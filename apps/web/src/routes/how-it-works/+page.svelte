@@ -258,7 +258,7 @@
 			</div>
 			<p class="note" data-testid="home-note">
 				<span class="dot" aria-hidden="true"></span><b>Testnet only · {PUBLIC ? 'early preview' : 'private preview'}</b>
-				<span>Data is paid in test USDC on Base Sepolia, not switched on yet; markets use tONYX test tokens. No real money.</span>
+				<span>Paid in test USDC on Base Sepolia, not switched on yet.</span>
 			</p>
 		</div>
 		<div class="vizslot">

@@ -80,7 +80,7 @@
 <OnyxSlab>
 	<h1>Query API</h1>
 	<div class="slabside wide" data-testid="slabside">
-		<p class="meta slabmeta" data-testid="api-status">Hosted test node at <a href="https://onyx.cryptagraph.com/v1/health" target="_blank" rel="noopener">onyx.cryptagraph.com/v1</a> · <span class="nw">testnet only</span> · <span>data is paid in test USDC on Base Sepolia, not switched on yet</span> · <span class="nw">no real money</span></p>
+		<p class="meta slabmeta" data-testid="api-status">Hosted test node at <a href="https://onyx.cryptagraph.com/v1/health" target="_blank" rel="noopener">onyx.cryptagraph.com/v1</a> · <span class="nw">testnet only</span> · <span class="nw">test USDC, not switched on yet</span></p>
 		<div class="perks">
 			<span><Wallet size={16} /> Testnet USDC per call (x402, HTTP 402)</span>
 			<span><GitMerge size={16} /> A proof with every row</span>

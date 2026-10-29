@@ -360,7 +360,9 @@ export async function w12(browser, base, root, expect) {
 						return { alone: false, same: Math.abs(a.top + a.height / 2 - (b.top + b.height / 2)) < 4 };
 					})
 				);
-				expect(ops.length >= (page === 'run' ? 2 : FB ? 0 : 6) && ops.every((o) => !o.alone && o.same), `${at} ${name}: all ${ops.length} chain operators travel with a value on one line`);
+				// Meeting polish MP16: on a phone the data page stacks a check's chain one step a line and hides
+				// the operators, so none is left alone there.
+				expect(ops.length >= (page === 'run' ? 2 : FB || (page === 'data' && width < 500) ? 0 : 6) && ops.every((o) => !o.alone && o.same), `${at} ${name}: all ${ops.length} chain operators travel with a value on one line`);
 			}
 			if (page === 'run') {
 				// Round 4, 3: no note floats loose between Run's cards (each is a panel footer or a note bar).
@@ -420,7 +422,8 @@ export async function w12(browser, base, root, expect) {
 					const rows = s.querySelectorAll('table tbody > tr').length;
 					return { panel: s.matches('.panel'), span: Math.abs(s.getBoundingClientRect().width - sec.width) < 2, n: rows, notes: !!s.querySelector('details [data-testid="api-scope-flow"]'), foot: s.lastElementChild.matches('.pfoot') };
 				});
-				expect(A.panel && A.span && A.n === 4 && A.notes && A.foot, `${at} api: "served so far" is a full-width panel, ${A.n} datasets in one table, run notes folded, a footer last`);
+				// Meeting polish MP16: the mining-pool row (served nowhere) left the table for the run notes.
+				expect(A.panel && A.span && A.n === 3 && A.notes && A.foot, `${at} api: "served so far" is a full-width panel, ${A.n} datasets in one table, run notes folded, a footer last`);
 			}
 			// Round 5, 3: Reserves' four cards share one "Data tables" switch (no fold per card); it opens
 			// every card's table right under its chart, with rows.
