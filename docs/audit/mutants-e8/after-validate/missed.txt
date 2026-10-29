@@ -1,0 +1,2 @@
+crates/onyx-coordinator/src/validate.rs:180:25: replace < with <= in assigned
+crates/onyx-coordinator/src/validate.rs:344:30: replace > with >= in ValidationConfig::validators_deterred

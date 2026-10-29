@@ -1,0 +1,18 @@
+[package]
+name = "onyx-recipe-sdk"
+description = "What recipe authors import: input decoding, output encoding, the host ABI (no floats, no clock, no randomness)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+borsh = { version = "1", default-features = false, features = ["derive"] }
+
+[features]
+# Recipe runtime (allocator, panic handler, export glue). Enable only in recipe crates built for wasm32.
+rt = []
+
+[lints]
+workspace = true

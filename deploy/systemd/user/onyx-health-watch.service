@@ -1,0 +1,40 @@
+# Onyx health watch, one pass (ROADMAP L12; docs/ops/runbooks/health-watch.md). A systemd *user*
+# unit, started every minute by onyx-health-watch.timer. Read-only: no key, no transaction.
+#
+#   install -D -m 0644 deploy/systemd/user/onyx-health-watch.service ~/.config/systemd/user/onyx-health-watch.service
+#   install -D -m 0644 deploy/systemd/user/onyx-health-watch.timer   ~/.config/systemd/user/onyx-health-watch.timer
+#   install -D -m 0600 /dev/null ~/.config/onyx/health-watch.env   # then fill it in (below)
+#   systemctl --user daemon-reload && systemctl --user enable --now onyx-health-watch.timer
+#   loginctl enable-linger "$USER"     # keep user timers running while logged out
+#
+# ~/.config/onyx/health-watch.env (mode 0600; the RPC URL may hold a provider API key). The script
+# reads every ONYX_WATCH_* variable itself, so nothing here is word-split by a shell:
+#   ONYX_WATCH_REPO=/opt/onyx                       # a checkout (script + deploy/health-watch/)
+#   ONYX_WATCH_NODE=http://127.0.0.1:8080           # onyx-node
+#   ONYX_WATCH_RPC_URL=https://sepolia.base.org     # never printed, never passed to the notify command
+#   ONYX_WATCH_SITE=https://<public site>           # optional (require.site is false until LC-6)
+#   ONYX_WATCH_NOTIFY_CMD=/usr/local/bin/onyx-alert --to ops   # optional; split like a shell, run without one
+#
+# Exit 1 (any alert) marks this unit failed: `systemctl --user status onyx-health-watch` shows
+# it, and `journalctl --user -u onyx-health-watch` has every JSON line. Alerts also go to
+# ~/.local/state/onyx-health-watch/alerts.jsonl (de-duplicated) and to ONYX_WATCH_NOTIFY_CMD
+# once the project owner picks a channel (launch checklist LC-18).
+#
+# Time: the script stops its checks at deadline_s (90 s in thresholds.json) and gives notify
+# commands at most 2 x notify.command_timeout_s (60 s) more; TimeoutStartSec stays above both.
+
+[Unit]
+Description=Onyx health watch (one pass)
+Documentation=file:///opt/onyx/docs/ops/runbooks/health-watch.md
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/onyx/health-watch.env
+ExecStart=/usr/bin/python3 -I ${ONYX_WATCH_REPO}/scripts/health-watch.py --once --state %S/onyx-health-watch/state.json
+StateDirectory=onyx-health-watch
+TimeoutStartSec=180
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%S/onyx-health-watch

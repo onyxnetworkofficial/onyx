@@ -1,0 +1,31 @@
+[package]
+name = "onyx-source-eth"
+description = "Ethereum source adapter (ADR-0044): JSON-RPC block and receipt answers to the canonical eth-chain-stats source, with every hash and trie root checked. Sector adapter; core crates must never depend on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-eth-schema.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+serde_json.workspace = true
+flate2 = "1"
+hex.workspace = true
+sha2 = "0.10"
+
+[dev-dependencies]
+onyx-eth-schema = { workspace = true, features = ["synthetic"] }
+onyx-recipe-host.workspace = true
+onyx-recipe-sdk.workspace = true
+onyx-merkle.workspace = true
+onyx-labels.workspace = true
+onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+eth-chain-stats = { path = "../../recipes/eth-chain-stats" }
+base64.workspace = true
+
+[lints]
+workspace = true

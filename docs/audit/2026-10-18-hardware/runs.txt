@@ -1,0 +1,90 @@
+# P5 measurements, reference machine (AMD Ryzen 5 5600X, 60 GiB, NVMe), 2026-10-18
+# Produced by measure.sh in this folder; each block: load average before and after (/proc/loadavg),
+# the run's exit code, its /usr/bin/time -v lines, and the test harness's result line.
+
+== bench-golden
+load before: 28.60 29.38 33.46 24/2414 974751
+exit: 0
+load after: 28.60 29.38 33.46 34/2440 974996
+	User time (seconds): 1.52
+	System time (seconds): 0.07
+	Percent of CPU this job got: 75%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:02.11
+	Maximum resident set size (kbytes): 72152
+
+== golden
+load before: 28.60 29.38 33.46 42/2442 975039
+exit: 0
+load after: 31.57 29.98 33.61 30/2474 976045
+	User time (seconds): 5.00
+	System time (seconds): 0.16
+	Percent of CPU this job got: 63%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:08.08
+	Maximum resident set size (kbytes): 123772
+test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 8.05s
+
+== golden-series-24
+load before: 31.57 29.98 33.61 34/2476 976055
+exit: 0
+load after: 30.45 29.94 33.37 32/2457 982057
+	User time (seconds): 33.37
+	System time (seconds): 1.73
+	Percent of CPU this job got: 58%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 1:00.11
+	Maximum resident set size (kbytes): 305160
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 60.03s
+
+== golden-pools-week
+load before: 30.45 29.94 33.37 25/2453 982067
+exit: 0
+load after: 28.26 29.39 33.00 28/2569 987892
+	User time (seconds): 24.54
+	System time (seconds): 2.02
+	Percent of CPU this job got: 52%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:50.37
+	Maximum resident set size (kbytes): 41424
+test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 50.36s
+
+== golden-history-week
+load before: 28.26 29.39 33.00 30/2578 987933
+exit: 0
+load after: 46.40 53.89 46.91 36/2544 1128596
+	User time (seconds): 543.48
+	System time (seconds): 26.61
+	Percent of CPU this job got: 47%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 19:52.76
+	Maximum resident set size (kbytes): 226944
+test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 1192.75s
+
+== golden-reserve-week
+load before: 46.40 53.89 46.91 26/2538 1128617
+exit: 0
+load after: 32.39 38.83 42.42 37/2594 1211850
+	User time (seconds): 371.47
+	System time (seconds): 7.55
+	Percent of CPU this job got: 53%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 11:50.66
+	Maximum resident set size (kbytes): 196716
+test result: ok. 9 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 710.56s
+
+== verify-lib
+load before: 32.39 38.83 42.42 29/2574 1211885
+exit: 0
+load after: 32.39 38.83 42.42 29/2579 1211961
+	User time (seconds): 0.12
+	System time (seconds): 0.01
+	Percent of CPU this job got: 61%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.22
+	Maximum resident set size (kbytes): 10796
+test result: ok. 25 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.22s
+
+== verify-reserves
+load before: 32.39 38.83 42.42 23/2582 1211986
+exit: 0
+load after: 32.39 38.83 42.42 32/2587 1212021
+	User time (seconds): 0.05
+	System time (seconds): 0.00
+	Percent of CPU this job got: 50%
+	Elapsed (wall clock) time (h:mm:ss or m:ss): 0:00.12
+	Maximum resident set size (kbytes): 9124
+test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.10s

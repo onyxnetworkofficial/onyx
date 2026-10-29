@@ -1,0 +1,17 @@
+[package]
+name = "test-clock"
+description = "Negative test recipe: must be rejected by the host (uses clock)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+onyx-recipe-sdk = { workspace = true, features = ["rt"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,10 @@
+crates/onyx-coordinator/src/round.rs:338:9: replace Round::open_unchecked -> Result<Round, RoundError> with Ok(Default::default())
+crates/onyx-coordinator/src/round.rs:359:32: replace < with <= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:371:27: replace > with >= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:571:27: replace match guard rows.len() as u64 == commitment.leaf_count with true in Round::reveal
+crates/onyx-coordinator/src/round.rs:587:16: replace < with <= in Round::close
+crates/onyx-coordinator/src/round.rs:674:32: replace == with != in check_available
+crates/onyx-coordinator/src/round.rs:677:24: replace > with == in check_available
+crates/onyx-coordinator/src/round.rs:677:24: replace > with >= in check_available
+crates/onyx-coordinator/src/round.rs:691:18: replace > with == in check_available
+crates/onyx-coordinator/src/round.rs:691:18: replace > with >= in check_available

@@ -1,0 +1,22 @@
+crates/onyx-coordinator/src/observe.rs:1184:13: delete field draw_count from struct DrawRecord expression in <impl DrawChain for SimulatedRegistry>::fix_beacon
+crates/onyx-coordinator/src/observe.rs:3329:58: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:1194:17: delete field draw_count from struct DrawRecord expression in <impl DrawChain for SimulatedRegistry>::draw_of
+crates/onyx-coordinator/src/observe.rs:3338:69: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3338:82: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3339:26: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3354:32: replace match guard ours(x) with true in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3372:34: replace > with < in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3375:62: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3390:27: replace >= with < in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3544:47: replace == with != in ObservationResults::attempt_published
+crates/onyx-coordinator/src/observe.rs:3572:17: replace || with && in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3571:41: replace == with != in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3573:21: replace && with || in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3573:77: replace == with != in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3607:22: replace && with || in ObservationResults::unwritable_draw
+crates/onyx-coordinator/src/observe.rs:3607:25: delete ! in ObservationResults::unwritable_draw
+crates/onyx-coordinator/src/observe.rs:4004:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4002:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4003:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4001:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4026:19: replace >= with < in ObservationResults::settle

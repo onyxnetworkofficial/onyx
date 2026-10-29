@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+# Per-address connection cap on port 443 for the web server (ROADMAP L19, THREATS NS17-4, TLS-2).
+#
+# Caddy is onyx-node's trusted proxy, so the node's own ONYX_MAX_CONNS_PER_IP never sees Caddy's
+# clients: about 300 HTTP/1.1 connections from one client would hold all 256 of the node's
+# in-flight slots. Caddy serves HTTP/1.1 only (deploy/caddy/onyx-web.Caddyfile), so a cap on open
+# connections per source is also a cap on requests in flight. A new connection from a source that
+# already holds CAP open ones is reset; the others are untouched.
+#
+# CAP: browsers open at most 6 HTTP/1.1 connections per host; 32 leaves room for a shared NAT.
+# One source then holds at most 32 of the node's 256 slots. IPv6 sources count per /64 (one
+# customer's prefix), so stepping through addresses in one prefix does not get past the cap.
+#
+# This is its own table: it never touches ufw's rules, and loading it again replaces only this
+# table (the empty declaration makes the delete safe on the first load). Do not put it in
+# /etc/nftables.conf: that file starts with "flush ruleset", which would drop ufw's rules.
+# Install (owner's OK): deploy/systemd/onyx-conn-cap.service. Test: scripts/conn-cap-test.sh.
+
+table inet onyx_conn_cap {}
+delete table inet onyx_conn_cap
+
+table inet onyx_conn_cap {
+  set https_v4 {
+    type ipv4_addr
+    size 65535
+    flags dynamic
+  }
+  set https_v6 {
+    type ipv6_addr
+    size 65535
+    flags dynamic
+  }
+  chain input {
+    # Before ufw's filter chains (priority filter = 0), and policy accept: this table only ever
+    # rejects over-cap connections; everything else goes on to ufw unchanged.
+    type filter hook input priority filter - 1; policy accept;
+    tcp dport 443 ct state new add @https_v4 { ip saddr ct count over 32 } counter reject with tcp reset
+    tcp dport 443 ct state new add @https_v6 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over 32 } counter reject with tcp reset
+  }
+}

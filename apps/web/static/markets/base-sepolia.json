@@ -1,0 +1,73 @@
+{
+  "note": "NS11 (ADR-0042 amendment 2): what the chain cannot say about each market. Pools, state, value and winner are read from Base Sepolia in the reader's browser (verify/src/markets_view.rs). tONYX is a test token with no value.",
+  "chainId": 84532,
+  "network": "Base Sepolia",
+  "explorer": "https://sepolia.basescan.org",
+  "registry": "0x497389e04f7d58e07a79ac8d395c3927aecbdf2b",
+  "token": "0x1cb5f5816812991ac3b52c63c3fcadcc9f544579",
+  "stakes": "0xff67f3ec5da643719d1b839584c2b4efd0a4ac98",
+  "panel": "0x3c3368823af04292be0cc6d396e5b958ad7c4002",
+  "facts": "0xe13b89565d037c6ea91d2bc040de78829eac473c",
+  "futures": "0xd0252e271cc218fabe591895f23a3e6e9e1180ff",
+  "markets": [
+    {
+      "id": 1,
+      "fact": "0x1598f049997f46cda70ff579a1cd92a426ba7dac420709fe9b86b9fe8f7c8975",
+      "title": "U.S. total public debt on 2026-10-27",
+      "question": "What will the Treasury report as total public debt outstanding for 27 October 2026?",
+      "metric": "us.treasury.total_public_debt_outstanding",
+      "recordDate": "2026-10-27",
+      "source": "U.S. Treasury, Debt to the Penny",
+      "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/",
+      "unit": "USD",
+      "scale": 2
+    }
+  ],
+  "insurance": {
+    "note": "North-star loop NL18 (ADR-0042 amendment 3): test policies on OnyxParametric. Products, the pool and the outcome are read from the chain; payouts settle from the value observers record, never from a vote. Its `markets` are open on the guarded futures (NL23): the same contract as the first futures, but insiders may not bet and trading closes before the source publishes.",
+    "address": "0xfc585f41e5e615b774a24404fd5a857042f63639",
+    "facts": "0x8d10fc8f37875f15f4d180dbcaa6c2915334bb76",
+    "futures": "0x07e89ae47579f9297c28ccab782acf9443354a65",
+    "products": [
+      {
+        "id": 1,
+        "fact": "0xc1ba8d6dad265d88506a37094c709084b4a98366e0ac1dba7e252bd6563e23ef",
+        "scale": 1,
+        "title": "Frost cover: Denver on 2026-10-31",
+        "question": "Pays if the official daily high at Denver International Airport on 31 October 2026 is 0.0 °C or lower.",
+        "metric": "noaa.ghcnd.usw00003017.tmax",
+        "recordDate": "2026-10-31",
+        "source": "NOAA NCEI, Global Historical Climatology Network daily",
+        "sourceUrl": "https://www.ncei.noaa.gov/products/land-based-station/global-historical-climatology-network-daily",
+        "unit": "°C"
+      },
+      {
+        "id": 2,
+        "fact": "0xbcec4881cd913049dffb6463a010052534adc47d99d6cf2600096b194b09eeee",
+        "scale": 0,
+        "title": "Quake cover: worldwide on 2026-10-31",
+        "question": "Pays if at least 6 earthquakes of magnitude 5 or more happen worldwide on 31 October 2026 (UTC).",
+        "metric": "usgs.earthquakes.m5_count",
+        "recordDate": "2026-10-31",
+        "source": "USGS earthquake catalog",
+        "sourceUrl": "https://earthquake.usgs.gov/fdsnws/event/1/",
+        "unit": "earthquakes"
+      }
+    ],
+    "markets": [
+      {
+        "id": 1,
+        "number": 2,
+        "fact": "0x3dd92d8cbf2890ecfd7cfc0c1d88b223ef5f3498995480736187ed9bfd9e2792",
+        "title": "U.S. total public debt on 2026-11-02",
+        "question": "What will the Treasury report as total public debt outstanding for 2 November 2026?",
+        "metric": "us.treasury.total_public_debt_outstanding",
+        "recordDate": "2026-11-02",
+        "source": "U.S. Treasury, Debt to the Penny",
+        "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/",
+        "unit": "USD",
+        "scale": 2
+      }
+    ]
+  }
+}

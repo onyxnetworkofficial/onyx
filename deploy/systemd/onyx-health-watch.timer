@@ -1,0 +1,14 @@
+# Runs onyx-health-watch.service every minute on the API server (launch checklist section 3:
+# poll every minute). Install: docs/ops/runbooks/health-watch.md "On the API server".
+
+[Unit]
+Description=Onyx health watch every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

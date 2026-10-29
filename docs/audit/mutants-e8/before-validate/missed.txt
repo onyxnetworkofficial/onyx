@@ -1,0 +1,144 @@
+crates/onyx-coordinator/src/validate.rs:90:5: replace seed_draw_voids -> bool with true
+crates/onyx-coordinator/src/validate.rs:90:38: replace > with == in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:90:38: replace > with < in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:90:38: replace > with >= in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:91:50: replace > with == in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:91:50: replace > with < in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:91:50: replace > with >= in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:91:9: replace || with && in seed_draw_voids
+crates/onyx-coordinator/src/validate.rs:113:9: replace ValidatorSet::add -> Result<(), ValidationError> with Ok(())
+crates/onyx-coordinator/src/validate.rs:113:28: replace || with && in ValidatorSet::add
+crates/onyx-coordinator/src/validate.rs:113:17: replace < with == in ValidatorSet::add
+crates/onyx-coordinator/src/validate.rs:113:17: replace < with > in ValidatorSet::add
+crates/onyx-coordinator/src/validate.rs:113:17: replace < with <= in ValidatorSet::add
+crates/onyx-coordinator/src/validate.rs:122:9: replace ValidatorSet::contains -> bool with true
+crates/onyx-coordinator/src/validate.rs:90:5: replace seed_draw_voids -> bool with false
+crates/onyx-coordinator/src/validate.rs:122:9: replace ValidatorSet::contains -> bool with false
+crates/onyx-coordinator/src/validate.rs:127:9: replace ValidatorSet::bond -> u128 with 0
+crates/onyx-coordinator/src/validate.rs:127:9: replace ValidatorSet::bond -> u128 with 1
+crates/onyx-coordinator/src/validate.rs:132:9: replace ValidatorSet::members -> impl Iterator<Item =&MinerAddress> with ::std::iter::empty()
+crates/onyx-coordinator/src/validate.rs:180:25: replace < with <= in assigned
+crates/onyx-coordinator/src/validate.rs:256:5: replace verdict_message -> String with String::new()
+crates/onyx-coordinator/src/validate.rs:256:5: replace verdict_message -> String with "xyzzy".into()
+crates/onyx-coordinator/src/validate.rs:344:30: replace > with >= in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:508:9: replace Settlement::round -> u64 with 0
+crates/onyx-coordinator/src/validate.rs:508:9: replace Settlement::round -> u64 with 1
+crates/onyx-coordinator/src/validate.rs:518:9: replace Settlement::entries -> &[LedgerEntry] with Vec::leak(Vec::new())
+crates/onyx-coordinator/src/validate.rs:523:9: replace Settlement::finalized -> &BTreeMap<Hash32, Hash32> with Box::leak(Box::new(BTreeMap::new()))
+crates/onyx-coordinator/src/validate.rs:513:9: replace Settlement::statuses -> &BTreeMap<(Hash32, MinerAddress), RevealStatus> with Box::leak(Box::new(BTreeMap::new()))
+crates/onyx-coordinator/src/validate.rs:539:9: replace Settlement::shards -> &BTreeSet<Hash32> with Box::leak(Box::new(BTreeSet::new()))
+crates/onyx-coordinator/src/validate.rs:529:9: replace Settlement::references -> &BTreeMap<Hash32, (Hash32, SettlePath)> with Box::leak(Box::new(BTreeMap::new()))
+crates/onyx-coordinator/src/validate.rs:534:9: replace Settlement::pending -> &BTreeSet<Hash32> with Box::leak(Box::new(BTreeSet::new()))
+crates/onyx-coordinator/src/validate.rs:544:9: replace Settlement::round_level -> bool with true
+crates/onyx-coordinator/src/validate.rs:674:9: replace Validation<R>::tasks_for -> Vec<(Hash32, MinerAddress, Hash32)> with vec![]
+crates/onyx-coordinator/src/validate.rs:674:12: delete ! in Validation<R>::tasks_for
+crates/onyx-coordinator/src/validate.rs:544:9: replace Settlement::round_level -> bool with false
+crates/onyx-coordinator/src/validate.rs:685:9: replace Validation<R>::revealed_root -> Option<Hash32> with None
+crates/onyx-coordinator/src/validate.rs:689:33: replace == with != in Validation<R>::revealed_root
+crates/onyx-coordinator/src/validate.rs:694:9: replace Validation<R>::check_time -> Result<(), ValidationError> with Ok(())
+crates/onyx-coordinator/src/validate.rs:697:16: replace < with == in Validation<R>::check_time
+crates/onyx-coordinator/src/validate.rs:697:16: replace < with > in Validation<R>::check_time
+crates/onyx-coordinator/src/validate.rs:697:16: replace < with <= in Validation<R>::check_time
+crates/onyx-coordinator/src/validate.rs:705:9: replace Validation<R>::commit_verdict -> Result<(), ValidationError> with Ok(())
+crates/onyx-coordinator/src/validate.rs:706:16: replace >= with < in Validation<R>::commit_verdict
+crates/onyx-coordinator/src/validate.rs:710:51: replace != with == in Validation<R>::commit_verdict
+crates/onyx-coordinator/src/validate.rs:713:12: delete ! in Validation<R>::commit_verdict
+crates/onyx-coordinator/src/validate.rs:719:12: delete ! in Validation<R>::commit_verdict
+crates/onyx-coordinator/src/validate.rs:747:9: replace Validation<R>::reveal_verdict -> Result<(), ValidationError> with Ok(())
+crates/onyx-coordinator/src/validate.rs:748:48: replace || with && in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:748:16: replace < with == in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:748:16: replace < with > in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:748:16: replace < with <= in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:748:55: replace >= with < in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:756:89: replace != with == in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:760:27: replace == with != in Validation<R>::reveal_verdict
+crates/onyx-coordinator/src/validate.rs:780:9: replace Validation<R>::slash_validator with ()
+crates/onyx-coordinator/src/validate.rs:783:17: replace > with == in Validation<R>::slash_validator
+crates/onyx-coordinator/src/validate.rs:783:17: replace > with < in Validation<R>::slash_validator
+crates/onyx-coordinator/src/validate.rs:783:17: replace > with >= in Validation<R>::slash_validator
+crates/onyx-coordinator/src/validate.rs:784:19: replace += with -= in Validation<R>::slash_validator
+crates/onyx-coordinator/src/validate.rs:784:19: replace += with *= in Validation<R>::slash_validator
+crates/onyx-coordinator/src/validate.rs:817:16: replace < with == in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:817:16: replace < with > in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:817:16: replace < with <= in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:820:16: replace < with == in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:820:16: replace < with > in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:820:16: replace < with <= in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:838:25: replace match guard now >= self.cfg.canary_open_close with true in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:838:25: replace match guard now >= self.cfg.canary_open_close with false in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:826:50: replace != with == in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:831:29: replace || with && in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:830:67: replace != with == in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:838:29: replace >= with < in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:850:26: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:864:24: replace >= with < in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:879:27: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:879:30: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:885:42: replace || with && in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:917:29: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:917:20: replace == with != in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:938:56: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:938:59: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:938:29: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:953:35: replace > with == in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:953:35: replace > with < in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:74: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:953:35: replace > with >= in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:59: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:46: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:41: replace == with != in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:49: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:954:62: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:956:17: delete match arm (true, Some(r), _) in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:960:17: delete match arm (false, _, Some(spec)) in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:957:40: replace match guard !rules_ok with true in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:957:40: replace match guard !rules_ok with false in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:957:40: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:964:39: replace match guard unanimous with true in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:964:39: replace match guard unanimous with false in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:967:44: replace match guard void with true in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:967:44: replace match guard void with false in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:977:42: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1014:24: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1012:29: replace == with != in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1046:24: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1082:36: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1082:33: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1120:53: replace == with != in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1147:29: delete ! in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1238:5: replace verdict_right -> Option<bool> with None
+crates/onyx-coordinator/src/validate.rs:1238:5: replace verdict_right -> Option<bool> with Some(true)
+crates/onyx-coordinator/src/validate.rs:1238:5: replace verdict_right -> Option<bool> with Some(false)
+crates/onyx-coordinator/src/validate.rs:1242:50: replace == with != in verdict_right
+crates/onyx-coordinator/src/validate.rs:1243:68: replace && with || in verdict_right
+crates/onyx-coordinator/src/validate.rs:1243:62: replace != with == in verdict_right
+crates/onyx-coordinator/src/validate.rs:1243:76: replace == with != in verdict_right
+crates/onyx-coordinator/src/validate.rs:1374:9: replace Ledger<R>::entries -> &[LedgerEntry] with Vec::leak(Vec::new())
+crates/onyx-coordinator/src/validate.rs:1381:9: replace Ledger<R>::finalized -> &BTreeMap<Hash32, (u64, Hash32)> with Box::leak(Box::new(BTreeMap::new()))
+crates/onyx-coordinator/src/validate.rs:1386:9: replace Ledger<R>::open_work -> &BTreeSet<Hash32> with Box::leak(Box::new(BTreeSet::new()))
+crates/onyx-coordinator/src/validate.rs:1391:9: replace Ledger<R>::known_miners -> &BTreeSet<MinerAddress> with Box::leak(Box::new(BTreeSet::from_iter([Default::default()])))
+crates/onyx-coordinator/src/validate.rs:1391:9: replace Ledger<R>::known_miners -> &BTreeSet<MinerAddress> with Box::leak(Box::new(BTreeSet::new()))
+crates/onyx-coordinator/src/validate.rs:1423:9: replace Ledger<R>::round_tag -> Option<Hash32> with None
+crates/onyx-coordinator/src/validate.rs:1428:9: replace Ledger<R>::record_commit with ()
+crates/onyx-coordinator/src/validate.rs:1433:9: replace Ledger<R>::active_elsewhere -> BTreeSet<MinerAddress> with BTreeSet::from_iter([Default::default()])
+crates/onyx-coordinator/src/validate.rs:1435:60: replace != with == in Ledger<R>::active_elsewhere
+crates/onyx-coordinator/src/validate.rs:1433:9: replace Ledger<R>::active_elsewhere -> BTreeSet<MinerAddress> with BTreeSet::new()
+crates/onyx-coordinator/src/validate.rs:1442:9: replace Ledger<R>::record_validators with ()
+crates/onyx-coordinator/src/validate.rs:1447:9: replace Ledger<R>::has_round -> bool with true
+crates/onyx-coordinator/src/validate.rs:1447:9: replace Ledger<R>::has_round -> bool with false
+crates/onyx-coordinator/src/validate.rs:1477:9: replace Ledger<R>::record_seed -> Result<BTreeSet<MinerAddress>, ValidationError> with Ok(BTreeSet::new())
+crates/onyx-coordinator/src/validate.rs:1453:9: replace Ledger<R>::record_open with ()
+crates/onyx-coordinator/src/validate.rs:1477:9: replace Ledger<R>::record_seed -> Result<BTreeSet<MinerAddress>, ValidationError> with Ok(BTreeSet::from_iter([Default::default()]))
+crates/onyx-coordinator/src/validate.rs:1484:31: replace == with != in Ledger<R>::record_seed
+crates/onyx-coordinator/src/validate.rs:1498:9: replace Ledger<R>::record_known with ()
+crates/onyx-coordinator/src/validate.rs:1513:13: replace && with || in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1516:49: replace && with || in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1586:57: replace && with || in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1586:53: replace > with == in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1586:53: replace > with < in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1586:53: replace > with >= in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1592:29: replace == with != in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1618:18: replace match guard a == actor with true in Ledger<R>::balance
+crates/onyx-coordinator/src/validate.rs:1618:18: replace match guard a == actor with false in Ledger<R>::balance
+crates/onyx-coordinator/src/validate.rs:1621:18: replace match guard a == actor with true in Ledger<R>::balance
+crates/onyx-coordinator/src/validate.rs:1618:20: replace == with != in Ledger<R>::balance

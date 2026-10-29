@@ -1,0 +1,19 @@
+[package]
+name = "btc-pool-blocks"
+description = "Recipe: blocks mined per pool over a range, by coinbase tag and pool payout script (a rerunnable block metric)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+onyx-recipe-sdk = { workspace = true, features = ["rt"] }
+onyx-pool-schema.workspace = true
+borsh = { version = "1", default-features = false, features = ["derive"] }
+
+[lints]
+workspace = true

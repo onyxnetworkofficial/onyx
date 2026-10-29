@@ -1,0 +1,28 @@
+{
+  "chainId": 84532,
+  "count": 3,
+  "domainSeparator": "0x2809fa057d0eb506215f47cfca1d5e6037c35f8bbc2715372aecfecb4cc87180",
+  "synthetic": "test keys derived from public labels; they hold nothing",
+  "verifyingContract": "0x5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a5a",
+  "voucherTypehash": "0xe6e29b9333bd9d9020773b2c5784f2fda52d45bd243a82eb807db5d0619af6d7",
+  "vouchers": [
+    {
+      "buyer": "0x3b391d30d36fb77f40ae0494f46b3004d82e8613",
+      "cumulative": 250000,
+      "digest": "0xb72005ccda2f29109bd83666bf7c77228f000e22310b263cd54d68062e2912fc",
+      "signature": "0xb33babf942165a60e855da6925212dc4b98a3bd4d2e3a8877ca8153a70721d1a06c3af7ddb20daac4eb8c58e8e26163c73f323f9c6c3adb0d9e67fba299086bc1b"
+    },
+    {
+      "buyer": "0x3b391d30d36fb77f40ae0494f46b3004d82e8613",
+      "cumulative": 500000,
+      "digest": "0xdacd82e4fad667846bb20ce001c61164a9c4c01a67488bebb0eb901e607a076d",
+      "signature": "0xc4b2d2cf5f6bb9f1bc82903671bbbf3663da4fa2ba9c85d3583a5466cfe3df00093071da787f0241a4b4da4aeb9242243b1cbec0a70ab398aaf43bf6520bf27e1c"
+    },
+    {
+      "buyer": "0xf1dd56374fd58cf78c6df8709bd6e83f5c672c62",
+      "cumulative": 1,
+      "digest": "0xb7bafbd0e01112c065d4ee932f0c1f639b3118c176307698c685962ecdefcd8e",
+      "signature": "0xe4388a9073faff98a48a7b9e394b33b29857acea16e2376b7063dc0b8747c3d74532d540c59f705428027dc15cfe8cdaf4111a8bdc0643b0e90f85a11121fe7c1b"
+    }
+  ]
+}

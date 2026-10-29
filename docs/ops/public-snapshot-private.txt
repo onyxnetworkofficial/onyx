@@ -1,0 +1,5 @@
+# Paths that never go into a public snapshot (pre-public loop PP13, the owner's choice 2026-10-25):
+# The partners' private notes and the tool that knows the names it scrubs. One shell glob per line,
+# relative to the root; scripts/public-snapshot.sh reads it in every mode.
+docs/partners/*
+scripts/public-scrub.py

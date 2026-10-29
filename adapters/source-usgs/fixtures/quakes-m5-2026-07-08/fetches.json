@@ -1,0 +1,43 @@
+{
+  "note": "Five real HTTPS GETs of the pinned URL, one per simulated observer, made from one machine on 2026-10-26 about 62 s apart (past the CDN's 60 s cache). Every body was byte-identical; response.txt is that body. fetched_unix is the local clock just before each request; http_date, age and x_cache are the server's Date, Age and X-Cache headers (an empty age: no Age header). Cache hits: none.",
+  "url": "https://earthquake.usgs.gov/fdsnws/event/1/count?starttime=2026-07-08T00:00:00&endtime=2026-07-08T23:59:59.999&minmagnitude=5.0&eventtype=earthquake",
+  "day": "2026-07-08",
+  "body": "response.txt",
+  "fetches": [
+    {
+      "observer": 1,
+      "fetched_unix": 1793050098,
+      "http_date": "Mon, 26 Oct 2026 21:28:19 GMT",
+      "age": "",
+      "x_cache": "Miss from cloudfront"
+    },
+    {
+      "observer": 2,
+      "fetched_unix": 1793050161,
+      "http_date": "Mon, 26 Oct 2026 21:29:21 GMT",
+      "age": "",
+      "x_cache": "Miss from cloudfront"
+    },
+    {
+      "observer": 3,
+      "fetched_unix": 1793050223,
+      "http_date": "Mon, 26 Oct 2026 21:30:24 GMT",
+      "age": "",
+      "x_cache": "Miss from cloudfront"
+    },
+    {
+      "observer": 4,
+      "fetched_unix": 1793050286,
+      "http_date": "Mon, 26 Oct 2026 21:31:26 GMT",
+      "age": "",
+      "x_cache": "Miss from cloudfront"
+    },
+    {
+      "observer": 5,
+      "fetched_unix": 1793050348,
+      "http_date": "Mon, 26 Oct 2026 21:32:28 GMT",
+      "age": "",
+      "x_cache": "Miss from cloudfront"
+    }
+  ]
+}

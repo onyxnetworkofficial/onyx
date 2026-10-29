@@ -1,0 +1,15 @@
+[package]
+name = "onyx-chain-schema"
+description = "Borsh schema of the Bitcoin chain statistics metric (no_std, ADR-0043). Separate from onyx-btc-schema so the existing recipes' bytes and ids never change."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-btc-schema.workspace = true
+borsh = { version = "1", default-features = false, features = ["derive"] }
+
+[lints]
+workspace = true

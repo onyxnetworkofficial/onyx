@@ -1,0 +1,188 @@
+{
+  "agreed": 5,
+  "bonds": [
+    {
+      "bond": "1000",
+      "observer": "0x7a04b0b8fcc4a8f777d64a41a1a1bf6ae86242dd"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x9236e9f3f583360e2ad23ea822000342466b588b"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x99e639483c89a2841a20b67bf5cef359335f8620"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xc57fd1ea5fcdf6314befd0805b69443c10080e1c"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xccafa13ee83472b967ec7b670f80e5307c4a6f6b"
+    }
+  ],
+  "config": {
+    "commit_close": 1793050453,
+    "miss_slash": "20",
+    "outlier_slash": "100",
+    "reveal_close": 1793050573,
+    "reward": "10"
+  },
+  "draw": {
+    "announcement": {
+      "announced_at": 4,
+      "attempt": 0,
+      "beacon": "0x5e937071a7bbef892e95a5288d4480c0c1816cf8eff6b6b830b0e82a5c9e29cf",
+      "beacon_height": 5,
+      "chain_id": 31337,
+      "commit": "0x3c6197e6a1b8bddc46237690611d161b2b0e32839ab2571d31c6b3f6f01673aa",
+      "draw_count": 1,
+      "registry": "0x8464135c8f25da09e49bc8782676a84730c318bc"
+    },
+    "attempt": 0,
+    "beacon": "0x5e937071a7bbef892e95a5288d4480c0c1816cf8eff6b6b830b0e82a5c9e29cf",
+    "beacon_height": 5
+  },
+  "feed": {
+    "fetcher_id": "0x9888b8d09a3176f43a14de6fef31771466a053ba26dce82ae194b7c7df85d189",
+    "metric": "usgs.earthquakes.m5_count",
+    "min_observers": 5,
+    "record_date": "2026-07-08",
+    "scale": 0,
+    "selector": "body",
+    "spec_id": "0xd262eb2dbd9d7faada658fd9946b7246d7d18421a7249241810d8ea197c0f4ae",
+    "subject": "usgs.earthquakes.m5_world:2026-07-08",
+    "url": "https://earthquake.usgs.gov/fdsnws/event/1/count?starttime=2026-07-08T00:00:00&endtime=2026-07-08T23:59:59.999&minmagnitude=5.0&eventtype=earthquake",
+    "window_end": 1793050393,
+    "window_start": 1793050093
+  },
+  "observers": 5,
+  "pool": [
+    {
+      "bond": "1000",
+      "observer": "0x492fb7f31723345aaad6cde630b2fa3d26f9d358"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x76cf30e601132a58125173b4da042fd2d187b1a5"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x7a04b0b8fcc4a8f777d64a41a1a1bf6ae86242dd"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x9236e9f3f583360e2ad23ea822000342466b588b"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x99e639483c89a2841a20b67bf5cef359335f8620"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xc57fd1ea5fcdf6314befd0805b69443c10080e1c"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xccafa13ee83472b967ec7b670f80e5307c4a6f6b"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xd30afd6c7d37bde4084130f353a2013ee981a449"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xd5819e91c16e9badc13674db7fe9f733c58d686e"
+    }
+  ],
+  "proof_level": 2,
+  "rehearsal": "Observers simulated on one machine; each fetched the source itself over HTTPS.",
+  "response_body": "9",
+  "result_hash": "0x0b3ee5b15558f76d4eb6f494cf110a52fa81bb846fde58b9f5fba4f2c7c92cdc",
+  "reveals": [
+    {
+      "commit": "0xcdc820008b1d9f571d68f2f536b2d4e5ba58d659b63377e898bc2aac86ffe752",
+      "commit_sig": "0x737652d1828997b8bb68f0c37dd2ef8cf1a0ac3686909240434e11ba5823142913e1255ad9de6dffe888d444490f058ffeb8ff49a34d0388f2edecc5a98aa0a61b",
+      "http_date": "Mon, 26 Oct 2026 21:28:19 GMT",
+      "observed_unix": 1793050098,
+      "observer": "0x7a04b0b8fcc4a8f777d64a41a1a1bf6ae86242dd",
+      "page_hash": "0xd2f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb",
+      "reveal_sig": "0xc5b7ffa376302fa2dc5cb5aa9cd8f49b33bfae0bcaf7f07990078a5da189c7d23c2154365c069571b7b7640e35191f6973fcbe04672978794a299710639534391b",
+      "salt": "0xd929ea6146ac98bb6f35aea2af6474d0c1c41ece7849efa198cc716d69cf0dcc"
+    },
+    {
+      "commit": "0x0dae6174e9633982807d292334ad85626f7f88495a2cbe5b8fa8dcea36af598d",
+      "commit_sig": "0x6946ebc2eac354e8339a3f56f912c72d4aa336cb82d5f25cc137af2d304712555c0adaa55573532a34fff5f171044b47ba0a96f87f3aab75c10d39e2898738781b",
+      "http_date": "Mon, 26 Oct 2026 21:29:21 GMT",
+      "observed_unix": 1793050161,
+      "observer": "0x9236e9f3f583360e2ad23ea822000342466b588b",
+      "page_hash": "0xd2f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb",
+      "reveal_sig": "0x44a0251284f7dde481dd45ee2dd2e279a9157ef9cb3ef1de705d3b0d3fe28a6f3a151acf259c81c7a8a1ef0e9d8025fb1a12dc0d2b3020343511d31627130be11b",
+      "salt": "0xac5972aecd1aeba963dab39d0d55bc2249f5a84cc9510311b185fa07ca86497c"
+    },
+    {
+      "commit": "0xefb34e2c49210a05d3a03afc72104435fbd7b24a9ca64380adae0733672258a2",
+      "commit_sig": "0xfd02046235aee2d16d0e69ac6e76ea8fdf3eefd639a75d02e1bce9ef9abb1dcd49a525057e0be0bd20425703898603f70c9e41d930866205ab0cf745e098fcf71b",
+      "http_date": "Mon, 26 Oct 2026 21:30:24 GMT",
+      "observed_unix": 1793050223,
+      "observer": "0x99e639483c89a2841a20b67bf5cef359335f8620",
+      "page_hash": "0xd2f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb",
+      "reveal_sig": "0x82043adf834ed6b1c41a1d3879e7f15f8bd0d94791a981351a619dd70066cc4e7e5ad553832cafb76f27b2feb302255683fb7feece839634806ec65f2d64af6e1b",
+      "salt": "0x8c38d025ad66c3d0a4bdd673ae10a7280ecd0993b505434139c5e534df5cac6f"
+    },
+    {
+      "commit": "0x228f457d29e9544641a965de5114ac07641afeff3db6d1f010ec2223e1783b73",
+      "commit_sig": "0xd1512463d2300a4d14e1c50638275f25fa510a052c20faeecba28112d95c401e49fd08b04444cac37dc04544a2275a33c283b4838d4b6540d334025b840805df1b",
+      "http_date": "Mon, 26 Oct 2026 21:31:26 GMT",
+      "observed_unix": 1793050286,
+      "observer": "0xc57fd1ea5fcdf6314befd0805b69443c10080e1c",
+      "page_hash": "0xd2f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb",
+      "reveal_sig": "0x476864d49dc77bcf708799ba11515d686be4e346711228ab004f270eb52cbee627f4ecfe8e22bebc32c1f3c443b68db36a36ae3fc2b74107e6cb990caf5d16a51c",
+      "salt": "0x28538d75b37edd85830c0ef5b2a34edf4d94829739969a63e2b3c3868e90c108"
+    },
+    {
+      "commit": "0x88c87a6a40f05da5837bb3d707c273278d69ec1adc05612b07de484452936563",
+      "commit_sig": "0x9fa485620f416784023caaa33ea95e72a1d80e4317801496ed9af449cefc52073dfbd3f744d906b9da21c587bdec6f3f20a8bd6a4c4c1127bc9721567b8793341c",
+      "http_date": "Mon, 26 Oct 2026 21:32:28 GMT",
+      "observed_unix": 1793050348,
+      "observer": "0xccafa13ee83472b967ec7b670f80e5307c4a6f6b",
+      "page_hash": "0xd2f8f61201b2b11a78d6e866abc9c3db2ae8631fa656bfe5cb53668255367afb",
+      "reveal_sig": "0xdfa17409aaeb0d5cae652e2b13f00bff1c4743dae437e9a333888030ea458156115c9e73aca73dcaa5db401700911368bcdb078eaf2eefa7ac5767545f474a011c",
+      "salt": "0x0ef56b3db093e9c5f616642e9b4ea4429825d6d66f582a18ee39c3aec69f231f"
+    }
+  ],
+  "round_id": "0x17aa93e8822dc8536759e693481933152d3d5165199c040217c0146dbcefffbe",
+  "source": {
+    "attribution": "Source: U.S. Geological Survey, ANSS Comprehensive Earthquake Catalog (earthquake.usgs.gov)",
+    "id": "usgs.comcat",
+    "license": "onyx:facts-from-usgs-comcat",
+    "name": "U.S. Geological Survey: ANSS Comprehensive Earthquake Catalog",
+    "terms_quote": "USGS-authored or produced data and information are considered to be in the U.S. Public Domain",
+    "terms_url": "https://www.usgs.gov/information-policies-and-instructions/copyrights-and-credits"
+  },
+  "statuses": [
+    {
+      "observer": "0x7a04b0b8fcc4a8f777d64a41a1a1bf6ae86242dd",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x9236e9f3f583360e2ad23ea822000342466b588b",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x99e639483c89a2841a20b67bf5cef359335f8620",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0xc57fd1ea5fcdf6314befd0805b69443c10080e1c",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0xccafa13ee83472b967ec7b670f80e5307c4a6f6b",
+      "status": "Agreed"
+    }
+  ],
+  "unit": "earthquakes",
+  "value": "9"
+}

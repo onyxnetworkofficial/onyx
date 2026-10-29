@@ -1,0 +1,20 @@
+[package]
+name = "onyx-eth-schema"
+description = "Ethereum block format for Onyx (no_std, ADR-0044): RLP, the ordered Merkle-Patricia trie root, header, transaction and receipt decoding, and the Borsh schema of eth-chain-stats."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+borsh = { version = "1", default-features = false, features = ["derive"] }
+# Keccak-256 (ADR-0003), already in the graph through onyx-core; no_std for the recipe.
+sha3 = { version = "0.10", default-features = false }
+
+[features]
+# Builders of synthetic blocks for tests; never enabled by the recipe build.
+synthetic = []
+
+[lints]
+workspace = true

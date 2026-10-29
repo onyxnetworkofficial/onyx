@@ -1,0 +1,4 @@
+crates/onyx-coordinator/src/round.rs:371:27: replace > with >= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:571:27: replace match guard rows.len() as u64 == commitment.leaf_count with true in Round::reveal
+crates/onyx-coordinator/src/validate.rs:1362:13: delete field id from struct Ledger expression in Ledger<R>::mirror_of_contract
+crates/onyx-coordinator/src/validate.rs:1374:9: replace Ledger<R>::entries -> &[LedgerEntry] with Vec::leak(Vec::new())

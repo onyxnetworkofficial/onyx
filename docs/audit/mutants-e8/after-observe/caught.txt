@@ -1,0 +1,51 @@
+crates/onyx-coordinator/src/observe.rs:3324:34: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3324:23: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3324:46: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3324:75: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3329:58: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3333:54: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3338:47: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3338:29: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3324:56: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3338:69: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3338:82: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3339:26: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3339:29: delete ! in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3339:20: delete ! in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3339:39: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3354:32: replace match guard ours(x) with true in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3354:32: replace match guard ours(x) with false in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3357:29: replace match guard r.block < bh with true in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3357:29: replace match guard r.block < bh with false in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3357:37: replace < with == in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3357:37: replace < with > in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3357:37: replace < with <= in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3364:51: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3373:21: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3372:34: replace > with == in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3372:34: replace > with >= in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3372:34: replace > with < in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3375:50: replace && with || in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3375:62: replace == with != in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3376:20: delete ! in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3544:47: replace == with != in ObservationResults::attempt_published
+crates/onyx-coordinator/src/observe.rs:3396:51: replace || with && in ObservationResults::release_draw
+crates/onyx-coordinator/src/observe.rs:3564:12: delete ! in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3571:41: replace == with != in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3572:17: replace || with && in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3573:21: replace && with || in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3573:77: replace == with != in ObservationResults::published
+crates/onyx-coordinator/src/observe.rs:3600:32: replace != with == in ObservationResults::unwritable_draw
+crates/onyx-coordinator/src/observe.rs:3607:22: replace && with || in ObservationResults::unwritable_draw
+crates/onyx-coordinator/src/observe.rs:3607:25: delete ! in ObservationResults::unwritable_draw
+crates/onyx-coordinator/src/observe.rs:4004:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4003:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4002:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4001:13: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4000:34: replace != with == in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4001:28: replace != with == in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4002:24: replace != with == in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4003:25: replace != with == in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4004:34: replace != with == in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4017:19: replace || with && in ObservationResults::settle
+crates/onyx-coordinator/src/observe.rs:4017:12: delete ! in ObservationResults::settle

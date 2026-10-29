@@ -1,0 +1,28 @@
+Onyx
+Copyright 2026 The Onyx authors
+
+This product's source code is licensed under the Apache License, Version 2.0
+(see LICENSE).
+
+The Apache-2.0 licence covers the code and documentation written for Onyx. It
+does not cover third-party data or third-party files in this repository; those
+keep their own terms. See DATA-LICENSE.md for every data set and its terms, and
+THIRD-PARTY.md for third-party code, fonts and test vectors.
+
+This product includes or is built with:
+
+- IBM Plex Sans and IBM Plex Mono fonts, Copyright 2019 IBM Corp., under the
+  SIL Open Font License 1.1 (apps/web/static/fonts/OFL-ibm-plex.txt).
+- Instrument Serif font, Copyright 2022 The Instrument Serif Project Authors,
+  under the SIL Open Font License 1.1
+  (apps/web/static/fonts/OFL-instrument-serif.txt).
+- A list of mining pools derived from bitcoin-data/mining-pools,
+  Copyright (c) 2019-2021 btc.com and Copyright (c) 2021- 0xB10C and
+  contributors, under the MIT License (fixtures/pools/LICENSE-mining-pools.txt).
+- Lucide icons (@lucide/svelte), bundled into the website build,
+  Copyright (c) 2026 Lucide Icons and Contributors, under the ISC License.
+  Some of these icons are derived from Feather, Copyright (c) 2013-present
+  Cole Bemis, under the MIT License
+  (apps/web/static/licenses/LICENSE-lucide.txt).
+- blst (BLS12-381 signature library, supranational/blst), under the Apache
+  License 2.0, used by crates/onyx-tlock.

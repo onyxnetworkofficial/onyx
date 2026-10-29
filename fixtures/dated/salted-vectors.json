@@ -1,0 +1,237 @@
+{
+  "cases": [
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 0,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 0,
+          "leafCount": 4,
+          "siblings": [
+            "0x09c77e07a13c732200118c458266817a05ec7bb8b666a54fcc694b3daab85116",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3110000000656e746974793a6578616d706c652d6100a0bb0d00000000006400000000000000004fa8b1f6249f5d4b0fd55a031b6f215b0b6a0fbcd0d2724e65d673ca6053dec6",
+        "version": 1
+      },
+      "case": "row 0",
+      "expect": "ok",
+      "expectAddress": "test:addr-1",
+      "expectEntity": "entity:example-a",
+      "from": 100,
+      "to": null
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 1,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6200a0bb0d0000000000c80000000000000001f301000000000000136f8b6ce4a980f101ae136c32550e2bd209c1b85a566a7e2ad39a6513241801",
+        "version": 1
+      },
+      "case": "row 1",
+      "expect": "ok",
+      "expectAddress": "test:addr-2",
+      "expectEntity": "entity:example-b",
+      "from": 200,
+      "to": 499
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 2,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 2,
+          "leafCount": 4,
+          "siblings": [
+            "0xc5829bead83a23b4f55623e76452700440add5a6750a4fd737baedc217f2bcd9",
+            "0xf9c3c19565e9d85c7792d1ff31ea3e394abd98be5493f85f6e6efc51c30e0492"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6100a0bb0d0000000000f40100000000000000c9395875ed473b983d023ae452884b0c4ecf840f7b90124f3477f3260262b04b",
+        "version": 1
+      },
+      "case": "row 2",
+      "expect": "ok",
+      "expectAddress": "test:addr-2",
+      "expectEntity": "entity:example-a",
+      "from": 500,
+      "to": null
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 3,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 3,
+          "leafCount": 4,
+          "siblings": [
+            "0xd3616a03875a22b3d5c87e42e7c1daf201a20ae4f7aeff4fce50377a1816f45f",
+            "0xf9c3c19565e9d85c7792d1ff31ea3e394abd98be5493f85f6e6efc51c30e0492"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3310000000656e746974793a6578616d706c652d6200a0bb0d00000000009600000000000000000863859afb0b86bf5e2843c4654ac352cb4ad30a2f3a62cfbebfe82abca980b8",
+        "version": 1
+      },
+      "case": "row 3",
+      "expect": "ok",
+      "expectAddress": "test:addr-3",
+      "expectEntity": "entity:example-b",
+      "from": 150,
+      "to": null
+    },
+    {
+      "answer": {
+        "contentHash": "0x08bda3059e34132bbfc03bb57406e13b0baebeb1ace4b1b114a997875e1361d7",
+        "format": 3,
+        "index": 1,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6200a0bb0d0000000000c80000000000000001f301000000000000136f8b6ce4a980f101ae136c32550e2bd209c1b85a566a7e2ad39a6513241801",
+        "version": 2
+      },
+      "case": "another version (another pin)",
+      "expect": "NotPinned"
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 0,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6200a0bb0d0000000000c80000000000000001f301000000000000136f8b6ce4a980f101ae136c32550e2bd209c1b85a566a7e2ad39a6513241801",
+        "version": 1
+      },
+      "case": "proof of another index",
+      "expect": "ProofMismatch"
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 1,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210",
+        "version": 1
+      },
+      "case": "row cut short",
+      "expect": "BadRow"
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 1,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6200a0bb0d0000000000c80000000000000001f301000000000000136f8b6ce4a980f101ae136c32550e2bd209c1b85a566a7e2ad39a6513241800",
+        "version": 1
+      },
+      "case": "salt bit flipped",
+      "expect": "NotInRoot"
+    },
+    {
+      "answer": {
+        "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+        "format": 3,
+        "index": 1,
+        "members": 4,
+        "name": "test.onyx.salted",
+        "proof": {
+          "index": 1,
+          "leafCount": 4,
+          "siblings": [
+            "0xda9e712318c7dbddefb19f1c0066f77aa1172c3cfa7deca064260aab259b69cb",
+            "0x0cc3a1ffbe467274263230322e49e1da8a7a85dc3841b45a946974a1c2a020c6"
+          ]
+        },
+        "published": 2000,
+        "root": "0xda1fd410d547f8eec45b785481e39eff93c3bf6f691b40a3c794aa46abc4e285",
+        "row": "0x0b000000746573743a616464722d3310000000656e746974793a6578616d706c652d6200a0bb0d00000000009600000000000000000863859afb0b86bf5e2843c4654ac352cb4ad30a2f3a62cfbebfe82abca980b8",
+        "version": 1
+      },
+      "case": "another row's bytes",
+      "expect": "NotInRoot"
+    }
+  ],
+  "contentHash": "0x6f4f13485be020d73e44c5050f93d9f82abf648cf623cafca34d06f7f7645700",
+  "domain": "onyx-salted-label-set-v1",
+  "format": 3,
+  "guess": {
+    "leafIfUnsalted": "0x49447aded2dd0755a34491f09ef7c2c95a2ae81b224d2293bc4fb471e8c13276",
+    "row": "0x0b000000746573743a616464722d3210000000656e746974793a6578616d706c652d6200a0bb0d0000000000c80000000000000001f301000000000000",
+    "sibling": "0x09c77e07a13c732200118c458266817a05ec7bb8b666a54fcc694b3daab85116"
+  },
+  "saltSeedHex": "0xe28c6dd8910b8bb48e3cef5cd8a802eafc749b867fcc5d06141a251f784db3ec",
+  "synthetic": "example entities and test: addresses only; no real label data"
+}

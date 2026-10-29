@@ -1,0 +1,46 @@
+{
+  "content_hash": "0xe9ac14997bb8353c4b678674789a76d06f6aa8b4997a802bb3c193b71e08e486",
+  "domain": "onyx-dated-label-set-v1",
+  "format": 2,
+  "leaves": [
+    "06000000743a6b65657008000000656e746974793a6100a0bb0d0000000000640000000000000000",
+    "05000000743a6e657708000000656e746974793a6100a0bb0d0000000000c80000000000000000",
+    "05000000743a6f6c6408000000656e746974793a6100a0bb0d0000000000640000000000000001c700000000000000"
+  ],
+  "members_root": "0x187b47d11dfeab53f2380ffd03b68029f7f05ee3409e33da23ea05ae371ccd0e",
+  "set": {
+    "members": [
+      {
+        "address": "t:keep",
+        "confidence_ppm": 900000,
+        "entity": "entity:a",
+        "from": 100,
+        "kind": "Exchange",
+        "to": null
+      },
+      {
+        "address": "t:new",
+        "confidence_ppm": 900000,
+        "entity": "entity:a",
+        "from": 200,
+        "kind": "Exchange",
+        "to": null
+      },
+      {
+        "address": "t:old",
+        "confidence_ppm": 900000,
+        "entity": "entity:a",
+        "from": 100,
+        "kind": "Exchange",
+        "to": 199
+      }
+    ],
+    "name": "onyx.test",
+    "published": 1000,
+    "version": 1
+  },
+  "windows": {
+    "100-199": "0x014d52c3563219f47f5582603f97497b50686d1c134e8aa3c2b3fa508d38f078",
+    "200-900": "0x726501509f48b45ae1745b5a377b9354f2e76e853028f95c4336cba369fc0a5c"
+  }
+}

@@ -1,0 +1,17 @@
+[package]
+name = "onyx-level2"
+description = "Level-2 round runner for any dated feed (NS3): the draw, commits, reveals, receipts, settlement and results store, with each source supplying its template, fetcher and registry."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-coordinator = { path = "../onyx-coordinator" }
+onyx-api = { path = "../onyx-api" }
+serde_json.workspace = true
+
+[lints]
+workspace = true

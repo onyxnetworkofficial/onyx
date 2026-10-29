@@ -1,0 +1,50 @@
+[profile.default]
+src = "src"
+out = "out"
+libs = ["lib"]
+solc_version = "0.8.30"
+evm_version = "cancun"
+optimizer = true
+optimizer_runs = 200
+via_ir = true
+# Tests read the shared Rust/Solidity Merkle vectors.
+fs_permissions = [
+  { access = "read", path = "../fixtures" },
+  # Per-run coverage lines of the invariant suites (ONYX_INVARIANT_STATS=1, gitignored).
+  { access = "write", path = "./cache/invariant-stats" },
+]
+
+[fuzz]
+runs = 1024
+
+# Handler-based invariants (test/invariant, L2 contract audit). Kept small here so `forge test`
+# stays fast; `FOUNDRY_PROFILE=audit` runs them at depth (docs/audit/2026-10-13-contracts.md).
+[invariant]
+runs = 16
+depth = 64
+fail_on_revert = false
+
+# Audit profile: every fuzz test at 10,000 runs and the invariants at depth.
+[profile.audit.fuzz]
+runs = 10000
+
+[profile.audit.invariant]
+runs = 512
+depth = 256
+fail_on_revert = false
+show_metrics = true
+
+# Gas profile (`FOUNDRY_PROFILE=gas forge snapshot --check`, scripts/check-all.sh). The same
+# compiler settings as the default profile but without the CBOR metadata (which hashes source
+# paths and comments into the bytecode), so `.gas-snapshot` depends on code only, not on where
+# the checkout lives or on a comment edit (review L2-R1). Deployed bytecode is built by the
+# default profile and keeps its metadata. Separate out/cache so switching profiles never
+# rebuilds the other.
+[profile.gas]
+out = "out-gas"
+cache_path = "cache-gas"
+bytecode_hash = "none"
+cbor_metadata = false
+
+[fmt]
+line_length = 100

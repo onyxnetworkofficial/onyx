@@ -1,0 +1,41 @@
+{
+  "connectionTimeUnix": 1792567595,
+  "demoKeyAbsentFromPresentation": true,
+  "hiddenResponseBytes": 260,
+  "httpStatus": 200,
+  "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+  "maxRecvData": 4096,
+  "maxSentData": 1024,
+  "notaryKeyAlg": "secp256k1",
+  "notaryNote": "local notary in the prover's own process; its signing key was random and dropped after the run",
+  "notaryPublicKey": "02bb1b2611e74b40a43a01cef678820763157d86898e6018e56c91373095819924",
+  "notaryToProverBytes": 4005145,
+  "presentationBytes": 18553,
+  "presentationKeccak256": "0xe68a60287b96f28f29ce3748edb1407b2c1e071f3232e6af9fc89cd8ae506e79",
+  "prover": "tlsn-v1",
+  "proverToNotaryBytes": 30487436,
+  "recordDate": "2026-10-08",
+  "redactedHeader": "X-Demo-Key",
+  "redactedSentRange": [
+    288,
+    320
+  ],
+  "redactedValueBytes": 32,
+  "requestTarget": "/services/api/fiscal_service/v2/accounting/od/debt_to_penny?fields=record_date,tot_pub_debt_out_amt&filter=record_date:eq:2026-10-08",
+  "responseBytes": 550,
+  "responseKeccak256": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+  "serverName": "api.fiscaldata.treasury.gov",
+  "timingsUs": {
+    "attestation": 8297,
+    "mpcSetup": 318862,
+    "presentation": 198,
+    "prove": 396384,
+    "tlsAndHttp": 619439,
+    "total": 1344160,
+    "verify": 393
+  },
+  "tlsVersion": "TLS 1.2",
+  "tlsnVersion": "0.1.0-alpha.15",
+  "userAgent": "onyx-dev",
+  "value": "40305316210829.72"
+}

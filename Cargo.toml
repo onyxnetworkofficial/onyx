@@ -1,0 +1,135 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/onyx-core",
+    "crates/onyx-recipe-sdk",
+    "crates/onyx-recipe-host",
+    "crates/onyx-merkle",
+    "crates/onyx-labels",
+    "crates/onyx-miner",
+    "crates/onyx-validator",
+    "crates/onyx-coordinator",
+    "crates/onyx-tlock",
+    "crates/onyx-api",
+    "crates/onyx-node",
+    "crates/onyx-track",
+    "crates/onyx-intake",
+    "crates/onyx-check",
+    "crates/onyx-level2",
+    "apps/web/verify",
+    "adapters/source-btc",
+    "adapters/btc-schema",
+    "adapters/pool-schema",
+    "adapters/chain-schema",
+    "adapters/reserve-schema",
+    "adapters/reserve-serve",
+    "adapters/source-page",
+    "adapters/source-signed",
+    "adapters/source-fiscaldata",
+    "adapters/source-edgar",
+    "adapters/source-usgs",
+    "adapters/source-ncei",
+    "adapters/eth-schema",
+    "adapters/source-eth",
+    "recipes/eth-chain-stats",
+    "recipes/btc-entity-balance",
+    "recipes/btc-entity-flow-series",
+    "recipes/btc-entity-reserve",
+    "recipes/btc-pool-blocks",
+    "recipes/btc-chain-stats",
+    "recipes/test-float",
+    "recipes/test-clock",
+    "recipes/test-rand",
+]
+# ROADMAP S2b: the TLSNotary experiment is its own workspace (heavy pre-release tlsn crates);
+# check-all never builds it. See experiments/tlsn-fiscaldata/README.md.
+exclude = ["experiments/tlsn-fiscaldata"]
+
+[workspace.package]
+version = "0.0.1"
+edition = "2021"
+rust-version = "1.98"
+license = "Apache-2.0"
+publish = false
+
+[workspace.dependencies]
+onyx-core = { path = "crates/onyx-core" }
+onyx-merkle = { path = "crates/onyx-merkle" }
+onyx-labels = { path = "crates/onyx-labels" }
+onyx-track = { path = "crates/onyx-track" }
+onyx-intake = { path = "crates/onyx-intake" }
+onyx-recipe-host = { path = "crates/onyx-recipe-host" }
+onyx-recipe-sdk = { path = "crates/onyx-recipe-sdk" }
+onyx-btc-schema = { path = "adapters/btc-schema" }
+onyx-pool-schema = { path = "adapters/pool-schema" }
+onyx-chain-schema = { path = "adapters/chain-schema" }
+onyx-reserve-schema = { path = "adapters/reserve-schema" }
+borsh = { version = "1", features = ["derive"] }
+sha3 = "0.10"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+hex = "0.4"
+tracing = "0.1"
+# Pinned exactly: attestation verdicts must not change under a semver bump (ADR-0015).
+secp256k1 = { version = "=0.29.1", features = ["recovery"] }
+bip322 = "=0.0.12"
+bitcoin = "=0.32.102"
+base64 = "=0.23.1"
+# ROADMAP P4a (ADR-0044): Ethereum block format, shared by the adapter, the recipe and the verifier.
+onyx-eth-schema = { path = "adapters/eth-schema" }
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_docs = "warn"
+
+[workspace.lints.clippy]
+float_arithmetic = "deny"
+dbg_macro = "deny"
+unwrap_used = "warn"
+
+[profile.release]
+opt-level = 3
+codegen-units = 1
+
+# The canonical interpreter is slow unoptimized; optimize it in test builds too
+# (semantics do not depend on optimization level of the interpreter's own code).
+[profile.dev.package.wasmi]
+opt-level = 3
+[profile.dev.package.wasmi_core]
+opt-level = 3
+[profile.dev.package.wasmi_ir]
+opt-level = 3
+# Signature checks (secp256k1 C library, keccak) dominate the level-3
+# exhaustive state test; optimizing them changes no result.
+[profile.dev.package.secp256k1-sys]
+opt-level = 3
+[profile.dev.package.secp256k1]
+opt-level = 3
+# The time-lock's pairings (onyx-tlock, ROADMAP C50): blst's C at -O0 makes
+# the interop and adversarial tests slow; optimizing it changes no result.
+[profile.dev.package.blst]
+opt-level = 3
+[profile.dev.package.sha3]
+opt-level = 3
+[profile.dev.package.keccak]
+opt-level = 3
+# The draw-invariant property test (`revlog_r8`, 20,000 seeded runs, review
+# R9) spends its time in the book's JSON and the coordinator: optimized it
+# runs in about 50 s instead of about 100 s. Overflow checks and debug
+# assertions stay on (they follow the profile, not `opt-level`).
+[profile.dev.package.serde_json]
+opt-level = 3
+[profile.dev.package.onyx-coordinator]
+opt-level = 3
+[profile.dev.package.onyx-api]
+opt-level = 3
+
+# Browser verifier build (ADR-0020): whole-program LTO and size-leaning
+# optimization; the canonical engine's semantics do not depend on it.
+[profile.web]
+inherits = "release"
+lto = "fat"
+opt-level = "s"
+panic = "abort"
+strip = true

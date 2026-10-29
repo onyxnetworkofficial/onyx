@@ -1,0 +1,29 @@
+/target
+/experiments/*/target
+.env
+.env.*
+!.env.example
+*.db
+*.sqlite
+/contracts/out
+/contracts/cache
+/contracts/broadcast
+/data
+/exports
+*.log
+apps/demo/site/data/
+/fixtures-live
+apps/web/node_modules/
+apps/web/build/
+apps/web/.svelte-kit/
+apps/web/src/lib/pkg/
+apps/web/static/data/
+
+# Local agent worktrees
+/.claude/worktrees/
+
+# Base Sepolia run: actor keys (0600) and run logs (docs/ops/demo-testnet.md)
+/.onyx-testnet/
+
+# Python bytecode (scripts)
+__pycache__/

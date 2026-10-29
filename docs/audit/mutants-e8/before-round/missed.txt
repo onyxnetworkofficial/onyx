@@ -1,0 +1,96 @@
+crates/onyx-coordinator/src/round.rs:44:5: replace commit_message -> String with String::new()
+crates/onyx-coordinator/src/round.rs:283:9: replace ShardOutcome::first -> Option<&(u64, MinerAddress, Hash32)> with None
+crates/onyx-coordinator/src/round.rs:338:9: replace Round::open_unchecked -> Result<Round, RoundError> with Ok(Default::default())
+crates/onyx-coordinator/src/round.rs:352:12: delete ! in Round::open_inner
+crates/onyx-coordinator/src/round.rs:354:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:353:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:352:18: replace < with == in Round::open_inner
+crates/onyx-coordinator/src/round.rs:352:18: replace < with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:352:18: replace < with <= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:353:33: replace < with == in Round::open_inner
+crates/onyx-coordinator/src/round.rs:44:5: replace commit_message -> String with "xyzzy".into()
+crates/onyx-coordinator/src/round.rs:353:33: replace < with <= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:354:33: replace <= with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:359:12: delete ! in Round::open_inner
+crates/onyx-coordinator/src/round.rs:373:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:374:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:353:33: replace < with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:372:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:370:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:371:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:367:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:366:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:362:13: replace && with || in Round::open_inner
+crates/onyx-coordinator/src/round.rs:359:32: replace < with == in Round::open_inner
+crates/onyx-coordinator/src/round.rs:359:32: replace < with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:359:32: replace < with <= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:365:17: replace <= with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:364:52: replace + with * in Round::open_inner
+crates/onyx-coordinator/src/round.rs:366:39: replace < with == in Round::open_inner
+crates/onyx-coordinator/src/round.rs:366:39: replace < with <= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:366:39: replace < with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:367:39: replace <= with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:370:68: replace <= with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:371:27: replace > with == in Round::open_inner
+crates/onyx-coordinator/src/round.rs:371:27: replace > with < in Round::open_inner
+crates/onyx-coordinator/src/round.rs:371:27: replace > with >= in Round::open_inner
+crates/onyx-coordinator/src/round.rs:372:27: replace <= with > in Round::open_inner
+crates/onyx-coordinator/src/round.rs:378:12: delete ! in Round::open_inner
+crates/onyx-coordinator/src/round.rs:394:48: replace || with && in Round::open_inner
+crates/onyx-coordinator/src/round.rs:394:51: delete ! in Round::open_inner
+crates/onyx-coordinator/src/round.rs:421:9: replace Round::id -> u64 with 0
+crates/onyx-coordinator/src/round.rs:421:9: replace Round::id -> u64 with 1
+crates/onyx-coordinator/src/round.rs:436:9: replace Round::outcome -> Option<&BTreeMap<Hash32, ShardOutcome>> with Some(Box::leak(Box::new(BTreeMap::new())))
+crates/onyx-coordinator/src/round.rs:436:9: replace Round::outcome -> Option<&BTreeMap<Hash32, ShardOutcome>> with None
+crates/onyx-coordinator/src/round.rs:441:9: replace Round::work_of -> BTreeMap<Hash32, Hash32> with BTreeMap::new()
+crates/onyx-coordinator/src/round.rs:446:9: replace Round::committed_miners -> BTreeSet<MinerAddress> with BTreeSet::from_iter([Default::default()])
+crates/onyx-coordinator/src/round.rs:446:9: replace Round::committed_miners -> BTreeSet<MinerAddress> with BTreeSet::new()
+crates/onyx-coordinator/src/round.rs:451:9: replace Round::shard_ids -> Vec<Hash32> with vec![]
+crates/onyx-coordinator/src/round.rs:456:9: replace Round::specs -> &BTreeMap<Hash32, ShardSpec> with Box::leak(Box::new(BTreeMap::new()))
+crates/onyx-coordinator/src/round.rs:461:16: replace < with == in Round::phase
+crates/onyx-coordinator/src/round.rs:461:16: replace < with > in Round::phase
+crates/onyx-coordinator/src/round.rs:463:23: replace < with == in Round::phase
+crates/onyx-coordinator/src/round.rs:463:23: replace < with > in Round::phase
+crates/onyx-coordinator/src/round.rs:461:16: replace < with <= in Round::phase
+crates/onyx-coordinator/src/round.rs:474:9: replace Round::check_time -> Result<(), RoundError> with Ok(())
+crates/onyx-coordinator/src/round.rs:463:23: replace < with <= in Round::phase
+crates/onyx-coordinator/src/round.rs:477:16: replace < with == in Round::check_time
+crates/onyx-coordinator/src/round.rs:477:16: replace < with <= in Round::check_time
+crates/onyx-coordinator/src/round.rs:494:9: replace Round::commit -> Result<u64, RoundError> with Ok(0)
+crates/onyx-coordinator/src/round.rs:477:16: replace < with > in Round::check_time
+crates/onyx-coordinator/src/round.rs:494:9: replace Round::commit -> Result<u64, RoundError> with Ok(1)
+crates/onyx-coordinator/src/round.rs:506:49: replace != with == in Round::commit
+crates/onyx-coordinator/src/round.rs:495:38: replace != with == in Round::commit
+crates/onyx-coordinator/src/round.rs:513:12: delete ! in Round::commit
+crates/onyx-coordinator/src/round.rs:516:17: replace < with == in Round::commit
+crates/onyx-coordinator/src/round.rs:510:18: replace != with == in Round::commit
+crates/onyx-coordinator/src/round.rs:516:17: replace < with > in Round::commit
+crates/onyx-coordinator/src/round.rs:516:17: replace < with <= in Round::commit
+crates/onyx-coordinator/src/round.rs:523:23: replace += with -= in Round::commit
+crates/onyx-coordinator/src/round.rs:523:23: replace += with *= in Round::commit
+crates/onyx-coordinator/src/round.rs:549:18: replace != with == in Round::reveal
+crates/onyx-coordinator/src/round.rs:562:13: replace != with == in Round::reveal
+crates/onyx-coordinator/src/round.rs:547:9: replace Round::reveal -> Result<(), RoundError> with Ok(())
+crates/onyx-coordinator/src/round.rs:566:12: delete ! in Round::reveal
+crates/onyx-coordinator/src/round.rs:571:27: replace match guard rows.len() as u64 == commitment.leaf_count with true in Round::reveal
+crates/onyx-coordinator/src/round.rs:571:45: replace == with != in Round::reveal
+crates/onyx-coordinator/src/round.rs:587:16: replace < with == in Round::close
+crates/onyx-coordinator/src/round.rs:571:27: replace match guard rows.len() as u64 == commitment.leaf_count with false in Round::reveal
+crates/onyx-coordinator/src/round.rs:584:9: replace Round::close -> Result<BTreeMap<Hash32, ShardOutcome>, RoundError> with Ok(BTreeMap::new())
+crates/onyx-coordinator/src/round.rs:587:16: replace < with > in Round::close
+crates/onyx-coordinator/src/round.rs:591:18: replace < with > in Round::close
+crates/onyx-coordinator/src/round.rs:587:16: replace < with <= in Round::close
+crates/onyx-coordinator/src/round.rs:591:18: replace < with == in Round::close
+crates/onyx-coordinator/src/round.rs:636:5: replace check_available -> Result<(), RoundError> with Ok(())
+crates/onyx-coordinator/src/round.rs:651:8: delete ! in check_available
+crates/onyx-coordinator/src/round.rs:655:12: delete ! in check_available
+crates/onyx-coordinator/src/round.rs:663:21: replace != with == in check_available
+crates/onyx-coordinator/src/round.rs:663:33: replace || with && in check_available
+crates/onyx-coordinator/src/round.rs:663:48: replace != with == in check_available
+crates/onyx-coordinator/src/round.rs:674:32: replace == with != in check_available
+crates/onyx-coordinator/src/round.rs:677:24: replace > with == in check_available
+crates/onyx-coordinator/src/round.rs:691:18: replace > with == in check_available
+crates/onyx-coordinator/src/round.rs:677:24: replace > with < in check_available
+crates/onyx-coordinator/src/round.rs:677:24: replace > with >= in check_available
+crates/onyx-coordinator/src/round.rs:691:18: replace > with >= in check_available
+crates/onyx-coordinator/src/round.rs:691:18: replace > with < in check_available

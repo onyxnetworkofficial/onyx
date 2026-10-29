@@ -1,0 +1,298 @@
+{
+  "bad": [
+    {
+      "name": "empty",
+      "payload": "0x"
+    },
+    {
+      "name": "truncated",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65010700000000000000000000000000000000f153650000000001000000000000"
+    },
+    {
+      "name": "trailing byte",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65010700000000000000000000000000000000f1536500000000010000000000000000"
+    },
+    {
+      "name": "source length past the end",
+      "payload": "0xffffffff6578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65010700000000000000000000000000000000f15365000000000100000000000000"
+    },
+    {
+      "name": "subject tag 4",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665040e000000656e746974793a6578616d706c65010700000000000000000000000000000000f15365000000000100000000000000"
+    },
+    {
+      "name": "value tag 5",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65050700000000000000000000000000000000f15365000000000100000000000000"
+    },
+    {
+      "name": "fixed scale 0",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c6502010000000000000000000000000000000000f15365000000000100000000000000"
+    },
+    {
+      "name": "fixed scale 39",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c6502010000000000000000000000000000002700f15365000000000100000000000000"
+    },
+    {
+      "name": "bool byte 2",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65030200f15365000000000100000000000000"
+    },
+    {
+      "name": "bytes over 1024",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c650401040000010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010101010100f15365000000000100000000000000"
+    },
+    {
+      "name": "zero key",
+      "payload": "0x0e0000006578616d706c652e7369676e65640000000000000000000000000000000000000000000000000000000000000000160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65010700000000000000000000000000000000f15365000000000100000000000000"
+    },
+    {
+      "name": "zero observation time",
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65010700000000000000000000000000000000000000000000000100000000000000"
+    }
+  ],
+  "cases": [
+    {
+      "digest": "0xd2e3437c1f597a5c671e5a21aa26b28e251ec505727e3764e126a3754ee40813",
+      "fact": "0x4ebb04b9f8d777667b53f9081c9229a9aabfe726addeb9b9db900e5e4cf304f0",
+      "observed": 1700000000,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c6500d6ffffffffffffffffffffffffffffff00f15365000000000000000000000000",
+      "reportHash": "0xa35843907cf7745cdf0864ad0274dc038feb6da9d1a76a07a08d6c27ada589b8",
+      "sequence": 0,
+      "signature": "0xe0c2eac90c56d32c2c8358412c4def4200c31fbee56cae485f38a333673c4631648bfc599b672426bc8484db51330c68800b782583aaac5de2368026ac270cd11b",
+      "valueHash": "0x16bade0e61ae3bec6982e73c67b4e9c6edf70baba3afb01b904faf26b23d8fb7"
+    },
+    {
+      "digest": "0x8a029535d288d4d649c5b8100995bbf364f50a552b9c426b0c8e9621eda5e3aa",
+      "fact": "0x5d58c18c98d2405a4a80cc9d5d8306f63a8906f951e2398a78a00fe346819670",
+      "observed": 1700000001,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c6501ffffffffffffffffffffffffffffffff01f15365000000000100000000000000",
+      "reportHash": "0xa09583b066bef38ac5532dfd16475b9160cd7b9ef84c6cc6338516f0ab386a4b",
+      "sequence": 1,
+      "signature": "0x48cb21bb1c03171a01abcaa7c9d1384728454f09f13a705e960ed612e661240e7139e59c75260bdeba8da93e3a299eb379c7913aa868a4a438e0b5f58066afdc1c",
+      "valueHash": "0xbb4d67326897010fe387039716ada6a0d5b7e363a1dac397b89c7851e80409a6"
+    },
+    {
+      "digest": "0xf7f5c43f1f31c6b06e1bee0d04d40e51c6a34e69ea0ccf4bde2d53ded275d489",
+      "fact": "0x4f83ad8bf69773ec5d04ea8cd8a2f069156e3ec8a7d0870bea9a77fc36183b23",
+      "observed": 1700000002,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c6502c01dfeffffffffffffffffffffffffff2602f15365000000000200000000000000",
+      "reportHash": "0xbf4c5ff3d47f3ccfc349c30067b4a137821eea23c50fb2129fba178f34091042",
+      "sequence": 2,
+      "signature": "0x77407323c642f199fd60aa2eb1a17a12e1a73b0ac69d3e99a4de0185728d96201983ef8d07c90c27ee758712077779169475382ebcaa82c95a827c36865a15e91c",
+      "valueHash": "0x0cd11373b6c7849f108ead62d385e26597e60cef12128db75ccf49f4e010a457"
+    },
+    {
+      "digest": "0xefecebfbb617624d34c3edbb18902830f8e4f0093ed5538fc524e42e70896645",
+      "fact": "0xec9857896fdc589894b7861d13a2c57cc28a75d8313a0983a2fb6f40ef9516db",
+      "observed": 1700000003,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65030103f15365000000000300000000000000",
+      "reportHash": "0x6a58340adc7b2ca4cee8b7321bec19ae55adf3bfe0e21afa990c5d3c7fb79467",
+      "sequence": 3,
+      "signature": "0x01b358c10bbdaacd3b2aae012ad8943e1e789f34ea57acddae708c6b9f9e2deb1fbc088bf7c1264154c0e4d41117e39d34b3945cf8f711ed0efb3b2ab311a8561b",
+      "valueHash": "0x88768d4766ae70039712941261bf2d46204cbd0513f73c8e2a7cba7565e81749"
+    },
+    {
+      "digest": "0x8449ff2e8b626b9cb9e71fc35b8e5d2ffd8188d9a1bc9478b8d83cdd30640b7d",
+      "fact": "0x7921a4f3f90070ad5b0971df10f8bb19c04a2e1087979e4f6e864d641205d3da",
+      "observed": 1700000004,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c65040000000004f15365000000000400000000000000",
+      "reportHash": "0x487ff0cc32d4a524a8e24d2c6efa181bb1ed95ffce50aea23e09629a597bce8c",
+      "sequence": 4,
+      "signature": "0x16a3c979d804985a370b12e5d9e617d2ac7fea4d1f7767073e84616f6e50138f683eae8ab550be9a9946a8619a9fe9a79f4e9f35e679462b5fa68a8a19e79eb41c",
+      "valueHash": "0xd9aff3b2275446d0d02f6eddd541418def4174a05aa4669172117c5be0aa25c6"
+    },
+    {
+      "digest": "0x209b3efb84f412623ab9b85341a639af0132dc5e8c6109fb22d7e9b5c41ef590",
+      "fact": "0xa64896e0160a0664cedb3423714da2c72af1a5e489d964e9472a21c41b53b518",
+      "observed": 1700000005,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665000e000000656e746974793a6578616d706c650400040000abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab05f15365000000000500000000000000",
+      "reportHash": "0x38931b1999ba99875337cfa59f7951780caf34122d06ab3593777fdfe04691da",
+      "sequence": 5,
+      "signature": "0x80425a1f95b8b2520abb761072f3c7b74e8035367cb5e599bf1173478199fbd93048b004ef7a39d580abe1522e77d9c82a874e7e7d4944091646d5bd763bb6351c",
+      "valueHash": "0x4100ca83fddb3e8553ef2b65e211e0762cd1ee6a5a3ee42ae1d48b17e8a678eb"
+    },
+    {
+      "digest": "0x2c023033d099587e993c2dedc31f35ec4d4c7d0da097df601d9a33d98085d1e0",
+      "fact": "0x54e49af00729751d53e80172e665f5ecbfa3a30246887846a9dc8c41a64c0c33",
+      "observed": 1700000010,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c6500d6ffffffffffffffffffffffffffffff0af15365000000006400000000000000",
+      "reportHash": "0x84116725b3df0bd987cb92e1a3b295d160d0c364dc580d3406db45edbafe1418",
+      "sequence": 100,
+      "signature": "0x1d36839eb695ce455ff79c64090a906af71689a5cc811390d1d1654c762f334865a0403a2ee11102662956e169151398d240bc12889c871f84fc7b018e3a1adc1c",
+      "valueHash": "0x16bade0e61ae3bec6982e73c67b4e9c6edf70baba3afb01b904faf26b23d8fb7"
+    },
+    {
+      "digest": "0x2ef4b2499620a697ebe8b0c1d8fb9704ee69200607a9913ecb08774632943427",
+      "fact": "0x9143ecf43d7dd009184a55070736848e10b4c681bb1463af3d17f01118a4953d",
+      "observed": 1700000011,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c6501ffffffffffffffffffffffffffffffff0bf15365000000006500000000000000",
+      "reportHash": "0xee5111ad9eb4ffc6964ee6c6fe1b64f58ea81a53428e1d5a3e44241fde2bbf08",
+      "sequence": 101,
+      "signature": "0xf62cfb3d870cd00ee41ccfb1fffb8e56ec277d507f677257ed1154f6a9d66c9a461181f8de885f6d537d5834d83ab8b36aeef781f902031095262c548c754f451b",
+      "valueHash": "0xbb4d67326897010fe387039716ada6a0d5b7e363a1dac397b89c7851e80409a6"
+    },
+    {
+      "digest": "0xe91c3ed0261fbfe3bafc1511c8551bdbed749fa6afbe3dbd083b0b6f3e205c46",
+      "fact": "0xf5f7b3f5b8f37ba9e737bb9d93198fa5a3765444088fd546f13098166040eeb1",
+      "observed": 1700000012,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c6502c01dfeffffffffffffffffffffffffff260cf15365000000006600000000000000",
+      "reportHash": "0x49f1ac56ea9b12889547359df9b3620c9a49f79c288122dd27a321283cc97d61",
+      "sequence": 102,
+      "signature": "0x99800bdbcbc00efd54bafa3ca5264743d5cb47abeeeab6b60b30cf228da8fda03eae9112601c87690b26295898a43899b5cb7929acf89ee1c8f1c2cc837804fa1c",
+      "valueHash": "0x0cd11373b6c7849f108ead62d385e26597e60cef12128db75ccf49f4e010a457"
+    },
+    {
+      "digest": "0xf5dc3397e2cf6b8c3468d2b2d42065ae35ba771a37d4cc1c1d917bd37cdc977e",
+      "fact": "0xfa3fda7486e145fc13d748f9a1bfe2a39c499f7dc8546e73098c901c7b65e7ac",
+      "observed": 1700000013,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c6503010df15365000000006700000000000000",
+      "reportHash": "0xafff60a499975d866cbd402f30cafdf31ecbdea6bbc198e9328da04ee8bf0af6",
+      "sequence": 103,
+      "signature": "0xdfad6cf39e65192ab4cbab086b13b19effbb903e8f974ab741908b8f00fd2d1a39687ad22fa457a27d518d4a5a92d54e8ed304a25e2c4c6e480abd14bb47b3651b",
+      "valueHash": "0x88768d4766ae70039712941261bf2d46204cbd0513f73c8e2a7cba7565e81749"
+    },
+    {
+      "digest": "0xdb85f759c98d12fbd79dfb3811a1fbf0c07afbc7c68cd8540c700908a1e954f7",
+      "fact": "0x2b4517c18f90127a64dcb9a9ef3dac52534655390b6d7d2b8463b92888eb69aa",
+      "observed": 1700000014,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c6504000000000ef15365000000006800000000000000",
+      "reportHash": "0x10e51e6b7c387ad807cb58221095d0b88871f47f758f5faff4e2fe8b0debe0ff",
+      "sequence": 104,
+      "signature": "0x8babcbe4a00a57696c73da20d82a05a02cc0764420763de573e5bfca27b4845b0ac29297ee43f84ce7df6b1589698743f4d84463f2cecb04357498ae7386fca61b",
+      "valueHash": "0xd9aff3b2275446d0d02f6eddd541418def4174a05aa4669172117c5be0aa25c6"
+    },
+    {
+      "digest": "0x11f824586fcbd8a9a0c4e479f8617f369b7ddbf5bfffa9398bbdcb4618c5ed33",
+      "fact": "0x425b599723567bff28c99a734ca0ba00ec5fec61d278efd7005b072645b62d99",
+      "observed": 1700000015,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665010f0000006274633a626331716578616d706c650400040000abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab0ff15365000000006900000000000000",
+      "reportHash": "0x7bec1eec4cea40a553898c0ae9f0901c84bb47ccb9a4ee3027615e598cb5da99",
+      "sequence": 105,
+      "signature": "0xef53b673d1d57f8ecf8734fce6b180057287c6e8ca215a47ad61476ed22a64db0f58ac12c70e2fc6307f45e839a3f38180c709ee42ebff2467668acfcbe8b4631c",
+      "valueHash": "0x4100ca83fddb3e8553ef2b65e211e0762cd1ee6a5a3ee42ae1d48b17e8a678eb"
+    },
+    {
+      "digest": "0xf2ae70ea3c647fc444959fc94aa9be8df6888765ac28f0fa74fce0380ec883a5",
+      "fact": "0x03ee75618bac8199378ab4c154d2b15e94bdf0cb8b6cc33e528d6fefa1a4610f",
+      "observed": 1700000020,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a4942495400d6ffffffffffffffffffffffffffffff14f1536500000000c800000000000000",
+      "reportHash": "0x73a78e0c55e583305f542c988a654c0e7490f51d0f33a3d6fb4466b57143eaeb",
+      "sequence": 200,
+      "signature": "0xac303e8932148f1749f7b34b9e15058cb928a420112ab0267c4c043a0ad174930aa212ea234f5e67f0b2ffc6c44e9d1b5af143dc7f6e79af185d3ffbe9745fa81b",
+      "valueHash": "0x16bade0e61ae3bec6982e73c67b4e9c6edf70baba3afb01b904faf26b23d8fb7"
+    },
+    {
+      "digest": "0xe4ec3fc2bd5c953434106d2e02baa2692278a901e920cdc6a6f279556ba79de5",
+      "fact": "0xee4960ee00340ef53b3b2c837549e6fdbfc99f1021ad1afe436384439ba3b5aa",
+      "observed": 1700000021,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a4942495401ffffffffffffffffffffffffffffffff15f1536500000000c900000000000000",
+      "reportHash": "0xfdb1b2154413c797bf2672968adf5ce37b9ae2f9d5e37035dcaad97485bb03cc",
+      "sequence": 201,
+      "signature": "0x62a59eb198ecbb85fc641be356ac38b9a23a5fe401bd3cf219632400e3021e8a346e56a52f78d786952d0e11022f3003b45651afa48aa7da457820822d02220f1b",
+      "valueHash": "0xbb4d67326897010fe387039716ada6a0d5b7e363a1dac397b89c7851e80409a6"
+    },
+    {
+      "digest": "0x6b4b82426fea5b6123f795428402d884a0aba753d67a836161aa286ca3339af8",
+      "fact": "0x32a9e338ed9d91dbd23b7d42cbea655f1073915b79520fa222d741969c2ae4d0",
+      "observed": 1700000022,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a4942495402c01dfeffffffffffffffffffffffffff2616f1536500000000ca00000000000000",
+      "reportHash": "0x0e596e4d40845cb42966f5e0b7f10a0e9f64d996f9ec1f65b1bec12a34cbb382",
+      "sequence": 202,
+      "signature": "0xb46a718717e3d97b3193a72f26a84077b10f255faed3ab0ee7879144eb778bd9463f59857fbae218c1ba817190cbbdc770f2cc404c2f51d552267440e3cdb4461b",
+      "valueHash": "0x0cd11373b6c7849f108ead62d385e26597e60cef12128db75ccf49f4e010a457"
+    },
+    {
+      "digest": "0x14c6bc9ef36c84ad4c18862d1632b307880e65cc743f7e7bf5db2eaa643569f2",
+      "fact": "0x684945065dca90e66b59a7dbec3116174bcd83ab7d5dd9508fc1b4d6b1c92d40",
+      "observed": 1700000023,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a49424954030117f1536500000000cb00000000000000",
+      "reportHash": "0xda4f9abc89e8d1d0e7f85f0897c0efb251c9cbefd78d65b593bd4f3ada866876",
+      "sequence": 203,
+      "signature": "0x82a64a07b742cc01f17da13f6bf7662d7a00c15c4ad1d03693cf65b7b41002305316d107597d57867660899d678d4d102c81fb2f36f9da2e8c840ad6cf3640b41b",
+      "valueHash": "0x88768d4766ae70039712941261bf2d46204cbd0513f73c8e2a7cba7565e81749"
+    },
+    {
+      "digest": "0x7c266eb4061baf2d3edd2cb2128c885efebcfc65a8ee409149108dc5eb4d2033",
+      "fact": "0x66e39913084bdd487ec913d79e40e778b44ad486d9bce5f57777ef0057f674da",
+      "observed": 1700000024,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a49424954040000000018f1536500000000cc00000000000000",
+      "reportHash": "0x8d66879fbe0ac275ceb0da9214cd8945053574cb46614203c7cd5c4b9cd09fe7",
+      "sequence": 204,
+      "signature": "0x921531ac5ea514c18b005e722a9aa084e45576516cbb09bc5b463026c444d0ec5bc4850ac6b931316c6e6a8d864785dca8d96f682de68787a58799ec031dfcbb1c",
+      "valueHash": "0xd9aff3b2275446d0d02f6eddd541418def4174a05aa4669172117c5be0aa25c6"
+    },
+    {
+      "digest": "0x8ba070ef1863e90b66be8e3cbc53c4a2444dfe82ecd766e6451b287157f4cd21",
+      "fact": "0x8e337999d168cc74761187d730b20b4bb1e1db4a1714e17d1f8077db5aeee299",
+      "observed": 1700000025,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665020b0000007469636b65723a494249540400040000abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab19f1536500000000cd00000000000000",
+      "reportHash": "0x2e4f06ca691fbb29d6dd2f88850e0dbc59ec4d785e23550ea9036cb67d595353",
+      "sequence": 205,
+      "signature": "0x8601e0c61ff2a4b3479829519203b5132de14c7f5f45f4f86cf065ba1d44f0b8179144a1ca73c9cefc269b2e209e8e578cb1194338a11659bda3ef6bab9c32c91c",
+      "valueHash": "0x4100ca83fddb3e8553ef2b65e211e0762cd1ee6a5a3ee42ae1d48b17e8a678eb"
+    },
+    {
+      "digest": "0x234329f7239fd7d4137a0078c38c1f69f9e935c6e8cfdce9f4577f05dbddc4e8",
+      "fact": "0x43c763a885f2d74b831ec4c5b15aa9a342053d4d95a3eacd6a56f3c48644c993",
+      "observed": 1700000030,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e657400d6ffffffffffffffffffffffffffffff1ef15365000000002c01000000000000",
+      "reportHash": "0xd8972264eeceaf3c81c2c0916803763ae690841b169bcfdcf64c931272ccf765",
+      "sequence": 300,
+      "signature": "0x2421d35aa1bbc17f84c98a493676ca8dcfbdf689dc4ee7b7c4910871ce0ba1ec74d76de2cb69ccba42d8685668d43125b854a0b4ed3f5a0fd8e00b3b16eab7331c",
+      "valueHash": "0x16bade0e61ae3bec6982e73c67b4e9c6edf70baba3afb01b904faf26b23d8fb7"
+    },
+    {
+      "digest": "0x2fce0c966efd1a93b8aa12225e7265b7b8e980801633bcf40067d6f3ec9ed4d5",
+      "fact": "0x47442b046a95785ab33beaabd86bdea5b3d8c32d6c9fb95ea0d034333694c3fc",
+      "observed": 1700000031,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e657401ffffffffffffffffffffffffffffffff1ff15365000000002d01000000000000",
+      "reportHash": "0x02a10ed1592933e9842de5f307e6f39574e1d2cd9e66fde8358804eb96fd1631",
+      "sequence": 301,
+      "signature": "0x66aaca042e71d91ae5953ad0e53a99dcd7ef0421f17b4f3832d26feea9c6ac9a2ff977c3fe067d7a598f0b9dc6caa9b6fac3c9c77fda45e51bbe6f5bf3680c621b",
+      "valueHash": "0xbb4d67326897010fe387039716ada6a0d5b7e363a1dac397b89c7851e80409a6"
+    },
+    {
+      "digest": "0xa4d08806e77c21d05fc8ab9805526a990a1cba09c520b45d65118b9ec0921363",
+      "fact": "0x8ad0ade9839e2ca7903aecacd35661499e824973641006de067e42fe5adcbc10",
+      "observed": 1700000032,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e657402c01dfeffffffffffffffffffffffffff2620f15365000000002e01000000000000",
+      "reportHash": "0x95bdb867984fd483a31ea81f6bf76858e2cdd68da9b3de1ebdf5f9a8af644c53",
+      "sequence": 302,
+      "signature": "0xfdff419487af98e069d18dcb19582e9a73ee08c11685d460704a3a87bfdc68c8119ef554135dea0920ff78a577bc9d8cc7eac05e9b50f220c0d4a2f402c6248d1c",
+      "valueHash": "0x0cd11373b6c7849f108ead62d385e26597e60cef12128db75ccf49f4e010a457"
+    },
+    {
+      "digest": "0xa8195ebd6a301aa20d1315e2b10fde3a9f4ba0218518e2aa713cae1aa594f36f",
+      "fact": "0xf299a2c112e2e4826a0f092ea96d1c87679f39c5d5f0c2fb1f6f6cddc362eef3",
+      "observed": 1700000033,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e6574030121f15365000000002f01000000000000",
+      "reportHash": "0xa9aa19e5a1bb2e603720c15cee9faa95e6123ebd2b9eb2f5667ba659ed0d307b",
+      "sequence": 303,
+      "signature": "0x8ebc548871d9e61e5e120a0ad058bc5f4a35bfd56ced0c7813ab89c9fdc7441513d53731820e17e37d825035a6be42c168d49275881700a8c3f7b68febca0f3a1b",
+      "valueHash": "0x88768d4766ae70039712941261bf2d46204cbd0513f73c8e2a7cba7565e81749"
+    },
+    {
+      "digest": "0x4d2ae044bf3376fbc9ca89c3f6a8fc70525dc9c0586fcec72561d54ac948efbf",
+      "fact": "0x58e24febd0fb68f2f54d04fb2f5964fb17244c9c5763864e9fda3ba89decfbcb",
+      "observed": 1700000034,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e6574040000000022f15365000000003001000000000000",
+      "reportHash": "0xce881f59717a20566921f8571607f2453f44bc2e5562071be5f2b1efbff48e8b",
+      "sequence": 304,
+      "signature": "0xb7777e9d63821011c8e3ed9d51b1c44b27e0ff7f8770e194b02045f39943ce584a5f1c61fa55a320a0251bab9e7168238031c4996a7e960f00712b95e4da3a6e1c",
+      "valueHash": "0xd9aff3b2275446d0d02f6eddd541418def4174a05aa4669172117c5be0aa25c6"
+    },
+    {
+      "digest": "0x08ac859edd7c4439f0558366c1c9cf5918a8ae8f625d2a42d81c20c75aa17f35",
+      "fact": "0x10d709d71edd83f18553d215a7acf9026184ed6afc67dd2b4c217372f8663ab5",
+      "observed": 1700000035,
+      "payload": "0x0e0000006578616d706c652e7369676e65646f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f160000006578616d706c652e7369676e65642e72657365727665030b0000006274632e6d61696e6e65740400040000abababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababababab23f15365000000003101000000000000",
+      "reportHash": "0x5c2926f1c9b6d800bc222515e1853cb9ac855b81bbacd7e898adf2d2939cc385",
+      "sequence": 305,
+      "signature": "0x1d817196a8c752c9bd1804542d1dfd6fd9df8bc51d42c0a64ec78569539d831d4ea660dd908da2fdb440ac03fae0f7ea70166d84ab6b85d3fd966a479636639d1b",
+      "valueHash": "0x4100ca83fddb3e8553ef2b65e211e0762cd1ee6a5a3ee42ae1d48b17e8a678eb"
+    }
+  ],
+  "keyId": "0x6f88c30099d16609744cd8bd1a18aca45d3a42a0c67b3cbde990e1d5e974b13f",
+  "origin": "data.example.org",
+  "signer": "0x76169bd8947c378570b79bdacd906ed836a8becf",
+  "source": "example.signed"
+}

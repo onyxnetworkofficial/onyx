@@ -1,0 +1,32 @@
+[package]
+name = "onyx-source-usgs"
+description = "Level-2 source: the number of magnitude 5+ earthquakes the USGS catalog lists worldwide on one day (U.S. public domain, no account), read by a pinned fetcher (NS3)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+serde_json.workspace = true
+# The round runner (feature `round`): the shared level-2 runner (NS3).
+onyx-level2 = { path = "../../crates/onyx-level2", optional = true }
+onyx-coordinator = { path = "../../crates/onyx-coordinator", optional = true }
+
+[features]
+round = ["dep:onyx-level2", "dep:onyx-coordinator"]
+
+[dev-dependencies]
+onyx-source-usgs = { path = ".", features = ["round"] }
+onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+onyx-level2 = { path = "../../crates/onyx-level2" }
+# The query API test (NS17): the recorded round served over HTTP.
+onyx-api = { path = "../../crates/onyx-api" }
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+http-body-util = "0.1"
+tokio = { version = "1", features = ["rt", "macros"] }
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[lints]
+workspace = true

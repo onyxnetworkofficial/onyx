@@ -1,0 +1,43 @@
+[package]
+name = "onyx-coordinator"
+description = "Rounds, commit-reveal, sampling and canaries, disputes, level-2 observer rounds, level-3 intake and track-record publication; reward and slash ledger."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+onyx-labels.workspace = true
+onyx-merkle.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+onyx-recipe-host.workspace = true
+# Sealed reveal posts (ADR-0027 amendment 10): ECDH and Chaum-Pedersen proofs on secp256k1.
+secp256k1.workspace = true
+# The time-lock layer (ROADMAP C50, ADR-0027 amendment 13): drand/tlock's IBE on blst.
+onyx-tlock = { path = "../onyx-tlock" }
+# Only `src/track_chain.rs` and its example use it, and they name no level or
+# market-policy code (ADR-0036 amendment 1 item 11; scripts/check-boundaries.sh).
+onyx-track.workspace = true
+
+[features]
+# Settlement-path tests only (SER-R2-F1): exposes `Round::open_unchecked`, which
+# skips the round preflight. No shipped crate enables it
+# (scripts/check-boundaries.sh).
+unchecked-open = []
+
+[dev-dependencies]
+# WAT recipes for the round and validation unit tests (src/test_fixture.rs).
+wat = "1"
+# The served form, for the client checks of examples/track-onchain-anvil.rs (ROADMAP C7).
+onyx-track = { workspace = true, features = ["wire"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[lints]
+workspace = true

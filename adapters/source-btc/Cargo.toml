@@ -1,0 +1,66 @@
+[package]
+name = "onyx-source-btc"
+description = "Bitcoin source adapter: pinned block fixtures and blocks read from a node, each checked (proof of work, parent links, Merkle root); entity flows, reserves and pools. Sector adapter; core crates must never depend on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# PP13: tests that read the label-derived files (docs/ops/public-snapshot-exclude.txt). On here;
+# a public snapshot turns it off, so those tests show as ignored instead of failing.
+label-data = []
+default = []
+
+[dependencies]
+onyx-core.workspace = true
+onyx-labels.workspace = true
+onyx-btc-schema.workspace = true
+onyx-pool-schema.workspace = true
+onyx-chain-schema.workspace = true
+onyx-reserve-schema.workspace = true
+onyx-recipe-sdk.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json = { workspace = true, features = ["raw_value"] }
+flate2 = "1"
+hex.workspace = true
+sha2 = "0.10"
+bip322.workspace = true
+bitcoin.workspace = true
+base64.workspace = true
+
+[dev-dependencies]
+onyx-validator = { path = "../../crates/onyx-validator" }
+# The public-build guard unpacks Brotli files to scan them (AUD-2R-F1).
+brotli-decompressor = "5"
+onyx-miner = { path = "../../crates/onyx-miner" }
+onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+secp256k1.workspace = true
+onyx-recipe-host.workspace = true
+onyx-merkle.workspace = true
+btc-entity-balance = { path = "../../recipes/btc-entity-balance" }
+btc-entity-flow-series = { path = "../../recipes/btc-entity-flow-series" }
+btc-entity-reserve = { path = "../../recipes/btc-entity-reserve" }
+btc-pool-blocks = { path = "../../recipes/btc-pool-blocks" }
+btc-chain-stats = { path = "../../recipes/btc-chain-stats" }
+onyx-api = { path = "../../crates/onyx-api", features = ["http-client"] }
+onyx-node = { path = "../../crates/onyx-node" }
+# The local demo serves btc.entity-reserve through its serving check (ADR-0034 Amendment 1).
+onyx-reserve-serve = { path = "../reserve-serve" }
+# The local demo also serves the recorded Treasury level-2 round (ADR-0027 amendment 4).
+onyx-source-fiscaldata = { path = "../source-fiscaldata", features = ["round"] }
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "net", "signal"] }
+tower = { version = "0.5", features = ["util"] }
+http-body-util = "0.1"
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+
+[lints]
+workspace = true
+
+# The demo driver carries unit tests for its option parsing (M8-L58-F1).
+[[example]]
+name = "demo-local"
+test = true

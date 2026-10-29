@@ -1,0 +1,30 @@
+[package]
+name = "onyx-labels"
+description = "Label sets (entities only): versions, dated memberships, salted rows, first-party attestations, issuer rosters and calibration scoring."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+secp256k1.workspace = true
+hex.workspace = true
+onyx-merkle.workspace = true
+# `json`: the wire form of a salted answer (salted::json), shared by onyx-api and the browser.
+serde_json = { workspace = true, optional = true }
+
+[features]
+json = ["dep:serde_json"]
+
+[dev-dependencies]
+serde_json.workspace = true
+# Tests always build the wire form (the shared salted vectors).
+onyx-labels = { path = ".", features = ["json"] }
+onyx-recipe-sdk.workspace = true
+
+[lints]
+workspace = true

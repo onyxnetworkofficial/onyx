@@ -1,0 +1,179 @@
+# cargo-fuzz targets for every parser on a trust boundary (ROADMAP L3,
+# docs/audit/2026-10-13-fuzzing.md). Its own workspace: the main workspace
+# never builds it, so stable builds and `scripts/check-all.sh` need no
+# nightly toolchain. Run with `scripts/fuzz-smoke.sh` (nightly + cargo-fuzz).
+
+[package]
+name = "onyx-fuzz"
+version = "0.0.0"
+edition = "2021"
+publish = false
+license = "Apache-2.0"
+
+[package.metadata]
+cargo-fuzz = true
+
+[workspace]
+members = [".", "common"]
+
+[dependencies]
+libfuzzer-sys = { version = "0.4", features = ["arbitrary-derive"] }
+onyx-fuzz-common = { path = "common" }
+onyx-core = { path = "../crates/onyx-core" }
+onyx-merkle = { path = "../crates/onyx-merkle" }
+onyx-labels = { path = "../crates/onyx-labels" }
+onyx-api = { path = "../crates/onyx-api" }
+onyx-coordinator = { path = "../crates/onyx-coordinator" }
+onyx-tlock = { path = "../crates/onyx-tlock" }
+onyx-node = { path = "../crates/onyx-node" }
+onyx-recipe-sdk = { path = "../crates/onyx-recipe-sdk" }
+onyx-btc-schema = { path = "../adapters/btc-schema" }
+onyx-pool-schema = { path = "../adapters/pool-schema" }
+onyx-reserve-schema = { path = "../adapters/reserve-schema" }
+onyx-source-fiscaldata = { path = "../adapters/source-fiscaldata", features = ["round"] }
+onyx-source-edgar = { path = "../adapters/source-edgar" }
+onyx-source-page = { path = "../adapters/source-page" }
+borsh = { version = "1", features = ["derive"] }
+serde = "1"
+serde_json = "1"
+hex = "0.4"
+tokio = { version = "1", default-features = false, features = ["rt", "time", "sync", "test-util"] }
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[profile.release]
+debug = 1
+
+[[bin]]
+name = "x402_header"
+path = "fuzz_targets/x402_header.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "x402_precheck"
+path = "fuzz_targets/x402_precheck.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "sig_recover"
+path = "fuzz_targets/sig_recover.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc_json"
+path = "fuzz_targets/rpc_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc_answers"
+path = "fuzz_targets/rpc_answers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "abi_returns"
+path = "fuzz_targets/abi_returns.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "borsh_decode"
+path = "fuzz_targets/borsh_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "merkle_proof"
+path = "fuzz_targets/merkle_proof.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "catalog_file"
+path = "fuzz_targets/catalog_file.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "book_store"
+path = "fuzz_targets/book_store.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "indexer_state"
+path = "fuzz_targets/indexer_state.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "journals"
+path = "fuzz_targets/journals.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "client_verify"
+path = "fuzz_targets/client_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "level2_verify"
+path = "fuzz_targets/level2_verify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "api_router"
+path = "fuzz_targets/api_router.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_parsers"
+path = "fuzz_targets/text_parsers.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "rpc_node"
+path = "fuzz_targets/rpc_node.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "page_extract"
+path = "fuzz_targets/page_extract.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "tlock_open"
+path = "fuzz_targets/tlock_open.rs"
+test = false
+doc = false
+bench = false

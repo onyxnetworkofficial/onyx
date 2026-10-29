@@ -1,0 +1,20 @@
+# Compiler files
+cache/
+out/
+
+# Commonly ignored directories
+.logs/
+.ignore/
+
+# Broadcast logs from every network (signed transactions, addresses): never committed (M6-L36-F3)
+/broadcast/
+
+# Docs
+docs/
+
+# Dotenv file
+.env
+.env.*
+!.env.example
+out-gas/
+cache-gas/

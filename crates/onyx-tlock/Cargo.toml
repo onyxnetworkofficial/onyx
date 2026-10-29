@@ -1,0 +1,24 @@
+[package]
+name = "onyx-tlock"
+description = "drand/tlock time-lock encryption (Boneh-Franklin IBE with Fujisaki-Okamoto) for drand quicknet, on blst (ROADMAP C50)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+blst = { version = "=0.3.17", default-features = false }
+sha2 = "0.10"
+thiserror.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+# ROADMAP C52: the far-date vectors' sigma is a Keccak-256 derivation (the
+# workspace's own hash, ADR-0003); tests and the wasm32 known-answer run only.
+sha3.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+
+[lints]
+workspace = true

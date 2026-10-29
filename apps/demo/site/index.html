@@ -1,0 +1,506 @@
+<title>Onyx Network Demo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Instrument+Serif&family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/js-sha3/0.9.3/sha3.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/6.13.4/ethers.umd.min.js"></script>
+<style>
+/* Layout: a single reading column of numbered pipeline steps (data -> labels -> miner -> validator ->
+   commit -> attest -> score -> spread -> proof), each with a live panel that runs real Onyx code. */
+:root {
+  --bg: #f6f7f5; --panel: #ffffff; --ink: #14201d; --muted: #5b6b66; --line: #d9e0dc;
+  --accent: #0f7a63; --accent-ink: #ffffff; --warn: #b4540a; --bad: #b3261e; --good: #1d7a3a;
+  --code-bg: #eef2ef;
+  --display: "Instrument Serif", Georgia, "Times New Roman", serif;
+  --body: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+}
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) {
+  --bg: #0e1513; --panel: #151f1c; --ink: #e4ece8; --muted: #93a49e; --line: #26332f;
+  --accent: #3fc2a0; --accent-ink: #062018; --warn: #f0a050; --bad: #ff7b72; --good: #5fd08a;
+  --code-bg: #1b2724; color-scheme: dark } }
+:root[data-theme="dark"] {
+  --bg: #0e1513; --panel: #151f1c; --ink: #e4ece8; --muted: #93a49e; --line: #26332f;
+  --accent: #3fc2a0; --accent-ink: #062018; --warn: #f0a050; --bad: #ff7b72; --good: #5fd08a;
+  --code-bg: #1b2724; color-scheme: dark }
+body { background: var(--bg); color: var(--ink); font-family: var(--body); font-size: 15px; line-height: 1.55; }
+.wrap { max-width: 920px; margin: 0 auto; padding-inline: 20px; padding-block: 28px 64px; }
+header.hero { display: grid; gap: 12px; padding-block: 12px 28px; border-bottom: 1px solid var(--line); }
+.eyebrow { font-family: var(--mono); font-size: 12px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+h1 { font-family: var(--display); font-weight: 400; font-size: clamp(36px, 6vw, 56px); line-height: 1.05; margin: 0; text-wrap: balance; }
+h2 { font-family: var(--display); font-weight: 400; font-size: 30px; line-height: 1.15; margin: 0; text-wrap: balance; }
+h3 { font-size: 15px; margin: 0; font-weight: 600; }
+p { margin: 0; max-width: 68ch; }
+.lede { font-size: 17px; color: var(--muted); }
+.mono, code, .hash { font-family: var(--mono); font-size: 12.5px; }
+.hash { word-break: break-all; }
+.muted { color: var(--muted); }
+section.step { display: grid; grid-template-columns: 56px minmax(0, 1fr); gap: 4px 16px; padding-block: 34px; border-bottom: 1px solid var(--line); }
+.num { font-family: var(--display); font-size: 40px; line-height: 1; color: var(--accent); }
+.step > div { display: grid; gap: 14px; min-width: 0; }
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; padding: 16px; display: grid; gap: 12px; min-width: 0; }
+.row { display: flex; flex-wrap: wrap; gap: 10px; align-items: center; }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; align-items: baseline; }
+.kv dt { color: var(--muted); font-size: 13px; }
+.kv dd { margin: 0; min-width: 0; }
+button { font: inherit; font-weight: 500; border-radius: 8px; padding: 8px 14px; cursor: pointer; border: 1px solid var(--accent); background: var(--accent); color: var(--accent-ink); }
+button.ghost { background: transparent; color: var(--accent); }
+button:focus-visible, input:focus-visible, select:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
+button:disabled { opacity: .5; cursor: default; }
+.pill { display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 600; border-radius: 999px; padding: 3px 10px; border: 1px solid currentColor; }
+.pill.good { color: var(--good); } .pill.bad { color: var(--bad); } .pill.warn { color: var(--warn); } .pill.idle { color: var(--muted); }
+.tablebox { overflow-x: auto; }
+table { border-collapse: collapse; width: 100%; font-size: 13.5px; font-variant-numeric: tabular-nums; }
+th, td { text-align: left; padding: 7px 10px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th { color: var(--muted); font-weight: 500; font-size: 12.5px; }
+td.num-r { text-align: right; }
+pre.code { background: var(--code-bg); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 0; font-family: var(--mono); font-size: 12.5px; white-space: pre; }
+.grid2 { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 12px; }
+.stat { display: grid; gap: 2px; }
+.stat b { font-family: var(--mono); font-size: 18px; font-weight: 500; }
+.stat span { color: var(--muted); font-size: 12.5px; }
+input[type=range] { width: 100%; accent-color: var(--accent); }
+select { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid var(--line); background: var(--panel); color: var(--ink); }
+.band { position: relative; height: 54px; border-radius: 8px; background: var(--code-bg); }
+.band .bar { position: absolute; top: 18px; height: 18px; background: var(--accent); opacity: .25; border-radius: 4px; }
+.band .tick { position: absolute; top: 8px; width: 3px; height: 38px; background: var(--accent); border-radius: 2px; }
+.band .lbl { position: absolute; top: 38px; transform: translateX(-50%); font-family: var(--mono); font-size: 11.5px; color: var(--muted); white-space: nowrap; }
+.milestones { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; }
+.ms { border: 1px solid var(--line); border-radius: 8px; padding: 10px; display: grid; gap: 4px; background: var(--panel); }
+.ms b { font-size: 13px; } .ms span { font-size: 12px; color: var(--muted); }
+.ms.done { border-color: var(--accent); }
+.log { font-family: var(--mono); font-size: 12.5px; display: grid; gap: 4px; }
+footer { padding-block: 28px; color: var(--muted); font-size: 13px; display: grid; gap: 6px; }
+@media (max-width: 560px) { section.step { grid-template-columns: minmax(0, 1fr); } .num { font-size: 30px; } }
+@media (prefers-reduced-motion: no-preference) { .pill { transition: color .2s; } }
+</style>
+
+<div class="wrap">
+  <header class="hero">
+    <div class="eyebrow">Onyx · contributor-run data network · testnet prototype</div>
+    <h1>Bitcoin numbers anyone can recompute</h1>
+    <p class="lede">Miners publish metrics such as an exchange's net flow. Validators rerun the same open recipe on the same pinned blocks and must get the same bytes. This page runs that recipe in your browser on three real Bitcoin blocks, so you can check every step yourself.</p>
+    <div class="row">
+      <button id="runAll" type="button">Run the whole pipeline</button>
+      <span id="runAllStatus" class="pill idle">Not run yet</span>
+    </div>
+  </header>
+
+  <section class="step" id="data">
+    <div class="num">1</div>
+    <div>
+      <h2>Pinned input: three real blocks</h2>
+      <p>Blocks 921,080 to 921,082 of Bitcoin mainnet, checked for proof of work, parent links and transaction Merkle roots. The shard pins the hash of their exact bytes, so nobody can swap the data.</p>
+      <div class="panel">
+        <div class="tablebox"><table id="blocksTable"><thead><tr><th>Height</th><th>Block hash</th><th class="num-r">Transactions</th><th class="num-r">Outputs</th></tr></thead><tbody></tbody></table></div>
+        <dl class="kv">
+          <dt>Source bytes</dt><dd class="mono" id="srcBytes">-</dd>
+          <dt>Pinned content hash</dt><dd class="hash" id="pinnedHash">-</dd>
+          <dt>Hash computed here</dt><dd class="hash" id="computedHash">-</dd>
+        </dl>
+        <div class="row"><span id="hashCheck" class="pill idle">Not checked</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="labels">
+    <div class="num">2</div>
+    <div>
+      <h2>Labels: which addresses belong to which organisation</h2>
+      <p>A versioned label set maps addresses to registered organisations only, never people. This test set holds OKX proof-of-reserves addresses and Bitwise BITB issuer addresses. Its name starts with <code>test.</code>, so the network refuses to serve it to customers.</p>
+      <div class="panel">
+        <dl class="kv">
+          <dt>Set</dt><dd class="mono" id="setName">-</dd>
+          <dt>Content hash</dt><dd class="hash" id="setHash">-</dd>
+        </dl>
+        <div class="grid2" id="setStats"></div>
+        <div class="tablebox"><table id="labelsTable"><thead><tr><th>Address</th><th>Entity</th><th class="num-r">Confidence</th></tr></thead><tbody></tbody></table></div>
+        <p class="muted" id="labelsNote"></p>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="miner">
+    <div class="num">3</div>
+    <div>
+      <h2>Miner: run the recipe</h2>
+      <p>The recipe is a content-addressed WebAssembly module with no clock, no randomness and no floats. Below, your browser loads the exact recipe bytes and the exact input the network uses, runs them, and builds the Merkle root over the output rows.</p>
+      <div class="panel">
+        <dl class="kv">
+          <dt>Recipe id (keccak of the bytes)</dt><dd class="hash" id="recipeId">-</dd>
+          <dt>Computed here</dt><dd class="hash" id="recipeIdHere">-</dd>
+        </dl>
+        <div class="row"><button id="runMiner" type="button">Run recipe in this browser</button><span id="minerStatus" class="pill idle">Not run</span></div>
+        <div class="tablebox"><table id="rowsTable"><thead><tr><th>Entity</th><th class="num-r">Received (BTC)</th><th class="num-r">Sent (BTC)</th><th class="num-r">Net (BTC)</th><th class="num-r">Txs</th></tr></thead><tbody></tbody></table></div>
+        <dl class="kv">
+          <dt>Root from the Rust engine</dt><dd class="hash" id="rootRust">-</dd>
+          <dt>Root computed here</dt><dd class="hash" id="rootHere">-</dd>
+          <dt>Browser run time</dt><dd class="mono" id="runTime">-</dd>
+        </dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="live">
+    <div class="num">4</div>
+    <div>
+      <h2>Live: the latest blocks from a Bitcoin node</h2>
+      <p>The same recipe and label set, run by the Rust engine on recent blocks fetched read-only from a Bitcoin Core node. Onyx checked every block from its raw bytes (a pinned minimum difficulty, proof of work, parent links, height, transaction Merkle root, witness commitment, fees). The live input is 16 MB, so your browser does not rerun the recipe here: it rechecks each header's proof of work against the pinned minimum difficulty and the parent links, and that the published root matches the published rows. An independent Python recount from the node's JSON gives the same numbers.</p>
+      <div class="panel" id="livePanel">
+        <dl class="kv" id="liveKv"></dl>
+        <div class="tablebox"><table id="liveRows"><thead><tr><th>Entity</th><th class="num-r">Received (BTC)</th><th class="num-r">Sent (BTC)</th><th class="num-r">Net (BTC)</th><th class="num-r">Txs</th></tr></thead><tbody></tbody></table></div>
+        <div class="row"><button id="checkLive" type="button">Check headers and root here</button><span id="liveStatus" class="pill idle">Not checked</span></div>
+        <div class="log" id="liveLog"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="validator">
+    <div class="num">5</div>
+    <div>
+      <h2>Validator: recompute and challenge</h2>
+      <p>Validators rerun shards at random. Pick what a miner submitted. An honest result matches byte for byte. A miner who used other labels, or altered the blocks, is caught by recompute, not by a vote.</p>
+      <div class="panel">
+        <div class="row">
+          <label for="scenario" class="muted">Miner submitted</label>
+          <select id="scenario">
+            <option value="honest">Honest run on the pinned label set</option>
+            <option value="labels">A root computed with a different label set</option>
+            <option value="blocks">Blocks with one output value changed</option>
+          </select>
+          <button id="runValidator" type="button">Validate</button>
+        </div>
+        <div class="log" id="validatorLog"><span class="muted">Choose a case and press Validate.</span></div>
+        <div class="row"><span id="validatorStatus" class="pill idle">Waiting</span></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="commit">
+    <div class="num">6</div>
+    <div>
+      <h2>Commit, then reveal</h2>
+      <p>Miners first publish only a hash that binds the root, the shard and their address with a secret salt. Nobody can copy a result they cannot see. After the round closes they reveal, and the settlement contract recomputes the same hash. The contract formulas already match Rust in shared test vectors; deployment on Base Sepolia comes in milestone 6.</p>
+      <div class="panel">
+        <dl class="kv" id="commitKv"></dl>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="attest">
+    <div class="num">7</div>
+    <div>
+      <h2>First-party attestation</h2>
+      <p>A label at 100% needs two signatures over one statement: the Bitcoin address signs (BIP-322), and a key the organisation registered with Onyx co-signs (EIP-191). One signature alone is refused, so nobody can claim an address for an exchange. This example uses test keys and a test entity.</p>
+      <div class="panel">
+        <pre class="code" id="statement"></pre>
+        <dl class="kv">
+          <dt>Address signature (BIP-322)</dt><dd class="hash" id="btcSig">-</dd>
+          <dt>Registered entity key</dt><dd class="hash" id="entityKey">-</dd>
+          <dt>Verdict from Onyx (Rust)</dt><dd id="rustVerdict">-</dd>
+        </dl>
+        <div class="row">
+          <button id="verifyEip" type="button">Check entity signature here</button>
+          <button id="tamperEip" type="button" class="ghost">Change one word and check again</button>
+          <span id="eipStatus" class="pill idle">Not checked</span>
+        </div>
+        <p class="muted" id="eipNote"></p>
+        <h3>BIP-322 policy vectors pinned in the registry</h3>
+        <div class="grid2" id="vectorStats"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="score">
+    <div class="num">8</div>
+    <div>
+      <h2>Calibration scoring</h2>
+      <p>Labelers state a probability. When ground truth arrives (an attestation), they are scored with the Brier rule over all registered organisations. Honest probabilities score best; overconfidence and empty "not this one" labels score worse. Lower is better.</p>
+      <div class="panel">
+        <div class="grid2">
+          <div class="stat"><label for="pA">Labeler A says OKX with</label><input id="pA" type="range" min="0" max="100" value="99"><span id="pAv"></span></div>
+          <div class="stat"><label for="pB">Labeler B says OKX with</label><input id="pB" type="range" min="0" max="100" value="70"><span id="pBv"></span></div>
+        </div>
+        <div class="row">
+          <label for="truthRate" class="muted">Share of these addresses that really are OKX</label>
+          <select id="truthRate"><option value="70">70 of 100</option><option value="90">90 of 100</option><option value="99">99 of 100</option><option value="50">50 of 100</option></select>
+        </div>
+        <div class="grid2" id="scoreOut"></div>
+        <p class="muted">Same integer formula as <code>onyx_labels::score::brier_term</code>, with K = 50 registered organisations.</p>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="spread">
+    <div class="num">9</div>
+    <div>
+      <h2>Spread across label sets</h2>
+      <p>A number that depends on labels is published with every label set used and the band between them. Here the same blocks and recipe give two answers, because the second set holds half of the OKX addresses. An independent Python recount gives the same two numbers.</p>
+      <div class="panel">
+        <div class="band" id="band"></div>
+        <div class="tablebox"><table id="spreadTable"><thead><tr><th>Label set</th><th class="num-r">OKX net (BTC)</th><th>Root</th></tr></thead><tbody></tbody></table></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="proof">
+    <div class="num">10</div>
+    <div>
+      <h2>Customer: check one row with a proof</h2>
+      <p>A customer who buys one row gets the row plus a Merkle proof. They check it against the root on chain without trusting the seller.</p>
+      <div class="panel">
+        <div class="row">
+          <label for="proofRow" class="muted">Row</label>
+          <select id="proofRow"></select>
+          <button id="checkProof" type="button">Verify proof</button>
+          <button id="breakProof" type="button" class="ghost">Change the row by 1 sat and verify</button>
+          <span id="proofStatus" class="pill idle">Not checked</span>
+        </div>
+        <div class="log" id="proofLog"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="step" id="status">
+    <div class="num">11</div>
+    <div>
+      <h2>Where the build stands</h2>
+      <p>Each milestone ends with tests, benchmarks and an adversarial review. Every loop ends with a fresh adversarial review; every finding is logged with a test or an open item.</p>
+      <div class="milestones" id="milestones"></div>
+    </div>
+  </section>
+
+  <footer>
+    <span>Everything above comes from the Onyx code. For the three pinned blocks this page reran the recipe and rechecked the source hash, root and proofs itself. For the live range it rechecked headers, proof of work and the root over the published rows; the rows themselves come from the Rust engine and a Python recount. BIP-322 proofs are checked in Rust only. Testnet prototype; no real funds, no mainnet contracts.</span>
+    <span class="mono" id="footerIds"></span>
+  </footer>
+</div>
+
+<script>
+"use strict";
+const $ = (id) => document.getElementById(id);
+const hexOf = (u8) => "0x" + Array.from(u8, (b) => b.toString(16).padStart(2, "0")).join("");
+const fromHex = (h) => { h = h.replace(/^0x/, ""); const u = new Uint8Array(h.length / 2); for (let i = 0; i < u.length; i++) u[i] = parseInt(h.substr(i * 2, 2), 16); return u; };
+const keccak = (u8) => new Uint8Array(keccak256.arrayBuffer(u8));
+const cat = (...parts) => { const n = parts.reduce((a, p) => a + p.length, 0); const o = new Uint8Array(n); let k = 0; for (const p of parts) { o.set(p, k); k += p.length; } return o; };
+const short = (h) => h.slice(0, 10) + "…" + h.slice(-6);
+const btc = (sats) => { const s = BigInt(sats); const neg = s < 0n; const a = neg ? -s : s; const whole = a / 100000000n; const frac = (a % 100000000n).toString().padStart(8, "0"); return (neg ? "-" : "") + whole.toLocaleString("en-US") + "." + frac; };
+function pill(el, kind, text) { el.className = "pill " + kind; el.textContent = text; }
+
+// Minimum difficulty for live blocks: onyx_source_btc::node::MAINNET_MIN_BITS, a quarter of the
+// difficulty seen at heights 970,543-970,566. Pinned here so an edited data file cannot lower it.
+const PINNED_MIN_BITS = 0x17087bc0;
+// Merkle layout from onyx-merkle: leaf = keccak(0x00 ‖ row), node = keccak(0x01 ‖ l ‖ r),
+// odd node promoted, root = keccak(0x02 ‖ count u64 big-endian ‖ top).
+function merkleRoot(rows) {
+  let level = rows.map((r) => keccak(cat(new Uint8Array([0]), r)));
+  while (level.length > 1) {
+    const next = [];
+    for (let i = 0; i < level.length; i += 2) next.push(i + 1 < level.length ? keccak(cat(new Uint8Array([1]), level[i], level[i + 1])) : level[i]);
+    level = next;
+  }
+  const count = new Uint8Array(8); new DataView(count.buffer).setBigUint64(0, BigInt(rows.length));
+  return keccak(cat(new Uint8Array([2]), count, level.length ? level[0] : new Uint8Array(32)));
+}
+function verifyProof(rootHex, row, proof) {
+  let h = keccak(cat(new Uint8Array([0]), row)); let idx = BigInt(proof.index); let n = BigInt(proof.leaf_count); let s = 0;
+  while (n > 1n) {
+    if (idx % 2n === 1n) { h = keccak(cat(new Uint8Array([1]), fromHex(proof.siblings[s++]), h)); }
+    else if (idx + 1n < n) { h = keccak(cat(new Uint8Array([1]), h, fromHex(proof.siblings[s++]))); }
+    idx /= 2n; n = (n + 1n) / 2n;
+  }
+  const count = new Uint8Array(8); new DataView(count.buffer).setBigUint64(0, BigInt(proof.leaf_count));
+  return hexOf(keccak(cat(new Uint8Array([2]), count, h))) === rootHex && s === proof.siblings.length;
+}
+
+// Borsh readers for the recipe's RunReturn and EntityFlowRow.
+class Reader {
+  constructor(u8) { this.u = u8; this.v = new DataView(u8.buffer, u8.byteOffset, u8.byteLength); this.o = 0; }
+  u8() { return this.u[this.o++]; }
+  u32() { const x = this.v.getUint32(this.o, true); this.o += 4; return x; }
+  u64() { const x = this.v.getBigUint64(this.o, true); this.o += 8; return x; }
+  u128() { const lo = this.u64(), hi = this.u64(); return (hi << 64n) | lo; }
+  i128() { const x = this.u128(); return x >= (1n << 127n) ? x - (1n << 128n) : x; }
+  bytes() { const n = this.u32(); const b = this.u.slice(this.o, this.o + n); this.o += n; return b; }
+  str() { return new TextDecoder().decode(this.bytes()); }
+}
+function parseOutput(u8) {
+  const r = new Reader(u8); const tag = r.u8(); if (tag !== 0) throw new Error("recipe returned error code " + r.u32());
+  const n = r.u32(); const rows = [];
+  for (let i = 0; i < n; i++) { const start = r.o; r.bytes(); const value = r.bytes(); rows.push({ leaf: u8.slice(start, r.o), value }); }
+  return rows;
+}
+function parseFlow(value) {
+  const r = new Reader(value);
+  const row = { entity: r.str(), from: r.u64(), to: r.u64(), received: r.u128(), sent: r.u128(), net: r.i128(), txs: r.u64() };
+  return row;
+}
+function sourceOf(input) { const r = new Reader(input); r.u32(); return r.bytes(); }
+
+let D = null, WASM = null; const INPUT = {};
+async function load() {
+  const res = await fetch("data/demo.json"); D = await res.json();
+  WASM = new Uint8Array(await (await fetch("data/recipe.wasm")).arrayBuffer());
+  for (const run of D.runs) {
+    const b64 = (await (await fetch(run.input)).text()).trim();
+    const bin = atob(b64); const u = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) u[i] = bin.charCodeAt(i);
+    INPUT[run.id] = u;
+  }
+  render();
+}
+async function runRecipe(input) {
+  const { instance } = await WebAssembly.instantiate(WASM, {});
+  const ex = instance.exports;
+  const ptr = ex.onyx_alloc(input.length);
+  new Uint8Array(ex.memory.buffer, ptr, input.length).set(input);
+  const packed = BigInt.asUintN(64, ex.onyx_run(ptr, input.length));
+  const optr = Number(packed >> 32n), olen = Number(packed & 0xffffffffn);
+  const out = new Uint8Array(ex.memory.buffer, optr, olen).slice();
+  const rows = parseOutput(out);
+  return { rows, root: hexOf(merkleRoot(rows.map((r) => r.leaf))) };
+}
+
+function render() {
+  const tb = $("blocksTable").tBodies[0];
+  tb.innerHTML = D.blocks.map((b) => `<tr><td class="mono">${b.height.toLocaleString("en-US")}</td><td class="mono">${short(b.hash)}</td><td class="num-r">${b.txs.toLocaleString("en-US")}</td><td class="num-r">${b.outputs.toLocaleString("en-US")}</td></tr>`).join("");
+  $("srcBytes").textContent = D.snapshot.source_bytes.toLocaleString("en-US") + " bytes, chain " + D.snapshot.chain;
+  $("pinnedHash").textContent = D.snapshot.content_hash;
+  const ls = D.label_set;
+  $("setName").textContent = ls.name + " v" + ls.version; $("setHash").textContent = ls.content_hash;
+  const by = {}; for (const l of ls.labels) by[l.entity] = (by[l.entity] || 0) + 1;
+  $("setStats").innerHTML = Object.entries(by).map(([e, n]) => `<div class="stat"><b>${n}</b><span>${e} addresses</span></div>`).join("") + `<div class="stat"><b>${ls.count}</b><span>labels in total</span></div>`;
+  $("labelsTable").tBodies[0].innerHTML = ls.labels.slice(0, 6).map((l) => `<tr><td class="mono">${l.address.length > 40 ? l.address.slice(0, 22) + "…" + l.address.slice(-8) : l.address}</td><td class="mono">${l.entity}</td><td class="num-r">${(l.confidence_ppm / 10000).toFixed(0)}%</td></tr>`).join("");
+  $("labelsNote").textContent = `Showing 6 of ${ls.count}. Full confidence (100%) is reserved for labels with a valid attestation (step 6).`;
+  $("recipeId").textContent = D.recipe_id;
+  $("rootRust").textContent = D.runs[0].root;
+  const c = D.commitment;
+  $("commitKv").innerHTML = [["Shard id", D.runs[0].shard_id], ["Root", D.runs[0].root], ["Binding hash", c.binding_hash], ["Miner (test address)", c.miner], ["Round", String(c.round)], ["Commit hash", c.commit_hash]].map(([k, v]) => `<dt>${k}</dt><dd class="hash">${v}</dd>`).join("");
+  const a = D.attestation;
+  $("statement").textContent = a.statement;
+  $("btcSig").textContent = a.address_sig;
+  $("entityKey").textContent = a.entity_key;
+  $("rustVerdict").innerHTML = `<span class="pill good">${a.verdict === 'Ok("valid")' ? "Valid" : a.verdict}</span> <span class="muted">Same statement claimed for another entity: ${a.forged_entity_verdict.replace(/^Err\(|\)$/g, "")}</span>`;
+  const cnt = { Valid: 0, Invalid: 0, Inconclusive: 0 }; let agree = 0;
+  for (const v of D.bip322_vectors) { cnt[v.expect]++; if (v.expect === v.got) agree++; }
+  $("vectorStats").innerHTML = `<div class="stat"><b>${D.bip322_vectors.length}</b><span>vectors, ${agree} match the expected verdict</span></div><div class="stat"><b>${cnt.Valid}</b><span>valid proofs (P2WPKH, P2TR, P2PKH, multisig)</span></div><div class="stat"><b>${cnt.Invalid}</b><span>refusals (time locks, bad encodings, unprefixed, >520-byte scripts)</span></div><div class="stat"><b>${cnt.Inconclusive}</b><span>inconclusive (never counted as proof)</span></div>`;
+  const vals = D.spread.values.map((v) => BigInt(v.net_sats));
+  const lo = vals.reduce((a, b) => (b < a ? b : a)), hi = vals.reduce((a, b) => (b > a ? b : a));
+  const span = Number(hi - lo) || 1; const pos = (x) => 6 + 88 * Number(x - lo) / span;
+  $("band").innerHTML = `<div class="bar" style="left:6%;width:88%"></div>` + D.spread.values.map((v) => `<div class="tick" style="left:${pos(BigInt(v.net_sats))}%"></div><div class="lbl" style="left:${pos(BigInt(v.net_sats))}%">${btc(v.net_sats)} BTC</div>`).join("");
+  $("spreadTable").tBodies[0].innerHTML = D.spread.values.map((v, i) => `<tr><td class="mono">${v.set}</td><td class="num-r">${btc(v.net_sats)}</td><td class="mono">${short(D.runs[i].root)}</td></tr>`).join("");
+  $("proofRow").innerHTML = D.runs[0].rows.map((r, i) => `<option value="${i}">${r.entity}</option>`).join("");
+  const ms = [["M0", "Foundation", "done"], ["M1", "Deterministic recipe runtime", "done"], ["M2", "Labels, attestations, scoring", "done"], ["M3", "Miners and commit-reveal", "next"], ["M4", "Validators, sampling, canaries", "planned"], ["M5", "Disputes by recompute", "planned"], ["M6", "Contracts on Base Sepolia", "planned"], ["M7", "Delivery, x402, proofs", "planned"], ["M8", "End-to-end demo", "planned"]];
+  $("milestones").innerHTML = ms.map(([k, t, s]) => `<div class="ms ${s === "done" ? "done" : ""}"><b>${k} · ${t}</b><span>${s === "done" ? "Done, reviewed" : s === "next" ? "Next" : "Planned"}</span></div>`).join("");
+  if (D.live) {
+    const L = D.live;
+    $("liveKv").innerHTML = [["Blocks", `${L.from_height.toLocaleString("en-US")} to ${L.to_height.toLocaleString("en-US")} (${L.blocks.length} blocks, ${L.blocks.reduce((a, b) => a + b.txs, 0).toLocaleString("en-US")} transactions)`], ["Source", L.node], ["Content hash", L.content_hash], ["Root (Rust engine)", L.root], ["Python recount", L.python_recount], ["Pinned minimum difficulty (bits)", "0x17087bc0 (pinned in this page)"]].map(([k, v]) => `<dt>${k}</dt><dd class="${k.includes("hash") || k.includes("Root") ? "hash" : "mono"}">${v}</dd>`).join("");
+    $("liveRows").tBodies[0].innerHTML = L.rows.map((r) => `<tr><td class="mono">${r.entity}</td><td class="num-r">${btc(r.received_sats)}</td><td class="num-r">${btc(r.sent_sats)}</td><td class="num-r">${btc(r.net_sats)}</td><td class="num-r">${r.tx_count}</td></tr>`).join("");
+  } else { $("livePanel").innerHTML = '<p class="muted">No live range in this export.</p>'; }
+  $("footerIds").textContent = `host ${D.host_id} · registry ${short(D.registry_root)}`;
+  scoreUpdate();
+}
+
+async function stepData() {
+  const src = sourceOf(INPUT.full); const h = hexOf(keccak(src));
+  $("computedHash").textContent = h;
+  const ok = h === D.snapshot.content_hash; pill($("hashCheck"), ok ? "good" : "bad", ok ? "Matches the pinned snapshot" : "Does not match");
+  return ok;
+}
+async function stepMiner() {
+  $("recipeIdHere").textContent = hexOf(keccak(WASM));
+  pill($("minerStatus"), "idle", "Running…");
+  const t = performance.now(); const r = await runRecipe(INPUT.full); const ms = performance.now() - t;
+  $("rowsTable").tBodies[0].innerHTML = r.rows.map((x) => { const f = parseFlow(x.value); return `<tr><td class="mono">${f.entity}</td><td class="num-r">${btc(f.received)}</td><td class="num-r">${btc(f.sent)}</td><td class="num-r">${btc(f.net)}</td><td class="num-r">${f.txs}</td></tr>`; }).join("");
+  $("rootHere").textContent = r.root;
+  $("runTime").textContent = `${ms.toFixed(0)} ms in this browser (Rust canonical engine: ${(D.runs[0].wasmi_secs * 1000).toFixed(0)} ms, ${Number(D.runs[0].fuel).toLocaleString("en-US")} fuel)`;
+  const ok = r.root === D.runs[0].root && $("recipeIdHere").textContent === D.recipe_id;
+  pill($("minerStatus"), ok ? "good" : "bad", ok ? "Same root as the Rust engine" : "Root differs");
+  return ok;
+}
+async function sha256d(u8) { const a = await crypto.subtle.digest("SHA-256", u8); return new Uint8Array(await crypto.subtle.digest("SHA-256", a)); }
+async function stepLive() {
+  const L = D.live; if (!L) return false; const log = []; let ok = true; let prev = null;
+  for (const b of L.blocks) {
+    const h = fromHex(b.header); const d = await sha256d(h); const disp = hexOf(d.slice().reverse()).slice(2);
+    const bits = new DataView(h.buffer).getUint32(72, true); const exp = BigInt(bits >>> 24), mant = BigInt(bits & 0xffffff);
+    const target = mant * (1n << (8n * (exp - 3n)));
+    // Pinned in this page, not read from the data it checks.
+    const pinBits = PINNED_MIN_BITS; const floor = BigInt(pinBits & 0xffffff) * (1n << (8n * (BigInt(pinBits >>> 24) - 3n)));
+    const maxTarget = 0xffffn << 208n; // difficulty 1 (bits 0x1d00ffff)
+    const work = target <= floor && target <= maxTarget && BigInt("0x" + disp) <= target;
+    const parent = hexOf(h.slice(4, 36).reverse()).slice(2); const linked = prev === null || parent === prev; prev = disp;
+    const good = disp === b.hash && work && linked; ok = ok && good;
+    log.push(`${b.height}: ${disp.slice(0, 20)}… ${good ? "hash, proof of work (at least the pinned difficulty) and parent link OK" : "FAILED"}`);
+  }
+  const root = hexOf(merkleRoot(L.rows.map((r) => fromHex(r.leaf)))); const rootOk = root === L.root; ok = ok && rootOk;
+  log.push(`Root recomputed from ${L.rows.length} rows: ${short(root)} ${rootOk ? "matches" : "DIFFERS"}`);
+  $("liveLog").innerHTML = log.map((l) => `<span>${l}</span>`).join("");
+  pill($("liveStatus"), ok ? "good" : "bad", ok ? `All ${L.blocks.length} headers and the root check out` : "A check failed");
+  return ok;
+}
+async function stepValidator() {
+  const s = $("scenario").value; const log = []; const pinned = D.runs[0].root;
+  pill($("validatorStatus"), "idle", "Checking…");
+  let verdict;
+  if (s === "blocks") {
+    const tampered = INPUT.full.slice(); tampered[8 + 5000] ^= 1; // a byte inside the block data
+    const h = hexOf(keccak(sourceOf(tampered)));
+    log.push(`Source hash of submitted blocks: ${short(h)}`, `Pinned snapshot hash: ${short(D.snapshot.content_hash)}`);
+    verdict = h === D.snapshot.content_hash ? ["bad", "Not caught"] : ["good", "Refused before running: blocks do not match the pinned snapshot"];
+  } else {
+    const claimed = s === "honest" ? pinned : D.runs[1].root;
+    const r = await runRecipe(INPUT.full);
+    log.push(`Miner's root: ${short(claimed)}`, `Validator recomputed on the pinned input: ${short(r.root)}`);
+    verdict = r.root === claimed ? ["good", "Match: the miner would be paid"] : ["bad", "Mismatch: a challenge would win by recompute and the bond would be slashed (disputes are milestone 5)"];
+  }
+  $("validatorLog").innerHTML = log.map((l) => `<span>${l}</span>`).join("");
+  pill($("validatorStatus"), verdict[0], verdict[1]);
+}
+async function eipCheck(tamper) {
+  const a = D.attestation; let msg = a.statement;
+  if (tamper) msg = msg.replace("entity:example", "entity:exemple");
+  try {
+    const signer = ethers.verifyMessage(msg, a.entity_sig).toLowerCase();
+    const ok = signer === a.entity_key.toLowerCase();
+    pill($("eipStatus"), ok ? "good" : "bad", ok ? "Signed by the key the exported registry lists" : "Signer does not match");
+    $("eipNote").textContent = `Recovered signer ${signer}${tamper ? " from the changed statement" : ""}. BIP-322 address proofs are checked by the Rust verifier above.`;
+  } catch (e) { pill($("eipStatus"), "bad", "Signature error"); $("eipNote").textContent = String(e); }
+}
+// Brier over K entities, units of 1e-12 (onyx_labels::score::brier_term).
+const ONE = 1000000n, ONE_SQ = ONE * ONE;
+function brier(pPpm, hit, K) { const p = BigInt(pPpm), m = BigInt(K - 1); if (hit) { const r = (ONE - p) * (ONE - p); return r + r / m; } const x = ONE_SQ - p * p; return p * p + ONE_SQ - (x + m - 1n) / m; }
+function scoreUpdate() {
+  const K = 50, q = Number($("truthRate").value); const pa = Number($("pA").value), pb = Number($("pB").value);
+  $("pAv").textContent = pa + "%"; $("pBv").textContent = pb + "%";
+  const mean = (p) => { const s = BigInt(q) * brier(p * 10000, true, K) + BigInt(100 - q) * brier(p * 10000, false, K); return Number(s / 100n) / 1e12; };
+  const a = mean(pa), b = mean(pb), best = mean(q);
+  const winner = a < b ? "A" : b < a ? "B" : "tie";
+  $("scoreOut").innerHTML = `<div class="stat"><b>${a.toFixed(4)}</b><span>Labeler A, mean Brier</span></div><div class="stat"><b>${b.toFixed(4)}</b><span>Labeler B, mean Brier</span></div><div class="stat"><b>${best.toFixed(4)}</b><span>Best possible: say exactly ${q}%</span></div><div class="stat"><b>${winner === "tie" ? "Tie" : "Labeler " + winner}</b><span>scores better</span></div>`;
+}
+function proofCheck(breakIt) {
+  const i = Number($("proofRow").value); const row = D.runs[0].rows[i]; let leaf = fromHex(row.leaf);
+  if (breakIt) { leaf = leaf.slice(); leaf[leaf.length - 25] ^= 1; } // lowest byte of net_sats: +/- 1 sat
+  const ok = verifyProof(D.runs[0].root, leaf, D.runs[0].proofs[i]);
+  $("proofLog").innerHTML = `<span>Row ${row.entity}: ${leaf.length} bytes${breakIt ? " (one byte changed)" : ""}</span><span>Proof: ${D.runs[0].proofs[i].siblings.length} sibling hash(es), ${D.runs[0].proofs[i].leaf_count} rows</span><span>Root: ${short(D.runs[0].root)}</span>`;
+  pill($("proofStatus"), ok ? "good" : "bad", ok ? "Proof valid: this row is in the committed data" : "Proof fails: the row was changed");
+}
+
+$("runMiner").addEventListener("click", stepMiner);
+$("checkLive").addEventListener("click", stepLive);
+$("runValidator").addEventListener("click", stepValidator);
+$("verifyEip").addEventListener("click", () => eipCheck(false));
+$("tamperEip").addEventListener("click", () => eipCheck(true));
+for (const id of ["pA", "pB", "truthRate"]) $(id).addEventListener("input", scoreUpdate);
+$("checkProof").addEventListener("click", () => proofCheck(false));
+$("breakProof").addEventListener("click", () => proofCheck(true));
+$("runAll").addEventListener("click", async () => {
+  const b = $("runAll"); b.disabled = true; pill($("runAllStatus"), "idle", "Running…");
+  try {
+    const a = await stepData(); const m = await stepMiner(); const lv = D.live ? await stepLive() : true;
+    $("scenario").value = "labels"; await stepValidator(); await eipCheck(false); proofCheck(false);
+    pill($("runAllStatus"), a && m && lv ? "good" : "bad", a && m && lv ? "All steps checked in this browser" : "A check failed");
+  } catch (e) { pill($("runAllStatus"), "bad", "Error: " + e.message); }
+  b.disabled = false;
+});
+load().then(() => { stepData(); }).catch((e) => { pill($("runAllStatus"), "bad", "Could not load data: " + e.message); });
+</script>

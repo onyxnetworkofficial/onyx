@@ -1,0 +1,18 @@
+# Paths left out of a public snapshot while DATA-LICENSE.md section 1 is pending (label rights,
+# THREATS L8-5, open-source checklist OSS-4). One shell glob per line, relative to the root.
+# Keep in step with DATA-LICENSE.md section 1; scripts/public-snapshot.sh --without-pending reads it.
+fixtures/labels/test.onyx.entities.btc.v1.json
+fixtures/labels/test.onyx.entities.btc.v2.json
+fixtures/golden/btc-entity-balance-*.json
+fixtures/golden/btc-entity-flow-series-*.json
+fixtures/golden/btc-entity-reserve-*.json
+fixtures/reserves/*
+apps/web/static/history/week/*
+apps/web/static/history/reserves-week.json
+apps/web/static/run/live-run.json
+apps/web/static/run/base-sepolia-*.json
+docs/audit/website-*
+apps/web/src/lib/reserves.ts
+fixtures/labels/test.onyx.entities.btc.v3.json
+fixtures/rosters/*
+apps/web/static/history/rosters-week.json

@@ -1,0 +1,331 @@
+{
+ "build": "<local path>",
+ "counts": {
+  "fontSizes": 15,
+  "lineHeights": 5,
+  "spacing": 12,
+  "radii": 6,
+  "shadows": 7,
+  "colorsNotToken": 0,
+  "colorsUsed": 29
+ },
+ "fontSizes": [
+  "12px",
+  "13px",
+  "15px",
+  "18px",
+  "22px",
+  "28px",
+  "30px",
+  "36px",
+  "42px",
+  "44px",
+  "46px",
+  "68px",
+  "80px",
+  "88px",
+  "220px"
+ ],
+ "lineHeights": [
+  "0.96",
+  "1.00",
+  "1.15",
+  "1.35",
+  "1.55"
+ ],
+ "spacing": [
+  "2px",
+  "4px",
+  "8px",
+  "12px",
+  "16px",
+  "20px",
+  "24px",
+  "32px",
+  "40px",
+  "48px",
+  "64px",
+  "80px"
+ ],
+ "radii": [
+  "4px",
+  "8px",
+  "12px",
+  "18px",
+  "50%",
+  "999px"
+ ],
+ "shadows": [
+  "rgb(235, 229, 214) 0px 0px 0px 1.5px inset, rgba(235, 229, 214, 0.25) 0px 0px 12px 0px",
+  "rgba(255, 255, 255, 0.6) 0px 1px 0px 0px inset, rgba(235, 229, 214, 0.45) 0px 8px 24px -12px",
+  "rgba(242, 177, 74, 0.12) 0px 0px 0px 4px",
+  "rgba(255, 255, 255, 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.9) 0px 20px 40px -24px",
+  "rgba(111, 214, 168, 0.12) 0px 0px 0px 4px, rgba(111, 214, 168, 0.45) 0px 0px 12px 0px",
+  "rgba(111, 214, 168, 0.08) 0px 0px 0px 4px",
+  "rgba(255, 255, 255, 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.9) 0px 32px 80px -24px"
+ ],
+ "colorsNotToken": {},
+ "spaceOther": [],
+ "where": {
+  "fontSizes": {
+   "15px": "182x, e.g. a.skip \"Skip to content\"",
+   "12px": "432x, e.g. aside.preview \"Company totals are held \"",
+   "22px": "76x, e.g. a.mark \"Onyx\"",
+   "13px": "1395x, e.g. span \"Menu\"",
+   "42px": "1x, e.g. h1 \"Data anyone can submit, \"",
+   "18px": "22x, e.g. p.lede \"Onyx is a contributor-ru\"",
+   "28px": "26x, e.g. span.pnum \"01\"",
+   "30px": "19x, e.g. h2 \"Who does what\"",
+   "80px": "7x, e.g. div.big \"Onyx\"",
+   "44px": "6x, e.g. h1 \"Live data\"",
+   "68px": "1x, e.g. h1 \"Data anyone can submit, \"",
+   "36px": "3x, e.g. span.pnum \"01\"",
+   "46px": "19x, e.g. h2 \"Who does what\"",
+   "220px": "7x, e.g. div.big \"Onyx\"",
+   "88px": "6x, e.g. h1 \"Live data\""
+  },
+  "lineHeights": {
+   "1.55": "2000x, e.g. a.skip \"Skip to content\"",
+   "1.00": "32x, e.g. a.mark \"Onyx\"",
+   "1.35": "64x, e.g. h2.eyebrow \"Shown so far, each with \"",
+   "1.15": "62x, e.g. h2 \"Who does what\"",
+   "0.96": "26x, e.g. div.big \"Onyx\""
+  },
+  "space": {
+   "12px": "1748x, e.g. a.skip \"Skip to content\"",
+   "16px": "879x, e.g. a.skip \"Skip to content\"",
+   "8px": "1344x, e.g. aside.preview \"Company totals are held \"",
+   "20px": "134x, e.g. div.wrap.bar \"Onyx OverviewDataReserve\"",
+   "4px": "719x, e.g. button.kbtn \"Search pages and actions\"",
+   "64px": "63x, e.g. div.wrap.inner \"Data anyone can submit, \"",
+   "48px": "17x, e.g. div.wrap.inner \"Data anyone can submit, \"",
+   "32px": "22x, e.g. div.hero \"Data anyone can submit, \"",
+   "24px": "272x, e.g. div.pitch \"Data anyone can submit, \"",
+   "2px": "586x, e.g. button.pgo \"Run the 5 checks\"",
+   "40px": "62x, e.g. section.section \"Who does what Blocks Pin\"",
+   "80px": "2x, e.g. section.section.verifynote \"Your node checks the roo\""
+  },
+  "radii": {
+   "999px": "512x, e.g. a.skip \"Skip to content\"",
+   "4px": "560x, e.g. span.glyph \"\"",
+   "12px": "924x, e.g. button.kbtn \"Search pages and actions\"",
+   "50%": "232x, e.g. span.dot \"\"",
+   "18px": "576x, e.g. div.panel.proof \"01 Full run passed live \"",
+   "8px": "452x, e.g. div.b.ok \"honest bond kept\""
+  }
+ },
+ "perPage": {
+  "home@390": {
+   "fontSizes": 9,
+   "lineHeights": 5,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 4,
+   "colors": 20
+  },
+  "data@390": {
+   "fontSizes": 8,
+   "lineHeights": 5,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 3,
+   "colors": 20
+  },
+  "reserves@390": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 10,
+   "spaceOther": 0,
+   "radii": 4,
+   "shadows": 2,
+   "colors": 11
+  },
+  "run@390": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 5,
+   "shadows": 2,
+   "colors": 20
+  },
+  "explorer@390": {
+   "fontSizes": 6,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 5,
+   "shadows": 4,
+   "colors": 17
+  },
+  "labels@390": {
+   "fontSizes": 6,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 3,
+   "colors": 16
+  },
+  "api@390": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 12,
+   "spaceOther": 0,
+   "radii": 5,
+   "shadows": 2,
+   "colors": 13
+  },
+  "home@desktop": {
+   "fontSizes": 10,
+   "lineHeights": 5,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 5,
+   "colors": 21
+  },
+  "data@desktop": {
+   "fontSizes": 9,
+   "lineHeights": 5,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 3,
+   "colors": 20
+  },
+  "reserves@desktop": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 4,
+   "shadows": 2,
+   "colors": 11
+  },
+  "run@desktop": {
+   "fontSizes": 8,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 5,
+   "shadows": 2,
+   "colors": 19
+  },
+  "explorer@desktop": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 5,
+   "shadows": 4,
+   "colors": 17
+  },
+  "labels@desktop": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 11,
+   "spaceOther": 0,
+   "radii": 6,
+   "shadows": 3,
+   "colors": 16
+  },
+  "api@desktop": {
+   "fontSizes": 7,
+   "lineHeights": 4,
+   "space": 12,
+   "spaceOther": 0,
+   "radii": 4,
+   "shadows": 2,
+   "colors": 13
+  }
+ },
+ "tokens": {
+  "colors": {
+   "rgb(8, 9, 9)": "--bg",
+   "rgb(13, 14, 14)": "--bg-2",
+   "rgba(22, 23, 23, 0.7)": "--panel",
+   "rgb(20, 21, 21)": "--panel-solid",
+   "rgba(255, 255, 255, 0.024)": "--panel-2",
+   "rgb(241, 238, 230)": "--slab-ink",
+   "rgb(154, 151, 143)": "--muted",
+   "rgba(255, 255, 255, 0.08)": "--line",
+   "rgba(255, 255, 255, 0.14)": "--line-strong",
+   "rgb(235, 229, 214)": "--slab-accent",
+   "rgb(185, 177, 160)": "--accent-2",
+   "rgb(11, 12, 11)": "--accent-ink",
+   "rgba(235, 229, 214, 0.07)": "--accent-soft",
+   "rgb(242, 177, 74)": "--warn",
+   "rgba(242, 177, 74, 0.12)": "--btc-soft",
+   "rgb(127, 180, 230)": "--pool-3",
+   "rgb(111, 214, 168)": "--good",
+   "rgb(199, 155, 230)": "--pool-5",
+   "rgb(230, 148, 138)": "--pool-6",
+   "rgb(117, 114, 107)": "--pool-other",
+   "rgba(255, 255, 255, 0.04)": "--code-bg",
+   "rgb(255, 129, 120)": "--bad",
+   "rgba(6, 11, 10, 0.72)": "--header-bg",
+   "rgba(7, 8, 8, 0.55)": "--slab-glass",
+   "rgba(0, 0, 0, 0.55)": "--scrim",
+   "rgba(255, 255, 255, 0.06)": "--hover",
+   "rgba(255, 255, 255, 0.22)": "--line-bright",
+   "rgba(235, 229, 214, 0.3)": "--accent-line",
+   "rgba(111, 214, 168, 0.08)": "--good-soft",
+   "rgba(111, 214, 168, 0.35)": "--good-line",
+   "rgb(7, 8, 8)": "--slab",
+   "rgb(168, 164, 154)": "--slab-muted",
+   "rgba(255, 255, 255, 0.1)": "--slab-line"
+  },
+  "fontSizes": {
+   "12px": "--text-xs",
+   "13px": "--text-sm",
+   "15px": "--text-base",
+   "16px": "--text-field",
+   "18px": "--text-md",
+   "22px": "--text-xl",
+   "28px": "--text-2xl",
+   "30px": "--text-h2",
+   "44px": "--text-h1",
+   "42px": "--text-hero",
+   "80px": "--text-display"
+  },
+  "space": {
+   "2px": "--sp-0",
+   "4px": "--sp-1",
+   "8px": "--sp-2",
+   "12px": "--sp-3",
+   "16px": "--sp-4",
+   "20px": "--sp-5",
+   "24px": "--sp-6",
+   "32px": "--sp-7",
+   "40px": "--sp-8",
+   "48px": "--sp-9",
+   "64px": "--sp-10",
+   "80px": "--sp-11",
+   "96px": "--sp-12"
+  },
+  "radii": {
+   "4px": "--radius-xs",
+   "8px": "--radius-sm",
+   "12px": "--radius-md",
+   "18px": "--radius-lg",
+   "999px": "--radius-pill"
+  },
+  "shadows": {
+   "rgba(255, 255, 255, 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.9) 0px 20px 40px -24px": "--shadow",
+   "rgba(255, 255, 255, 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.95) 0px 24px 48px -24px, rgba(235, 229, 214, 0.3) 0px 24px 48px -28px": "--shadow-lift",
+   "rgba(255, 255, 255, 0.04) 0px 1px 0px 0px inset, rgba(0, 0, 0, 0.9) 0px 32px 80px -24px": "--shadow-pop",
+   "rgba(255, 255, 255, 0.6) 0px 1px 0px 0px inset, rgba(235, 229, 214, 0.45) 0px 8px 24px -12px": "--shadow-btn",
+   "rgba(255, 255, 255, 0.6) 0px 1px 0px 0px inset, rgba(235, 229, 214, 0.55) 0px 12px 24px -10px": "--shadow-btn-hover",
+   "rgba(111, 214, 168, 0.08) 0px 0px 0px 4px": "--shadow-ring-good",
+   "rgba(242, 177, 74, 0.12) 0px 0px 0px 4px": "--shadow-ring-btc",
+   "rgba(111, 214, 168, 0.12) 0px 0px 0px 4px, rgba(111, 214, 168, 0.45) 0px 0px 12px 0px": "--shadow-glow-good",
+   "rgb(235, 229, 214) 0px 0px 0px 1.5px inset, rgba(235, 229, 214, 0.25) 0px 0px 12px 0px": "--shadow-mark",
+   "rgb(235, 229, 214) 0px -2px 0px 0px inset": "--shadow-underline",
+   "rgb(111, 214, 168) 0px -2px 0px 0px inset": "--shadow-underline-good",
+   "rgb(235, 229, 214) 2px 0px 0px 0px inset": "--shadow-edge"
+  }
+ }
+}

@@ -1,0 +1,12 @@
+{
+  "recipe_id": "0x1af9af156198c75b7ce1e8d648725be968065a37f7c104bc3daa9320cb0b538a",
+  "root": "0x7dee13a241aacf28fe2bc6f83bd26806d965a86ceeb1a6fd3fb8bb141ff6debd",
+  "rows": {
+    "F2Pool": 2,
+    "Foundry USA": 6,
+    "NiceHash": 1,
+    "SpiderPool": 1,
+    "ViaBTC": 1
+  },
+  "table": "0x9c84add53ed8ac3933948ef81455fcd24c5dad5ba8ffb5dcf72d2490945912cc"
+}

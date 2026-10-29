@@ -1,0 +1,52 @@
+# Onyx health watch on the API server, one pass (north-star loop NL20, launch checklist LC-17;
+# docs/ops/runbooks/health-watch.md "On the API server"). A *system* unit started every minute by
+# onyx-health-watch.timer, next to onyx-node.service. Read-only: no key, no transaction.
+# deploy/systemd/user/ has the same watch as a user unit for a workstation.
+#
+# Not installed by scripts/deploy-api.sh yet: install it by hand with the runbook's steps
+# (the files below, /opt/onyx-watch and /etc/onyx/health-watch.env).
+#
+# /etc/onyx/health-watch.env (mode 0600, root): the script reads every ONYX_WATCH_* itself.
+#   ONYX_WATCH_NODE=http://127.0.0.1:8080
+#   ONYX_WATCH_RPC_URL=https://sepolia.base.org     # never printed, never passed to the notify command
+#   ONYX_WATCH_SITE=https://onyx.cryptagraph.com
+#   ONYX_WATCH_NOTIFY_CMD=/usr/local/bin/onyx-alert # the channel (LC-18) waits for the owner
+#
+# Exit 1 (any alert) marks this unit failed: `systemctl status onyx-health-watch` and
+# `journalctl -u onyx-health-watch` show every JSON line; de-duplicated events are appended to
+# /var/lib/onyx-health-watch/alerts.jsonl.
+
+[Unit]
+Description=Onyx health watch (one pass)
+Documentation=file:///opt/onyx-watch/docs/health-watch.md
+After=network-online.target onyx-node.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/onyx/health-watch.env
+ExecStart=/usr/bin/python3 -I /opt/onyx-watch/scripts/health-watch.py --once --state /var/lib/onyx-health-watch/state.json
+DynamicUser=yes
+StateDirectory=onyx-health-watch
+StateDirectoryMode=0700
+TimeoutStartSec=180
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=169.254.0.0/16 fe80::/10
+RestrictNamespaces=yes
+RestrictRealtime=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=

@@ -1,0 +1,38 @@
+[package]
+name = "onyx-reserve-serve"
+description = "Serving check of btc.entity-reserve for onyx-api (ADR-0034 Amendment 1) and the onyx-node-btc binary. Sector adapter; core crates must never depend on it."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[features]
+# PP13: tests that read the label-derived files (docs/ops/public-snapshot-exclude.txt). On here;
+# a public snapshot turns it off, so those tests show as ignored instead of failing.
+label-data = []
+default = []
+
+[dependencies]
+onyx-core.workspace = true
+onyx-labels.workspace = true
+onyx-api = { path = "../../crates/onyx-api" }
+onyx-node = { path = "../../crates/onyx-node" }
+onyx-source-btc = { path = "../source-btc" }
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+
+[dev-dependencies]
+onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+onyx-merkle.workspace = true
+onyx-recipe-sdk.workspace = true
+onyx-reserve-schema.workspace = true
+borsh.workspace = true
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+tokio = { version = "1", features = ["rt", "macros"] }
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+[lints]
+workspace = true

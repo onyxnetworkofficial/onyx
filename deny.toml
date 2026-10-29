@@ -1,0 +1,56 @@
+# cargo-deny policy (ROADMAP L1, docs/audit/2026-10-13-dependencies.md).
+# Run: cargo deny --locked check  (scripts/check-deps.sh, called by scripts/check-all.sh).
+
+[graph]
+all-features = true
+
+[advisories]
+# RustSec database. Vulnerabilities always fail; unmaintained crates fail for
+# every crate in the graph; yanked versions fail.
+unmaintained = "all"
+yanked = "deny"
+# Every exception needs the advisory id, why it does not apply and a review date.
+# None today (2026-10-13 audit: 0 advisories).
+ignore = []
+
+[licenses]
+# Only the licenses the dependency graph uses on 2026-10-13, all permissive.
+# No copyleft (GPL/LGPL/AGPL/MPL/EPL/CDDL) is allowed in anything we ship; adding
+# one needs a review entry in docs/audit first.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "CC0-1.0",
+    "Unicode-3.0",
+    # webpki-roots: the Mozilla root list as data (permissive data licence).
+    "CDLA-Permissive-2.0",
+    # hex_lit: MIT plus "no false attribution" (SPDX MITNFA), permissive.
+    "MITNFA",
+]
+confidence-threshold = 0.93
+# Every crate is publish = false; private crates are not license-checked.
+private = { ignore = true }
+
+[bans]
+# Duplicate versions come from wasmtime/wasmi/bitcoin pinning their own
+# wasmparser/hex-conservative; they are a size cost, not a risk.
+multiple-versions = "warn"
+wildcards = "deny"
+# Workspace crates depend on each other by path.
+allow-wildcard-paths = true
+# ROADMAP C50 (docs/audit/2026-10-17-blst.md): blst, BLS12-381 in C and assembly behind FFI
+# (NCC Group audit 2021), is the one crate whose unsafe code the time-lock rests on. Only
+# onyx-tlock (safe Rust, `forbid(unsafe_code)`) may depend on it; the exact version is pinned
+# there (`=0.3.17`) and in both lock files (scripts/check-deps.sh). A bump needs a new review.
+deny = [{ crate = "blst", wrappers = ["onyx-tlock"], reason = "reviewed only behind onyx-tlock (docs/audit/2026-10-17-blst.md)" }]
+
+[sources]
+# crates.io only: no git dependencies, no other registry.
+unknown-registry = "deny"
+unknown-git = "deny"
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]
+allow-git = []

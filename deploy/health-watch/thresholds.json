@@ -1,0 +1,76 @@
+{
+  "_about": "Health watch thresholds (ROADMAP L12, launch checklist LC-17). This file is the only copy: docs/ops/launch-checklist.md section 3 and docs/ops/runbooks/health-watch.md link here. A key ending in _max alerts when the value is above it, _min when below it. Keys starting with _ are comments. scripts/health-watch.py refuses unknown keys.",
+  "chain_id": 84532,
+  "_deadline": "One budget for a whole run (all checks); checks not done when it runs out alert as 'deadline'. Notify commands get 2 x notify.command_timeout_s on top. The systemd unit's TimeoutStartSec must stay above both (a test checks).",
+  "deadline_s": 90,
+  "require": {
+    "_about": "A target that is not configured (no --node / --rpc / --site and no ONYX_WATCH_* variable) alerts when required, else prints skip lines. The site turns required once a public build is published (LC-6).",
+    "node": true,
+    "rpc": true,
+    "site": false
+  },
+  "addresses": {
+    "_source": "docs/ops/deployment.md 'Deployed addresses (Base Sepolia)' (the NS17 run of 2026-10-27). Public addresses only, never a key; health-watch-tests.py checks they match that table. null skips the check, with a skip line.",
+    "deployer": "0x80c91f45b8353ff5c2b1e4c127a2a21746b37972",
+    "operator": "0xf1b27c3f48e9972eb8050e6dff8594e05e3e488c",
+    "revenue": "0xa32d520380362378d22a7a51993678c7fbbfe44d",
+    "usdc": "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+  },
+  "node": {
+    "_about": "onyx-node GET /v1/health (crates/onyx-api/src/lib.rs fn health).",
+    "timeout_s": 10,
+    "indexer_required": true,
+    "_indexer_lag": "Blocks, not seconds: Base Sepolia made a block every 0.2 s on 2026-10-27 (10,000 blocks in 2,000 s, measured by hand; it was 2 s on 2026-10-15). 10,000 blocks is about 33 min, the time the old 1,000 at 2 s meant, and above one finality step (about 5,000 blocks, see rpc._about) so a fresh step on the watch's RPC alone never alerts.",
+    "indexer_lag_max_blocks": 10000,
+    "_indexer_ahead": "The cursor may run past the finalized head the watch sees by at most this (ONYX_INDEX_MAX_JUMP's default, and two providers' heads differ a little); more is a lying node or a state file from another chain.",
+    "indexer_ahead_max_blocks": 100,
+    "conflicts_max": 0,
+    "candidates_dropped_max": 0,
+    "candidates_evicted_max": 0,
+    "write_errors_max": 0,
+    "receipts_dropped_max": 0,
+    "intents_open_max": 100,
+    "_intents_open_for": "validBefore is at most now + maxTimeoutSeconds (60) + 300 s; the resolver drops an unused intent past validBefore + 600 s (deployment.md 'What runs'). /v1/health has no intent ages, so this is how long intentsOpen may stay above 0 without a break.",
+    "intents_open_for_max_s": 1800,
+    "unknown_outcomes_new_max": 0,
+    "_clock_skew": "payments are refused (503 clock_skew) above 300 s",
+    "clock_skew_max_s": 240,
+    "reporter_stuck_max_s": 600,
+    "_level3": "ROADMAP C62, THREATS C10-3: /v1/health level3 (crates/onyx-api/src/signed_serve.rs fn health_of). onyx-node stops every level-3 answer once a post has been pending more than 600 s (its own clock); the watch alerts at 300 s, five 60 s runs before the breaker (health-watch.py refuses more than 385 s: a 90 s deadline_s run, the timer's 60 s and 5 s accuracy, then one more run; review C61-R2-1). Not required until a level-3 store runs (C10 deploy and C60 are open). A refused post is the book deciding (Replay, Stale, BadSignature...): each new one (postsRefusedFinal) alerts once; one that may clear (FromFuture, UnknownKey, KeySuspended) is retried and holds its fact, so it alerts after 3 runs.",
+    "level3_required": false,
+    "level3_pending_for_max_s": 300,
+    "level3_pending_max": 20,
+    "level3_refused_new_max": 0,
+    "level3_retrying_max": 0
+  },
+  "rpc": {
+    "_about": "The chain node (JSON-RPC). The limits are in blocks, so they follow the block time. sepolia.base.org's finalized head ran 500 to 1,004 blocks behind latest on 2026-10-15/16 at 2 s blocks (17 to 33 min; a sawtooth: batches post, then L1 finalizes them). On 2026-10-27 blocks came every 0.2 s (10,000 blocks in 2,000 s) and the lag was 5,074 blocks (17 min), so the old 3,600-block limit alerted on normal batching (THREATS NL5-2). The limit, 36,000 blocks, is 2 h at 0.2 s, over 3x the largest lag measured in time; past it finality has stalled and the indexer, which reads only finalized blocks, stops seeing new roots.",
+    "timeout_s": 10,
+    "tries": 2,
+    "head_age_max_s": 60,
+    "finalized_lag_max_blocks": 36000
+  },
+  "balances": {
+    "_about": "Deployer gas (the A2 run used 0.000262 ETH; 0.001 ETH is about 4 runs) and OnyxRevenue's invariant USDC.balanceOf(revenue) >= allocated() - paidOut().",
+    "deployer_wei_min": "1000000000000000",
+    "_operator": "ROADMAP L19, THREATS NS17-4: the API operator's gas for self-settles and receipt posts. The NS17 run of 2026-10-27 spent 0.000211 ETH on 145 transactions (about 0.0000015 ETH each), so 0.00002 ETH is about 13 sends: enough lead time to top it up from the deployer. Skipped while the node reports payments off.",
+    "operator_wei_min": "20000000000000"
+  },
+  "site": {
+    "_about": "The public website: GET <site>/ and <site>/data/demo.json, which must be a public build (public: true, every runs[].input null).",
+    "timeout_s": 15
+  },
+  "after": {
+    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures.",
+    "node.up": 3,
+    "rpc.up": 2,
+    "node.indexer.failing": 3,
+    "node.reporter.last_error": 3,
+    "node.level3.retrying": 3
+  },
+  "notify": {
+    "_about": "A check that stays in alert is sent again after realert_after_s; a recovery is sent once.",
+    "realert_after_s": 3600,
+    "command_timeout_s": 30
+  }
+}

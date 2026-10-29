@@ -1,0 +1,35 @@
+[package]
+name = "onyx-node"
+description = "The onyx-api service binary (docs/ops/deployment.md): config from env, catalog and rows from disk, roots from the chain, x402 self-settle or facilitator, reporter loop, graceful shutdown."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "onyx-node"
+path = "src/main.rs"
+
+[dependencies]
+onyx-core.workspace = true
+onyx-api = { path = "../onyx-api", features = ["http-client"] }
+onyx-coordinator = { path = "../onyx-coordinator" }
+borsh.workspace = true
+hex.workspace = true
+sha2 = "0.10"
+serde.workspace = true
+serde_json.workspace = true
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
+hyper = { version = "1", default-features = false, features = ["server", "http1"] }
+# Hardware preflight (`doctor`): statvfs and device numbers without unsafe code.
+rustix = { version = "1.1.5", default-features = false, features = ["fs", "std"] }
+hyper-util = { version = "0.1", default-features = false, features = ["server", "http1", "tokio", "server-graceful", "service"] }
+
+[dev-dependencies]
+onyx-labels.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "test-util"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,44 @@
+# ROADMAP S2b: a real TLSNotary presentation of a public Treasury response with one request
+# header hidden. Its own workspace, excluded from the root one (root Cargo.toml `exclude`), so
+# scripts/check-all.sh never compiles the heavy pre-release tlsn crates. Run from this folder:
+#   cargo test --locked            (offline, over the committed fixture)
+#   cargo run --locked --release --bin prove   (network: api.fiscaldata.treasury.gov only)
+#   cargo run --locked --release --bin verify -- fixtures/presentation.bin
+[workspace]
+
+[package]
+name = "onyx-tlsn-fiscaldata"
+version = "0.0.1"
+edition = "2024"
+license = "Apache-2.0"
+publish = false
+
+[dependencies]
+# TLSNotary, released tag v0.1.0-alpha.15 (commit 47aee45b53e06648c1b2ad3689b367b8c923fdec),
+# licence "MIT OR Apache-2.0" (crate manifests and README). Not on crates.io; pinned by tag and
+# by Cargo.lock. `mozilla-certs`: the notary and the verifier check the server certificate
+# against the webpki-roots set compiled in (pinned by Cargo.lock).
+tlsn = { git = "https://github.com/tlsnotary/tlsn", tag = "v0.1.0-alpha.15", features = ["mozilla-certs"] }
+tlsn-formats = { git = "https://github.com/tlsnotary/tlsn", tag = "v0.1.0-alpha.15" }
+
+anyhow = "=1.0.102"
+bincode = "=1.3.3"
+futures = "=0.3.32"
+hex = "=0.4.3"
+http-body-util = "=0.1.3"
+hyper = { version = "=1.9.0", features = ["client", "http1"] }
+hyper-util = { version = "=0.1.20", features = ["tokio"] }
+k256 = { version = "=0.13.4", features = ["ecdsa"] }
+rand = "=0.9.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "=1.0.149"
+sha3 = "=0.10.9"
+thiserror = "2"
+tokio = { version = "=1.52.1", features = ["rt", "rt-multi-thread", "macros", "net", "io-util", "time"] }
+tokio-util = { version = "=0.7.18", features = ["compat"] }
+
+[profile.dev]
+# MPC-TLS is unusably slow without optimisation; tests only verify, but keep deps fast.
+opt-level = 1
+[profile.dev.package."*"]
+opt-level = 3

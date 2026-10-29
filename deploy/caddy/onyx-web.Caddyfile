@@ -1,0 +1,141 @@
+# The Onyx web server (deploy-api.sh installs it as /etc/caddy/Caddyfile): the static site and,
+# under /v1/, the query API (onyx-node on 127.0.0.1:8080, NS17), its proposal intake (ROADMAP S5),
+# and at /mcp the agent connector (apps/agent/src/http.mjs on 127.0.0.1:8090, NL21). API settings follow
+# deploy/caddy/Caddyfile (the API-only template); Caddy 2.6 (Ubuntu 26.04) has no request_buffers.
+{
+	# No admin endpoint: change this file and restart Caddy.
+	admin off
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 10s
+			write 75s
+			idle 60s
+		}
+		# A PAYMENT-SIGNATURE header may be 16 KiB.
+		max_header_size 32KiB
+		# HTTP/1.1 only: one request at a time per connection (deploy/caddy/Caddyfile).
+		# Server-wide, so the static site gives up HTTP/2 too: accepted (small pages,
+		# long-cached assets) for one connection rule in front of the API.
+		protocols h1
+	}
+}
+
+onyx.cryptagraph.com {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Frame-Options "DENY"
+		Permissions-Policy "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+		Cross-Origin-Opener-Policy "same-origin"
+		-Server
+	}
+
+	# The query API's read routes (GET/HEAD; a payment travels in a header).
+	# Caddy 2.6 has no request_buffers: max_size acts as the body streams, and
+	# onyx-node reads no body on these routes.
+	@api {
+		method GET HEAD
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants
+	}
+	handle @api {
+		request_body {
+			max_size 1KiB
+		}
+		reverse_proxy 127.0.0.1:8080 {
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 15s
+			}
+		}
+	}
+	# Proposals (ROADMAP S5, ADR-0039): onyx-node takes them only when ONYX_SUBMISSIONS is set,
+	# with its own per-client and global limits and a journal an operator reviews; nothing a
+	# proposal says is served until a reviewer clears it. A body over 64 KiB is cut off.
+	@submit {
+		method POST
+		path /v1/submit /v1/submit/check /v1/wants
+	}
+	# NL15 review: a declared body over the cap is refused here with 413. Cut off mid-stream by
+	# max_size it reached the client as a 502. The pattern matches a Content-Length over 65,536 (a
+	# body sent without one is still cut off by max_size).
+	@submit_big {
+		method POST
+		path /v1/submit /v1/submit/check /v1/wants
+		header_regexp Content-Length ^(?:[1-9][0-9]{5,}|6553[7-9]|655[4-9][0-9]|65[6-9][0-9]{2}|6[6-9][0-9]{3}|[7-9][0-9]{4})$
+	}
+	handle @submit_big {
+		respond "payload too large" 413
+	}
+	handle @submit {
+		request_body {
+			max_size 64KiB
+		}
+		reverse_proxy 127.0.0.1:8080 {
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 15s
+			}
+		}
+	}
+	# The agent connector (MCP Streamable HTTP, NL21): POST one message, DELETE a session.
+	# It holds no key, is read-only unless ONYX_MCP_ALLOW_PROPOSE=1, and rate-limits per
+	# client (X-Forwarded-For from this front only, ONYX_MCP_TRUSTED_PROXY=127.0.0.1).
+	@mcp {
+		method POST DELETE
+		path /mcp
+	}
+	# As @submit_big, for a Content-Length over 262,144 (256 KiB).
+	@mcp_big {
+		method POST DELETE
+		path /mcp
+		header_regexp Content-Length ^(?:[1-9][0-9]{6,}|26214[5-9]|2621[5-9][0-9]|262[2-9][0-9]{2}|26[3-9][0-9]{3}|2[7-9][0-9]{4}|[3-9][0-9]{5})$
+	}
+	handle @mcp_big {
+		respond "payload too large" 413
+	}
+	handle @mcp {
+		request_body {
+			max_size 256KiB
+		}
+		reverse_proxy 127.0.0.1:8090 {
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 30s
+			}
+		}
+	}
+	handle /mcp {
+		respond "method not allowed" 405
+	}
+	# Anything else under /v1 is not served.
+	handle /v1/* {
+		respond "not found" 404
+	}
+
+	handle {
+		# Compression for the site only: the API's answers keep their own ETags (304s).
+		encode zstd gzip
+		root * /srv/onyx/current
+		@immutable path /app/immutable/*
+		header @immutable Cache-Control "public, max-age=31536000, immutable"
+		@pages path / /index.html
+		header @pages Cache-Control "public, max-age=300, must-revalidate"
+		file_server
+	}
+
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			X-Content-Type-Options nosniff
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
+}
+
+# The main domain and its www redirect to the Onyx site.
+cryptagraph.com, www.cryptagraph.com {
+	redir https://onyx.cryptagraph.com{uri} 301
+}

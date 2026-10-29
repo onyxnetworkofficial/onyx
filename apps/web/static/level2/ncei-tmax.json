@@ -1,0 +1,188 @@
+{
+  "agreed": 5,
+  "bonds": [
+    {
+      "bond": "1000",
+      "observer": "0x215b1cfb28f5af3c305593162670528173a6aa61"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x37a8b711d0581136e9ba24905fa05c5004fe328e"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x5f676961dd75c84653dc2f51b83ff9ed05fcc634"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xb73713169e009fde564565907845f60c175008b5"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xff5e2cc37ce712165d43af4f452da1723271cc42"
+    }
+  ],
+  "config": {
+    "commit_close": 1793049378,
+    "miss_slash": "20",
+    "outlier_slash": "100",
+    "reveal_close": 1793049498,
+    "reward": "10"
+  },
+  "draw": {
+    "announcement": {
+      "announced_at": 18,
+      "attempt": 0,
+      "beacon": "0xceaa9aa23595e9f0d7132a82b8c845124c4e86fc8ca5df54e742e8749db64b56",
+      "beacon_height": 20,
+      "chain_id": 31337,
+      "commit": "0xce4a45f0f1114edfc1b3f3c254d567285fc574fc485567aa8d81249f894b13d0",
+      "draw_count": 1,
+      "registry": "0x8464135c8f25da09e49bc8782676a84730c318bc"
+    },
+    "attempt": 0,
+    "beacon": "0xceaa9aa23595e9f0d7132a82b8c845124c4e86fc8ca5df54e742e8749db64b56",
+    "beacon_height": 20
+  },
+  "feed": {
+    "fetcher_id": "0x64909d4e021b44846d4316606d03ca0b8a0da5f008a78d0d78d292be1c55bd70",
+    "metric": "noaa.ghcnd.usw00003017.tmax",
+    "min_observers": 5,
+    "record_date": "2026-09-01",
+    "scale": 1,
+    "selector": "/0/TMAX",
+    "spec_id": "0xee5341cc3fab4bf5c295522155b75061e8e48985aae57134c67bf094480eeaa4",
+    "subject": "noaa.ghcnd.usw00003017:2026-09-01",
+    "url": "https://www.ncei.noaa.gov/access/services/data/v1?dataset=daily-summaries&stations=USW00003017&startDate=2026-09-01&endDate=2026-09-01&dataTypes=TMAX&units=metric&format=json",
+    "window_end": 1793049318,
+    "window_start": 1793049018
+  },
+  "observers": 5,
+  "pool": [
+    {
+      "bond": "1000",
+      "observer": "0x0a490c0c94d2d3496dc93260e35e4b927882999d"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x215b1cfb28f5af3c305593162670528173a6aa61"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x37a8b711d0581136e9ba24905fa05c5004fe328e"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x5f676961dd75c84653dc2f51b83ff9ed05fcc634"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x639f6929d7ce280f0b8b1d00c64a4b7032101de3"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x874e018172fa9a5b3f30afb70a9587fa059d0475"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xb73713169e009fde564565907845f60c175008b5"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xd84f7b84f8fef01497bbe72229a42cdd42e8c570"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xff5e2cc37ce712165d43af4f452da1723271cc42"
+    }
+  ],
+  "proof_level": 2,
+  "rehearsal": "Observers simulated on one machine; each fetched the source itself over HTTPS.",
+  "response_body": "[\n{\"DATE\":\"2026-09-01\",\"STATION\":\"USW00003017\",\"TMAX\":\"30.6\"}\n]\n",
+  "result_hash": "0x3fe00cfc9220cfb4ab22a113cdf43d5306f4404d11eb58316611d163c56434a5",
+  "reveals": [
+    {
+      "commit": "0xb42b430ea5c44bb30ebf939fa89fb3f8ed25961d2a7284bebf6d047e9dde2f2a",
+      "commit_sig": "0xf0ca9583eca85a3def636c835dfe3742188fba68e6b2a394e3d67862286825d8272cbb3dd92b1ede2a02595852422b9339e533fa9d3e857ccb8190b640c61f0c1c",
+      "http_date": "Mon, 26 Oct 2026 21:10:24 GMT",
+      "observed_unix": 1793049023,
+      "observer": "0x215b1cfb28f5af3c305593162670528173a6aa61",
+      "page_hash": "0xc3090a97d656543d9f3c2cc71b40a1c27fce27a533511d535d2d501c3252a38f",
+      "reveal_sig": "0x041a38cb28d70a5df40650b62551aa1df307ee518b643e9904c917a3c8ae6cf07f24fd906753dcf60e5f847e9a13f695b2296b87f3dd44f442d40d57a16051d81b",
+      "salt": "0xf285ca863be8274d9e9394861bf0148b49c7a38bd03a036890e5d6f50481077a"
+    },
+    {
+      "commit": "0x6798116f49e8d9b28364412c7a117865ceeec8466626165ea11e4395adb40a81",
+      "commit_sig": "0x7f1a41376d0313beb172205c2d47ad069968935ded0f32ebe10d6f49407d7a0342759d13c9d2520ba1a01a9d4f87a849ff577e9956d83e8c2d760e435d94e47c1c",
+      "http_date": "Mon, 26 Oct 2026 21:10:28 GMT",
+      "observed_unix": 1793049028,
+      "observer": "0x37a8b711d0581136e9ba24905fa05c5004fe328e",
+      "page_hash": "0xc3090a97d656543d9f3c2cc71b40a1c27fce27a533511d535d2d501c3252a38f",
+      "reveal_sig": "0xdbb961ed9ae461b566a29817ee5e83e529bb552ff6d3bbf2dfb36b881f5672cf44198ee7971b6809ac408f7aeb59fd59a16d81801520f4171c2e217166e2fdfd1b",
+      "salt": "0xb9669bfd0702415dea46b25916ac7eb6dc77543ab5004d8431a0cba8a2c946ba"
+    },
+    {
+      "commit": "0x4f0423d29c9645193c76b2a99269418d78ccf5a4c33f5da8478269f812c50636",
+      "commit_sig": "0x1360db1ad1f0e1af49ad08508c3945a1080d179f09091069a0191a0cad37243b6d241ba41a4a2dd151d4aff0ed94228ae6603af57ed5fce1794996df13716cc51b",
+      "http_date": "Mon, 26 Oct 2026 21:10:32 GMT",
+      "observed_unix": 1793049032,
+      "observer": "0x5f676961dd75c84653dc2f51b83ff9ed05fcc634",
+      "page_hash": "0xc3090a97d656543d9f3c2cc71b40a1c27fce27a533511d535d2d501c3252a38f",
+      "reveal_sig": "0xf09f7cb86d67fe6b144604c2d67721603b60bff979d0e6d812874021fdf3d625775e0789326efea5427c4501fda76ea81b1cfd20f276e7c07c98d599e0997a241b",
+      "salt": "0x8a9c11c5c268e42aa407791d02717abde02a48805b8921390b3225d28fcd574b"
+    },
+    {
+      "commit": "0x8e15e19e3a39e4be3feb06abf75b26764d285112e43dc06840ea2fbbda0a05a7",
+      "commit_sig": "0x905bf133e95565d06f999c35bd8df7d27eedb1d0c01f6caa06292f711f2aaf92436de7079c874b0f40d40fdcf19a2dc090adf8c4133c77c6ad967aeaba3e908f1b",
+      "http_date": "Mon, 26 Oct 2026 21:10:37 GMT",
+      "observed_unix": 1793049036,
+      "observer": "0xb73713169e009fde564565907845f60c175008b5",
+      "page_hash": "0xc3090a97d656543d9f3c2cc71b40a1c27fce27a533511d535d2d501c3252a38f",
+      "reveal_sig": "0x0b33cfbaf1269781552531ced249cb51579808cc69b644de22ce63b123ee664e7950d678ddefe5d22fa7aacdacb457168eeb49089d2ea650e3184b36f928ad261c",
+      "salt": "0xf61a315f088cede1101a2b89af9b0aed7c8811e19367435d110b75e5bade7b68"
+    },
+    {
+      "commit": "0xaca7b83ac874a90c037ff30e417da421c5a86ec9ab1c9f7fecba124a571638a8",
+      "commit_sig": "0x6ac839d8ae305ac54d131093de364385a6903450914fcca36dd9682750c91feb740e6467ed9173a60f3a2690b2a873d680d14d06ee6fb99eba2b166a79c63f8f1c",
+      "http_date": "Mon, 26 Oct 2026 21:10:41 GMT",
+      "observed_unix": 1793049041,
+      "observer": "0xff5e2cc37ce712165d43af4f452da1723271cc42",
+      "page_hash": "0xc3090a97d656543d9f3c2cc71b40a1c27fce27a533511d535d2d501c3252a38f",
+      "reveal_sig": "0xd1d03ae527097cf6f30586334264248d2297ca61084393729672433c69a6e7aa143274c9eb6648e7521ba39dd688e651a2675a8e1375158224848eb3190f22361c",
+      "salt": "0x0fc41308554e6cb0fe5fb5dae197da289592281807fc2ef6da1367fa1074ede2"
+    }
+  ],
+  "round_id": "0xa864bfe48a1d4bfefa39353315a26b06605aac92cae3893a3a05a133f7b104c2",
+  "source": {
+    "attribution": "Source: NOAA National Centers for Environmental Information, GHCN-Daily version 3 (doi:10.7289/V5D21VHZ), station USW00003017; not an official NOAA product as shown here",
+    "id": "noaa.ncei.ghcnd",
+    "license": "onyx:us-government-work-noaa",
+    "name": "NOAA NCEI GHCN-Daily: daily maximum temperature, Denver International Airport",
+    "terms_quote": "are in the public domain, unless specifically noted otherwise, and may be used without charge for any lawful purpose",
+    "terms_url": "https://www.weather.gov/disclaimer"
+  },
+  "statuses": [
+    {
+      "observer": "0x215b1cfb28f5af3c305593162670528173a6aa61",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x37a8b711d0581136e9ba24905fa05c5004fe328e",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x5f676961dd75c84653dc2f51b83ff9ed05fcc634",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0xb73713169e009fde564565907845f60c175008b5",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0xff5e2cc37ce712165d43af4f452da1723271cc42",
+      "status": "Agreed"
+    }
+  ],
+  "unit": "degrees Celsius",
+  "value": "30.6"
+}

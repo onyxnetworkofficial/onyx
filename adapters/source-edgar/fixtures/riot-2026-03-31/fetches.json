@@ -1,0 +1,23 @@
+{
+  "window_start": 1791753060,
+  "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001167419/us-gaap/CryptoAssetNumberOfUnits.json",
+  "record_date": "2026-03-31",
+  "body": "response.json",
+  "fetches": [
+    {
+      "observer": 1,
+      "fetched_unix": 1791753070,
+      "http_date": "Sun, 11 Oct 2026 21:11:10 GMT"
+    },
+    {
+      "observer": 2,
+      "fetched_unix": 1791753072,
+      "http_date": "Sun, 11 Oct 2026 21:11:12 GMT"
+    },
+    {
+      "observer": 3,
+      "fetched_unix": 1791753075,
+      "http_date": "Sun, 11 Oct 2026 21:11:15 GMT"
+    }
+  ]
+}

@@ -1,0 +1,59 @@
+{
+ "version": 1,
+ "chain": "eth.mainnet",
+ "rpc": "http://127.0.0.1:18546",
+ "check_rpc": "https://rpc.flashbots.net",
+ "fetched_at": "2026-10-19T19:33:45Z",
+ "finalized_at_fetch": {
+  "number": 26228652,
+  "hash": "0xb3a2e6a958e9a846a75c80ac3097181cc9d2fe06763691dcd0e8d08cda56dfd3"
+ },
+ "parent": 26225267,
+ "from": 26225268,
+ "to": 26225270,
+ "cross_checked": [
+  {
+   "number": 26225260,
+   "hash": "0x7d3b17038ceadf663373ecf3506352fc39c3fed259fd3c576ec8ae604e45a4fe"
+  },
+  {
+   "number": 26225261,
+   "hash": "0x9919f04b2135acf98dd1ad5092a9710d30d9592c5fc03bb0846e5aac0e69c42f"
+  },
+  {
+   "number": 26225311,
+   "hash": "0xc920c603e4fb95e863a18e68dc1a90c05657299de43a50782a0a28d3e3a1eafb"
+  },
+  {
+   "number": 26225361,
+   "hash": "0xfd9aa9451acde2e490cc79949ac564650c5dc0b6a4abce6f93df30dfba3630de"
+  },
+  {
+   "number": 26225411,
+   "hash": "0x5799959ed445ea8a597852496c21753297b07aa296a2dea54245cbef2eb4ea43"
+  },
+  {
+   "number": 26225461,
+   "hash": "0xfc91b45bace6f6fe025a8e26fd4989a3dbae326fd9cef75fe4a86e7b74ef82a0"
+  },
+  {
+   "number": 26225511,
+   "hash": "0x6b532e9db89af105c197b3c1e3777fee49dc36d66537ad9e39a3f037272af3bf"
+  },
+  {
+   "number": 26225560,
+   "hash": "0xf630b9d91bde21e09efd502b0bde3fb11113673255164eb1c834ac5d334dd76f"
+  }
+ ],
+ "requests": 613,
+ "sha256": {
+  "26225267.block.json.gz": "1a61aa1e6c0da3ac0cf24e7b9e7a3ebfbf008283afc8ebd5eb05f7045c2c2022",
+  "26225268.block.json.gz": "7d6b3bd2959b7ece57444dea306bf2242866a8307127c6c9a478b1f78e58e663",
+  "26225268.receipts.json.gz": "18274ec5fc62815122d35e20fb0682aba9d8dcb95aa20a9fd82b468a2cbd9eec",
+  "26225269.block.json.gz": "de33501febe24979f22842730db4aad5397312e447fbed171cf3b6262e0e06a1",
+  "26225269.receipts.json.gz": "c2100f3bc877130b0c4bc028b26be480f0b41787549ced2cc2c84a8394290655",
+  "26225270.block.json.gz": "53f3e52faef32d6bfcf76c609ed87bfd6160d8a9cd1a8f0279e21622dd2d7c84",
+  "26225270.receipts.json.gz": "1fb79e7feec662b8448b7aafece13d8a6ed8709f0ee4d6c6bb57eb6026dfbf12"
+ },
+ "subset_of": "fixtures/eth/window-26225261-26225560.manifest.json"
+}

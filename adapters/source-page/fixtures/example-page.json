@@ -1,0 +1,9 @@
+{
+  "notice": "Synthetic example page for Onyx tests. Not real data.",
+  "data": {
+    "usd_per_unit": "64123.45",
+    "status": "open",
+    "units_listed": 1200,
+    "float_field": 1.5
+  }
+}

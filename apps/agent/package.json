@@ -1,0 +1,33 @@
+{
+	"name": "onyx-agent",
+	"version": "0.1.0",
+	"description": "Onyx agent toolkit (NS8, ADR-0047; agent connect NL21): find, propose, pay for and check Onyx data from an AI agent. An API client and MCP servers (stdio and HTTP) built from the OpenAPI file; answers are checked by onyx-check.",
+	"private": true,
+	"type": "module",
+	"license": "Apache-2.0",
+	"engines": {
+		"node": ">=20"
+	},
+	"bin": {
+		"onyx-mcp": "src/mcp.mjs",
+		"onyx-mcp-http": "src/http.mjs"
+	},
+	"exports": {
+		".": "./src/client.mjs",
+		"./check": "./src/check.mjs",
+		"./connect": "./src/connect.mjs",
+		"./mcp": "./src/mcp.mjs",
+		"./http": "./src/http.mjs"
+	},
+	"scripts": {
+		"test": "node --test test/*.test.mjs",
+		"sync": "node scripts/sync.mjs",
+		"sync:check": "node scripts/sync.mjs --check"
+	},
+	"files": [
+		"src",
+		"openapi.json",
+		"catalog.json",
+		"README.md"
+	]
+}

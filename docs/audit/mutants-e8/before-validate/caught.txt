@@ -1,0 +1,63 @@
+crates/onyx-coordinator/src/validate.rs:168:5: replace assigned -> bool with false
+crates/onyx-coordinator/src/validate.rs:168:5: replace assigned -> bool with true
+crates/onyx-coordinator/src/validate.rs:168:18: replace == with != in assigned
+crates/onyx-coordinator/src/validate.rs:180:25: replace < with > in assigned
+crates/onyx-coordinator/src/validate.rs:180:25: replace < with == in assigned
+crates/onyx-coordinator/src/validate.rs:180:7: replace * with + in assigned
+crates/onyx-coordinator/src/validate.rs:180:7: replace * with / in assigned
+crates/onyx-coordinator/src/validate.rs:180:57: replace << with >> in assigned
+crates/onyx-coordinator/src/validate.rs:187:5: replace deterrence_holds -> bool with true
+crates/onyx-coordinator/src/validate.rs:187:5: replace deterrence_holds -> bool with false
+crates/onyx-coordinator/src/validate.rs:191:9: delete match arm (Some(a), Some(b)) in deterrence_holds
+crates/onyx-coordinator/src/validate.rs:191:33: replace >= with < in deterrence_holds
+crates/onyx-coordinator/src/validate.rs:204:5: replace fees_covered_by_bond -> bool with true
+crates/onyx-coordinator/src/validate.rs:204:5: replace fees_covered_by_bond -> bool with false
+crates/onyx-coordinator/src/validate.rs:207:38: replace >= with < in fees_covered_by_bond
+crates/onyx-coordinator/src/validate.rs:291:5: replace canary_commit -> Option<Hash32> with None
+crates/onyx-coordinator/src/validate.rs:293:43: replace >= with < in canary_commit
+crates/onyx-coordinator/src/validate.rs:344:9: replace ValidationConfig::validators_deterred -> bool with true
+crates/onyx-coordinator/src/validate.rs:348:13: replace && with || in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:349:13: replace && with || in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:344:9: replace ValidationConfig::validators_deterred -> bool with false
+crates/onyx-coordinator/src/validate.rs:347:13: replace && with || in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:345:13: replace && with || in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:346:13: replace && with || in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:344:30: replace > with == in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:344:30: replace > with < in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:345:34: replace > with == in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:345:34: replace > with < in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:345:34: replace > with >= in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:346:37: replace >= with < in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:347:36: replace > with == in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:347:36: replace > with < in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:347:36: replace > with >= in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:348:36: replace <= with > in ValidationConfig::validators_deterred
+crates/onyx-coordinator/src/validate.rs:1223:5: replace entry_amount -> u128 with 0
+crates/onyx-coordinator/src/validate.rs:1223:5: replace entry_amount -> u128 with 1
+crates/onyx-coordinator/src/validate.rs:1249:5: replace is_validator_slash -> bool with true
+crates/onyx-coordinator/src/validate.rs:1249:5: replace is_validator_slash -> bool with false
+crates/onyx-coordinator/src/validate.rs:1361:9: replace Ledger<R>::mirror_of_contract -> Self with Default::default()
+crates/onyx-coordinator/src/validate.rs:1362:13: delete field id from struct Ledger expression in Ledger<R>::mirror_of_contract
+crates/onyx-coordinator/src/validate.rs:1397:9: replace Ledger<R>::taken -> BTreeSet<Hash32> with BTreeSet::new()
+crates/onyx-coordinator/src/validate.rs:1417:17: replace || with && in Ledger<R>::release_held
+crates/onyx-coordinator/src/validate.rs:1412:9: replace Ledger<R>::release_held with ()
+crates/onyx-coordinator/src/validate.rs:1416:17: replace || with && in Ledger<R>::release_held
+crates/onyx-coordinator/src/validate.rs:1415:17: replace < with == in Ledger<R>::release_held
+crates/onyx-coordinator/src/validate.rs:1415:17: replace < with > in Ledger<R>::release_held
+crates/onyx-coordinator/src/validate.rs:1415:17: replace < with <= in Ledger<R>::release_held
+crates/onyx-coordinator/src/validate.rs:1512:9: replace Ledger<R>::apply -> bool with true
+crates/onyx-coordinator/src/validate.rs:1512:9: replace Ledger<R>::apply -> bool with false
+crates/onyx-coordinator/src/validate.rs:1516:40: replace == with != in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1512:28: replace == with != in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1517:12: delete ! in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1516:59: replace == with != in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1552:22: replace match guard is_validator_slash(reason) with true in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1552:22: replace match guard is_validator_slash(reason) with false in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1568:62: replace > with == in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1568:62: replace > with < in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1568:62: replace > with >= in Ledger<R>::apply
+crates/onyx-coordinator/src/validate.rs:1615:9: replace Ledger<R>::balance -> i128 with 0
+crates/onyx-coordinator/src/validate.rs:1615:9: replace Ledger<R>::balance -> i128 with 1
+crates/onyx-coordinator/src/validate.rs:1615:9: replace Ledger<R>::balance -> i128 with -1
+crates/onyx-coordinator/src/validate.rs:1621:18: replace match guard a == actor with false in Ledger<R>::balance
+crates/onyx-coordinator/src/validate.rs:1621:20: replace == with != in Ledger<R>::balance

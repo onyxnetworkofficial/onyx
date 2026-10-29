@@ -1,0 +1,13 @@
+{
+  "note": "Five real HTTPS GETs of the pinned URL, one per simulated observer, made from one machine on 2026-10-11. Every body was byte-identical; response.json is that body. fetched_unix is the local clock just before each request; http_date is the server's Date header.",
+  "url": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?fields=record_date,tot_pub_debt_out_amt&filter=record_date:eq:2026-10-08",
+  "record_date": "2026-10-08",
+  "body": "response.json",
+  "fetches": [
+    { "observer": 1, "fetched_unix": 1791696378, "http_date": "Sun, 11 Oct 2026 05:26:18 GMT" },
+    { "observer": 2, "fetched_unix": 1791696381, "http_date": "Sun, 11 Oct 2026 05:26:21 GMT" },
+    { "observer": 3, "fetched_unix": 1791696384, "http_date": "Sun, 11 Oct 2026 05:26:25 GMT" },
+    { "observer": 4, "fetched_unix": 1791696388, "http_date": "Sun, 11 Oct 2026 05:26:28 GMT" },
+    { "observer": 5, "fetched_unix": 1791696391, "http_date": "Sun, 11 Oct 2026 05:26:32 GMT" }
+  ]
+}

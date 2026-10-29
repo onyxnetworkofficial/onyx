@@ -1,0 +1,27 @@
+# The per-address connection cap on port 443 (deploy/nftables/onyx-conn-cap.nft; ROADMAP L19,
+# THREATS NS17-4) loaded at boot, after ufw. On the web server, with the owner's OK:
+#
+#   sudo install -m 0644 deploy/nftables/onyx-conn-cap.nft /etc/onyx/onyx-conn-cap.nft
+#   sudo nft -c -f /etc/onyx/onyx-conn-cap.nft        # syntax check, changes nothing
+#   sudo install -m 0644 deploy/systemd/onyx-conn-cap.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now onyx-conn-cap
+#   sudo nft list table inet onyx_conn_cap             # the two rules, counters at 0
+#
+# Undo: sudo systemctl disable --now onyx-conn-cap (ExecStop deletes only this table).
+# The file replaces only its own table, so a restart or a second load is safe, and ufw's rules
+# are never touched. Tested in a throwaway network namespace: scripts/conn-cap-test.sh.
+[Unit]
+Description=Onyx per-address connection cap on port 443
+After=network-pre.target ufw.service
+Wants=network-pre.target
+Before=caddy.service
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/onyx/onyx-conn-cap.nft
+ExecStop=/usr/sbin/nft delete table inet onyx_conn_cap
+ExecReload=/usr/sbin/nft -f /etc/onyx/onyx-conn-cap.nft
+
+[Install]
+WantedBy=multi-user.target

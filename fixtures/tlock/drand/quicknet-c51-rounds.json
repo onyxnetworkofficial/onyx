@@ -1,0 +1,112 @@
+{
+ "about": "ROADMAP C51: published drand quicknet rounds for the time-locked sealed-reveal tests and the local anvil rehearsal (scripts/level2-timelocked.sh). Each entry of rounds is a verbatim https://api.drand.sh/<chain>/public/<round> answer, fetched 2026-10-17 with the User-Agent onyx-drand-client and no account. Signatures are checked against the pinned quicknet key wherever they are used, never trusted from this file.",
+ "chain": "52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971",
+ "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/<round>",
+ "rounds": [
+  {
+   "round": 32964509,
+   "randomness": "5c0e96972bb992be42c4ad11ffa2f40144d47a24f9f512dd4e3792e6f4fa36fe",
+   "signature": "a622932180a9a8f9168b83b1474c57193d3152a9fc66d017a9ec45e81fb92b7536e48f28ab80e738a96ddd0a95e320c2"
+  },
+  {
+   "round": 32964510,
+   "randomness": "fc966478304cfe2f290919e2c5f06099e3ad0b6c2a7d5ba39d42933b7397dc2b",
+   "signature": "8724fcfb06e5463985e84490080dea31e06630655c576b9ba8c3a5a987b1dd0a4a3422502c89d1599cecd5d774ba1927"
+  },
+  {
+   "round": 32964511,
+   "randomness": "91081ac463ca3d3d084784a5f821f4744d9f1b0520b15f05f1c1424cb52775e1",
+   "signature": "99c9dabe256f960d3814f57e4afd08aa48e9f505ae15749c9ffe0e8b1511fc0f441eabb49e8765dfdc5f90ed1a4db536"
+  },
+  {
+   "round": 32964512,
+   "randomness": "3b34636f51a5320ba4147dbba695ad3a4b77e4c766e1c1a9eedfa4dd0145d4fb",
+   "signature": "a437d56578b704344ee4caed3da1ea58b7eb875b0b5279aed4165f198b46be96ef71ac2fe4be439dd04ccc8b07b7b049"
+  },
+  {
+   "round": 32964513,
+   "randomness": "c1d1a65f43055ae193a6615ce969d5bab745bbd6917c9e22e94ab7dd3f5d055c",
+   "signature": "aeb856510bbb701b51163c7c11b0478227048232b3b791dbf5968d3a20a727863a701318bbc890edb28c818d2b9fce45"
+  },
+  {
+   "round": 32964514,
+   "randomness": "57b8957ccd271df036297ec312609247b9bd9dadcd162d6d85ea0765fcea0932",
+   "signature": "b554c5b658badf6588c0e82e9b1326f8e0700179dafc4f12d3b00833c9a9ba7ab9661b74010412b65fbe6f2fcb829c33"
+  },
+  {
+   "round": 32964515,
+   "randomness": "9307e109447acd7f29fff528424eccb2178e88c2f8cfcbf40b92a9fe551a6d6f",
+   "signature": "b056228ae5ef341a743e6c7a03290fc86c44bb5efb8f53af3cdfad58d5ca0d0c3919b47b991188b6856b59c36fcb2912"
+  },
+  {
+   "round": 33152429,
+   "randomness": "8266952194a0bb2a3f5a70d2ed3a7d3748bb09274738521390662b10b23e55d4",
+   "signature": "8bab219116ba80af0fc541ecec87db1bc78436b38a1d44672346147459266780322ebd6625a88f16f716437af5ade75c"
+  },
+  {
+   "round": 33152430,
+   "randomness": "d365de41df0277f3f4f064558b77197462a21da53387a8dcbf05d92927d401cc",
+   "signature": "a0c206105e56e09f22989b146369ed8915d344ac5bb43d5508f17ddea5ca7e346dade1a46b105eb5ca2d4bcde9042c47"
+  },
+  {
+   "round": 33152431,
+   "randomness": "f74a0c2fcf39a01d7eef8b7aadd782166b12924e02b63ba3a240488907054410",
+   "signature": "8c7f07ae07dbcb10266805e12b4ffddffb0a46e27514a0429cc906aa24e30e6bb5e9cbe3514381cda66e1b7c8ecaea0e"
+  },
+  {
+   "round": 33152432,
+   "randomness": "c3b2835c9eaac6c240d0fe33b828d3a92574bf27ba6e5d094ec5d6b84ce19ad4",
+   "signature": "b8593b96a45441f9a41e9860c3d960a92bb134dbb1ec775d4b5110074ae58b89472abe59e360a739b42de4c05b45c3fb"
+  },
+  {
+   "round": 33152433,
+   "randomness": "b19b28c88a58d0eab1dd050b76616986477f84938e589b880ec3e012e4c60ba4",
+   "signature": "91a68f3c6e137a6706b2e7fb35f6c9feae491e001f86b6efc38c82e60421f44c08a11ce434df118d9380ae02c85668ec"
+  },
+  {
+   "round": 33152434,
+   "randomness": "cca9c0e213671d4bb485f610d7487e9bc70f9277d406cc09c1f928aca5bbd005",
+   "signature": "93a385920bbf8ce5aa27be8769c6cd86a3c5fa156550d9664dc722ba0e63e03153a8eb10a5ca965c2261ebc9d2885354"
+  },
+  {
+   "round": 33152435,
+   "randomness": "1fa45e92ade34649017714e6ee8539787e0569954c4b767611f7dfb3d668c193",
+   "signature": "80cda6ca1754ceff751f75a542bc56eab799e7f4a4a1c7a511f200f87449b4977b758ae9d4a6462a96925ba9d32348fd"
+  },
+  {
+   "round": 33152729,
+   "randomness": "f363391365ca6a9d8731726b292c4fde5d0ae3d090f8daa3f7b4724336284990",
+   "signature": "afbd17209acbc9aafd12405fa6a5e866a4f89f34f3e2653d8eac490cb429997f07358a9538e916eb28d5459b060e6fb3"
+  },
+  {
+   "round": 33152730,
+   "randomness": "7789fd67eef4d3a8549314e456d8e04392323c5386ba57dd5db0eb0e614b47e9",
+   "signature": "89f42167e23b800f78dc33667c97f1ae85cb9cbafe5bb73a129e6932f10b3287134e99a2496e60143601973fdc32a17d"
+  },
+  {
+   "round": 33152731,
+   "randomness": "f5fa42b8a944d81f058642d50f0828cb90bcb6d8e030a25923066e552d052f60",
+   "signature": "aef36af2a3dfee6575aec7fc1f3fb009ea7021c0458e469bc774401ed978d6eebd2a4f7a6e60e77ef3b17d3f4eb3a97b"
+  },
+  {
+   "round": 33152732,
+   "randomness": "40a8f5b6a8d05cb3d253a7a5d25ffd391f037c1f1a748e6d9c582ea365c866ae",
+   "signature": "9290f4e5f70a269bb3c839a2e77b24f50624d8d797db46f2c48e00e06d41462d3744ae27efbf393b41eac06654da48bc"
+  },
+  {
+   "round": 33152733,
+   "randomness": "3d478bfd51aba49b64e4753d8538556909651617d2a922d5e2e21135f59f43a9",
+   "signature": "831a483d648b3bad173d329985432c7b93c9802149b0b39185eebf70c5bf38d31ba5fdbfd6d9aff0ccc2dc322b1ed6f2"
+  },
+  {
+   "round": 33152734,
+   "randomness": "78bbbc04a9c20eae765ea8a615d41604836903c8519692bcdda3aac724eabbd3",
+   "signature": "8003a47335fa4e56ee3383001aa0c3ab4a658725bc96a2eef9cc7b3ab0599c68437136879299a4987fec31422a0bfd30"
+  },
+  {
+   "round": 33152735,
+   "randomness": "b71484293be42330cae8e650e207f94bae1377c152bf59883ea35e4ed97eef83",
+   "signature": "86df8951d6dd174d6885b05facaa672057a353ff276d9e3b5672708a25d44ffbcf9103a0d76897a2eaf32a2012bb66fe"
+  }
+ ]
+}

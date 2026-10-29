@@ -1,0 +1,144 @@
+# TLS in front of onyx-node (ROADMAP L11, THREATS.md M7-7; docs/ops/deployment.md
+# "TLS in front"). Tested with Caddy 2.11.7 (docs/audit/2026-10-15-tls-front.md).
+#
+# onyx-node speaks plain HTTP and refuses a listen address that is not
+# loopback unless ONYX_ALLOW_PLAIN_HTTP_PUBLIC=1. Caddy terminates TLS with a
+# certificate it obtains and renews itself over ACME (Let's Encrypt, ZeroSSL),
+# redirects plain HTTP to HTTPS, and proxies the API's GET/HEAD routes and the two bounded intake POST routes.
+#
+# Settings (environment, read when Caddy loads this file):
+#   ONYX_CADDY_DOMAIN     the API's public name, e.g. api.example.org (required).
+#                         Its A/AAAA records point at this host; ports 80 and
+#                         443 reach Caddy (the ACME challenges use them).
+#   ONYX_CADDY_TLS        the `tls` argument (required): a role mailbox for
+#                         ACME notices in production, or `internal` (Caddy's
+#                         own CA) for a local test only.
+#   ONYX_CADDY_UPSTREAM   onyx-node's ONYX_LISTEN (default 127.0.0.1:8080).
+#   ONYX_CADDY_HTTP_PORT, ONYX_CADDY_HTTPS_PORT  (default 80 and 443).
+#   ONYX_CADDY_BIND       listen addresses (default: all; a local test sets
+#                         127.0.0.1).
+#
+# onyx-node behind it (docs/ops/config.md):
+#   ONYX_LISTEN=127.0.0.1:8080          loopback only (not [::1]: Caddy
+#                                       would then connect from ::1)
+#   ONYX_TRUSTED_PROXIES=127.0.0.1      rate limits key on the forwarded client
+#                                       (in Docker: the bridge gateway Caddy's
+#                                       connections arrive from, e.g.
+#                                       172.17.0.1; deployment.md)
+#   ONYX_PUBLIC_URL=https://<ONYX_CADDY_DOMAIN>
+#   ONYX_INDEX_HEALTH=summary           /v1/health is public through this file
+#
+# Run: ONYX_CADDY_DOMAIN=api.example.org ONYX_CADDY_TLS=ops@example.org \
+#        caddy run --config deploy/caddy/Caddyfile --adapter caddyfile
+{
+	http_port {$ONYX_CADDY_HTTP_PORT:80}
+	https_port {$ONYX_CADDY_HTTPS_PORT:443}
+	default_bind {$ONYX_CADDY_BIND}
+	# `tls internal` (local tests) must never touch the system trust store;
+	# no effect with ACME certificates.
+	skip_install_trust
+	# No admin endpoint (any local user could reconfigure the proxy through
+	# it): change this file and restart Caddy.
+	admin off
+	servers {
+		timeouts {
+			# onyx-node's ONYX_HEADER_READ_TIMEOUT_SECS default; also ends a
+			# slow TLS handshake plus headers (slowloris).
+			read_header 10s
+			# Slow request bodies, including intake, have a deadline.
+			read_body 10s
+			# A whole response: onyx-node's 12 s request deadline plus its
+			# 60 s send_timeout (an export is up to 32 MiB).
+			write 75s
+			idle 60s
+		}
+		# A PAYMENT-SIGNATURE header may be 16 KiB
+		# (onyx_api::x402::MAX_PAYMENT_HEADER); Caddy's default of 16 KiB for
+		# all headers together would refuse it with 431.
+		max_header_size 32KiB
+		# HTTP/1.1 only: one request at a time per connection, so a
+		# per-address connection cap in the host firewall also caps a
+		# client's requests in flight (HTTP/2 would allow 250 streams on
+		# each connection against onyx-api's 256 in flight for everyone).
+		protocols h1
+	}
+}
+
+# Plain HTTP: redirect only, nothing is proxied. Written out (not Caddy's
+# automatic redirect) so the server options above apply to port 80 too; ACME
+# HTTP challenges are still answered here. The target has no port: Caddy
+# treats https_port as internal and the public port as 443.
+http://{$ONYX_CADDY_DOMAIN} {
+	redir https://{host}{uri} 308
+}
+
+https://{$ONYX_CADDY_DOMAIN} {
+	tls {$ONYX_CADDY_TLS}
+
+	header {
+		# One year, this host only: includeSubDomains and preload are the
+		# domain owner's choice (docs/ops/deployment.md "TLS in front").
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		-Server
+	}
+
+	# Read routes: base, track, signed facts and submission receipt status.
+	@api {
+		method GET HEAD
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants
+	}
+	handle @api {
+		# These GET/HEAD routes need no request body (a
+		# payment travels in a header), so any body beyond a token one is
+		# refused here with 413. The limit alone acts only when the proxy
+		# reads past it; request_buffers (below) makes it read first.
+		request_body {
+			max_size 1KiB
+		}
+		# X-Forwarded-For: Caddy ignores the client's own value (no
+		# trusted_proxies here) and sends the client's address, so onyx-node
+		# (ONYX_TRUSTED_PROXIES=127.0.0.1) keys rate limits on it.
+		reverse_proxy {$ONYX_CADDY_UPSTREAM:127.0.0.1:8080} {
+			# Read the body (up to 4 KiB) before dialing: a body over
+			# max_size then fails with 413 before onyx-node sees the request.
+			request_buffers 4KiB
+			transport http {
+				dial_timeout 3s
+				# onyx-node answers within its 12 s request deadline (504).
+				response_header_timeout 15s
+			}
+		}
+	}
+	# Intake is disabled in the node unless ONYX_SUBMISSIONS is configured.
+	@submit {
+		method POST
+		path /v1/submit /v1/submit/check /v1/wants
+	}
+	handle @submit {
+		request_body {
+			max_size 64KiB
+		}
+		reverse_proxy {$ONYX_CADDY_UPSTREAM:127.0.0.1:8080} {
+			request_buffers 68KiB
+			transport http {
+				dial_timeout 3s
+				response_header_timeout 15s
+			}
+		}
+	}
+	handle {
+		respond "not found" 404
+	}
+
+	# Errors raised by Caddy itself (413 body cap, 502/504 upstream down)
+	# skip the deferred header handler above: set the same headers here.
+	handle_errors {
+		header {
+			Strict-Transport-Security "max-age=31536000"
+			X-Content-Type-Options nosniff
+			-Server
+		}
+		respond "{err.status_code} {err.status_text}"
+	}
+}

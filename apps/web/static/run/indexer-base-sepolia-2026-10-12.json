@@ -1,0 +1,93 @@
+{
+  "generated_by": "scripts/read-indexer-sepolia.py",
+  "command": "python3 -I scripts/read-indexer-sepolia.py --to 48040000 apps/web/static/run/base-sepolia-2026-10-12.json apps/web/static/run/indexer-base-sepolia-2026-10-12.json",
+  "rpc": "https://sepolia.base.org",
+  "network": "Base Sepolia",
+  "chain_id": 84532,
+  "explorer": "https://sepolia.basescan.org",
+  "settlement": "0x7d2576ee99c98ce8de353eff23708c26742a7116",
+  "settlement_url": "https://sepolia.basescan.org/address/0x7d2576ee99c98ce8de353eff23708c26742a7116",
+  "read_at_block": 48040000,
+  "read_at_utc": "2026-10-12 23:38:08",
+  "deploy": {
+    "block": 48037567,
+    "code_hex_chars_before": 0,
+    "code_hex_chars_at": 46358,
+    "ok": true
+  },
+  "scan": {
+    "from": 48037567,
+    "to": 48040000,
+    "span": 200,
+    "topic": "0x642365fa0ec457443cdadf7b4792f76d3de186ce4a33f99c4f6b69e5828fba73",
+    "get_logs_calls": 13,
+    "ranges_with_events": [
+      [
+        48037967,
+        48038166,
+        1
+      ],
+      [
+        48039367,
+        48039566,
+        1
+      ]
+    ]
+  },
+  "rpc_calls": {
+    "eth_call": 4,
+    "eth_chainId": 1,
+    "eth_getBlockByNumber": 4,
+    "eth_getCode": 2,
+    "eth_getLogs": 13
+  },
+  "events": [
+    {
+      "round": 1,
+      "shard": "0xd129a817105ba6f9377327659e9eed1c6d553843264cfba960723fd65b831878",
+      "root": "0x99789e60491178040f5353fb96909f76cba6b0d4eb627fadcc91c9ba86d0727e",
+      "binding": "0x5e07591f4c565bcc1b583ecb1038d2bfe1da50b6c57df15f029eff0476b03bd6",
+      "block": 48037969,
+      "log_index": 200,
+      "utc": "2026-10-12 22:30:26",
+      "tx": "0x3b6a1b1e9baf7fdd77d42c9cfde107b0b6ab5c1894ae99ffeaf0180e4ddae1eb",
+      "tx_url": "https://sepolia.basescan.org/tx/0x3b6a1b1e9baf7fdd77d42c9cfde107b0b6ab5c1894ae99ffeaf0180e4ddae1eb",
+      "run_step": "r1.finalize",
+      "run_fn": "finalizeShard",
+      "view": {
+        "root": "0x99789e60491178040f5353fb96909f76cba6b0d4eb627fadcc91c9ba86d0727e",
+        "binding": "0x5e07591f4c565bcc1b583ecb1038d2bfe1da50b6c57df15f029eff0476b03bd6",
+        "finalized_at": 48037969
+      },
+      "agrees": true,
+      "state": {
+        "status": "Finalized",
+        "closed": false
+      }
+    },
+    {
+      "round": 2,
+      "shard": "0x349a723a00b4c874090eb921862cd3081e1f09efd223cd54676e7193ddda902a",
+      "root": "0xdca49baf47c44c11eba304342f8eb229f903ed1c5da8dace8955c5382943f2b7",
+      "binding": "0x40832aa65f0a43d7b3f9c4cb5a90491ed2ca58bbee08950f16626e0dd8cd2a12",
+      "block": 48039489,
+      "log_index": 15,
+      "utc": "2026-10-12 23:21:06",
+      "tx": "0x403698ef0289834a5cfe9c6482684fead49da99395b3bacf5387c4021d0eca28",
+      "tx_url": "https://sepolia.basescan.org/tx/0x403698ef0289834a5cfe9c6482684fead49da99395b3bacf5387c4021d0eca28",
+      "run_step": "r2.dispute",
+      "run_fn": "settleCase",
+      "view": {
+        "root": "0xdca49baf47c44c11eba304342f8eb229f903ed1c5da8dace8955c5382943f2b7",
+        "binding": "0x40832aa65f0a43d7b3f9c4cb5a90491ed2ca58bbee08950f16626e0dd8cd2a12",
+        "finalized_at": 48039489
+      },
+      "agrees": true,
+      "state": {
+        "status": "Finalized",
+        "closed": true
+      }
+    }
+  ],
+  "all_agree": true
+}

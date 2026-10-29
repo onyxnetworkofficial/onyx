@@ -1,0 +1,21 @@
+# Allowlist: only what `cargo build -p onyx-node` (and onyx-node-btc, below)
+# needs enters the build context. Everything else, above all .env, .onyx-testnet/ (testnet keys),
+# fixtures-live/ and run state, never leaves this machine (docs/ops/deployment.md).
+*
+!Cargo.toml
+!Cargo.lock
+!crates/
+!adapters/
+!recipes/
+!apps/web/verify/
+# onyx-node-btc's serving-check inputs (committed, checksummed) and its config.
+!fixtures/SHA256SUMS
+!fixtures/reserves/scan-971199.json
+!fixtures/reserves/cross-checks.json
+!fixtures/labels/test.onyx.entities.btc.v2.json
+!fixtures/reserves/headers-969839-971207.json
+!deploy/reserve-gate.json
+**/target/
+**/*.key
+**/.env
+**/.env.*

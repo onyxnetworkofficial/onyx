@@ -1,0 +1,9 @@
+{
+  "fixtures": "../fixtures",
+  "scan": "reserves/scan-971199.json",
+  "labels": "labels/test.onyx.entities.btc.v2.json",
+  "crossChecks": "reserves/cross-checks.json",
+  "headers": "reserves/headers-969839-971207.json",
+  "startHeight": 969838,
+  "recipeId": "0xd0c1331f82f9a743548ca68de3693a2754ae35e6faef7e047a739ba939b49e34"
+}

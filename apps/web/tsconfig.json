@@ -1,0 +1,9 @@
+{
+	"extends": "$app/tsconfig",
+	"include": ["src", "*"],
+	"exclude": ["src/service-worker", "src/lib/pkg"],
+	"compilerOptions": {
+		"strict": true,
+		"skipLibCheck": true
+	}
+}

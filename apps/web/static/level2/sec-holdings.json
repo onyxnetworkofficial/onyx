@@ -1,0 +1,279 @@
+{
+  "companies": [
+    {
+      "agreed": 3,
+      "bonds": [
+        {
+          "bond": "1000",
+          "observer": "0x71e9794bee2d63729cc64838283ea8565a1ef457"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xf06ed3903c6784b40a7488260cb97446b05c95ab"
+        }
+      ],
+      "company": {
+        "cik": "0001050446",
+        "key": "mstr",
+        "name": "Strategy Inc",
+        "unit": "Bitcoin"
+      },
+      "config": {
+        "commit_close": 1791753420,
+        "miss_slash": "20",
+        "outlier_slash": "100",
+        "reveal_close": 1791753540,
+        "reward": "10"
+      },
+      "draw": {
+        "announcement": {
+          "announced_at": 9,
+          "attempt": 0,
+          "beacon": "0xfe7ee5b1f170e4bc153503d23e98056c0f8362f4ce8a04bdd91cf285f6d44ed7",
+          "beacon_height": 11,
+          "chain_id": 31337,
+          "commit": "0x064437f410670fe8f88863f962296b34c7b9aa5ea5aa1b07918f98105b26f9e4",
+          "draw_count": 1,
+          "registry": "0x8464135c8f25da09e49bc8782676a84730c318bc"
+        },
+        "attempt": 0,
+        "beacon": "0xfe7ee5b1f170e4bc153503d23e98056c0f8362f4ce8a04bdd91cf285f6d44ed7",
+        "beacon_height": 11
+      },
+      "feed": {
+        "fetcher_id": "0xc38e3f0e2db871743bd9c633f91e2d736fa2543b14da5453253d5f7a599f2111",
+        "metric": "sec.edgar.crypto_asset_units.mstr",
+        "min_observers": 3,
+        "period_end": "2026-03-31",
+        "selector": "units/Bitcoin/end=2026-03-31",
+        "spec_id": "0x61d97bf6540fcc2b349c31a9fd60a2c33fa97453a3a9bdcd2f0d68168d3502f4",
+        "subject": "sec.cik0001050446.crypto_asset_units:2026-03-31",
+        "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/us-gaap/CryptoAssetNumberOfUnits.json",
+        "window_end": 1791753360,
+        "window_start": 1791753060
+      },
+      "observers": 3,
+      "pool": [
+        {
+          "bond": "1000",
+          "observer": "0x00a60c2ba5f01d3523b2d1cfe0ed065899a0c742"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x1a71bb4b19f6559ab16f16df554dd57b47697913"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x3c672897c98677b76050744c68dd5a9190223603"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x41169337e70f908e4e24966aaa1a1f3ada626b79"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x71e9794bee2d63729cc64838283ea8565a1ef457"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x7256648ad8e537a1d5327dc0d9481278dd9e71de"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x7c6abd508581ca13a92be7ff4cd0363b07624755"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xf06ed3903c6784b40a7488260cb97446b05c95ab"
+        }
+      ],
+      "proof_level": 2,
+      "response_body": "{\"cik\":1050446,\"taxonomy\":\"us-gaap\",\"tag\":\"CryptoAssetNumberOfUnits\",\"label\":\"\",\"description\":\"\",\"entityName\":\"STRATEGY INC\",\"units\":{\"Bitcoin\":[{\"end\":\"2022-12-31\",\"val\":132500,\"accn\":\"0001050446-26-000020\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-02-19\",\"frame\":\"CY2022Q4I\"},{\"end\":\"2023-12-31\",\"val\":189150,\"accn\":\"0001050446-26-000020\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-02-19\",\"frame\":\"CY2023Q4I\"},{\"end\":\"2024-12-31\",\"val\":447470,\"accn\":\"0001050446-26-000020\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-02-19\",\"frame\":\"CY2024Q4I\"},{\"end\":\"2025-12-31\",\"val\":672500,\"accn\":\"0001050446-26-000020\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-02-19\"},{\"end\":\"2025-12-31\",\"val\":672500,\"accn\":\"0001050446-26-000031\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-05-06\"},{\"end\":\"2025-12-31\",\"val\":672500,\"accn\":\"0001050446-26-000044\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-03\",\"frame\":\"CY2025Q4I\"},{\"end\":\"2026-03-31\",\"val\":762099,\"accn\":\"0001050446-26-000031\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-05-06\",\"frame\":\"CY2026Q1I\"},{\"end\":\"2026-06-30\",\"val\":846000,\"accn\":\"0001050446-26-000044\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-03\",\"frame\":\"CY2026Q2I\"}]}}",
+      "result_hash": "0x0011ce22675f820c7bf8460db0aa63e93be5595690fc7fd5d9723b4b7fd8d959",
+      "reveals": [
+        {
+          "commit": "0x896f315c2e903db0cac8b2ac8d98a4d1c6e76bf4e4a1c24b7f5884281b15c9cb",
+          "commit_sig": "0xd0fbbd4a2cd8337919cca3800503c4bcc44f457ed464f8463b87cac7639740aa2d125db8b46e57990baadd028f278d114c8da35916e041a1dedd2f59a0ed29151b",
+          "http_date": "Sun, 11 Oct 2026 21:11:00 GMT",
+          "observed_unix": 1791753060,
+          "observer": "0x71e9794bee2d63729cc64838283ea8565a1ef457",
+          "page_hash": "0x7f9bfd10b5897c37b75efaabb9278a5f30d97160fbdaa3180ae3e2a2a09e8bad",
+          "reveal_sig": "0x7fac563378aaa6d21fea7f844591756050fa1c5c55aa07f5a58f1d3e06be8ee3776b99cf7a6d668b2ac7702540466c0cd74d92cc6360749d7175c92e907588081b",
+          "salt": "0xe41a19b9931c9533ae64942761f2601db5deb2483f307c98391035f152f5692d"
+        },
+        {
+          "commit": "0x2e1ef6d6c1bf3636d0615c9c69ca9018d9ed3c9bb0f5a49c9c495409ba366ea5",
+          "commit_sig": "0x493bfdd6031dbedb1eeaa3cb4afd8fc29d645886374f3067b416e484f777a49b6ac88f9f6317a2ed3d9cb2d4cd6222b68fc79e249daf8b223fb866791244199c1c",
+          "http_date": "Sun, 11 Oct 2026 21:11:03 GMT",
+          "observed_unix": 1791753063,
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48",
+          "page_hash": "0x7f9bfd10b5897c37b75efaabb9278a5f30d97160fbdaa3180ae3e2a2a09e8bad",
+          "reveal_sig": "0x6bf6f9f616c439b2d4ceabb039aea39cd8f672eed8f75ea13a6ab23523f5749d551050ed101eade9d7787a1034d9b7704dce37a93c8c9a5837e0e2c8e16ae7011c",
+          "salt": "0x9af368fdfd295e2631bbb3f5f23d4d23bb61bd001237e0f12a3ac1db9e347e7c"
+        },
+        {
+          "commit": "0x41b58c9b2c9b10988fa85533e7f571c32d73d9b60fdd8ff424b19200a14dabfc",
+          "commit_sig": "0xfdb915f971f72abd23142844fa0c82e29d022788214badcf74a35adb7a64ab351658634c4ec5ef4ac4d17d8f00b904c5135f3dd737ccb4eced1f3223a6bbf5b51b",
+          "http_date": "Sun, 11 Oct 2026 21:11:05 GMT",
+          "observed_unix": 1791753065,
+          "observer": "0xf06ed3903c6784b40a7488260cb97446b05c95ab",
+          "page_hash": "0x7f9bfd10b5897c37b75efaabb9278a5f30d97160fbdaa3180ae3e2a2a09e8bad",
+          "reveal_sig": "0x51c78e5a7327c48c0e8131e4b4d8837c89137860456d05044569e54343aa4f9335a0a2914f53d5447986fa1ba1d97104c40c30fe7cbd3d62ccc88a41b8cc0c8d1b",
+          "salt": "0xbc6da5d15d496ef4329181a84e5cc2efd9d5ceb4ad74437ef7a327c8e7a10b8f"
+        }
+      ],
+      "round_id": "0x448950047594c184234873f6e23e5f31718eadd144e4cdc6dfbc9270628f725f",
+      "value": "762099"
+    },
+    {
+      "agreed": 3,
+      "bonds": [
+        {
+          "bond": "1000",
+          "observer": "0x00a60c2ba5f01d3523b2d1cfe0ed065899a0c742"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x41169337e70f908e4e24966aaa1a1f3ada626b79"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48"
+        }
+      ],
+      "company": {
+        "cik": "0001167419",
+        "key": "riot",
+        "name": "Riot Platforms, Inc.",
+        "unit": "item"
+      },
+      "config": {
+        "commit_close": 1791753420,
+        "miss_slash": "20",
+        "outlier_slash": "100",
+        "reveal_close": 1791753540,
+        "reward": "10"
+      },
+      "draw": {
+        "announcement": {
+          "announced_at": 13,
+          "attempt": 0,
+          "beacon": "0x9dc8a4d5bca3a2e3244acf211a2203efc87756779d2e87d72d3a893f424dff4c",
+          "beacon_height": 15,
+          "chain_id": 31337,
+          "commit": "0x853311c87ff45beeb2864aeb9557c2eb0d2d4abab558ae76cbfaa6053e521dba",
+          "draw_count": 1,
+          "registry": "0x8464135c8f25da09e49bc8782676a84730c318bc"
+        },
+        "attempt": 0,
+        "beacon": "0x9dc8a4d5bca3a2e3244acf211a2203efc87756779d2e87d72d3a893f424dff4c",
+        "beacon_height": 15
+      },
+      "feed": {
+        "fetcher_id": "0xc38e3f0e2db871743bd9c633f91e2d736fa2543b14da5453253d5f7a599f2111",
+        "metric": "sec.edgar.crypto_asset_units.riot",
+        "min_observers": 3,
+        "period_end": "2026-03-31",
+        "selector": "units/item/end=2026-03-31",
+        "spec_id": "0xbd3ecfe123b55dab9d21394d33dfe01b18cb5f90b6ed8de99622be3397c9560d",
+        "subject": "sec.cik0001167419.crypto_asset_units:2026-03-31",
+        "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001167419/us-gaap/CryptoAssetNumberOfUnits.json",
+        "window_end": 1791753360,
+        "window_start": 1791753060
+      },
+      "observers": 3,
+      "pool": [
+        {
+          "bond": "1000",
+          "observer": "0x00a60c2ba5f01d3523b2d1cfe0ed065899a0c742"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x1a71bb4b19f6559ab16f16df554dd57b47697913"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x3c672897c98677b76050744c68dd5a9190223603"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x41169337e70f908e4e24966aaa1a1f3ada626b79"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x71e9794bee2d63729cc64838283ea8565a1ef457"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x7256648ad8e537a1d5327dc0d9481278dd9e71de"
+        },
+        {
+          "bond": "1000",
+          "observer": "0x7c6abd508581ca13a92be7ff4cd0363b07624755"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48"
+        },
+        {
+          "bond": "1000",
+          "observer": "0xf06ed3903c6784b40a7488260cb97446b05c95ab"
+        }
+      ],
+      "proof_level": 2,
+      "response_body": "{\"cik\":1167419,\"taxonomy\":\"us-gaap\",\"tag\":\"CryptoAssetNumberOfUnits\",\"label\":\"\",\"description\":\"\",\"entityName\":\"RIOT PLATFORMS, INC.\",\"units\":{\"item\":[{\"end\":\"2022-12-31\",\"val\":6974,\"accn\":\"0001558370-25-001888\",\"fy\":2024,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2025-02-28\",\"frame\":\"CY2022Q4I\"},{\"end\":\"2023-12-31\",\"val\":7362,\"accn\":\"0001558370-25-001888\",\"fy\":2024,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2025-02-28\"},{\"end\":\"2023-12-31\",\"val\":7362,\"accn\":\"0001558370-25-006119\",\"fy\":2025,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2025-05-01\"},{\"end\":\"2023-12-31\",\"val\":7362,\"accn\":\"0001558370-25-009896\",\"fy\":2025,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2025-07-31\"},{\"end\":\"2023-12-31\",\"val\":7362,\"accn\":\"0001104659-25-104466\",\"fy\":2025,\"fp\":\"Q3\",\"form\":\"10-Q\",\"filed\":\"2025-10-30\"},{\"end\":\"2023-12-31\",\"val\":7362,\"accn\":\"0001104659-26-022322\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-03-02\",\"frame\":\"CY2023Q4I\"},{\"end\":\"2024-03-31\",\"val\":8490,\"accn\":\"0001558370-25-006119\",\"fy\":2025,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2025-05-01\",\"frame\":\"CY2024Q1I\"},{\"end\":\"2024-06-30\",\"val\":9334,\"accn\":\"0001558370-25-009896\",\"fy\":2025,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2025-07-31\",\"frame\":\"CY2024Q2I\"},{\"end\":\"2024-09-30\",\"val\":10427,\"accn\":\"0001104659-25-104466\",\"fy\":2025,\"fp\":\"Q3\",\"form\":\"10-Q\",\"filed\":\"2025-10-30\",\"frame\":\"CY2024Q3I\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001558370-25-001888\",\"fy\":2024,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2025-02-28\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001558370-25-006119\",\"fy\":2025,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2025-05-01\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001558370-25-009896\",\"fy\":2025,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2025-07-31\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001104659-25-104466\",\"fy\":2025,\"fp\":\"Q3\",\"form\":\"10-Q\",\"filed\":\"2025-10-30\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001104659-26-022322\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-03-02\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001104659-26-053120\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-04-30\"},{\"end\":\"2024-12-31\",\"val\":17722,\"accn\":\"0001104659-26-093448\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-10\",\"frame\":\"CY2024Q4I\"},{\"end\":\"2025-03-31\",\"val\":19223,\"accn\":\"0001558370-25-006119\",\"fy\":2025,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2025-05-01\"},{\"end\":\"2025-03-31\",\"val\":19223,\"accn\":\"0001104659-26-053120\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-04-30\",\"frame\":\"CY2025Q1I\"},{\"end\":\"2025-06-30\",\"val\":19273,\"accn\":\"0001558370-25-009896\",\"fy\":2025,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2025-07-31\"},{\"end\":\"2025-06-30\",\"val\":19273,\"accn\":\"0001104659-26-093448\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-10\",\"frame\":\"CY2025Q2I\"},{\"end\":\"2025-09-30\",\"val\":19287,\"accn\":\"0001104659-25-104466\",\"fy\":2025,\"fp\":\"Q3\",\"form\":\"10-Q\",\"filed\":\"2025-10-30\",\"frame\":\"CY2025Q3I\"},{\"end\":\"2025-12-31\",\"val\":18005,\"accn\":\"0001104659-26-022322\",\"fy\":2025,\"fp\":\"FY\",\"form\":\"10-K\",\"filed\":\"2026-03-02\"},{\"end\":\"2025-12-31\",\"val\":18005,\"accn\":\"0001104659-26-053120\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-04-30\"},{\"end\":\"2025-12-31\",\"val\":18005,\"accn\":\"0001104659-26-093448\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-10\",\"frame\":\"CY2025Q4I\"},{\"end\":\"2026-03-31\",\"val\":15679,\"accn\":\"0001104659-26-053120\",\"fy\":2026,\"fp\":\"Q1\",\"form\":\"10-Q\",\"filed\":\"2026-04-30\",\"frame\":\"CY2026Q1I\"},{\"end\":\"2026-06-30\",\"val\":11380,\"accn\":\"0001104659-26-093448\",\"fy\":2026,\"fp\":\"Q2\",\"form\":\"10-Q\",\"filed\":\"2026-08-10\",\"frame\":\"CY2026Q2I\"}]}}",
+      "result_hash": "0x2ac71477b46cc418a992c8e308bea4c8b244e5937442bcf1f75283fce055c320",
+      "reveals": [
+        {
+          "commit": "0x33db0472e7fed2b20691d175612bde35023362024322e06f59d83b9fc388ced1",
+          "commit_sig": "0xf4487c22ca57ac168c7bf7687bf768a694c9f993fc2d0638118d7ceb752f134a5a9dcf8d8eb1d26e022ec70465ba7c04231137dd49c1f8b2cce1e23ec0c4d1261b",
+          "http_date": "Sun, 11 Oct 2026 21:11:10 GMT",
+          "observed_unix": 1791753070,
+          "observer": "0x00a60c2ba5f01d3523b2d1cfe0ed065899a0c742",
+          "page_hash": "0xbac3e181b65746eb1d3c9840f317c7075570317de17cb8c8ed79c92c56cbfd26",
+          "reveal_sig": "0x3b7b1093e59017a23045911097f26a5e9349bc8065d26747973c66e3a4fb97d60200f949e45a5afcadf2b37f83180727bf37d46640a3811414f832943a419c351b",
+          "salt": "0xaf17f13298cee0d68a04e0ddab80549d29a2f3717d9e2645670aabc8c1072a95"
+        },
+        {
+          "commit": "0x130c50294a5395dc5698b603f4c8d7c5f4f9adfcf641007a0cc81f4dccb37fb7",
+          "commit_sig": "0x7ecb793bfc74b7f1c153e72aa0420a592e08b28d2be80a2378a830f37de08e2f03f9bfc5e64ce30b9abb19f535ef1ad8bf3769b36f0b5fef198e90e28837ad941b",
+          "http_date": "Sun, 11 Oct 2026 21:11:12 GMT",
+          "observed_unix": 1791753072,
+          "observer": "0x41169337e70f908e4e24966aaa1a1f3ada626b79",
+          "page_hash": "0xbac3e181b65746eb1d3c9840f317c7075570317de17cb8c8ed79c92c56cbfd26",
+          "reveal_sig": "0xe174ac72023b642162eaa44d42bc5262c7344e48527e491ccc8bc44ea75c450b3d2b9f550157c745b7937c8ada70a5f76e0ae58ed0ea4b2a18025b4fe13909bf1b",
+          "salt": "0x48986143ce78006a8c9eee5d71b008b5e77519f07f2667b10d070a1f76438270"
+        },
+        {
+          "commit": "0xdd12fca463f8c236d79009d74ce4f2f3443dbc063c591409cbfb66ae5fdba588",
+          "commit_sig": "0xac4d8d978768589a794847170b627fc095b6c2d5bef0ec408ff950c90581dd4c5bcfe207c74ec2ae6885a5abccf4881bee465a33d46e395115a29857882d54fb1b",
+          "http_date": "Sun, 11 Oct 2026 21:11:15 GMT",
+          "observed_unix": 1791753075,
+          "observer": "0xcac085da9f08e01aa560e74130310d19dfcb5f48",
+          "page_hash": "0xbac3e181b65746eb1d3c9840f317c7075570317de17cb8c8ed79c92c56cbfd26",
+          "reveal_sig": "0x730c198973eb43d0bfbaeba3fd761bfb78573862cce9ca451a45b4e8cac6c9303eab7c4189b0fd150cf2cb100c2755d9075aa3949d3388dab7873fe3c107c5861c",
+          "salt": "0x332a65898ace34497bb949bca13e9302aa663d78cd03f35f765e57ec818c9f00"
+        }
+      ],
+      "round_id": "0x8b412fe02a42582e2bdfab65a196acf750b6866b10e4946600eab1fb1109fabf",
+      "value": "15679"
+    }
+  ],
+  "proof_level": 2,
+  "rehearsal": "Observers simulated on one machine; each fetched EDGAR itself over HTTPS.",
+  "source": {
+    "attribution": "Source: U.S. Securities and Exchange Commission, EDGAR XBRL data (data.sec.gov)",
+    "id": "sec.edgar",
+    "name": "SEC EDGAR: XBRL company concept (data.sec.gov)",
+    "terms_quote": "Information presented on sec.gov is considered public information and may be copied or further distributed by users of the web site without the SEC's permission.",
+    "terms_url": "https://www.sec.gov/privacy"
+  }
+}

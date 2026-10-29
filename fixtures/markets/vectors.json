@@ -1,0 +1,740 @@
+{
+  "note": "Shared S3/S6 vectors (ADR-0042): payouts of decided claims, the vote rule, the attack-cost bound, parimutuel markets and buckets. Run by Foundry (contracts/test/OnyxMarketsVectors.t.sol), Rust (crates/onyx-markets) and the website (apps/web/src/lib/markets.ts). Amounts are token base units as decimal strings. Change only with an ADR-0042 amendment.",
+  "claims": [
+    {
+      "name": "correct: the wrong voter pays the fee, an unrevealed stake is forfeited, dust to the treasury",
+      "bond": "10",
+      "feePpm": 20000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "correct",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "30",
+          "side": "correct"
+        },
+        {
+          "who": "v2",
+          "amount": "7",
+          "side": "wrong"
+        },
+        {
+          "who": "v3",
+          "amount": "5",
+          "side": "none"
+        },
+        {
+          "who": "v4",
+          "amount": "3",
+          "side": "correct"
+        }
+      ],
+      "expect": {
+        "fee": "0",
+        "dust": "2",
+        "treasury": "7",
+        "payouts": {
+          "submitter": "11",
+          "v1": "34",
+          "v2": "0",
+          "v3": "0",
+          "v4": "3"
+        }
+      }
+    },
+    {
+      "name": "wrong: the submitter bond is slashed to the wrong voters",
+      "bond": "10",
+      "feePpm": 50000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "wrong",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "40",
+          "side": "wrong"
+        },
+        {
+          "who": "v2",
+          "amount": "25",
+          "side": "wrong"
+        },
+        {
+          "who": "v3",
+          "amount": "6",
+          "side": "correct"
+        }
+      ],
+      "expect": {
+        "fee": "0",
+        "dust": "1",
+        "treasury": "1",
+        "payouts": {
+          "submitter": "0",
+          "v1": "49",
+          "v2": "31",
+          "v3": "0"
+        }
+      }
+    },
+    {
+      "name": "wrong with nobody on the wrong side: all lost money to the treasury",
+      "bond": "10",
+      "feePpm": 20000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "wrong",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "12",
+          "side": "correct"
+        },
+        {
+          "who": "v2",
+          "amount": "4",
+          "side": "none"
+        }
+      ],
+      "expect": {
+        "fee": "22",
+        "dust": "0",
+        "treasury": "26",
+        "payouts": {
+          "submitter": "0",
+          "v1": "0",
+          "v2": "0"
+        }
+      }
+    },
+    {
+      "name": "correct with no other stake: bond back plus the reward",
+      "bond": "10",
+      "feePpm": 20000,
+      "submitReward": "1",
+      "rewardPool": "5",
+      "outcome": "correct",
+      "stakes": [],
+      "expect": {
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "submitter": "11"
+        }
+      }
+    },
+    {
+      "name": "correct, reward pool short: the reward is capped at the pool",
+      "bond": "10",
+      "feePpm": 20000,
+      "submitReward": "3",
+      "rewardPool": "2",
+      "outcome": "correct",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "8",
+          "side": "wrong"
+        }
+      ],
+      "expect": {
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "submitter": "20",
+          "v1": "0"
+        }
+      }
+    },
+    {
+      "name": "void: every token back, unrevealed included",
+      "bond": "10",
+      "feePpm": 20000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "void",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "9",
+          "side": "correct"
+        },
+        {
+          "who": "v2",
+          "amount": "11",
+          "side": "wrong"
+        },
+        {
+          "who": "v3",
+          "amount": "2",
+          "side": "none"
+        }
+      ],
+      "expect": {
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "submitter": "10",
+          "v1": "9",
+          "v2": "11",
+          "v3": "2"
+        }
+      }
+    },
+    {
+      "name": "large amounts: 18-decimal tokens, uneven split",
+      "bond": "10000000000000000000",
+      "feePpm": 20000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "correct",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "333000000000000000007",
+          "side": "correct"
+        },
+        {
+          "who": "v2",
+          "amount": "101000000000000000001",
+          "side": "wrong"
+        },
+        {
+          "who": "v3",
+          "amount": "77000000000000000000",
+          "side": "correct"
+        },
+        {
+          "who": "v4",
+          "amount": "13000000000000000003",
+          "side": "wrong"
+        }
+      ],
+      "expect": {
+        "fee": "2280000000000000000",
+        "dust": "1",
+        "treasury": "2280000000000000001",
+        "payouts": {
+          "submitter": "12660000000000000000",
+          "v1": "421578000000000000010",
+          "v2": "0",
+          "v3": "97482000000000000000",
+          "v4": "0"
+        }
+      }
+    },
+    {
+      "name": "fee at the maximum (10%), three-way rounding",
+      "bond": "7",
+      "feePpm": 100000,
+      "submitReward": "0",
+      "rewardPool": "0",
+      "outcome": "wrong",
+      "stakes": [
+        {
+          "who": "v1",
+          "amount": "3",
+          "side": "wrong"
+        },
+        {
+          "who": "v2",
+          "amount": "3",
+          "side": "wrong"
+        },
+        {
+          "who": "v3",
+          "amount": "3",
+          "side": "wrong"
+        },
+        {
+          "who": "v4",
+          "amount": "11",
+          "side": "correct"
+        }
+      ],
+      "expect": {
+        "fee": "1",
+        "dust": "2",
+        "treasury": "3",
+        "payouts": {
+          "submitter": "0",
+          "v1": "8",
+          "v2": "8",
+          "v3": "8",
+          "v4": "0"
+        }
+      }
+    }
+  ],
+  "votes": [
+    {
+      "correct": "20",
+      "wrong": "0",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "expect": "correct"
+    },
+    {
+      "correct": "19",
+      "wrong": "0",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "expect": "fallback"
+    },
+    {
+      "correct": "0",
+      "wrong": "0",
+      "quorum": "1",
+      "decisivePpm": 666667,
+      "expect": "fallback"
+    },
+    {
+      "correct": "2",
+      "wrong": "1",
+      "quorum": "3",
+      "decisivePpm": 666667,
+      "expect": "fallback"
+    },
+    {
+      "correct": "666667",
+      "wrong": "333333",
+      "quorum": "1",
+      "decisivePpm": 666667,
+      "expect": "correct"
+    },
+    {
+      "correct": "666666",
+      "wrong": "333334",
+      "quorum": "1",
+      "decisivePpm": 666667,
+      "expect": "fallback"
+    },
+    {
+      "correct": "10",
+      "wrong": "30",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "expect": "wrong"
+    },
+    {
+      "correct": "10",
+      "wrong": "19",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "expect": "fallback"
+    },
+    {
+      "correct": "50",
+      "wrong": "50",
+      "quorum": "20",
+      "decisivePpm": 500001,
+      "expect": "fallback"
+    },
+    {
+      "correct": "51",
+      "wrong": "49",
+      "quorum": "20",
+      "decisivePpm": 510000,
+      "expect": "correct"
+    }
+  ],
+  "attack": [
+    {
+      "honest": "0",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "20"
+    },
+    {
+      "honest": "10",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "21"
+    },
+    {
+      "honest": "100",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "201"
+    },
+    {
+      "honest": "300",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "601"
+    },
+    {
+      "honest": "334",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "0"
+    },
+    {
+      "honest": "400",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "0"
+    },
+    {
+      "honest": "100",
+      "quorum": "20",
+      "decisivePpm": 750000,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "300"
+    },
+    {
+      "honest": "0",
+      "quorum": "20",
+      "decisivePpm": 666667,
+      "minStake": "25",
+      "maxPerClaim": "1000",
+      "expect": "25"
+    },
+    {
+      "honest": "5",
+      "quorum": "1",
+      "decisivePpm": 500001,
+      "minStake": "1",
+      "maxPerClaim": "1000",
+      "expect": "6"
+    },
+    {
+      "honest": "20000000000000000000",
+      "quorum": "20000000000000000000",
+      "decisivePpm": 666667,
+      "minStake": "1000000000000000000",
+      "maxPerClaim": "1000000000000000000000",
+      "expect": "40000060000060000061"
+    }
+  ],
+  "markets": [
+    {
+      "name": "Debt to the Penny 2026-10-08 in cents, three buckets (the demo market)",
+      "edges": [
+        "4030000000000000",
+        "4031000000000000"
+      ],
+      "feePpm": 20000,
+      "value": "4030531621082972",
+      "bets": [
+        {
+          "who": "dave",
+          "bucket": 0,
+          "amount": "30"
+        },
+        {
+          "who": "erin",
+          "bucket": 1,
+          "amount": "50"
+        },
+        {
+          "who": "frank",
+          "bucket": 2,
+          "amount": "20"
+        }
+      ],
+      "expect": {
+        "state": "resolved",
+        "winner": 1,
+        "fee": "1",
+        "dust": "0",
+        "treasury": "1",
+        "payouts": {
+          "dave": "0",
+          "erin": "99",
+          "frank": "0"
+        }
+      }
+    },
+    {
+      "name": "over/under, two winners, uneven split, 5% fee",
+      "edges": [
+        "100"
+      ],
+      "feePpm": 50000,
+      "value": "100",
+      "bets": [
+        {
+          "who": "a",
+          "bucket": 1,
+          "amount": "7"
+        },
+        {
+          "who": "b",
+          "bucket": 1,
+          "amount": "11"
+        },
+        {
+          "who": "c",
+          "bucket": 0,
+          "amount": "13"
+        },
+        {
+          "who": "d",
+          "bucket": 0,
+          "amount": "5"
+        }
+      ],
+      "expect": {
+        "state": "resolved",
+        "winner": 1,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "a": "14",
+          "b": "22",
+          "c": "0",
+          "d": "0"
+        }
+      }
+    },
+    {
+      "name": "a value on an edge falls in the upper bucket",
+      "edges": [
+        "0",
+        "10"
+      ],
+      "feePpm": 20000,
+      "value": "10",
+      "bets": [
+        {
+          "who": "a",
+          "bucket": 0,
+          "amount": "5"
+        },
+        {
+          "who": "b",
+          "bucket": 1,
+          "amount": "5"
+        },
+        {
+          "who": "c",
+          "bucket": 2,
+          "amount": "5"
+        }
+      ],
+      "expect": {
+        "state": "resolved",
+        "winner": 2,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "a": "0",
+          "b": "0",
+          "c": "15"
+        }
+      }
+    },
+    {
+      "name": "negative values: below the first edge",
+      "edges": [
+        "-5",
+        "5"
+      ],
+      "feePpm": 20000,
+      "value": "-6",
+      "bets": [
+        {
+          "who": "a",
+          "bucket": 0,
+          "amount": "4"
+        },
+        {
+          "who": "b",
+          "bucket": 1,
+          "amount": "6"
+        }
+      ],
+      "expect": {
+        "state": "resolved",
+        "winner": 0,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "a": "10",
+          "b": "0"
+        }
+      }
+    },
+    {
+      "name": "nobody on the winning bucket: void and refund",
+      "edges": [
+        "100"
+      ],
+      "feePpm": 20000,
+      "value": "150",
+      "bets": [
+        {
+          "who": "a",
+          "bucket": 0,
+          "amount": "3"
+        },
+        {
+          "who": "b",
+          "bucket": 0,
+          "amount": "4"
+        }
+      ],
+      "expect": {
+        "state": "void",
+        "winner": 1,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "a": "3",
+          "b": "4"
+        }
+      }
+    },
+    {
+      "name": "never resolved by the deadline: void and refund",
+      "edges": [
+        "100"
+      ],
+      "feePpm": 20000,
+      "value": null,
+      "bets": [
+        {
+          "who": "a",
+          "bucket": 0,
+          "amount": "3"
+        },
+        {
+          "who": "b",
+          "bucket": 1,
+          "amount": "4"
+        },
+        {
+          "who": "a",
+          "bucket": 1,
+          "amount": "2"
+        }
+      ],
+      "expect": {
+        "state": "void",
+        "winner": null,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "a": "5",
+          "b": "4"
+        }
+      }
+    },
+    {
+      "name": "wash trading on every bucket returns at most the stake",
+      "edges": [
+        "10",
+        "20"
+      ],
+      "feePpm": 20000,
+      "value": "15",
+      "bets": [
+        {
+          "who": "w",
+          "bucket": 0,
+          "amount": "10"
+        },
+        {
+          "who": "w",
+          "bucket": 1,
+          "amount": "10"
+        },
+        {
+          "who": "w",
+          "bucket": 2,
+          "amount": "10"
+        },
+        {
+          "who": "x",
+          "bucket": 1,
+          "amount": "30"
+        }
+      ],
+      "expect": {
+        "state": "resolved",
+        "winner": 1,
+        "fee": "0",
+        "dust": "0",
+        "treasury": "0",
+        "payouts": {
+          "w": "15",
+          "x": "45"
+        }
+      }
+    }
+  ],
+  "buckets": [
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "-1",
+      "bucket": 0
+    },
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "9",
+      "bucket": 0
+    },
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "10",
+      "bucket": 1
+    },
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "19",
+      "bucket": 1
+    },
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "20",
+      "bucket": 2
+    },
+    {
+      "edges": [
+        "10",
+        "20"
+      ],
+      "value": "999",
+      "bucket": 2
+    }
+  ]
+}

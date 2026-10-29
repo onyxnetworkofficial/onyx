@@ -1,0 +1,58 @@
+[package]
+name = "onyx-api"
+description = "Query API with per-row proofs, x402 v2 payments, settlement endpoint and time-decay pricing (M7, ADR-0023)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-merkle.workspace = true
+onyx-labels = { workspace = true, features = ["json"] }
+onyx-coordinator = { path = "../onyx-coordinator" }
+onyx-recipe-sdk.workspace = true
+# Level-5 track records, served from `track_serve` only (ROADMAP C6; fenced: TR-11).
+onyx-track = { workspace = true, features = ["wire"] }
+# Data submissions (ROADMAP S1, ADR-0038): answers, route, checks, fetch policy.
+onyx-intake.workspace = true
+borsh.workspace = true
+hex.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+base64.workspace = true
+thiserror.workspace = true
+secp256k1.workspace = true
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+tokio = { version = "1", default-features = false, features = ["time", "sync", "rt"] }
+http-body = "1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"], optional = true }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"], optional = true }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"], optional = true }
+http-body-util = { version = "0.1", optional = true }
+# The submission check pull's resolver (`submit::PublicResolver`), feature `http-client`.
+tower-service = { version = "0.3", optional = true }
+
+[features]
+# HTTPS transport for the x402 facilitator (x402::HyperPost, rustls). Off in tests.
+# Also the submission check pull (`submit::HttpsFetch`: public addresses only, no redirects).
+http-client = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:http-body-util", "dep:tower-service", "tokio/net"]
+
+[dev-dependencies]
+# test-util: a paused clock for the send-timeout test (E10).
+tokio = { version = "1", features = ["rt", "rt-multi-thread", "macros", "test-util"] }
+http-body-util = "0.1"
+tower = { version = "0.5", default-features = false, features = ["util"] }
+
+# Local dev server for the website's #/submit page (ROADMAP S1).
+[[example]]
+name = "submit-dev"
+required-features = ["http-client"]
+
+[[example]]
+name = "prepaid-rehearsal"
+required-features = ["http-client"]
+
+[lints]
+workspace = true

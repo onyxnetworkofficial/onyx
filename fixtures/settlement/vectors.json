@@ -1,0 +1,885 @@
+{
+  "assignShard": "0x2177d80c8cad3b3c6b3d10361583c8d456c4d7a9e4cc1e83c5b7c6e984815c03",
+  "assignments": [
+    {
+      "assigned": false,
+      "miner": "0x4912e88af1b02520da3d73f18e8da5bcb36bba38",
+      "rate": 250000
+    },
+    {
+      "assigned": true,
+      "miner": "0xb3e96f6676c2014e553515424f28183bc414e77a",
+      "rate": 250000
+    },
+    {
+      "assigned": true,
+      "miner": "0xd2c03a11c97dbe4f8c8cc518ba198a1306f92e35",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0xc3f84659a1348933b8a09640209cf16a292b2543",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x8f309d7c0403faef44c6ab672cabfe4caa278735",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x8697a613b3380bb738da438eaab58098d1991ac8",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x012ba5baf7142fac640a48e2d557774804796578",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x251479e76de0d619f847f661b77068f8d7846da3",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x216525727831564482c1ef0aab83b9700f153db9",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x8564cfdda6f93754fceb28ba8607f4daea465f2f",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0xf4fbe03afb36197e2b251c5291398428b06f6304",
+      "rate": 250000
+    },
+    {
+      "assigned": true,
+      "miner": "0x61c40c0cf464e875b848d52e2109fdcdb9147290",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x72f8823651d4f7a44fec3800f1422b5a6c23e18d",
+      "rate": 250000
+    },
+    {
+      "assigned": true,
+      "miner": "0x83e5f03d29cc77faf0413a5c56ab32d7de843b1e",
+      "rate": 250000
+    },
+    {
+      "assigned": true,
+      "miner": "0x429b1cead30fcad5cacf8c7466f0a0441552eb5c",
+      "rate": 250000
+    },
+    {
+      "assigned": false,
+      "miner": "0x5d7e0f6890d1ba7249c387a3d2e332ea8dd45362",
+      "rate": 250000
+    }
+  ],
+  "bonds": [
+    "5003",
+    "5001",
+    "5002"
+  ],
+  "canaries": [
+    {
+      "miner": "0x9dbfe095df3e28c26cd498348d54f75076d4e464",
+      "root": "0x0d927a6c974b9c3ff0ab4de3022cd656fe669bd7023b982f9992d4569387ca8c",
+      "shard": "0x1d387d79f52ca4ac339a30045e49275549a5a4be66e98550689396a7201a8de3"
+    },
+    {
+      "miner": "0x3a294ea3b9b738fd8a8170c6fab92f8da6e06139",
+      "root": "0x6fe57b60fe7812340c819a4e184eb37e6378195fefe92e5808c886b6185b271c",
+      "shard": "0x2177d80c8cad3b3c6b3d10361583c8d456c4d7a9e4cc1e83c5b7c6e984815c03"
+    }
+  ],
+  "canaryCommit": "0x865bc92c06a3c1ac1090eb4e70a942d44a96ffc7a20205b60db74ff200a951ee",
+  "canarySalt": "0xf8be1600685a8fe01d86fa38b8af19c6a2bd3aec5cb112697cf8e12557c51bc7",
+  "chainId": 84532,
+  "commit": {
+    "bond": "1234567",
+    "commitHash": "0x157c4782a4ed89fb04b705ac6b5f125f138c071e54bc84f917d9998660cba004",
+    "digest": "0x0e240fa48df6eb9d17d90faf9f9eedd993647364123c5b8b45aaecb1b5f630d4",
+    "message": "Onyx commit v1\nround: 0xa25874b182f8ec609a8e56a47e42fdd35d0d7a651d806af25048c5f1d5d8173f\nshard: 0x1d387d79f52ca4ac339a30045e49275549a5a4be66e98550689396a7201a8de3\ncommit: 0x157c4782a4ed89fb04b705ac6b5f125f138c071e54bc84f917d9998660cba004\nbond: 1234567",
+    "miner": "0xa5aacab1d72998c9b1e51ea8ea1c5a2fb85768b8",
+    "shard": "0x1d387d79f52ca4ac339a30045e49275549a5a4be66e98550689396a7201a8de3",
+    "sig": "0xd0d48f07420cf34cc671b5e5b1851305f56024c7c9c37777be9ae5de0333e4a21076ba8eec0fdd952017db79e533b72f4fe5e90ae88e87910e9c6a9cb6de47151c"
+  },
+  "disputes": {
+    "appealFloor": {
+      "floor": [
+        "2000",
+        "4000",
+        "16000",
+        "2800",
+        "2000"
+      ],
+      "level": [
+        1,
+        2,
+        4,
+        1,
+        1
+      ],
+      "minChallengeBond": [
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "1000"
+      ],
+      "panelFee": [
+        "10",
+        "10",
+        "10",
+        "400",
+        "400"
+      ],
+      "size": [
+        7,
+        15,
+        63,
+        7,
+        3
+      ]
+    },
+    "beacon": "0x2c383593b03435d4bdcb5afbef6a2d5a9f5a4c6de7ef4a438028e27fb756dc5b",
+    "canSit": {
+      "bond": [
+        "5000",
+        "5000",
+        "5000",
+        "5000",
+        "5000",
+        "0"
+      ],
+      "panelSlash": [
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "1"
+      ],
+      "result": [
+        true,
+        true,
+        false,
+        false,
+        false,
+        false
+      ],
+      "taken": [
+        "0",
+        "4500",
+        "4501",
+        "5000",
+        "9000",
+        "0"
+      ]
+    },
+    "candidates": [
+      "0x193ce6031d93f11679821ed12defd0ab8d2b237b",
+      "0x31a4177812e1ac0c42f98593ff10bffcebe0c730",
+      "0x58464e8c4eb1985f438f212d22f943aed1628638",
+      "0x61cc5e9a62eb385aa5258538647cd600202d4410",
+      "0x6cd49395dc498374eb36a2d8ac0d42dc19be3f3c",
+      "0xa47831cf99c9453baf3b028df94e2dd0bde2c14a",
+      "0xa4cf0de178c4e4c09a0a786d28fd7cbfe5131922",
+      "0xd15e4dfad587dd51bb2a4eba1803cf0ac266ba65",
+      "0xe554ba45396530d04d3bcfad37d790a3b1989912",
+      "0xf8010e7fcd9aa08655d04746ee00cd4d9a545267"
+    ],
+    "caseId": "0x6f2ae106b67649465662f7051bf02098792962e34995035e2e67d6d7d4177484",
+    "challenger": "0xbb6effc6cc52560477cd31206503fbd937f7a378",
+    "claimCommit": "0xf81924c993b3e6911162d78d76ce91e0fdad5db3902ca0893a02a117b5b77fe3",
+    "claimSalt": "0xefbe7ec8a89998cf463666f8f5397fdbfe5caf82c2464455396beb0343ee11fa",
+    "claimedRoot": "0xc0c0bbb0f3a1526cced03d2a958bad8001f1d59e9ed0f65a5fe2e7f93ab89a2e",
+    "configValid": {
+      "appealWindow": [
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "0",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50"
+      ],
+      "challengeWindow": [
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "0",
+        "150",
+        "151",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "200",
+        "18446744073709551615"
+      ],
+      "maxAppeals": [
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "1",
+        "4",
+        "5",
+        "0",
+        "0",
+        "2",
+        "2",
+        "1"
+      ],
+      "minChallengeBond": [
+        "1000",
+        "1000",
+        "1000",
+        "20",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "0",
+        "40",
+        "39",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "1000",
+        "640",
+        "660",
+        "160",
+        "180",
+        "1000"
+      ],
+      "names": [
+        "base",
+        "even panel",
+        "zero panel",
+        "panel 1",
+        "zero commit window",
+        "zero reveal window",
+        "zero appeal window",
+        "zero challenge window",
+        "window equals panel",
+        "window one more",
+        "zero bond",
+        "bond equals fees",
+        "bond below fees",
+        "zero slash",
+        "slash equals 9 fees",
+        "slash below 9 fees",
+        "zero fee",
+        "max appeals",
+        "too many appeals",
+        "panel 63 no appeals",
+        "panel 65 no appeals",
+        "panel 15 two appeals",
+        "panel 17 two appeals",
+        "windows overflow"
+      ],
+      "panelCommitWindow": [
+        "50",
+        "50",
+        "50",
+        "50",
+        "0",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "18446744073709551615"
+      ],
+      "panelFee": [
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "0",
+        "10",
+        "10",
+        "0",
+        "10",
+        "10",
+        "0",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10",
+        "10"
+      ],
+      "panelRevealWindow": [
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "0",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50",
+        "50"
+      ],
+      "panelSize": [
+        "3",
+        "4",
+        "0",
+        "1",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "3",
+        "63",
+        "65",
+        "15",
+        "17",
+        "3"
+      ],
+      "panelSlash": [
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "0",
+        "90",
+        "89",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500",
+        "500"
+      ],
+      "valid": [
+        true,
+        false,
+        false,
+        true,
+        false,
+        false,
+        false,
+        false,
+        false,
+        true,
+        false,
+        true,
+        false,
+        false,
+        true,
+        false,
+        true,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        false
+      ]
+    },
+    "draw11": [],
+    "draw3": [
+      "0xa4cf0de178c4e4c09a0a786d28fd7cbfe5131922",
+      "0xa47831cf99c9453baf3b028df94e2dd0bde2c14a",
+      "0x58464e8c4eb1985f438f212d22f943aed1628638"
+    ],
+    "draw7": [
+      "0xf8010e7fcd9aa08655d04746ee00cd4d9a545267",
+      "0xa4cf0de178c4e4c09a0a786d28fd7cbfe5131922",
+      "0x61cc5e9a62eb385aa5258538647cd600202d4410",
+      "0x193ce6031d93f11679821ed12defd0ab8d2b237b",
+      "0xd15e4dfad587dd51bb2a4eba1803cf0ac266ba65",
+      "0xe554ba45396530d04d3bcfad37d790a3b1989912",
+      "0x58464e8c4eb1985f438f212d22f943aed1628638"
+    ],
+    "noValidRootMarker": "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+    "rerunCaseId": "0xb6eb3f080a3fb158ffb4019e313deb483afc707d43023bbd0f873012faadff97",
+    "round": 7,
+    "seed": "0xc0ef9d947b94f48d5b0e47e1d6988c79f582c709a75365b5ae73cb0ba70fc994",
+    "shard": "0x1d387d79f52ca4ac339a30045e49275549a5a4be66e98550689396a7201a8de3",
+    "verdictRight": {
+      "kind": [
+        0,
+        0,
+        0,
+        0,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        1,
+        2,
+        2,
+        2,
+        2,
+        3,
+        3,
+        3,
+        3
+      ],
+      "minerRoot": [
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e"
+      ],
+      "noValidRoot": [
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true,
+        false,
+        true
+      ],
+      "reference": [
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x49cf8af57f2878c8faf71906bf96a388eeb98d587e26868b5edfde9a48841ac3"
+      ],
+      "result": [
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        1,
+        2,
+        2,
+        2,
+        2,
+        2,
+        0,
+        0,
+        0,
+        0,
+        2,
+        1,
+        2,
+        1
+      ],
+      "verdictRoot": [
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x3c1724f6ac4e4101f4a38ca722aa2cc8897fccb7325e4c3f9db7a521e027d080",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x560f34fe842653beaac1c10c273a582cf6c778cb493c01dae08224bef1197b5e",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000",
+        "0x0000000000000000000000000000000000000000000000000000000000000000"
+      ]
+    },
+    "voteHash": "0x65ddc403428b054ca5076d84c679dd5e6ac10dc05145aa95543fd9a967084600",
+    "voteLevel": 1,
+    "voteMember": "0x6cd49395dc498374eb36a2d8ac0d42dc19be3f3c",
+    "voteRoot": "0x4f09f18a935ad9f0f963f7fe8589101b4f2e2af83f189271b39306525fa073c0",
+    "voteSalt": "0xe1ef6fac5f467f931984bc038d179fb2e5e575266f8e514bb0fbc526852fbbd4"
+  },
+  "domain": "onyx.devnet",
+  "evmSeed": {
+    "beacon": "0xe2f7107f886d8ebb9b559c78133b581b63b3177da2b24d88e521a73aafc5fd21",
+    "cfg": {
+      "appealWindow": 50,
+      "beaconHeight": 201,
+      "canaryCommit": "0x262c862aa929038ed4b52e8e0208692f649a815ebb6d1e8264eed4c784222a68",
+      "canaryOpenClose": 450,
+      "challengeWindow": 200,
+      "commitClose": 100,
+      "maxAppeals": 1,
+      "minBond": "1000",
+      "minCanaryPpm": 50000,
+      "minChallengeBond": "1000",
+      "minerReward": "500",
+      "missedSlash": "100",
+      "panelCommitWindow": 50,
+      "panelFee": "10",
+      "panelRevealWindow": 50,
+      "panelSize": 3,
+      "panelSlash": "500",
+      "pendingClose": 600,
+      "ratePpm": 500000,
+      "revealClose": 200,
+      "validatorFee": "10",
+      "validatorSetRoot": "0x3e654c3f3702dbd02b90fc12bfea93a0bb0a62784d2175036e455abb070d4b81",
+      "validatorSlash": "2000",
+      "verdictCommitClose": 300,
+      "verdictRevealClose": 400
+    },
+    "domain": "onyx.devnet",
+    "ledgerId": "0xa1b01cbeb1b874ae9615c65eb50768007b5402e69d8cb49b2acbf511b7b35a23",
+    "miners": [
+      "0x2aa762545b43f1ccded2da67ea23b0b58d90cd8c",
+      "0xe26d3acb2382ac2d38181fd27507a6b704084dd4",
+      "0x3ede36c96fb5497bfec947acd0512e4961e453dc"
+    ],
+    "ratePpm": 500000,
+    "round": 12,
+    "seed": "0x7c2285b4cc720bca75673910edc4f1a1a6474d71e61ae08212731ab244d05113",
+    "shard": "0xacbcbfa203b99d9cba691cc1958b3c6563f04f8eab94db5a0402597b1ca34244",
+    "shards": [
+      "0xacbcbfa203b99d9cba691cc1958b3c6563f04f8eab94db5a0402597b1ca34244"
+    ],
+    "tag": "0x6257a2fa93bb96fa17715a719bb818dc8b73f720a495adfaadf4d459dcd9bfb6",
+    "tasks": [
+      [
+        false,
+        true,
+        false
+      ],
+      [
+        false,
+        true,
+        false
+      ],
+      [
+        true,
+        false,
+        true
+      ],
+      [
+        true,
+        false,
+        true
+      ]
+    ],
+    "validators": [
+      "0x81ef095c571a584f1ec7ef810381403fa582fe83",
+      "0xe4695c8142af7c85ad547fba115fcd80f03212bc",
+      "0x261820a44a33d863e9b90392f7b9894ce978410b",
+      "0xc36b3c660c9d2e24134606acf11ba6132f7f30c0"
+    ]
+  },
+  "ledger": "0x51e2ab1195d14dd7b6e0d4600a4782dcb85ab7e0",
+  "ledgerId": "0xa1b01cbeb1b874ae9615c65eb50768007b5402e69d8cb49b2acbf511b7b35a23",
+  "members": [
+    "0x1ac506da74d084d950691e8767d0593fe03d0479",
+    "0x2f7447d6bca8b713584e17ef7869ca04d0b81fc4",
+    "0x8dd1e2b6265991b45d2b7d55fe91112cd5db6f11"
+  ],
+  "rewardOrder": {
+    "revealSeqs": [
+      2,
+      0,
+      1
+    ],
+    "winnerIndex": 1
+  },
+  "round": 7,
+  "roundTag": "0xa25874b182f8ec609a8e56a47e42fdd35d0d7a651d806af25048c5f1d5d8173f",
+  "seed": "0xc0ef9d947b94f48d5b0e47e1d6988c79f582c709a75365b5ae73cb0ba70fc994",
+  "seedDraw": {
+    "at": [
+      1,
+      10,
+      11,
+      30,
+      256,
+      257
+    ],
+    "beaconWindow": 256,
+    "minDrawSlack": 10,
+    "minVerdictWindow": 20,
+    "vcc": [
+      30,
+      30,
+      30,
+      30,
+      400,
+      400
+    ],
+    "voids": [
+      false,
+      false,
+      true,
+      true,
+      false,
+      true
+    ]
+  },
+  "shards": [
+    "0x1d387d79f52ca4ac339a30045e49275549a5a4be66e98550689396a7201a8de3",
+    "0x2177d80c8cad3b3c6b3d10361583c8d456c4d7a9e4cc1e83c5b7c6e984815c03"
+  ],
+  "unrevealedSlashing": {
+    "disputed": {
+      "actions": [
+        1,
+        1,
+        2,
+        1,
+        4,
+        4,
+        4,
+        0,
+        0,
+        0
+      ],
+      "fee": [
+        10,
+        10,
+        0,
+        0,
+        0
+      ],
+      "missed": [
+        0,
+        0,
+        0,
+        0,
+        100
+      ],
+      "unrevealed": [
+        0,
+        0,
+        4000,
+        2000,
+        0
+      ]
+    },
+    "finalized": {
+      "actions": [
+        1,
+        1,
+        1,
+        4,
+        4,
+        4,
+        3,
+        3,
+        0,
+        0,
+        3,
+        4,
+        0,
+        4
+      ],
+      "fee": [
+        10,
+        10,
+        0,
+        0,
+        0,
+        0,
+        0
+      ],
+      "missed": [
+        0,
+        0,
+        0,
+        100,
+        100,
+        0,
+        0
+      ],
+      "unrevealed": [
+        0,
+        2000,
+        4000,
+        0,
+        0,
+        2000,
+        2000
+      ]
+    }
+  },
+  "validator": "0x1ac506da74d084d950691e8767d0593fe03d0479",
+  "validatorSetRoot": "0xf0a4b0d2dedaefe7ae2b4225c405a445c00edd7b93e9a77ebb7349401ae2bbde",
+  "verdictMiner": "0xa5aacab1d72998c9b1e51ea8ea1c5a2fb85768b8",
+  "verdictSalt": "0x79978ee1038308d1ac58559d2445ee4cc821967edcd8472c2c5f32b585633fb2",
+  "verdicts": [
+    {
+      "hash": "0x0c7004eb242a63e1dba77acfe6de78e80b38363b938dd40d103c5723f6abe8c3",
+      "kind": 0,
+      "root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "hash": "0xb7cc2ce0b233c3cdb5bae685b41c3c1b57120b1c21241edaad58789d21307154",
+      "kind": 1,
+      "root": "0xc2a3a11b91436c12f47f5523bedd04607563156ebf5714009a8dff6f68c966bc"
+    },
+    {
+      "hash": "0x0989fce2555190e45f8a4d45e72664c81f6759bf9504f48f083c8dd8aec8401e",
+      "kind": 2,
+      "root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    },
+    {
+      "hash": "0x0959612d6f0164b656bb248a701569aca60603a060190ae362a832ab9d029298",
+      "kind": 3,
+      "root": "0x0000000000000000000000000000000000000000000000000000000000000000"
+    }
+  ]
+}

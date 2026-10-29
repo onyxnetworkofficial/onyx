@@ -1,0 +1,61 @@
+{
+  "about": "Made by onyx-tlock (NOT by drand/tlock): tau (msg) ending in zero bytes, each locked to a published quicknet round in fixtures/tlock/drand and opened with its real signature. Cross-target consistency vectors (native and wasm32), not interop vectors. Regenerate: ONYX_BLESS=1 cargo test -p onyx-tlock --test interop.",
+  "vectors": [
+    {
+      "beacon": "drand/quicknet-round-1.json",
+      "ciphertext": "b95160ee18473b13e75972af7e50a74df95c63d049a41621660ba99dc9ea942a4e3fd4ff71622c9f44b0140889127e5804a5cc97e2c19b0b0dbbcbcb688ee25048884f9ebd5590f0a71a3310fa07169b394f5fb943af1b5cdedf947c7c13c174605c158157f53426bec078587c2d7bbf192dbdaec9d9c0ed185e3c93693d59b2",
+      "msg": "11111111111111111111111111111100",
+      "round": 1,
+      "sigma": "21212121212121212121212121212121"
+    },
+    {
+      "beacon": "drand/quicknet-round-2.json",
+      "ciphertext": "adc8692b36343be42f760686f41f8657d45246f8f1558e3dd390f7d724cc0f045683a79f1a367ed944595d89d1ec507b0183a5bdcd87dc3544bb796fb417a7b36119f0ce31ce94b79f45cab2114cc8b6317ea3012ccf9d87293730f5923e4b19a31368f1c661b4cbb62538ba0f0943d8224c69c153cb1660b81dc6cec04c7bab",
+      "msg": "12121212121212121212121212120000",
+      "round": 2,
+      "sigma": "22222222222222222222222222222222"
+    },
+    {
+      "beacon": "drand/quicknet-round-1000.json",
+      "ciphertext": "86cc4ab9d1d30b4b8a72b267da0bfcd3e436d321cbc5877cee6dd62c183c7b2b994230a272f7e41538aafc1eb30da7320569ade49e85bd7e8377ce7ad69e14d8b344d69f50634f7d76a7f4e53bdda6c51005130e7dbed62d044a8528401cefd404871c4f43bc6541c609e36a801d3231761b24f93577e3552899d845e584081a",
+      "msg": "13131313131313130000000000000000",
+      "round": 1000,
+      "sigma": "23232323232323232323232323232323"
+    },
+    {
+      "beacon": "drand/quicknet-round-746511.json",
+      "ciphertext": "b46803d07c336dfdd6e9c079f10e0225fc2f76742f6fd81928bc13cbae21d1d0eab05cef56cf195aec797d27ac13343d0af2c55b43b97fa93ab939eda12dfcfe0098d49208e36bb169f378656038cd405b61ba289ca102e09e75a0963d3acbe82d224bff99fdafcfc31d73cb8f2d424eaa6884735b9f8375c3a867f9aafcdbab",
+      "msg": "14000000000000000000000000000000",
+      "round": 746511,
+      "sigma": "24242424242424242424242424242400"
+    },
+    {
+      "beacon": "drand/quicknet-round-33154000.json",
+      "ciphertext": "aad56dfbea3916a0785140bbb554fa5d1cc4eab4a53a752882b4ff0f219162a50968f83938da0ab65633e11a4b6c4ff51329de55ecf15c064bbb77430a8e570d76aa852ba6712dabbf80fa30eb34f12a90262c743d74ac349c771e3e5e8f6c6c226fd81f8ea0426f0a09da2df7fdebfb5bb84c2128faf403bb2d781a3a5e0633",
+      "msg": "00000000000000000000000000000000",
+      "round": 33154000,
+      "sigma": "25252525252525252525252525252525"
+    },
+    {
+      "beacon": "drand/quicknet-round-1.json",
+      "ciphertext": "96232bf84b05e5c990bac8ae7aae2ade5a76f4e1ddfec3032ecb40d2c8098d89209787945ec0d788cf211c39f086f3e80e5979628fc97fe30dca6fa3bbe49c8e074caf9d50de2861fe739d2d61a66401864eff43e6c95df8685f84fc26de6b6b1c584ba4d56ca84d0ff1a13ac42fdeb01676cb048695205bd4df85e48fe5b83d",
+      "msg": "ffffffffffffffffffffffffffffff00",
+      "round": 1,
+      "sigma": "00000000000000000000000000000000"
+    },
+    {
+      "beacon": "drand/quicknet-round-1000.json",
+      "ciphertext": "82ab04ab1c5510988a2bd7720ff830be07f63e895d94ca279613d2b306797e23eef78fcb3a6feb25317a9d7c8470f551060c8591f98f8f030036d99b952d5336593bbb5060cf7c1f4e137cb33c60e0cce65275c94c1b4e2bb324801b88f5786d4b8f9bcb4ce25138821ff35bac42bf33db71dc93e005bd92552c5d491847e9b9",
+      "msg": "80808080808080808080808000000000",
+      "round": 1000,
+      "sigma": "27272727272727270000000000000000"
+    },
+    {
+      "beacon": "drand/quicknet-round-33154000.json",
+      "ciphertext": "b2de312d3e13d31d6a1c71723e45287e0f6924f641fb56228c61614962a0165bf9189d6a76f124acb11e4879d6f1e157105148ac9e46933ee235a2f034d96b48d2be2bb41be530e28c14b12c2d85c14f70491760a7fca06633ee187b6e108b6f935d11b798d53fc3a946544c5af5573ce4b6a1cd6a375fdae6b4874d9148b3ff",
+      "msg": "01010101010101010101010101000000",
+      "round": 33154000,
+      "sigma": "28282828282828282828282828282828"
+    }
+  ]
+}

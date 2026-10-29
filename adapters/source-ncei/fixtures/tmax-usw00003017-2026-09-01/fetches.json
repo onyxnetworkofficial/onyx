@@ -1,0 +1,33 @@
+{
+  "note": "Five real HTTPS GETs of the pinned URL, one per simulated observer, made from one machine on 2026-10-26 about 4 s apart (the service sent no cache header). Every body was byte-identical; response.json is that body. fetched_unix is the local clock just before each request; http_date is the server's Date header.",
+  "url": "https://www.ncei.noaa.gov/access/services/data/v1?dataset=daily-summaries&stations=USW00003017&startDate=2026-09-01&endDate=2026-09-01&dataTypes=TMAX&units=metric&format=json",
+  "day": "2026-09-01",
+  "body": "response.json",
+  "fetches": [
+    {
+      "observer": 1,
+      "fetched_unix": 1793049023,
+      "http_date": "Mon, 26 Oct 2026 21:10:24 GMT"
+    },
+    {
+      "observer": 2,
+      "fetched_unix": 1793049028,
+      "http_date": "Mon, 26 Oct 2026 21:10:28 GMT"
+    },
+    {
+      "observer": 3,
+      "fetched_unix": 1793049032,
+      "http_date": "Mon, 26 Oct 2026 21:10:32 GMT"
+    },
+    {
+      "observer": 4,
+      "fetched_unix": 1793049036,
+      "http_date": "Mon, 26 Oct 2026 21:10:37 GMT"
+    },
+    {
+      "observer": 5,
+      "fetched_unix": 1793049041,
+      "http_date": "Mon, 26 Oct 2026 21:10:41 GMT"
+    }
+  ]
+}

@@ -1,0 +1,2290 @@
+{
+ "about": "Shared intake vectors (ROADMAP S1, ADR-0038). Rust (crates/onyx-intake/tests/vectors.rs) and the website (apps/web/tests/s1.mjs) both run every case; change only with the spec (docs/spec/submissions.md). Expectations are written by hand, not computed.",
+ "version": 1,
+ "levelNames": {
+  "1": "Recomputed",
+  "2": "Re-observed",
+  "3": "Source-proven",
+  "4": "Claim (unverified)",
+  "5": "Track record"
+ },
+ "reasons": {
+  "keyed_source": "It needs your own API key. Your key stays in your browser. A real prover (ROADMAP S2) would make the request from your side and send Onyx only a proof of the response; the stub in this build makes no request. A keyed source is held for a rights review of its terms and never published until cleared.",
+  "proof_not_real": "The proof step is not built yet (ROADMAP S2). Today the page makes no request and sends a placeholder labelled not real; it proves nothing.",
+  "source_blocked": "Onyx's rights review blocks this source: its terms restrict redistribution. It is held and will not be published.",
+  "names_person": "Onyx never publishes data about a person. Data may name companies, funds and protocols only.",
+  "terms_forbid": "The source's terms forbid redistribution, so Onyx cannot take it.",
+  "rights_review": "The rights are not known yet. It is held for a rights review and never published until a reviewer clears it.",
+  "chain_recipe": "Chain data can be recomputed by anyone. It needs a recipe: a small open program that reads pinned blocks. Your submission becomes a recipe request.",
+  "public_auto_pull": "Anyone can fetch it with no login, so it can reach level 2 once a reviewer clears its source's rights: bonded observers would then re-read it at the same time and must agree (built for the U.S. Treasury source after approval; other sources need their own adapter, ROADMAP S4).",
+  "live_window": "It changes continuously, so observers must read it inside one short window and agree within a tolerance.",
+  "needs_login": "It needs a login, key or payment, so observers cannot re-read it. It stays a claim until a way to prove the response exists (ROADMAP S2).",
+  "signed_key": "The source signs it. Once the source registers its signing key, anyone can check each value's signature.",
+  "own_claim": "It is your own or private data. Onyx records what you say it means as a claim.",
+  "unverified": "Labelled unverified: nobody has checked it. Buyers see it as level 4.",
+  "forecast_track": "A forecast cannot be checked today. It is scored later against the real answer, and your track record builds up."
+ },
+ "noFetch": {
+  "no_endpoint": "No endpoint was given, so there is nothing to pull.",
+  "not_while_refused_or_held": "Nothing is pulled for a refused or held submission.",
+  "not_auto_pull": "Only public data anyone can fetch without a login is pulled.",
+  "host_not_cleared": "Onyx pulls only from sources whose rights it has already reviewed. A reviewer reads this source's terms first; nothing is fetched until then.",
+  "port_not_allowed": "Only the standard https port (443) is pulled."
+ },
+ "clearedHosts": [
+  "api.fiscaldata.treasury.gov"
+ ],
+ "caps": {
+  "title": 120,
+  "description": 2000,
+  "sourceName": 120,
+  "url": 512,
+  "jsonPointer": 256,
+  "unit": 32,
+  "licenseId": 64,
+  "seriesId": 64,
+  "responseBytes": 9007199254740991,
+  "keyMin": 12
+ },
+ "example": {
+  "answers": {
+   "what": "public_api",
+   "noLogin": true,
+   "rights": "open_license",
+   "namesPerson": false,
+   "changes": "daily",
+   "licenseId": "onyx:us-treasury-fiscal-data-open"
+  },
+  "title": "U.S. total public debt outstanding",
+  "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+  "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+  "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+  "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+  "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+  "unit": "USD"
+ },
+ "routes": [
+  {
+   "name": "treasury walk-through (public API, open licence, daily)",
+   "answers": {
+    "what": "public_api",
+    "noLogin": true,
+    "rights": "open_license",
+    "namesPerson": false,
+    "changes": "daily",
+    "licenseId": "onyx:us-treasury-fiscal-data-open"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 2,
+    "path": "auto_pull",
+    "reasons": [
+     "public_auto_pull"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "public page that changes live",
+   "answers": {
+    "what": "public_api",
+    "noLogin": true,
+    "rights": "public_domain",
+    "namesPerson": false,
+    "changes": "live"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 2,
+    "path": "auto_pull",
+    "reasons": [
+     "public_auto_pull",
+     "live_window"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "public API behind a key",
+   "answers": {
+    "what": "public_api",
+    "noLogin": false,
+    "rights": "public_domain",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 4,
+    "path": "claim",
+    "reasons": [
+     "needs_login",
+     "unverified"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "own data on a public page",
+   "answers": {
+    "what": "public_api",
+    "noLogin": true,
+    "rights": "own_data",
+    "namesPerson": false,
+    "changes": "once"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 2,
+    "path": "auto_pull",
+    "reasons": [
+     "public_auto_pull"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "chain data",
+   "answers": {
+    "what": "chain",
+    "noLogin": true,
+    "rights": "public_domain",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 1,
+    "path": "recipe_request",
+    "reasons": [
+     "chain_recipe"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "chain data, login answer ignored",
+   "answers": {
+    "what": "chain",
+    "noLogin": false,
+    "rights": "own_data",
+    "namesPerson": false,
+    "changes": "once"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 1,
+    "path": "recipe_request",
+    "reasons": [
+     "chain_recipe"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "signed by the source",
+   "answers": {
+    "what": "signed",
+    "noLogin": true,
+    "rights": "open_license",
+    "namesPerson": false,
+    "changes": "once",
+    "licenseId": "CC-BY-4.0"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 3,
+    "path": "signed_source",
+    "reasons": [
+     "signed_key"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "own private data",
+   "answers": {
+    "what": "own",
+    "noLogin": false,
+    "rights": "own_data",
+    "namesPerson": false,
+    "changes": "once"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 4,
+    "path": "claim",
+    "reasons": [
+     "own_claim",
+     "unverified"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "a forecast",
+   "answers": {
+    "what": "forecast",
+    "noLogin": false,
+    "rights": "own_data",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 5,
+    "path": "track_record",
+    "reasons": [
+     "forecast_track"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "a live forecast gets no live note",
+   "answers": {
+    "what": "forecast",
+    "noLogin": true,
+    "rights": "public_domain",
+    "namesPerson": false,
+    "changes": "live"
+   },
+   "route": {
+    "outcome": "accept",
+    "level": 5,
+    "path": "track_record",
+    "reasons": [
+     "forecast_track"
+    ],
+    "status": "pending_review"
+   }
+  },
+  {
+   "name": "names a person",
+   "answers": {
+    "what": "own",
+    "noLogin": false,
+    "rights": "own_data",
+    "namesPerson": true,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "names_person"
+    ],
+    "status": "refused"
+   }
+  },
+  {
+   "name": "terms forbid (FRED-like)",
+   "answers": {
+    "what": "public_api",
+    "noLogin": true,
+    "rights": "terms_forbid",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "terms_forbid"
+    ],
+    "status": "refused"
+   }
+  },
+  {
+   "name": "names a person and terms forbid",
+   "answers": {
+    "what": "chain",
+    "noLogin": true,
+    "rights": "terms_forbid",
+    "namesPerson": true,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "names_person",
+     "terms_forbid"
+    ],
+    "status": "refused"
+   }
+  },
+  {
+   "name": "rights not sure, public API",
+   "answers": {
+    "what": "public_api",
+    "noLogin": true,
+    "rights": "not_sure",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 2,
+    "path": "auto_pull",
+    "reasons": [
+     "rights_review",
+     "public_auto_pull"
+    ],
+    "status": "held_rights_review"
+   }
+  },
+  {
+   "name": "rights not sure, own data",
+   "answers": {
+    "what": "own",
+    "noLogin": false,
+    "rights": "not_sure",
+    "namesPerson": false,
+    "changes": "once"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 4,
+    "path": "claim",
+    "reasons": [
+     "rights_review",
+     "own_claim",
+     "unverified"
+    ],
+    "status": "held_rights_review"
+   }
+  },
+  {
+   "name": "rights not sure, chain",
+   "answers": {
+    "what": "chain",
+    "noLogin": true,
+    "rights": "not_sure",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 1,
+    "path": "recipe_request",
+    "reasons": [
+     "rights_review",
+     "chain_recipe"
+    ],
+    "status": "held_rights_review"
+   }
+  },
+  {
+   "name": "rights not sure but names a person",
+   "answers": {
+    "what": "signed",
+    "noLogin": true,
+    "rights": "not_sure",
+    "namesPerson": true,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "names_person"
+    ],
+    "status": "refused"
+   }
+  },
+  {
+   "name": "signed, rights not sure, live",
+   "answers": {
+    "what": "signed",
+    "noLogin": false,
+    "rights": "not_sure",
+    "namesPerson": false,
+    "changes": "live"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 3,
+    "path": "signed_source",
+    "reasons": [
+     "rights_review",
+     "signed_key"
+    ],
+    "status": "held_rights_review"
+   }
+  },
+  {
+   "name": "keyed API, rights not sure (the FRED walk-through)",
+   "answers": {
+    "what": "keyed_api",
+    "noLogin": false,
+    "rights": "not_sure",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 4,
+    "path": "keyed_proof",
+    "reasons": [
+     "rights_review",
+     "keyed_source",
+     "proof_not_real",
+     "unverified"
+    ],
+    "status": "held_keyed_source_review"
+   }
+  },
+  {
+   "name": "keyed API with an open licence is still held",
+   "answers": {
+    "what": "keyed_api",
+    "noLogin": true,
+    "rights": "open_license",
+    "namesPerson": false,
+    "changes": "daily",
+    "licenseId": "CC-BY-4.0"
+   },
+   "route": {
+    "outcome": "held",
+    "level": 4,
+    "path": "keyed_proof",
+    "reasons": [
+     "keyed_source",
+     "proof_not_real",
+     "unverified"
+    ],
+    "status": "held_keyed_source_review"
+   }
+  },
+  {
+   "name": "keyed API whose terms forbid",
+   "answers": {
+    "what": "keyed_api",
+    "noLogin": false,
+    "rights": "terms_forbid",
+    "namesPerson": false,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "terms_forbid"
+    ],
+    "status": "refused"
+   }
+  },
+  {
+   "name": "keyed API naming a person",
+   "answers": {
+    "what": "keyed_api",
+    "noLogin": false,
+    "rights": "own_data",
+    "namesPerson": true,
+    "changes": "daily"
+   },
+   "route": {
+    "outcome": "refused",
+    "level": null,
+    "path": null,
+    "reasons": [
+     "names_person"
+    ],
+    "status": "refused"
+   }
+  }
+ ],
+ "fredExample": {
+  "answers": {
+   "what": "keyed_api",
+   "noLogin": false,
+   "rights": "not_sure",
+   "namesPerson": false,
+   "changes": "daily"
+  },
+  "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+  "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+  "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+  "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+  "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+  "seriesId": "CPIAUCSL",
+  "jsonPointer": "/observations/0/value",
+  "unit": "index 1982-1984=100",
+  "keyProof": {
+   "prover": "stub-s2",
+   "real": false
+  }
+ },
+ "syntheticKey": "fake.fred.key.for.s1.tests.only",
+ "blockedHosts": [
+  "stlouisfed.org"
+ ],
+ "rawSubmissions": [
+  {
+   "name": "a duplicate key",
+   "raw": "{\"answers\": {\"what\": \"public_api\", \"noLogin\": true, \"rights\": \"open_license\", \"namesPerson\": false, \"changes\": \"daily\", \"licenseId\": \"onyx:us-treasury-fiscal-data-open\"}, \"title\": \"U.S. total public debt outstanding\", \"description\": \"The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.\", \"sourceName\": \"U.S. Treasury Fiscal Data: Debt to the Penny\", \"sourceUrl\": \"https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny\", \"endpointUrl\": \"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08\", \"jsonPointer\": \"/data/0/tot_pub_debt_out_amt\", \"unit\": \"USD\", \"title\": \"again\"}",
+   "error": "bad_json"
+  },
+  {
+   "name": "a duplicate key inside the answers",
+   "raw": "{\"answers\": {\"what\": \"public_api\", \"what\": \"own\", \"noLogin\": true, \"rights\": \"open_license\", \"namesPerson\": false, \"changes\": \"daily\", \"licenseId\": \"onyx:us-treasury-fiscal-data-open\"}, \"title\": \"U.S. total public debt outstanding\", \"description\": \"The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.\", \"sourceName\": \"U.S. Treasury Fiscal Data: Debt to the Penny\", \"sourceUrl\": \"https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny\", \"endpointUrl\": \"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08\", \"jsonPointer\": \"/data/0/tot_pub_debt_out_amt\", \"unit\": \"USD\"}",
+   "error": "bad_json"
+  },
+  {
+   "name": "responseBytes 2^60",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 1152921504606846976}}",
+   "error": "proof_not_supported"
+  },
+  {
+   "name": "responseBytes 2^53",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 9007199254740992}}",
+   "error": "proof_not_supported"
+  },
+  {
+   "name": "responseBytes 2^53 - 1",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 9007199254740991}}",
+   "error": null
+  },
+  {
+   "name": "responseBytes past u64",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 18446744073709551616}}",
+   "error": "bad_json"
+  },
+  {
+   "name": "responseBytes 1.0",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 1.0}}",
+   "error": "bad_json"
+  },
+  {
+   "name": "responseBytes 1e3",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": 1e3}}",
+   "error": "bad_json"
+  },
+  {
+   "name": "responseBytes -1",
+   "raw": "{\"answers\": {\"what\": \"keyed_api\", \"noLogin\": false, \"rights\": \"not_sure\", \"namesPerson\": false, \"changes\": \"daily\"}, \"title\": \"U.S. consumer price index for all urban consumers (CPIAUCSL)\", \"description\": \"The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.\", \"sourceName\": \"FRED, Federal Reserve Bank of St. Louis\", \"sourceUrl\": \"https://fred.stlouisfed.org/series/CPIAUCSL\", \"endpointTemplate\": \"https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json\", \"seriesId\": \"CPIAUCSL\", \"jsonPointer\": \"/observations/0/value\", \"unit\": \"index 1982-1984=100\", \"keyProof\": {\"prover\": \"stub-s2\", \"real\": false, \"responseKeccak256\": \"0xabababababababababababababababababababababababababababababababab\", \"responseBytes\": -1}}",
+   "error": "bad_json"
+  },
+  {
+   "name": "not JSON",
+   "raw": "{",
+   "error": "bad_json"
+  },
+  {
+   "name": "trailing text after the object",
+   "raw": "{\"answers\": {\"what\": \"public_api\", \"noLogin\": true, \"rights\": \"open_license\", \"namesPerson\": false, \"changes\": \"daily\", \"licenseId\": \"onyx:us-treasury-fiscal-data-open\"}, \"title\": \"U.S. total public debt outstanding\", \"description\": \"The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.\", \"sourceName\": \"U.S. Treasury Fiscal Data: Debt to the Penny\", \"sourceUrl\": \"https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny\", \"endpointUrl\": \"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08\", \"jsonPointer\": \"/data/0/tot_pub_debt_out_amt\", \"unit\": \"USD\"} x",
+   "error": "bad_json"
+  },
+  {
+   "name": "the example as text",
+   "raw": "{\"answers\": {\"what\": \"public_api\", \"noLogin\": true, \"rights\": \"open_license\", \"namesPerson\": false, \"changes\": \"daily\", \"licenseId\": \"onyx:us-treasury-fiscal-data-open\"}, \"title\": \"U.S. total public debt outstanding\", \"description\": \"The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.\", \"sourceName\": \"U.S. Treasury Fiscal Data: Debt to the Penny\", \"sourceUrl\": \"https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny\", \"endpointUrl\": \"https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08\", \"jsonPointer\": \"/data/0/tot_pub_debt_out_amt\", \"unit\": \"USD\"}",
+   "error": null
+  }
+ ],
+ "submissions": [
+  {
+   "name": "the Treasury example",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "another host is never pulled",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001050446/us-gaap/Assets.json",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "host_not_cleared",
+   "status": "pending_review"
+  },
+  {
+   "name": "a host that only looks like the cleared one",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov.evil.example/x",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "host_not_cleared",
+   "status": "pending_review"
+  },
+  {
+   "name": "upper-case host is the same host",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://API.FiscalData.Treasury.GOV/services/api/fiscal_service/v2/accounting/od/debt_to_penny",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "explicit port 443 is fine",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov:443/services/api/fiscal_service/v2/accounting/od/debt_to_penny",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "another port is not pulled",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov:8443/x",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "port_not_allowed",
+   "status": "pending_review"
+  },
+  {
+   "name": "held for rights: nothing pulled",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_rights_review"
+  },
+  {
+   "name": "refused: nothing pulled",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "terms_forbid",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "refused"
+  },
+  {
+   "name": "a claim route is not pulled",
+   "submission": {
+    "answers": {
+     "what": "own",
+     "noLogin": false,
+     "rights": "own_data",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_auto_pull",
+   "status": "pending_review",
+   "reasons": [
+    "own_claim",
+    "unverified"
+   ]
+  },
+  {
+   "name": "no endpoint",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "no_endpoint",
+   "status": "pending_review"
+  },
+  {
+   "name": "a wallet field is not taken until S3 (S1-R1-7)",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD",
+    "wallet": "0xabababababababababababababababababababab"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "description of exactly 2,000 bytes",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "description of 2,001 bytes",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "ddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "field_too_long",
+   "fetch": null
+  },
+  {
+   "name": "title of 120 bytes",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "tttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttttt",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "title of 41 euro signs (123 bytes, 41 characters)",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€€",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "field_too_long",
+   "fetch": null
+  },
+  {
+   "name": "blank title",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "   ",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "empty_field",
+   "fetch": null
+  },
+  {
+   "name": "control character in the title",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "a\u0007b",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "control_characters",
+   "fetch": null
+  },
+  {
+   "name": "line breaks allowed in the description",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "line one\nline two",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  },
+  {
+   "name": "e-mail in the description",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "Questions to someone@example.com please",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "personal_contact",
+   "fetch": null
+  },
+  {
+   "name": "mailto in the source name",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "Treasury mailto:x",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "personal_contact",
+   "fetch": null
+  },
+  {
+   "name": "e-mail in the unit",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "a@b.co"
+   },
+   "error": "personal_contact",
+   "fetch": null
+  },
+  {
+   "name": "plain http source",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "http://fiscaldata.treasury.gov/",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "user info in the endpoint",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://user@api.fiscaldata.treasury.gov/x",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "IP literal endpoint",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://169.254.169.254/latest/meta-data",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "localhost endpoint",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://localhost/x",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "fragment in the source",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/#x",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "pointer without an endpoint",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "pointer_without_endpoint",
+   "fetch": null
+  },
+  {
+   "name": "pointer without a leading slash",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_json_pointer",
+   "fetch": null
+  },
+  {
+   "name": "pointer with a bad escape",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/~2",
+    "unit": "USD"
+   },
+   "error": "bad_json_pointer",
+   "fetch": null
+  },
+  {
+   "name": "open licence without its id",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "license_id_missing",
+   "fetch": null
+  },
+  {
+   "name": "licence id with public domain",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "CC0-1.0"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "license_id_unexpected",
+   "fetch": null
+  },
+  {
+   "name": "licence id with a space",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "CC BY"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "license_id_bad",
+   "fetch": null
+  },
+  {
+   "name": "an e-mail field is not a field",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD",
+    "email": "someone@example.com"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "unknown answer field",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily",
+     "phone": "1"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "unknown answer value",
+   "submission": {
+    "answers": {
+     "what": "rumour",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "missing title",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "the FRED walk-through: held, keyed, blocked source, never pulled",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_keyed_source_review",
+   "reasons": [
+    "source_blocked",
+    "rights_review",
+    "keyed_source",
+    "proof_not_real",
+    "unverified"
+   ]
+  },
+  {
+   "name": "FRED with a hashed response in the stub proof",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false,
+     "responseKeccak256": "0xabababababababababababababababababababababababababababababababab",
+     "responseBytes": 1234
+    }
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_keyed_source_review"
+  },
+  {
+   "name": "FRED page named on a public-API route is held as blocked",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointUrl": "https://api.stlouisfed.org/fred/series?series_id=CPIAUCSL",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_rights_review",
+   "reasons": [
+    "source_blocked",
+    "public_auto_pull"
+   ]
+  },
+  {
+   "name": "a key in the template instead of the placeholder",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key=fake.fred.key.for.s1.tests.only&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "bad_template",
+   "fetch": null
+  },
+  {
+   "name": "a key in the template beside the placeholder",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&token=fake.fred.key.for.s1.tests.only",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "a key in an endpoint URL",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?API_KEY=fake.fred.key.for.s1.tests.only",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "a token in the source URL",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/x?token=abc",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "the placeholder twice",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/x?api_key={api_key}&k2={api_key}",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "bad_template",
+   "fetch": null
+  },
+  {
+   "name": "a plain http template",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "http://api.stlouisfed.org/fred/x?api_key={api_key}",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "bad_url",
+   "fetch": null
+  },
+  {
+   "name": "a template on a source that is not keyed",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD",
+    "endpointTemplate": "https://api.fiscaldata.treasury.gov/x?api_key={api_key}"
+   },
+   "error": "not_keyed",
+   "fetch": null
+  },
+  {
+   "name": "a key proof on a source that is not keyed",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "not_keyed",
+   "fetch": null
+  },
+  {
+   "name": "a proof that claims to be real",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": true
+    }
+   },
+   "error": "proof_not_supported",
+   "fetch": null
+  },
+  {
+   "name": "another prover",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "tlsnotary",
+     "real": false
+    }
+   },
+   "error": "proof_not_supported",
+   "fetch": null
+  },
+  {
+   "name": "a hash without its length",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false,
+     "responseKeccak256": "0xabababababababababababababababababababababababababababababababab"
+    }
+   },
+   "error": "proof_not_supported",
+   "fetch": null
+  },
+  {
+   "name": "an upper-case hash",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false,
+     "responseKeccak256": "0xABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB",
+     "responseBytes": 1
+    }
+   },
+   "error": "proof_not_supported",
+   "fetch": null
+  },
+  {
+   "name": "a key field in the proof",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false,
+     "apiKey": "fake.fred.key.for.s1.tests.only"
+    }
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "an apiKey field in the submission",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    },
+    "apiKey": "fake.fred.key.for.s1.tests.only"
+   },
+   "error": "bad_json",
+   "fetch": null
+  },
+  {
+   "name": "a series id with a space",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/series/observations?series_id=CPIAUCSL&api_key={api_key}&file_type=json",
+    "seriesId": "CPI AUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "bad_series_id",
+   "fetch": null
+  },
+  {
+   "name": "ALFRED (alfred.stlouisfed.org) is held as blocked",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://alfred.stlouisfed.org/series?seid=CPIAUCSL",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_rights_review",
+   "reasons": [
+    "source_blocked",
+    "public_auto_pull"
+   ]
+  },
+  {
+   "name": "research.stlouisfed.org is held as blocked",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://research.stlouisfed.org/x",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_rights_review"
+  },
+  {
+   "name": "the apex stlouisfed.org is held as blocked",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://stlouisfed.org/data",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "not_while_refused_or_held",
+   "status": "held_rights_review"
+  },
+  {
+   "name": "a look-alike domain is not blocked",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "public_domain",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://notstlouisfed.org/data",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "no_endpoint",
+   "status": "pending_review"
+  },
+  {
+   "name": "a title of one byte-order mark",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "﻿",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "empty_field",
+   "fetch": null
+  },
+  {
+   "name": "a title of one NEL (U+0085)",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "empty_field",
+   "fetch": null
+  },
+  {
+   "name": "a title of zero-width spaces and a no-break space",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "​ ​",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "empty_field",
+   "fetch": null
+  },
+  {
+   "name": "a byte-order mark inside the title",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "Debt﻿total",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "control_characters",
+   "fetch": null
+  },
+  {
+   "name": "an ideographic space only",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "　",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "empty_field",
+   "fetch": null
+  },
+  {
+   "name": "a percent-encoded api_key name",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?%61pi_key=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "api_token",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?api_token=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "client_secret",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/x?client_secret=abc",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?filter=record_date:eq:2026-10-08",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "appid",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?appid=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "app_key",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?app_key=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "an AWS signed URL",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?X-Amz-Credential=a&X-Amz-Signature=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "a semicolon-separated api_key",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?a=1;api_key=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "an array-style api_key[]",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?api_key[]=abc",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "a secret beside the template's placeholder, percent-encoded",
+   "submission": {
+    "answers": {
+     "what": "keyed_api",
+     "noLogin": false,
+     "rights": "not_sure",
+     "namesPerson": false,
+     "changes": "daily"
+    },
+    "title": "U.S. consumer price index for all urban consumers (CPIAUCSL)",
+    "description": "The monthly CPI-U index, seasonally adjusted, as FRED serves it. I would fetch it with my own FRED API key.",
+    "sourceName": "FRED, Federal Reserve Bank of St. Louis",
+    "sourceUrl": "https://fred.stlouisfed.org/series/CPIAUCSL",
+    "endpointTemplate": "https://api.stlouisfed.org/fred/x?api_key={api_key}&%74oken=abc",
+    "seriesId": "CPIAUCSL",
+    "jsonPointer": "/observations/0/value",
+    "unit": "index 1982-1984=100",
+    "keyProof": {
+     "prover": "stub-s2",
+     "real": false
+    }
+   },
+   "error": "secret_in_url",
+   "fetch": null
+  },
+  {
+   "name": "ordinary parameters pass",
+   "submission": {
+    "answers": {
+     "what": "public_api",
+     "noLogin": true,
+     "rights": "open_license",
+     "namesPerson": false,
+     "changes": "daily",
+     "licenseId": "onyx:us-treasury-fiscal-data-open"
+    },
+    "title": "U.S. total public debt outstanding",
+    "description": "The U.S. Treasury's Debt to the Penny: total public debt outstanding in dollars and cents, one record per business day. The value is the record for the date in the endpoint's filter.",
+    "sourceName": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "sourceUrl": "https://fiscaldata.treasury.gov/datasets/debt-to-the-penny/debt-to-the-penny",
+    "endpointUrl": "https://api.fiscaldata.treasury.gov/x?filter=record_date:eq:2026-10-08&page[size]=1",
+    "jsonPointer": "/data/0/tot_pub_debt_out_amt",
+    "unit": "USD"
+   },
+   "error": null,
+   "fetch": "pull",
+   "status": "pending_review"
+  }
+ ]
+}

@@ -1,0 +1,30 @@
+[package]
+name = "onyx-source-edgar"
+description = "Level-2 source: crypto-asset holdings a company states in its SEC filings (EDGAR XBRL, public information, no account), read by a pinned fetcher."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+# `raw_value`: an ETF holding's decimal is read from its exact JSON token,
+# never through f64 (ETF-1).
+serde_json = { workspace = true, features = ["raw_value"] }
+thiserror.workspace = true
+hex.workspace = true
+sha2 = "0.10"
+# The round runner (feature `round`) uses the coordinator and the query API's
+# store format; the web verifier (wasm32) uses the fetcher only, without it.
+onyx-coordinator = { path = "../../crates/onyx-coordinator", optional = true }
+onyx-api = { path = "../../crates/onyx-api", optional = true }
+
+[features]
+round = ["dep:onyx-coordinator", "dep:onyx-api"]
+
+[dev-dependencies]
+onyx-source-edgar = { path = ".", features = ["round"] }
+
+[lints]
+workspace = true

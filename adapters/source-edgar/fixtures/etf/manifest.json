@@ -1,0 +1,197 @@
+{
+  "source": "SEC EDGAR XBRL companyconcept (data.sec.gov)",
+  "user_agent": "onyx-dev (contact pending)",
+  "window_start": 1792382708,
+  "window_secs": 300,
+  "funds": [
+    {
+      "key": "ibit",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001980994/us-gaap/CryptoAssetNumberOfUnits.json",
+      "body": "ibit.json",
+      "bytes": 1467,
+      "sha256": "3e22ba7a910d801db2fba459940422a755cd2df3e03697c32af6294cdf31a26c",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382708,
+          "http_date": "Mon, 19 Oct 2026 04:05:09 GMT",
+          "sha256": "3e22ba7a910d801db2fba459940422a755cd2df3e03697c32af6294cdf31a26c"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382709,
+          "http_date": "Mon, 19 Oct 2026 04:05:09 GMT",
+          "sha256": "3e22ba7a910d801db2fba459940422a755cd2df3e03697c32af6294cdf31a26c"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382710,
+          "http_date": "Mon, 19 Oct 2026 04:05:10 GMT",
+          "sha256": "3e22ba7a910d801db2fba459940422a755cd2df3e03697c32af6294cdf31a26c"
+        }
+      ]
+    },
+    {
+      "key": "fbtc",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001852317/us-gaap/InvestmentOwnedBalanceShares.json",
+      "body": "fbtc.json",
+      "bytes": 672,
+      "sha256": "d77a60ac64660ceec6a8b6c46ba17d02d6c1c846f50b51bfecb54d32c938fd5c",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382710,
+          "http_date": "Mon, 19 Oct 2026 04:05:11 GMT",
+          "sha256": "d77a60ac64660ceec6a8b6c46ba17d02d6c1c846f50b51bfecb54d32c938fd5c"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382711,
+          "http_date": "Mon, 19 Oct 2026 04:05:11 GMT",
+          "sha256": "d77a60ac64660ceec6a8b6c46ba17d02d6c1c846f50b51bfecb54d32c938fd5c"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382712,
+          "http_date": "Mon, 19 Oct 2026 04:05:12 GMT",
+          "sha256": "d77a60ac64660ceec6a8b6c46ba17d02d6c1c846f50b51bfecb54d32c938fd5c"
+        }
+      ]
+    },
+    {
+      "key": "gbtc",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001588489/us-gaap/InvestmentOwnedBalanceContracts.json",
+      "body": "gbtc.json",
+      "bytes": 11793,
+      "sha256": "f0686137c34153df057350c0c705980d4e5944c874860909ca367ccf0a659887",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382712,
+          "http_date": "Mon, 19 Oct 2026 04:05:13 GMT",
+          "sha256": "f0686137c34153df057350c0c705980d4e5944c874860909ca367ccf0a659887"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382713,
+          "http_date": "Mon, 19 Oct 2026 04:05:13 GMT",
+          "sha256": "f0686137c34153df057350c0c705980d4e5944c874860909ca367ccf0a659887"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382714,
+          "http_date": "Mon, 19 Oct 2026 04:05:14 GMT",
+          "sha256": "f0686137c34153df057350c0c705980d4e5944c874860909ca367ccf0a659887"
+        }
+      ]
+    },
+    {
+      "key": "btc_mini",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0002015034/us-gaap/InvestmentOwnedBalanceContracts.json",
+      "body": "btc_mini.json",
+      "bytes": 3379,
+      "sha256": "bd435d979690d39910646bf7b75d7c458e0d5c6da30750725dae1256c9c49e25",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382714,
+          "http_date": "Mon, 19 Oct 2026 04:05:14 GMT",
+          "sha256": "bd435d979690d39910646bf7b75d7c458e0d5c6da30750725dae1256c9c49e25"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382715,
+          "http_date": "Mon, 19 Oct 2026 04:05:15 GMT",
+          "sha256": "bd435d979690d39910646bf7b75d7c458e0d5c6da30750725dae1256c9c49e25"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382715,
+          "http_date": "Mon, 19 Oct 2026 04:05:16 GMT",
+          "sha256": "bd435d979690d39910646bf7b75d7c458e0d5c6da30750725dae1256c9c49e25"
+        }
+      ]
+    },
+    {
+      "key": "arkb",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001869699/us-gaap/InvestmentOwnedBalanceContracts.json",
+      "body": "arkb.json",
+      "bytes": 3897,
+      "sha256": "38f03aa447e18e62a98f690b6aacae00a454c7930c51e728519f9bc55d09be13",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382716,
+          "http_date": "Mon, 19 Oct 2026 04:05:17 GMT",
+          "sha256": "38f03aa447e18e62a98f690b6aacae00a454c7930c51e728519f9bc55d09be13"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382717,
+          "http_date": "Mon, 19 Oct 2026 04:05:17 GMT",
+          "sha256": "38f03aa447e18e62a98f690b6aacae00a454c7930c51e728519f9bc55d09be13"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382718,
+          "http_date": "Mon, 19 Oct 2026 04:05:18 GMT",
+          "sha256": "38f03aa447e18e62a98f690b6aacae00a454c7930c51e728519f9bc55d09be13"
+        }
+      ]
+    },
+    {
+      "key": "ezbc",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001992870/us-gaap/CryptoAssetNumberOfUnits.json",
+      "body": "ezbc.json",
+      "bytes": 460,
+      "sha256": "67d090aea0f8e55aae051cee2d63c7085d2e2dba85a1d4b44f9a2e3e2e5b71b3",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382718,
+          "http_date": "Mon, 19 Oct 2026 04:05:18 GMT",
+          "sha256": "67d090aea0f8e55aae051cee2d63c7085d2e2dba85a1d4b44f9a2e3e2e5b71b3"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382719,
+          "http_date": "Mon, 19 Oct 2026 04:05:19 GMT",
+          "sha256": "67d090aea0f8e55aae051cee2d63c7085d2e2dba85a1d4b44f9a2e3e2e5b71b3"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382719,
+          "http_date": "Mon, 19 Oct 2026 04:05:20 GMT",
+          "sha256": "67d090aea0f8e55aae051cee2d63c7085d2e2dba85a1d4b44f9a2e3e2e5b71b3"
+        }
+      ]
+    },
+    {
+      "key": "defi",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001985840/us-gaap/InvestmentOwnedBalanceShares.json",
+      "body": "defi.json",
+      "bytes": 1538,
+      "sha256": "1ace9b8179f212659852317a078a44f6f3e8dd3d7cb3221e955f0896c6a25fc5",
+      "fetches": [
+        {
+          "observer": 1,
+          "fetched_unix": 1792382720,
+          "http_date": "Mon, 19 Oct 2026 04:05:20 GMT",
+          "sha256": "1ace9b8179f212659852317a078a44f6f3e8dd3d7cb3221e955f0896c6a25fc5"
+        },
+        {
+          "observer": 2,
+          "fetched_unix": 1792382721,
+          "http_date": "Mon, 19 Oct 2026 04:05:21 GMT",
+          "sha256": "1ace9b8179f212659852317a078a44f6f3e8dd3d7cb3221e955f0896c6a25fc5"
+        },
+        {
+          "observer": 3,
+          "fetched_unix": 1792382721,
+          "http_date": "Mon, 19 Oct 2026 04:05:21 GMT",
+          "sha256": "1ace9b8179f212659852317a078a44f6f3e8dd3d7cb3221e955f0896c6a25fc5"
+        }
+      ]
+    }
+  ]
+}

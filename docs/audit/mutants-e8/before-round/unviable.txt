@@ -1,0 +1,13 @@
+crates/onyx-coordinator/src/round.rs:283:9: replace ShardOutcome::first -> Option<&(u64, MinerAddress, Hash32)> with Some(Box::leak(Box::new((0, Default::default(), Default::default()))))
+crates/onyx-coordinator/src/round.rs:283:9: replace ShardOutcome::first -> Option<&(u64, MinerAddress, Hash32)> with Some(Box::leak(Box::new((1, Default::default(), Default::default()))))
+crates/onyx-coordinator/src/round.rs:310:9: replace Round::open_preflighted -> Result<Round, RoundError> with Ok(Default::default())
+crates/onyx-coordinator/src/round.rs:352:9: replace Round::open_inner -> Result<Round, RoundError> with Ok(Default::default())
+crates/onyx-coordinator/src/round.rs:72:5: replace round_tag -> Hash32 with Default::default()
+crates/onyx-coordinator/src/round.rs:426:9: replace Round::tag -> Hash32 with Default::default()
+crates/onyx-coordinator/src/round.rs:431:9: replace Round::config -> RoundConfig with Default::default()
+crates/onyx-coordinator/src/round.rs:436:9: replace Round::outcome -> Option<&BTreeMap<Hash32, ShardOutcome>> with Some(Box::leak(Box::new(BTreeMap::from_iter([(Default::default(), Default::default())]))))
+crates/onyx-coordinator/src/round.rs:441:9: replace Round::work_of -> BTreeMap<Hash32, Hash32> with BTreeMap::from_iter([(Default::default(), Default::default())])
+crates/onyx-coordinator/src/round.rs:451:9: replace Round::shard_ids -> Vec<Hash32> with vec![Default::default()]
+crates/onyx-coordinator/src/round.rs:456:9: replace Round::specs -> &BTreeMap<Hash32, ShardSpec> with Box::leak(Box::new(BTreeMap::from_iter([(Default::default(), Default::default())])))
+crates/onyx-coordinator/src/round.rs:461:9: replace Round::phase -> RoundPhase with Default::default()
+crates/onyx-coordinator/src/round.rs:584:9: replace Round::close -> Result<BTreeMap<Hash32, ShardOutcome>, RoundError> with Ok(BTreeMap::from_iter([(Default::default(), Default::default())]))

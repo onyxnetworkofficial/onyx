@@ -1,0 +1,95 @@
+# onyx-node as a hardened systemd service (docs/ops/deployment.md "Run with
+# systemd" has every step, the row copy and the checks). From a checkout, with
+# <export> the --export-node directory; a VM or bare host (the sandbox needs
+# mount namespaces: an unprivileged container fails with 226/NAMESPACE):
+#
+#   sudo install -m 0755 target/release/onyx-node /usr/local/bin/onyx-node
+#   sudo install -d -m 0755 /etc/onyx
+#   sudo install -m 0600 <export>/node.service.env /etc/onyx/node.env   # set ONYX_PUBLIC_URL in it
+#   sudo install -m 0644 <export>/deployment.json <export>/catalog.json /etc/onyx/
+#   sudo install -m 0600 operator.key /etc/onyx/operator.key   # if payments are on
+#   sudo install -m 0644 deploy/systemd/onyx-node.service /etc/systemd/system/
+#   # payments off: delete both key lines below first, or the start fails 243/CREDENTIALS
+#   sudo systemctl daemon-reload && sudo systemctl enable --now onyx-node
+#
+# /etc/onyx/node.env (mode 0600) holds the ONYX_* settings. ONYX_RPC_URL can
+# carry a node provider's API key: keep the file 0600, or move the URL to the
+# rpc-url credential below. node.env must NOT set ONYX_STATE_DIR, ONYX_CAS_DIR
+# or ONYX_OPERATOR_KEY_FILE: this unit sets them, and an EnvironmentFile value
+# would override them (OPS-L1-F5; --export-node writes node.service.env
+# without them).
+#
+# The operator key is a systemd credential, readable only by this service at
+# $CREDENTIALS_DIRECTORY/operator-key (systemd makes it root-owned 0440 with an
+# ACL for the service, directory root:root 0550; the server accepts exactly
+# that there and refuses any other owner, group or a symlink, L7-SD-1). Keep BOTH key lines for
+# ONYX_PAYMENTS=self-settle, and for facilitator mode with the reporter.
+# Delete BOTH for ONYX_PAYMENTS=off, or for facilitator mode with
+# ONYX_REPORTER=off (receipts stay on disk, unposted). The server refuses a
+# configured key path it cannot read, and facilitator mode without a key
+# unless ONYX_REPORTER=off.
+
+[Unit]
+Description=Onyx query API (onyx-node, testnet)
+Documentation=file:///opt/onyx/docs/ops/deployment.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStartPre=/usr/local/bin/onyx-node --check-config
+ExecStart=/usr/local/bin/onyx-node
+EnvironmentFile=/etc/onyx/node.env
+LoadCredential=operator-key:/etc/onyx/operator.key
+Environment=ONYX_OPERATOR_KEY_FILE=%d/operator-key
+# Optional: the node URL as a credential instead of ONYX_RPC_URL in node.env
+# (then remove ONYX_RPC_URL there; setting both is refused).
+#LoadCredential=rpc-url:/etc/onyx/rpc-url
+#Environment=ONYX_RPC_URL_FILE=%d/rpc-url
+Environment=ONYX_STATE_DIR=/var/lib/onyx/state
+Environment=ONYX_CAS_DIR=/var/lib/onyx/cas
+StateDirectory=onyx onyx/state onyx/cas
+StateDirectoryMode=0700
+DynamicUser=yes
+Restart=on-failure
+RestartSec=5s
+# SIGTERM: stop accepting, let requests in flight finish (12 s), then the
+# settles they started (up to 50 s, with a facilitator or self-settle): about 66 s at most,
+# printed at start. A shorter stop timeout kills settles that already reached
+# the chain before their receipt or pending entry is written (OPS-L1-F1).
+KillSignal=SIGTERM
+TimeoutStopSec=75s
+
+# Hardening.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+# No link-local addresses: a cloud host's metadata service (169.254.169.254) is out of
+# reach of a compromised process (review NS17-R1). Loopback and the chain node are unaffected.
+IPAddressDeny=169.254.0.0/16 fe80::/10
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+MemoryMax=2G
+
+[Install]
+WantedBy=multi-user.target

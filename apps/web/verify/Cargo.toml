@@ -1,0 +1,69 @@
+[package]
+name = "onyx-web-verify"
+description = "Browser verifier for the website (ADR-0020): wasm-bindgen exports over the network's own checks."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[features]
+# PP13: tests that read the label-derived files (docs/ops/public-snapshot-exclude.txt). On here;
+# a public snapshot turns it off, so those tests show as ignored instead of failing.
+default = []
+label-data = []
+# SIG-R1-F2: a public website build (`ONYX_PUBLIC=1 scripts/build-web.sh`)
+# holds no level-2 result pins.
+public = []
+
+[dependencies]
+onyx-core.workspace = true
+onyx-merkle.workspace = true
+onyx-labels = { workspace = true, features = ["json"] }
+onyx-recipe-sdk.workspace = true
+# Level-5 track records (ROADMAP C6): checked in `track_view` only (fenced: TR-11).
+onyx-track = { workspace = true, features = ["wire"] }
+onyx-btc-schema.workspace = true
+onyx-pool-schema.workspace = true
+onyx-chain-schema.workspace = true
+onyx-reserve-schema.workspace = true
+# Canonical engine only: the wasmtime fast path cannot target wasm32.
+onyx-recipe-host = { path = "../../../crates/onyx-recipe-host", default-features = false }
+onyx-source-btc = { path = "../../../adapters/source-btc" }
+# Fetcher only (no `round` feature: the coordinator is not built for wasm32).
+onyx-source-fiscaldata = { path = "../../../adapters/source-fiscaldata" }
+onyx-source-edgar = { path = "../../../adapters/source-edgar" }
+# NS3: the daily sources' fetchers and templates (no round runner).
+onyx-source-usgs = { path = "../../../adapters/source-usgs" }
+onyx-source-ncei = { path = "../../../adapters/source-ncei" }
+onyx-source-page = { path = "../../../adapters/source-page" }
+# ADR-0044 (ROADMAP P4a): the Ethereum window's leaves, commitment and rerun.
+onyx-eth-schema.workspace = true
+onyx-source-eth = { path = "../../../adapters/source-eth" }
+borsh.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+secp256k1.workspace = true
+# ROADMAP C51: time-locked dismissals re-encrypted in the page (blst behind
+# onyx-tlock only, docs/audit/2026-10-17-blst.md; wasm32 as for secp256k1).
+onyx-tlock = { path = "../../../crates/onyx-tlock" }
+wasm-bindgen = "=0.2.129"
+
+[dev-dependencies]
+# The Ethereum window test (ADR-0044) and the level-3 tests decode shipped base64 inputs.
+base64.workspace = true
+# Native tests only: pin the browser's mirrors of the coordinator's round id
+# and result hash to the coordinator itself (L2SRC-R1-F3).
+onyx-coordinator = { path = "../../../crates/onyx-coordinator" }
+onyx-source-fiscaldata = { path = "../../../adapters/source-fiscaldata", features = ["round"] }
+onyx-source-edgar = { path = "../../../adapters/source-edgar", features = ["round"] }
+# ROADMAP C61: pin the browser's level-3 check to the body the API's own
+# `signed_serve` writes (native tests only; listed in the signed-money fence).
+onyx-api = { path = "../../../crates/onyx-api" }
+tokio = { version = "1", features = ["rt", "macros"] }
+
+[lints]
+workspace = true

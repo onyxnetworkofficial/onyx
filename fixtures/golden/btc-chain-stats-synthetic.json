@@ -1,0 +1,31 @@
+{
+  "fuel": 123974,
+  "recipe_id": "0xc14f0ea9cd979ca267e75683b498fc7fcb00cb506052f9ebfedebd557dd1255f",
+  "root": "0x1e92d410498dd8788063b2c0d33fd2ebb47e4e31fc1d3a76e0274743352bad9e",
+  "rows": [
+    {
+      "active_scripts": 3,
+      "fee_rate_avg_msat_vb": 7500,
+      "fee_rate_median_msat_vb": 4000,
+      "fees_sats": 3000,
+      "height": 970000,
+      "issued_sats": 312500000,
+      "segwit_txs": 1,
+      "size_bytes": 867,
+      "txs": 3,
+      "weight_wu": 2760
+    },
+    {
+      "active_scripts": 3,
+      "fee_rate_avg_msat_vb": 8750,
+      "fee_rate_median_msat_vb": 6000,
+      "fees_sats": 3500,
+      "height": 970001,
+      "issued_sats": 312500000,
+      "segwit_txs": 1,
+      "size_bytes": 867,
+      "txs": 3,
+      "weight_wu": 2760
+    }
+  ]
+}

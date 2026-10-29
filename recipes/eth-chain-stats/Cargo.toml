@@ -1,0 +1,22 @@
+[package]
+name = "eth-chain-stats"
+description = "Recipe: per-block Ethereum statistics (transactions, gas and fullness, base fee, priority fees, ETH burned, blob gas and fees, contract creations, value sent) from blocks whose hashes and trie roots it checks itself (ADR-0044)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+onyx-recipe-sdk = { workspace = true, features = ["rt"] }
+onyx-eth-schema.workspace = true
+borsh = { version = "1", default-features = false, features = ["derive"] }
+
+[dev-dependencies]
+onyx-eth-schema = { workspace = true, features = ["synthetic"] }
+
+[lints]
+workspace = true

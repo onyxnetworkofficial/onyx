@@ -1,0 +1,5 @@
+# THREATS rows that predate the "verified test" rule of scripts/check-threats.py and still have no
+# verified test, accepted reason, docs-only path or open milestone. One ID per line. This list may
+# only shrink: the check fails if an ID is added here after it exists on origin/main, or if a listed
+# row gains a verified test without being removed. Empty since the L9 sweep (2026-10-14): every such
+# row now cites its test, or is PARTIAL with a TODO naming an open ROADMAP item.

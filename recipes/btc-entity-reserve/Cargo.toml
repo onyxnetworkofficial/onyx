@@ -1,0 +1,21 @@
+[package]
+name = "btc-entity-reserve"
+description = "Recipe: per-entity BTC balance at the end of a range, from a committed base plus the range's flows (ADR-0034)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+onyx-recipe-sdk = { workspace = true, features = ["rt"] }
+onyx-btc-schema.workspace = true
+onyx-reserve-schema.workspace = true
+borsh = { version = "1", default-features = false, features = ["derive"] }
+sha2 = { version = "0.10", default-features = false }
+
+[lints]
+workspace = true

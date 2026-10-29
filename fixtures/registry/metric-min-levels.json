@@ -1,0 +1,18 @@
+{
+  "levels": [
+    4,
+    4
+  ],
+  "metricIds": [
+    "crypto.btc.pool_blocks",
+    "crypto.btc.entity_reserve"
+  ],
+  "metricKeys": [
+    "0xeba38f89ef4f69263540979f16d94fffc29a35129a9b994b67d745dbd558d076",
+    "0x48c613b2889ac0f1dc96b68a56ef6b969d838114edb9c2d0966b7fe8355e5909"
+  ],
+  "recipeIds": [
+    "0x1af9af156198c75b7ce1e8d648725be968065a37f7c104bc3daa9320cb0b538a",
+    "0xd0c1331f82f9a743548ca68de3693a2754ae35e6faef7e047a739ba939b49e34"
+  ]
+}

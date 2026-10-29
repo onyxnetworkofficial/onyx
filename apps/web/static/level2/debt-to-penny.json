@@ -1,0 +1,188 @@
+{
+  "agreed": 5,
+  "bonds": [
+    {
+      "bond": "1000",
+      "observer": "0x6109b5710a37f560e02ee024572581d130d218c6"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x65b54269f42fb4756e1b4883142a230ad9997dc5"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x712d42f0149994a3d06302ef9774975768235de9"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x79e400dee6a7aa0cbe8504d428960ac8e170603b"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xfca7b6ee1788383c9e7d4eed412e385e5f185062"
+    }
+  ],
+  "config": {
+    "commit_close": 1791696720,
+    "miss_slash": "20",
+    "outlier_slash": "100",
+    "reveal_close": 1791696840,
+    "reward": "10"
+  },
+  "draw": {
+    "announcement": {
+      "announced_at": 3,
+      "attempt": 0,
+      "beacon": "0xd24f3a517bab5a381beb871010c038186d141a4301665b9fef3eabd50a3b348e",
+      "beacon_height": 5,
+      "chain_id": 31337,
+      "commit": "0x372c2387021a6fcd6cf1db9b84a5c82e3fe61f69135ed2842d8a22adff201bbf",
+      "draw_count": 1,
+      "registry": "0x8464135c8f25da09e49bc8782676a84730c318bc"
+    },
+    "attempt": 0,
+    "beacon": "0xd24f3a517bab5a381beb871010c038186d141a4301665b9fef3eabd50a3b348e",
+    "beacon_height": 5
+  },
+  "feed": {
+    "fetcher_id": "0x8196fcbe7330cd64a7a4eb1473770f14622a273274c0056477f0697e89585e3d",
+    "metric": "us.treasury.total_public_debt_outstanding",
+    "min_observers": 5,
+    "record_date": "2026-10-08",
+    "scale": 2,
+    "selector": "/data/0/tot_pub_debt_out_amt",
+    "spec_id": "0x0cef170f5595649bfc63fa3a01be5f23d55012d31098f03cff92a76b4850ce24",
+    "subject": "us.treasury.federal_debt:2026-10-08",
+    "url": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v2/accounting/od/debt_to_penny?fields=record_date,tot_pub_debt_out_amt&filter=record_date:eq:2026-10-08",
+    "window_end": 1791696660,
+    "window_start": 1791696360
+  },
+  "observers": 5,
+  "pool": [
+    {
+      "bond": "1000",
+      "observer": "0x21e4abd4af7f68db279bc5564d7752c7ee46ab56"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x3318bde4877836eded45d10c57e72c93dd9e936e"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x442f158e72bba6d6458c19398909d5f3531df386"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x55f7adfecf87f231542f9ba95b0d6ae9b4e0aa00"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x6109b5710a37f560e02ee024572581d130d218c6"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x65b54269f42fb4756e1b4883142a230ad9997dc5"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x712d42f0149994a3d06302ef9774975768235de9"
+    },
+    {
+      "bond": "1000",
+      "observer": "0x79e400dee6a7aa0cbe8504d428960ac8e170603b"
+    },
+    {
+      "bond": "1000",
+      "observer": "0xfca7b6ee1788383c9e7d4eed412e385e5f185062"
+    }
+  ],
+  "proof_level": 2,
+  "rehearsal": "Observers simulated on one machine; each fetched the source itself over HTTPS.",
+  "response_body": "{\"data\":[{\"record_date\":\"2026-10-08\",\"tot_pub_debt_out_amt\":\"40305316210829.72\"}],\"meta\":{\"count\":1,\"labels\":{\"record_date\":\"Record Date\",\"tot_pub_debt_out_amt\":\"Total Public Debt Outstanding\"},\"dataTypes\":{\"record_date\":\"DATE\",\"tot_pub_debt_out_amt\":\"CURRENCY\"},\"dataFormats\":{\"record_date\":\"YYYY-MM-DD\",\"tot_pub_debt_out_amt\":\"$10.20\"},\"total-count\":1,\"total-pages\":1},\"links\":{\"self\":\"&page%5Bnumber%5D=1&page%5Bsize%5D=100\",\"first\":\"&page%5Bnumber%5D=1&page%5Bsize%5D=100\",\"prev\":null,\"next\":null,\"last\":\"&page%5Bnumber%5D=1&page%5Bsize%5D=100\"}}",
+  "result_hash": "0xf65720c7a4c2358f3c8d8047066846994e117bc0daa307e29009ca2da3f2cec9",
+  "reveals": [
+    {
+      "commit": "0x523a6196ae1891b6ffca1af28549d386dd5c9159c9400a2086aaf57afecfa468",
+      "commit_sig": "0x5e4a7e0dfa920614e827774ee8bbd851bc8b9ae402bcb3d899e0a040efa292567b66a77c6a0dd66f4c44ce8bc89fcd4ae423f4e02c48f28d2f796c44e36ff36b1c",
+      "http_date": "Sun, 11 Oct 2026 05:26:18 GMT",
+      "observed_unix": 1791696378,
+      "observer": "0x6109b5710a37f560e02ee024572581d130d218c6",
+      "page_hash": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+      "reveal_sig": "0x782c698d65cf5933c1b9ba8f122b85baa968528c306d79734750ad93807318d11a07d83fcfbda24d5672cfb89f216c9fdd206f8677ee3172155d4c7f4b783c771c",
+      "salt": "0x22f8759ae0340e23e3337b956e136a2be1653360d3c6ed83e7eea4c9c47911de"
+    },
+    {
+      "commit": "0x375126ea3a8c4643155056a18c2db691a08717008afa755d52e94e9e16bde1f5",
+      "commit_sig": "0x81ac910bc2034b128d2b35688669d44b01f910411e26e4129c71bb2079ee65545908306e5fa65c043658a87e72a4b0ee1f730cb5053eade84b1caaa88b06480f1c",
+      "http_date": "Sun, 11 Oct 2026 05:26:21 GMT",
+      "observed_unix": 1791696381,
+      "observer": "0x65b54269f42fb4756e1b4883142a230ad9997dc5",
+      "page_hash": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+      "reveal_sig": "0x64a760e6617c36bdd81525767be1854e94e772a02a4383e858d6a4add54c0d5719dde1ecf2c91d49410a6074dd39da173e3258226830e9b8f4fcb30906aafbaa1b",
+      "salt": "0x141156ab4de239532f7a7ef98407b1ffba58336b860ae3eccc9c140849e349cc"
+    },
+    {
+      "commit": "0x1c44bcc92e3e1dcd15ca13e400ab5b0e51079163c44e3ba3344011b3bf9fb22d",
+      "commit_sig": "0xa3be894b393f89f71dfc00075603c00ac6872619080171c75328bb4351107b267b7350388ec92eec335e562cbe30ade923291f5b29023f0e671063cd820297811c",
+      "http_date": "Sun, 11 Oct 2026 05:26:25 GMT",
+      "observed_unix": 1791696384,
+      "observer": "0x712d42f0149994a3d06302ef9774975768235de9",
+      "page_hash": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+      "reveal_sig": "0x0d2f71bd3c815af4db2c1815abb95c9e0fae18f9eeb9f7620dcfbb35fecc6b943cfff92c0b068639a12f427e2b01b922ac7feeb5b83ad2fba983d663284496aa1b",
+      "salt": "0x300b50d78c288e535d3d66df15aa73347bb7156465834b3e662890fb3dd24355"
+    },
+    {
+      "commit": "0x5202bd51d51c16180309b5e5c85d078b11492df9aed75220d8246475086377f5",
+      "commit_sig": "0x8df3dbc28922b2c27d62007bd05d5baf72a52a684bd6c2aa0517ac9e9124942c562f937c502d0c3c7d4fe93c5b94933d252cbee16387e03b31a537762e7b90b31b",
+      "http_date": "Sun, 11 Oct 2026 05:26:28 GMT",
+      "observed_unix": 1791696388,
+      "observer": "0x79e400dee6a7aa0cbe8504d428960ac8e170603b",
+      "page_hash": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+      "reveal_sig": "0x2ffc4f5f77f3e8f4de8423edd30528b39d0113defd28c9600b809109e7947b6447a3f18b4c64b5015a97e363b7fbb756bbfe2f6b31aa0a69e65cf1cd72b948b01c",
+      "salt": "0xcee5bdf6c52c6082dc4bbe726d952e6d1bc2b72da90f0bd2924bafc21d97b86a"
+    },
+    {
+      "commit": "0x02297afae7cc578d0ee85936c57929cab445ca28562af985327f46845dc95446",
+      "commit_sig": "0x0edbb67d1cdf2efae05451ad26202f8d068b4b00efa5107a806d7b28d6a29bc97142d1c4546e80a5e7bc875f665a8eca79f9f5673c1ce4346dd361f91901fcf41b",
+      "http_date": "Sun, 11 Oct 2026 05:26:32 GMT",
+      "observed_unix": 1791696391,
+      "observer": "0xfca7b6ee1788383c9e7d4eed412e385e5f185062",
+      "page_hash": "0xf5dd7a5c490fe1584511f4629bb503fdb1a770af9c1b4c13fe07497c6d45bfc4",
+      "reveal_sig": "0xa65e396841c03c3428badd78601fe9e144ba33e387ba0476ac582ef072d8a7d167ba50b07ed4a486c21f51553aacbc691bb374a5e1c6f1b72d2824ffe710014b1c",
+      "salt": "0x65242a69b31981df1c04ddf94e1d3b184d50f3681cc148a102e7dc9eeba18af6"
+    }
+  ],
+  "round_id": "0x7c5851d00109786f4ea7e60918cb6f2e9b5811d873b88e55e8cf98784d2012a0",
+  "source": {
+    "attribution": "Source: U.S. Department of the Treasury, Bureau of the Fiscal Service (fiscaldata.treasury.gov)",
+    "id": "us.treasury.fiscaldata",
+    "license": "onyx:us-treasury-fiscal-data-open",
+    "name": "U.S. Treasury Fiscal Data: Debt to the Penny",
+    "terms_quote": "available to copy, adapt, redistribute, or otherwise use for non-commercial and commercial purposes",
+    "terms_url": "https://fiscaldata.treasury.gov/about-us/"
+  },
+  "statuses": [
+    {
+      "observer": "0x6109b5710a37f560e02ee024572581d130d218c6",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x65b54269f42fb4756e1b4883142a230ad9997dc5",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x712d42f0149994a3d06302ef9774975768235de9",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0x79e400dee6a7aa0cbe8504d428960ac8e170603b",
+      "status": "Agreed"
+    },
+    {
+      "observer": "0xfca7b6ee1788383c9e7d4eed412e385e5f185062",
+      "status": "Agreed"
+    }
+  ],
+  "unit": "USD",
+  "value": "40305316210829.72"
+}

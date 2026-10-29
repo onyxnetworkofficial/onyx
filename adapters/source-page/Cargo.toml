@@ -1,0 +1,18 @@
+[package]
+name = "onyx-source-page"
+description = "Example level-2 fetcher: reads one value from a JSON page by JSON pointer (no account, no network in tests)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+
+[lints]
+workspace = true

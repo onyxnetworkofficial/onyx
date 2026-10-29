@@ -1,0 +1,35 @@
+name: ci
+on:
+  push:
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+# Read-only token; the checkout does not keep it on disk (AUD-1R-F4).
+permissions:
+  contents: read
+
+# One job runs scripts/check-all.sh, the same gate every loop runs locally, so CI and the
+# local gate cannot drift (AUD-1-F1). Actions are pinned by commit SHA and Foundry by version.
+# The website gate (scripts/build-web.sh) stays local: its e2e checks need the live Bitcoin
+# blocks read from our node (fixtures-live/, gitignored), which CI does not have.
+jobs:
+  check-all:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+      - uses: foundry-rs/foundry-toolchain@908c540300062bd5a7e473851cdb4282204cee09 # v1
+        with:
+          version: v1.8.5
+      # The dependency gate (scripts/check-deps.sh, deny.toml) needs cargo-deny; pinned version.
+      - name: Install cargo-deny
+        run: command -v cargo-deny || cargo install --locked cargo-deny@0.20.2
+      - name: check-all (recipes reproducible, fmt, clippy incl. unchecked-open, tests, onyx-node --help, boundaries, docs, deps, forge fmt/sizes/test)
+        run: scripts/check-all.sh

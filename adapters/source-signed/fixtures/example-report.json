@@ -1,0 +1,12 @@
+{
+  "key": "0x2bc349c7a25b3cb07bd93fe2fb810be835d24a833b6ace75afb6451df9724c1b",
+  "metric": "example.signed.reserve",
+  "observedUnix": 1700000000,
+  "sequence": 1,
+  "signature": "0xe0e460e7b937d896f0af3d544e551cf9d388c08e998186bc70c7ba61e42f07d874346787b632483300021da8cabdc4968f617c46b7a1d620b4e1b1db64063ade1b",
+  "source": "example.signed",
+  "subject": "entity:example",
+  "value": {
+    "uint": "12345678"
+  }
+}

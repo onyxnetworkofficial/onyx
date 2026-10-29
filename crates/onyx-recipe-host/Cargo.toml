@@ -1,0 +1,34 @@
+[package]
+name = "onyx-recipe-host"
+description = "Deterministic WASM recipe runner: the canonical wasmi engine (fuel, heap stacks, float and import rejection) and an advisory wasmtime fast path (ADR-0004, ADR-0014)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-recipe-sdk.workspace = true
+onyx-merkle.workspace = true
+onyx-labels.workspace = true
+thiserror.workspace = true
+borsh.workspace = true
+wasmi = { version = "=2.0.0", default-features = false, features = ["std", "validate", "deterministic", "portable-dispatch"] }
+wasmi_core = { version = "=2.0.0", default-features = false }
+wasmtime = { version = "=49.0.4", optional = true, default-features = false, features = ["cranelift", "runtime", "std", "parallel-compilation"] }
+wasmparser = "0.258"
+wasm-encoder = { version = "0.258", features = ["wasmparser"] }
+
+[features]
+# The advisory wasmtime fast path. Off for wasm32 builds (the browser verifier,
+# ADR-0020): wasmtime cannot target wasm32. The canonical engine is always built.
+default = ["fast"]
+fast = ["dep:wasmtime"]
+
+[dev-dependencies]
+wat = "1"
+borsh.workspace = true
+
+[lints]
+workspace = true

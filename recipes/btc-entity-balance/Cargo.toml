@@ -1,0 +1,20 @@
+[package]
+name = "btc-entity-balance"
+description = "Reference recipe: per-entity BTC flows (and balances when a base is given) over a block range."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+onyx-recipe-sdk = { workspace = true, features = ["rt"] }
+onyx-btc-schema.workspace = true
+borsh = { version = "1", default-features = false, features = ["derive"] }
+sha2 = { version = "0.10", default-features = false }
+
+[lints]
+workspace = true

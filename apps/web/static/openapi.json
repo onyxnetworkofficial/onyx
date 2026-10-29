@@ -1,0 +1,4777 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Onyx query API",
+    "version": "0.1.0-testnet",
+    "summary": "Data rows with proofs, level-2 observations, level-3 signed facts, level-5 track records and data proposals.",
+    "description": "Testnet only. Every row comes with a Merkle proof and a `verify` bundle so a client checks it against the root on its own node, never trusting the server (docs/spec/delivery.md). Paid routes use x402 v2 with testnet USDC on Base Sepolia. A hosted test node answers at https://onyx.cryptagraph.com (payments not switched on).",
+    "license": {
+      "name": "Apache-2.0",
+      "identifier": "Apache-2.0"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://onyx.cryptagraph.com",
+      "description": "The hosted testnet node (Base Sepolia; payments off)."
+    },
+    {
+      "url": "http://127.0.0.1:8080",
+      "description": "A local node (docs/ops/run-api.md)."
+    }
+  ],
+  "tags": [
+    {
+      "name": "Status"
+    },
+    {
+      "name": "Rows"
+    },
+    {
+      "name": "Level 2"
+    },
+    {
+      "name": "Level 3"
+    },
+    {
+      "name": "Level 5"
+    },
+    {
+      "name": "Labels"
+    },
+    {
+      "name": "Submit"
+    },
+    {
+      "name": "Estimates"
+    }
+  ],
+  "paths": {
+    "/v1/health": {
+      "get": {
+        "operationId": "getHealth",
+        "summary": "Server and payment health",
+        "description": "Always free and `no-store`. Roots, payments, receipts, settles, indexer, level-3 post log, shard levels and serving checks.",
+        "tags": [
+          "Status"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "Health",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Health"
+                }
+              }
+            }
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/openapi.json": {
+      "get": {
+        "operationId": "getOpenApi",
+        "summary": "This description",
+        "description": "docs/api/openapi.json as compiled into this build (OpenAPI 3.1). Free; revalidate with If-None-Match.",
+        "tags": [
+          "Status"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ifNoneMatch"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The OpenAPI document",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "description": "An OpenAPI 3.1 document."
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/export/{round}/{shard}": {
+      "get": {
+        "operationId": "getExport",
+        "summary": "Every row of a shard",
+        "description": "Capped by rows and bytes (413 `export_too_large`). Free exports are rate limited per client.",
+        "tags": [
+          "Rows"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/round"
+          },
+          {
+            "$ref": "#/components/parameters/shard"
+          },
+          {
+            "$ref": "#/components/parameters/root"
+          },
+          {
+            "$ref": "#/components/parameters/contributor"
+          },
+          {
+            "$ref": "#/components/parameters/payment"
+          },
+          {
+            "$ref": "#/components/parameters/prepaid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "ONYX-PREPAID-RESPONSE": {
+                "$ref": "#/components/headers/ONYX-PREPAID-RESPONSE"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Export"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-onyx-paid": true
+      }
+    },
+    "/v1/estimates/{metric}": {
+      "get": {
+        "operationId": "getEstimate",
+        "summary": "An estimate, apart from checked values",
+        "description": "A value Onyx did not check (ADR-0050, docs/spec/estimates.md): a model's output or an interpolation, with its method (id and hash) and its error band (`unknown` included, never left out). Its level is `E`, not a rung of the proof ladder: `proofLevel` and `ladder` are always null, and no checked route, total or market serves an estimate. Only `estimate.` metrics answer here; any other metric is 404 `unknown_metric`. Free on testnet.",
+        "tags": [
+          "Estimates"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/metric"
+          },
+          {
+            "$ref": "#/components/parameters/est_subject"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The estimate",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Estimate"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/labels/{set}/{address}": {
+      "get": {
+        "operationId": "getLabelRows",
+        "summary": "One address in a salted label set",
+        "description": "Each membership of the address as a salted row with its own salt and proof (ADR-0037 amendment 2). Testnet: only `test.*` sets are served until label rights are cleared. Free (30 a minute), `no-store`. A 404 `no_label_row` is the server word, not a proof.",
+        "tags": [
+          "Labels"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/labelSet"
+          },
+          {
+            "$ref": "#/components/parameters/address"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LabelRows"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/metrics/{metric}": {
+      "get": {
+        "operationId": "getMetric",
+        "summary": "A metric's row for one subject",
+        "description": "The row keyed `subject` in the newest finalized shard of `metric` within `min_as_of..as_of` (at most 16 shards searched). Not for settling money: use `/v1/settlement`.",
+        "tags": [
+          "Rows"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/metric"
+          },
+          {
+            "$ref": "#/components/parameters/subject"
+          },
+          {
+            "$ref": "#/components/parameters/as_of"
+          },
+          {
+            "$ref": "#/components/parameters/min_as_of"
+          },
+          {
+            "$ref": "#/components/parameters/contributor"
+          },
+          {
+            "$ref": "#/components/parameters/payment"
+          },
+          {
+            "$ref": "#/components/parameters/prepaid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The row",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "ONYX-PREPAID-RESPONSE": {
+                "$ref": "#/components/headers/ONYX-PREPAID-RESPONSE"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/MetricRow"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-onyx-paid": true
+      }
+    },
+    "/v1/observations/{metric}": {
+      "get": {
+        "operationId": "getObservation",
+        "summary": "A level-2 value with its round",
+        "description": "Several bonded observers fetched the source in one window with sealed answers. Priced like a row; every answer carries `limits`.",
+        "tags": [
+          "Level 2"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/metric"
+          },
+          {
+            "$ref": "#/components/parameters/obs_subject"
+          },
+          {
+            "$ref": "#/components/parameters/window_end"
+          },
+          {
+            "$ref": "#/components/parameters/obs_as_of"
+          },
+          {
+            "$ref": "#/components/parameters/min_window_end"
+          },
+          {
+            "$ref": "#/components/parameters/outcome"
+          },
+          {
+            "$ref": "#/components/parameters/contributor"
+          },
+          {
+            "$ref": "#/components/parameters/payment"
+          },
+          {
+            "$ref": "#/components/parameters/prepaid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The value and its transcript",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "ONYX-PREPAID-RESPONSE": {
+                "$ref": "#/components/headers/ONYX-PREPAID-RESPONSE"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Observation"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "No round settled this subject yet and a prepaid hold paid for one (ADR-0049), or another buyer's round for it is queued. Poll the ticket.",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ObserveAccepted"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-onyx-paid": true
+      }
+    },
+    "/v1/observations/{metric}/attempts": {
+      "get": {
+        "operationId": "getObservationAttempts",
+        "summary": "Rounds of a fact that settled no value",
+        "description": "Free (30 a minute per client). 409 `settled_value` once the fact has a value: ask the paid route with `outcome=all`.",
+        "tags": [
+          "Level 2"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/metric"
+          },
+          {
+            "$ref": "#/components/parameters/obs_subject"
+          },
+          {
+            "$ref": "#/components/parameters/window_end"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rounds",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Attempts"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/tickets/{ticket}": {
+      "get": {
+        "operationId": "getTicket",
+        "summary": "A paid observation ticket",
+        "description": "The state of a round a prepaid hold paid for (ADR-0049, docs/spec/paid-observation.md). Once `observed`, the paid answer is in `observation` (the same body as `/v1/observations`); once `released`, the hold was dropped and nothing was charged. Free; never cached.",
+        "tags": [
+          "Level 2"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/ticket"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The ticket",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Ticket"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/proofs/{round}/{shard}/{index}": {
+      "get": {
+        "operationId": "getProof",
+        "summary": "One row with its proof",
+        "description": "One row of a finalized shard, its Merkle proof, the root and the `verify` bundle. Priced per row (x402).",
+        "tags": [
+          "Rows"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/round"
+          },
+          {
+            "$ref": "#/components/parameters/shard"
+          },
+          {
+            "$ref": "#/components/parameters/index"
+          },
+          {
+            "$ref": "#/components/parameters/root"
+          },
+          {
+            "$ref": "#/components/parameters/contributor"
+          },
+          {
+            "$ref": "#/components/parameters/payment"
+          },
+          {
+            "$ref": "#/components/parameters/prepaid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The row",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "ONYX-PREPAID-RESPONSE": {
+                "$ref": "#/components/headers/ONYX-PREPAID-RESPONSE"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Row"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-onyx-paid": true
+      }
+    },
+    "/v1/served/{metric}": {
+      "get": {
+        "operationId": "getServed",
+        "summary": "Shards a serving check cleared",
+        "description": "Free; a hint for a client that re-runs the check. 404 `no_serving_check` without a check for the metric.",
+        "tags": [
+          "Rows"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/metric"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The list",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Served"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/settlement/{market}": {
+      "get": {
+        "operationId": "getSettlement",
+        "summary": "A market's value, ready for a contract",
+        "description": "The market's row from its pinned shard, with the calldata shape `OnyxSettlement.verifyRow` takes. Level-2 shards are refused (409 `proof_level_not_accepted`).",
+        "tags": [
+          "Rows"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/market"
+          },
+          {
+            "$ref": "#/components/parameters/contributor"
+          },
+          {
+            "$ref": "#/components/parameters/payment"
+          },
+          {
+            "$ref": "#/components/parameters/prepaid"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The value",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              },
+              "ONYX-PREPAID-RESPONSE": {
+                "$ref": "#/components/headers/ONYX-PREPAID-RESPONSE"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Settlement"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "308": {
+            "$ref": "#/components/responses/Redirect"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/PaymentRequired"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "451": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        },
+        "x-onyx-paid": true
+      }
+    },
+    "/v1/signed/{fact}": {
+      "get": {
+        "operationId": "getSignedFact",
+        "summary": "A level-3 signed fact",
+        "description": "Mounted only with a signed book. Free (30 a minute), `no-store`, never settles money.",
+        "tags": [
+          "Level 3"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/fact"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The report",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignedFact"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/submit": {
+      "post": {
+        "operationId": "submitProposal",
+        "summary": "Record a data proposal for review",
+        "description": "Records an accepted or held proposal and returns a receipt. Not verification and not publication (ADR-0039). Do not retry a timed-out POST automatically: check the receipt first.",
+        "tags": [
+          "Submit"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Submission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "The receipt",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/submit/check": {
+      "post": {
+        "operationId": "checkSubmission",
+        "summary": "Check a data proposal",
+        "description": "Validates and routes a proposal; for a rights-cleared level-2 source it pulls the endpoint once and previews the value. Records nothing.",
+        "tags": [
+          "Submit"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/Submission"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The check",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SubmitCheck"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/submit/{id}": {
+      "get": {
+        "operationId": "getReceipt",
+        "summary": "A receipt's status",
+        "description": "Public status only, `no-store`. Adds `check` once an approved proposal was fed to the observers.",
+        "tags": [
+          "Submit"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/receipt"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The status",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReceiptStatus"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/track": {
+      "get": {
+        "operationId": "getTrackIndex",
+        "summary": "Track records: the index",
+        "description": "Level 5. Free, never priced. 1,024 records a page.",
+        "tags": [
+          "Level 5"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The index",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackIndex"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/track/log": {
+      "get": {
+        "operationId": "getTrackLog",
+        "summary": "Track records: the publication logs",
+        "description": "Head, or with `at` and `from`/`posts` a page of a chained log (format 2). 2 heads and 60 pages a minute per client.",
+        "tags": [
+          "Level 5"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/since"
+          },
+          {
+            "$ref": "#/components/parameters/at"
+          },
+          {
+            "$ref": "#/components/parameters/from"
+          },
+          {
+            "$ref": "#/components/parameters/posts"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The logs",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackLog"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/track/registry": {
+      "get": {
+        "operationId": "getTrackRegistry",
+        "summary": "Track records: the registry",
+        "description": "The registry the latest commitment names (Borsh `RegistryData`). No query.",
+        "tags": [
+          "Level 5"
+        ],
+        "parameters": [],
+        "responses": {
+          "200": {
+            "description": "The registry",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackRegistry"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/track/{source}/{metric}": {
+      "get": {
+        "operationId": "getTrackRecord",
+        "summary": "One source's track record on a metric",
+        "description": "Rows under Merkle proofs; `since` chains from a commitment you checked.",
+        "tags": [
+          "Level 5"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/source"
+          },
+          {
+            "$ref": "#/components/parameters/trackMetric"
+          },
+          {
+            "$ref": "#/components/parameters/since"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The record",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackRecord"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/track/{source}/{metric}/history": {
+      "get": {
+        "operationId": "getTrackHistory",
+        "summary": "A page of a record's history",
+        "description": "`at` (the latest commitment) and `from`, in this order.",
+        "tags": [
+          "Level 5"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/source"
+          },
+          {
+            "$ref": "#/components/parameters/trackMetric"
+          },
+          {
+            "$ref": "#/components/parameters/at"
+          },
+          {
+            "$ref": "#/components/parameters/from"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The page",
+            "headers": {
+              "ETag": {
+                "$ref": "#/components/headers/ETag"
+              },
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TrackHistory"
+                }
+              }
+            }
+          },
+          "304": {
+            "$ref": "#/components/responses/NotModified"
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/wants": {
+      "get": {
+        "operationId": "getWants",
+        "summary": "Wanted data categories",
+        "description": "The bounty board: coarse categories of wanted data (kind, domain, region, cadence), each shown only once at least minAccounts prepaid accounts want it, as a bucket. Never an exact query. Changes only at the weekly cut.",
+        "tags": [
+          "Submit"
+        ],
+        "responses": {
+          "200": {
+            "description": "The board",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WantsBoard"
+                }
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      },
+      "post": {
+        "operationId": "postWant",
+        "summary": "Post a wanted category",
+        "description": "Four values from closed lists, signed by an open prepaid deposit for this week (read on chain, never charged). Any other field is refused (bounty_too_specific). The account is kept only as a salted hash.",
+        "tags": [
+          "Submit"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WantPost"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Taken; it counts from the next cut",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": [
+                    "accepted",
+                    "new",
+                    "countsFrom"
+                  ],
+                  "properties": {
+                    "accepted": {
+                      "type": "boolean"
+                    },
+                    "new": {
+                      "type": "boolean",
+                      "description": "False when the account already held this category (renewed)."
+                    },
+                    "countsFrom": {
+                      "type": "integer"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "schemas": {
+      "Address": {
+        "type": "string",
+        "pattern": "^0x[0-9a-fA-F]{40}$",
+        "description": "An EVM address, `0x` and 40 hex digits."
+      },
+      "Attempts": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "subjectText": {
+            "type": "string"
+          },
+          "templateId": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "factKey": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registryFactKey": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A round that settled no value; sealed (`revealed` instead of `reveals`) until the fact is closed."
+            }
+          },
+          "onchain": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "`{chainId, registry, drawCount, drawOf, drawBudget, transcriptComplete}`"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "REVLOG-1",
+                    "REVLOG-5"
+                  ]
+                },
+                "applies": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "docs": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "applies",
+                "docs",
+                "id",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Known limits of level 2 (docs/spec/delivery.md#level-2-limits). Advisory: not authenticated."
+          }
+        },
+        "required": [
+          "attempts",
+          "factKey",
+          "limits",
+          "metric",
+          "onchain",
+          "registryFactKey",
+          "subjectText",
+          "templateId"
+        ],
+        "additionalProperties": false
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "code": {
+                "type": "string",
+                "description": "Stable code (see `x-onyx-error-codes`)."
+              },
+              "message": {
+                "type": "string",
+                "description": "Human text; may change."
+              }
+            },
+            "required": [
+              "code",
+              "message"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "required": [
+          "error"
+        ],
+        "additionalProperties": true,
+        "description": "Every error. Some carry fields beside `error` (`limits` on a level-2 402, `route` on a refused submission, `reason` on track and signed refusals, `last` and `price` on a `prepaid_refused` with the wrong total)."
+      },
+      "Export": {
+        "type": "object",
+        "properties": {
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shard": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hex"
+            }
+          },
+          "finalizedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recipeId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labelSet": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verify": {
+            "$ref": "#/components/schemas/VerifyBundle"
+          },
+          "servingCheck": {
+            "type": "object",
+            "description": "The serving check that cleared the row (ADR-0034 Amendment 1): only on a gated metric."
+          },
+          "proofLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "The value's proof level (1 recomputed, 2 re-observed, 3 source-proven, 4 claim, 5 track record): its ladder's top (ADR-0048)."
+          }
+        },
+        "required": [
+          "attribution",
+          "finalizedAt",
+          "labelSet",
+          "leafCount",
+          "license",
+          "proofLevel",
+          "recipeId",
+          "root",
+          "round",
+          "rows",
+          "shard",
+          "tx",
+          "verify"
+        ],
+        "additionalProperties": false
+      },
+      "Hash": {
+        "type": "string",
+        "pattern": "^0x[0-9a-f]{64}$",
+        "description": "32 bytes: `0x` and 64 lowercase hex digits."
+      },
+      "Health": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "string",
+            "enum": [
+              "ok"
+            ]
+          },
+          "x402Version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "roots": {
+            "type": "string",
+            "description": "Root source kind."
+          },
+          "chainId": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payments": {
+            "oneOf": [
+              {
+                "type": "string",
+                "description": "x402 network."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "payTo": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contributorPass": {
+            "type": "boolean"
+          },
+          "receiptsPending": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "receiptLog": {
+            "type": "string",
+            "enum": [
+              "file",
+              "memory"
+            ]
+          },
+          "receiptsDropped": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "receiptWriteErrors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "pendingSettleWriteErrors": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "settles": {
+            "type": "object",
+            "properties": {
+              "intentsOpen": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "intentLog": {
+                "type": "string",
+                "enum": [
+                  "file",
+                  "memory"
+                ]
+              },
+              "intentWriteErrors": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "recovered": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "expiredUnused": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "cancelled": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "clockSkewSeconds": {
+                "oneOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "unknownOutcomes": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "inFlight": {
+                "type": "integer",
+                "minimum": 0
+              }
+            },
+            "required": [
+              "cancelled",
+              "clockSkewSeconds",
+              "expiredUnused",
+              "inFlight",
+              "intentLog",
+              "intentWriteErrors",
+              "intentsOpen",
+              "recovered",
+              "unknownOutcomes"
+            ],
+            "additionalProperties": false
+          },
+          "acceptingPayments": {
+            "type": "boolean"
+          },
+          "reporter": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The reporter's credits in flight."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "indexer": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The chain indexer's cursor and shards (ADR-0033)."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "level3": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The level-3 post log (ROADMAP C62); docs/spec/delivery.md lists its fields."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "shardLevels": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "description": "Shards served per proof level, e.g. `{\"1\": 2}`."
+          },
+          "shardsWithheld": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "servingChecks": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One serving check's latest run."
+            }
+          },
+          "rights": {
+            "type": "string",
+            "enum": [
+              "cleared",
+              "fallback"
+            ]
+          },
+          "observe": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "Paid observation tickets (ADR-0049): queued, running, observed, released, unbilled, oldestQueuedSecs."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "acceptingPayments",
+          "chainId",
+          "contract",
+          "contributorPass",
+          "indexer",
+          "level3",
+          "observe",
+          "payTo",
+          "payments",
+          "pendingSettleWriteErrors",
+          "receiptLog",
+          "receiptWriteErrors",
+          "receiptsDropped",
+          "receiptsPending",
+          "reporter",
+          "rights",
+          "roots",
+          "servingChecks",
+          "settles",
+          "shardLevels",
+          "shardsWithheld",
+          "status",
+          "x402Version"
+        ],
+        "additionalProperties": false,
+        "description": "Always free, `no-store`."
+      },
+      "Hex": {
+        "type": "string",
+        "pattern": "^0x([0-9a-f]{2})*$",
+        "description": "Bytes as `0x` and lowercase hex (Borsh bytes where the field says so)."
+      },
+      "LabelRows": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "address",
+          "answers",
+          "set"
+        ],
+        "description": "Every membership of one address in one salted set; never another row salt.",
+        "properties": {
+          "set": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "address": {
+            "type": "string"
+          },
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/SaltedAnswer"
+            }
+          }
+        }
+      },
+      "Limits": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "id": {
+              "type": "string",
+              "enum": [
+                "REVLOG-1",
+                "REVLOG-5"
+              ]
+            },
+            "applies": {
+              "type": "boolean"
+            },
+            "text": {
+              "type": "string"
+            },
+            "docs": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "applies",
+            "docs",
+            "id",
+            "text"
+          ],
+          "additionalProperties": false
+        },
+        "description": "Known limits of level 2 (docs/spec/delivery.md#level-2-limits). Advisory: not authenticated."
+      },
+      "MetricRow": {
+        "type": "object",
+        "properties": {
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shard": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "row": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "proof": {
+            "$ref": "#/components/schemas/Proof"
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "finalizedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Block height (on chain) or ledger step (off chain) of finalization."
+          },
+          "recipeId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labelSet": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshotUnix": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Unix time the shard's snapshot ends, when the source has one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verify": {
+            "$ref": "#/components/schemas/VerifyBundle"
+          },
+          "metric": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "servingCheck": {
+            "type": "object",
+            "description": "The serving check that cleared the row (ADR-0034 Amendment 1): only on a gated metric."
+          },
+          "proofLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "The value's proof level (1 recomputed, 2 re-observed, 3 source-proven, 4 claim, 5 track record): its ladder's top (ADR-0048)."
+          },
+          "ladder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ladder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asOf",
+          "attribution",
+          "finalizedAt",
+          "index",
+          "labelSet",
+          "ladder",
+          "leafCount",
+          "license",
+          "metric",
+          "proof",
+          "proofLevel",
+          "recipeId",
+          "root",
+          "round",
+          "row",
+          "shard",
+          "snapshotUnix",
+          "subject",
+          "tx",
+          "verify"
+        ],
+        "additionalProperties": false
+      },
+      "Observation": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "subject": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "subjectText": {
+            "type": "string"
+          },
+          "windowStart": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "windowEnd": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "config": {
+            "type": "object",
+            "description": "`{commitClose, revealClose, reward, outlierSlash, missSlash}`."
+          },
+          "pool": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{address, bond}`"
+            }
+          },
+          "draw": {
+            "type": "object",
+            "description": "`{beaconHeight, beacon, attempt}`."
+          },
+          "observers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{address, bond}`"
+            }
+          },
+          "commits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{observer, commit, sig}`"
+            }
+          },
+          "reveals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{observer, observation, salt, sig}`"
+            }
+          },
+          "sealed": {
+            "type": "object",
+            "description": "Sealed reveals (ROADMAP C11); only for a keyed draw."
+          },
+          "answer": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "value": {
+            "type": "string",
+            "description": "The answer as decimal text at the feed's scale."
+          },
+          "proofLevel": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              2
+            ]
+          },
+          "templateId": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "specId": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "roundId": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "resultHash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "factKey": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registryFactKey": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "settledUnix": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "rights": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "type": "string"
+          },
+          "onchain": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The `OnyxRegistry` calls a client makes on its own node."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "limits": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "enum": [
+                    "REVLOG-1",
+                    "REVLOG-5"
+                  ]
+                },
+                "applies": {
+                  "type": "boolean"
+                },
+                "text": {
+                  "type": "string"
+                },
+                "docs": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "applies",
+                "docs",
+                "id",
+                "text"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Known limits of level 2 (docs/spec/delivery.md#level-2-limits). Advisory: not authenticated."
+          },
+          "attempts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "A published round of the same fact that settled no value (`outcome=all` only)."
+            }
+          },
+          "ladder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ladder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "answer",
+          "attribution",
+          "commits",
+          "config",
+          "draw",
+          "factKey",
+          "ladder",
+          "license",
+          "limits",
+          "metric",
+          "observers",
+          "onchain",
+          "pool",
+          "proofLevel",
+          "registryFactKey",
+          "resultHash",
+          "reveals",
+          "rights",
+          "roundId",
+          "settledUnix",
+          "specId",
+          "subject",
+          "subjectText",
+          "templateId",
+          "value",
+          "windowEnd",
+          "windowStart"
+        ],
+        "additionalProperties": false,
+        "description": "A level-2 value with its round's public transcript (ADR-0027). Check it with `client::verify_observation` and your OWN copy of the feed template."
+      },
+      "Proof": {
+        "type": "object",
+        "properties": {
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            },
+            "description": "Sibling hashes, leaf to root (docs/spec/settlement.md)."
+          }
+        },
+        "required": [
+          "index",
+          "leafCount",
+          "siblings"
+        ],
+        "additionalProperties": false
+      },
+      "ReceiptStatus": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^sub_[0-9a-f]{32}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_review",
+              "held_rights_review",
+              "held_keyed_source_review",
+              "approved",
+              "rejected"
+            ]
+          },
+          "check": {
+            "type": "object",
+            "properties": {
+              "level": {
+                "type": "integer",
+                "minimum": 0,
+                "enum": [
+                  2
+                ]
+              },
+              "recordDate": {
+                "type": "string",
+                "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+              },
+              "roundId": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "result": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "value": {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$",
+                "maxLength": 80,
+                "description": "The value the observers agreed on, as the feed's decimal text: what the source published, not a claim that it is correct."
+              },
+              "registry": {
+                "type": "string",
+                "pattern": "^(simulated|eip155:[1-9][0-9]{0,19})$"
+              }
+            },
+            "required": [
+              "level",
+              "recordDate",
+              "registry",
+              "result",
+              "roundId",
+              "value"
+            ],
+            "additionalProperties": false,
+            "description": "Only once an approved submission was fed to the observers (ADR-0039 amendment 1)."
+          }
+        },
+        "required": [
+          "id",
+          "status"
+        ],
+        "additionalProperties": false,
+        "description": "Public status only: never the proposal or reviewer notes."
+      },
+      "Route": {
+        "type": "object",
+        "properties": {
+          "outcome": {
+            "type": "string",
+            "enum": [
+              "accept",
+              "held",
+              "refused"
+            ]
+          },
+          "level": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 5
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "levelName": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "path": {
+            "oneOf": [
+              {
+                "type": "string",
+                "enum": [
+                  "recipe_request",
+                  "auto_pull",
+                  "signed_source",
+                  "claim",
+                  "track_record",
+                  "keyed_proof"
+                ]
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "status": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reasons": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "reasonTexts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "level",
+          "levelName",
+          "outcome",
+          "path",
+          "reasonTexts",
+          "reasons",
+          "status"
+        ],
+        "additionalProperties": false,
+        "description": "Where a proposal goes and why."
+      },
+      "Row": {
+        "type": "object",
+        "properties": {
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shard": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "row": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "proof": {
+            "$ref": "#/components/schemas/Proof"
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "finalizedAt": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Block height (on chain) or ledger step (off chain) of finalization."
+          },
+          "recipeId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labelSet": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "license": {
+            "type": "string"
+          },
+          "attribution": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "snapshotUnix": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0,
+                "description": "Unix time the shard's snapshot ends, when the source has one."
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verify": {
+            "$ref": "#/components/schemas/VerifyBundle"
+          },
+          "servingCheck": {
+            "type": "object",
+            "description": "The serving check that cleared the row (ADR-0034 Amendment 1): only on a gated metric."
+          },
+          "proofLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "The value's proof level (1 recomputed, 2 re-observed, 3 source-proven, 4 claim, 5 track record): its ladder's top (ADR-0048)."
+          },
+          "ladder": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Ladder"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "attribution",
+          "finalizedAt",
+          "index",
+          "labelSet",
+          "ladder",
+          "leafCount",
+          "license",
+          "proof",
+          "proofLevel",
+          "recipeId",
+          "root",
+          "round",
+          "row",
+          "shard",
+          "snapshotUnix",
+          "tx",
+          "verify"
+        ],
+        "additionalProperties": false,
+        "description": "One row of a finalized shard with its Merkle proof."
+      },
+      "SaltedAnswer": {
+        "type": "object",
+        "additionalProperties": false,
+        "description": "One bought row of a format-3 (salted) label set: the set header, the row (`borsh(membership) || salt`) and its proof. Check it with `onyx_labels::salted::verify_salted_answer` against the content hash YOU pinned, never the `contentHash` it carries.",
+        "required": [
+          "contentHash",
+          "format",
+          "index",
+          "members",
+          "name",
+          "proof",
+          "published",
+          "root",
+          "row",
+          "version"
+        ],
+        "properties": {
+          "format": {
+            "type": "integer",
+            "enum": [
+              3
+            ]
+          },
+          "name": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "published": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "members": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "contentHash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "row": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "proof": {
+            "$ref": "#/components/schemas/Proof"
+          }
+        }
+      },
+      "Served": {
+        "type": "object",
+        "properties": {
+          "metric": {
+            "type": "string"
+          },
+          "gate": {
+            "type": "string"
+          },
+          "shards": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "round": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "shard": {
+                  "$ref": "#/components/schemas/Hash"
+                },
+                "from": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "to": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "root": {
+                  "$ref": "#/components/schemas/Hash"
+                }
+              },
+              "required": [
+                "from",
+                "root",
+                "round",
+                "shard",
+                "to"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [
+          "gate",
+          "metric",
+          "shards"
+        ],
+        "additionalProperties": false,
+        "description": "Shards a serving check cleared, in snapshot order. A hint only: the client re-runs the check."
+      },
+      "Settlement": {
+        "type": "object",
+        "properties": {
+          "market": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string",
+            "description": "The row's value as text."
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shard": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "row": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "index": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "siblings": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "finalizedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "recipeId": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "labelSet": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "verifyCall": {
+            "type": "string"
+          },
+          "verify": {
+            "$ref": "#/components/schemas/VerifyBundle"
+          },
+          "proofLevel": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "The value's proof level (1 recomputed, 2 re-observed, 3 source-proven, 4 claim, 5 track record): its ladder's top (ADR-0048)."
+          }
+        },
+        "required": [
+          "finalizedAt",
+          "index",
+          "labelSet",
+          "leafCount",
+          "market",
+          "proofLevel",
+          "recipeId",
+          "root",
+          "round",
+          "row",
+          "shard",
+          "siblings",
+          "subject",
+          "tx",
+          "value",
+          "verify",
+          "verifyCall"
+        ],
+        "additionalProperties": false,
+        "description": "A value a contract can verify: the same payload passes `OnyxSettlement.verifyRow` and `OnyxMerkle.verify`."
+      },
+      "SignedFact": {
+        "type": "object",
+        "description": "A level-3 signed report (docs/spec/proof-ladder.md R-SIG-ON-7): `level` 3, `payload`, `signature`, `reportHash`, `valueHash`, `acceptedAt`, `ladder` (its one step at level 3 on `reportHash`, at `acceptedAt`, from `OnyxSignedBook.ReportRecorded`; ADR-0048 amendment 2), `checkedAt` {block, blockHash, blockTime}, `book`, `chainId`, `verifyCall`, `moneySettlement`. Check it with `OnyxSignedBook.settleable(fact)` on your own node.",
+        "required": [
+          "level"
+        ]
+      },
+      "Submission": {
+        "type": "object",
+        "properties": {
+          "answers": {
+            "type": "object",
+            "properties": {
+              "what": {
+                "type": "string",
+                "enum": [
+                  "chain",
+                  "public_api",
+                  "signed",
+                  "own",
+                  "forecast",
+                  "keyed_api"
+                ]
+              },
+              "noLogin": {
+                "type": "boolean"
+              },
+              "rights": {
+                "type": "string",
+                "enum": [
+                  "public_domain",
+                  "open_license",
+                  "own_data",
+                  "not_sure",
+                  "terms_forbid"
+                ]
+              },
+              "licenseId": {
+                "type": "string",
+                "maxLength": 64,
+                "description": "Open licences only: 1-64 of `A-Z a-z 0-9 . - + _ :`."
+              },
+              "namesPerson": {
+                "type": "boolean"
+              },
+              "changes": {
+                "type": "string",
+                "enum": [
+                  "once",
+                  "daily",
+                  "live"
+                ]
+              }
+            },
+            "required": [
+              "changes",
+              "namesPerson",
+              "noLogin",
+              "rights",
+              "what"
+            ],
+            "additionalProperties": false
+          },
+          "title": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "description": {
+            "type": "string",
+            "maxLength": 2000
+          },
+          "sourceName": {
+            "type": "string",
+            "maxLength": 120
+          },
+          "sourceUrl": {
+            "type": "string",
+            "maxLength": 512,
+            "description": "https only (empty for own data with a payload)."
+          },
+          "dataPayload": {
+            "type": "object",
+            "properties": {
+              "format": {
+                "type": "string",
+                "enum": [
+                  "csv",
+                  "json"
+                ]
+              },
+              "content": {
+                "type": "string"
+              },
+              "bytes": {
+                "type": "integer",
+                "minimum": 0,
+                "maximum": 8192
+              },
+              "keccak256": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "bytes",
+              "content",
+              "format",
+              "keccak256"
+            ],
+            "additionalProperties": false
+          },
+          "endpointUrl": {
+            "type": "string",
+            "maxLength": 512
+          },
+          "jsonPointer": {
+            "type": "string",
+            "maxLength": 256
+          },
+          "unit": {
+            "type": "string",
+            "maxLength": 32
+          },
+          "endpointTemplate": {
+            "type": "string",
+            "description": "Keyed sources: the URL with `{api_key}`."
+          },
+          "seriesId": {
+            "type": "string",
+            "maxLength": 64
+          },
+          "keyProof": {
+            "type": "object",
+            "description": "`{prover, real, responseKeccak256?, responseBytes?, proof?}`; the stub prover is refused as not real."
+          }
+        },
+        "required": [
+          "answers",
+          "description",
+          "sourceName",
+          "sourceUrl",
+          "title"
+        ],
+        "additionalProperties": false,
+        "description": "A data proposal (ADR-0038, docs/spec/submissions.md). At most 64 KiB. No personal contact data."
+      },
+      "SubmitCheck": {
+        "type": "object",
+        "properties": {
+          "valid": {
+            "type": "boolean"
+          },
+          "hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "route": {
+            "$ref": "#/components/schemas/Route"
+          },
+          "fetch": {
+            "type": "object",
+            "properties": {
+              "pull": {
+                "type": "boolean"
+              },
+              "host": {
+                "type": "string"
+              },
+              "reason": {
+                "type": "string"
+              },
+              "text": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "pull"
+            ],
+            "additionalProperties": false
+          },
+          "preview": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "bodyKeccak256": {
+                    "$ref": "#/components/schemas/Hash"
+                  },
+                  "bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "value": {
+                    "oneOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "valueStatus": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "bodyKeccak256",
+                  "bytes",
+                  "value",
+                  "valueStatus"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "fetchError": {
+            "oneOf": [
+              {
+                "type": "object",
+                "properties": {
+                  "code": {
+                    "type": "string"
+                  },
+                  "message": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "code",
+                  "message"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "fetch",
+          "fetchError",
+          "hash",
+          "preview",
+          "route",
+          "valid"
+        ],
+        "additionalProperties": false,
+        "description": "Nothing is recorded."
+      },
+      "SubmitReceipt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^sub_[0-9a-f]{32}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "pending_review",
+              "held_rights_review",
+              "held_keyed_source_review"
+            ]
+          },
+          "hash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "route": {
+            "$ref": "#/components/schemas/Route"
+          }
+        },
+        "required": [
+          "hash",
+          "id",
+          "route",
+          "status"
+        ],
+        "additionalProperties": false
+      },
+      "TrackHistory": {
+        "type": "object",
+        "description": "`{level: 5, source, metric, commitmentHash, from, entries[{row, proof}], before, after}`.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              5
+            ]
+          }
+        }
+      },
+      "TrackIndex": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              5
+            ]
+          },
+          "published": {
+            "type": "boolean"
+          },
+          "commitmentHash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "asOf": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "rules": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{metric, closeAfterSecs, periodSecs, leadSecs, tolerance}`"
+            }
+          },
+          "records": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "`{source, metric, resolved, established, example}`"
+            }
+          },
+          "withheld": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "truncated": {
+            "type": "boolean"
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "reason": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "asOf",
+          "commitmentHash",
+          "level",
+          "next",
+          "published",
+          "reason",
+          "records",
+          "rules",
+          "truncated",
+          "withheld"
+        ],
+        "additionalProperties": false
+      },
+      "TrackLog": {
+        "type": "object",
+        "description": "The publication logs: format 1 `{level, example, asOf, commitmentHash, links, statements, resolutions, intake}`; format 2 head `{..., format: 2, links, rows, pageRows, intake}` or a page `{level, commitmentHash, since, from, rows}` / `{level, commitmentHash, from, posts}`.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              5
+            ]
+          }
+        }
+      },
+      "TrackRecord": {
+        "type": "object",
+        "description": "`{level: 5, example, source, metric, asOf, commitmentHash, commitment, params, record{row, proof}, summary{row, proof}, history, chain}`; Borsh rows under Merkle proofs. Check with `onyx_track::wire::check_record_body`.",
+        "required": [
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              5
+            ]
+          }
+        }
+      },
+      "TrackRegistry": {
+        "type": "object",
+        "properties": {
+          "level": {
+            "type": "integer",
+            "minimum": 0,
+            "enum": [
+              5
+            ]
+          },
+          "commitmentHash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registryRoot": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "registry": {
+            "$ref": "#/components/schemas/Hex"
+          }
+        },
+        "required": [
+          "commitmentHash",
+          "level",
+          "registry",
+          "registryRoot"
+        ],
+        "additionalProperties": false
+      },
+      "VerifyBundle": {
+        "type": "object",
+        "properties": {
+          "ledger": {
+            "type": "string",
+            "enum": [
+              "chain",
+              "off-chain"
+            ]
+          },
+          "chainId": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "contract": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "call": {
+            "type": "string",
+            "enum": [
+              "getFinalizedRoot(uint64,bytes32)"
+            ]
+          },
+          "round": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "shard": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "root": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "leafCount": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "binding": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "bindingInputs": {
+            "type": "object",
+            "properties": {
+              "recipeId": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "runtimeHash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "labelSetHash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "sourceHash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "schemaId": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "rightsHash": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "labelSetHash",
+              "recipeId",
+              "rightsHash",
+              "runtimeHash",
+              "schemaId",
+              "sourceHash"
+            ],
+            "additionalProperties": false
+          },
+          "shardInputs": {
+            "type": "object",
+            "properties": {
+              "paramsHash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "registryRoot": {
+                "$ref": "#/components/schemas/Hash"
+              }
+            },
+            "required": [
+              "paramsHash",
+              "registryRoot"
+            ],
+            "additionalProperties": false
+          },
+          "sourceRef": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "rights": {
+            "$ref": "#/components/schemas/Hex"
+          },
+          "finalizedAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "finalizedUnix": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "tx": {
+            "oneOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          }
+        },
+        "required": [
+          "binding",
+          "bindingInputs",
+          "call",
+          "chainId",
+          "contract",
+          "finalizedAt",
+          "finalizedUnix",
+          "leafCount",
+          "ledger",
+          "rights",
+          "root",
+          "round",
+          "shard",
+          "shardInputs",
+          "sourceRef",
+          "tx"
+        ],
+        "additionalProperties": false,
+        "description": "What a client needs to check the row on its own node: recompute the shard id and the binding, then call `getFinalizedRoot(round, shard)` at block tag `finalized` (docs/spec/delivery.md, Verification)."
+      },
+      "Ladder": {
+        "type": "object",
+        "description": "The value's proof level and the rises that got it there, oldest first (ADR-0048, docs/spec/delivery.md \"Ladder\"). Each step is strictly stronger than the one before; a client trusts a step only through its lane's own check and refuses a ladder that falls, rewrites a step it saw before, or states a level its steps do not reach.",
+        "additionalProperties": false,
+        "required": [
+          "value",
+          "level",
+          "steps"
+        ],
+        "properties": {
+          "value": {
+            "$ref": "#/components/schemas/Hash",
+            "description": "`keccak256(\"onyx-ladder-value-v1\" ‖ key ‖ value hash)`: the one value the ladder is about (never the value itself)."
+          },
+          "level": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5,
+            "description": "The top step's level."
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "level",
+                "name",
+                "evidence",
+                "at",
+                "record"
+              ],
+              "properties": {
+                "level": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 5
+                },
+                "name": {
+                  "type": "string",
+                  "enum": [
+                    "recomputed",
+                    "re-observed",
+                    "source-proven",
+                    "claim",
+                    "track record"
+                  ]
+                },
+                "evidence": {
+                  "$ref": "#/components/schemas/Hash",
+                  "description": "What the lane's check verifies: a shard root, a level-2 result hash or a level-3 report hash."
+                },
+                "at": {
+                  "type": "integer",
+                  "minimum": 0,
+                  "description": "Unix time the proof was settled, as its lane binds it (a row's is the server's finalizedUnix hint)."
+                },
+                "record": {
+                  "type": "string",
+                  "enum": [
+                    "OnyxRegistry.ShardAttested",
+                    "OnyxRegistry.ObservationRecorded",
+                    "OnyxSignedBook.ReportRecorded"
+                  ],
+                  "description": "The chain record that made the step public."
+                }
+              }
+            },
+            "description": "One to five steps (one per level at most)."
+          }
+        }
+      },
+      "ObserveAccepted": {
+        "type": "object",
+        "description": "202 on a level-2 subject no round settled yet (ADR-0049): to the payer, the ticket (shown once); to anyone else while the fact's round is queued or running, the state only. Nothing is charged until the round is served.",
+        "properties": {
+          "ticket": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$",
+            "description": "The bearer's secret: poll `/v1/tickets/{ticket}`."
+          },
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running"
+            ]
+          },
+          "deadline": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "Unix time the hold is released if the round is not final."
+          },
+          "retryAfter": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "status": {
+            "type": "string",
+            "description": "The ticket's URL path."
+          }
+        },
+        "required": [
+          "state",
+          "retryAfter"
+        ],
+        "additionalProperties": false
+      },
+      "Ticket": {
+        "type": "object",
+        "description": "A paid observation ticket (ADR-0049). `observation` once observed (the paid answer); `refund` once released (nothing was charged).",
+        "properties": {
+          "state": {
+            "type": "string",
+            "enum": [
+              "queued",
+              "running",
+              "observed",
+              "released"
+            ]
+          },
+          "metric": {
+            "type": "string"
+          },
+          "subject": {
+            "type": "string"
+          },
+          "deadline": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "retryAfter": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "observation": {
+            "$ref": "#/components/schemas/Observation"
+          },
+          "refund": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "state",
+          "metric",
+          "subject",
+          "deadline"
+        ],
+        "additionalProperties": false
+      },
+      "Estimate": {
+        "type": "object",
+        "description": "An estimate (ADR-0050): not checked, never a proof level, never part of a checked total.",
+        "properties": {
+          "metric": {
+            "type": "string",
+            "pattern": "^estimate\\."
+          },
+          "subject": {
+            "type": "string"
+          },
+          "asOf": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "value": {
+            "type": "string",
+            "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+          },
+          "level": {
+            "type": "string",
+            "enum": [
+              "E"
+            ]
+          },
+          "proofLevel": {
+            "type": "null"
+          },
+          "ladder": {
+            "type": "null"
+          },
+          "checked": {
+            "type": "boolean",
+            "enum": [
+              false
+            ]
+          },
+          "method": {
+            "type": "string"
+          },
+          "methodHash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "error": {
+            "type": "object",
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "interval",
+                  "unknown"
+                ]
+              },
+              "lo": {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+              },
+              "hi": {
+                "type": "string",
+                "pattern": "^-?(0|[1-9][0-9]*)(\\.[0-9]+)?$"
+              },
+              "coveragePpm": {
+                "type": "integer",
+                "minimum": 1,
+                "maximum": 999999
+              }
+            },
+            "required": [
+              "kind"
+            ],
+            "additionalProperties": false
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/Hash"
+            }
+          },
+          "estimateHash": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "note": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "metric",
+          "subject",
+          "asOf",
+          "value",
+          "level",
+          "proofLevel",
+          "ladder",
+          "checked",
+          "method",
+          "methodHash",
+          "error",
+          "inputs",
+          "estimateHash",
+          "note"
+        ],
+        "additionalProperties": false
+      },
+      "Want": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "kind",
+          "domain",
+          "region",
+          "cadence"
+        ],
+        "properties": {
+          "kind": {
+            "type": "string",
+            "enum": [
+              "chain",
+              "public_api",
+              "signed",
+              "own",
+              "forecast",
+              "keyed_api"
+            ]
+          },
+          "domain": {
+            "type": "string",
+            "enum": [
+              "finance",
+              "energy",
+              "weather_climate",
+              "earth_science",
+              "health_statistics",
+              "transport",
+              "public_spending",
+              "other"
+            ]
+          },
+          "region": {
+            "type": "string",
+            "enum": [
+              "global",
+              "africa",
+              "asia",
+              "europe",
+              "north_america",
+              "south_america",
+              "oceania"
+            ]
+          },
+          "cadence": {
+            "type": "string",
+            "enum": [
+              "once",
+              "daily",
+              "monthly"
+            ]
+          }
+        }
+      },
+      "WantsBoard": {
+        "type": "object",
+        "required": [
+          "minAccounts",
+          "week",
+          "nextCut",
+          "categories"
+        ],
+        "properties": {
+          "minAccounts": {
+            "type": "integer",
+            "description": "A category is shown only with wants from at least this many prepaid accounts."
+          },
+          "week": {
+            "type": "integer",
+            "description": "Weeks since 1970-01-01 00:00 UTC; the board changes only at each week's cut."
+          },
+          "nextCut": {
+            "type": "integer",
+            "description": "Unix time of the next cut."
+          },
+          "categories": {
+            "type": "array",
+            "items": {
+              "allOf": [
+                {
+                  "$ref": "#/components/schemas/Want"
+                },
+                {
+                  "type": "object",
+                  "required": [
+                    "bucket"
+                  ],
+                  "properties": {
+                    "bucket": {
+                      "type": "string",
+                      "enum": [
+                        "1-4",
+                        "5-19",
+                        "20+"
+                      ]
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      },
+      "WantPost": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "want",
+          "buyer",
+          "signature"
+        ],
+        "properties": {
+          "want": {
+            "$ref": "#/components/schemas/Want"
+          },
+          "buyer": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{40}$",
+            "description": "The prepaid account's address."
+          },
+          "signature": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{130}$",
+            "description": "EIP-191 signature of the want text for this week: onyx-want-v1, then kind=, domain=, region=, cadence= and week= lines."
+          }
+        }
+      }
+    },
+    "parameters": {
+      "round": {
+        "name": "round",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        },
+        "description": "Decimal round, no sign or leading zeros (other spellings: 308)."
+      },
+      "shard": {
+        "name": "shard",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^0[xX][0-9a-fA-F]{64}$"
+        },
+        "description": "Shard id; canonical is lowercase `0x` (others: 308)."
+      },
+      "index": {
+        "name": "index",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[0-9]+$"
+        }
+      },
+      "metric": {
+        "name": "metric",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,128}$"
+        }
+      },
+      "market": {
+        "name": "market",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^[a-z0-9._-]{1,128}$"
+        }
+      },
+      "fact": {
+        "name": "fact",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "`signed_fact_key`."
+      },
+      "source": {
+        "name": "source",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "A dotted source id."
+      },
+      "trackMetric": {
+        "name": "metric",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "A dotted metric id."
+      },
+      "receipt": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^sub_[0-9a-f]{32}$"
+        }
+      },
+      "root": {
+        "name": "root",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "Pin the root: the answer is `immutable` only when it matches (409 `root_mismatch` otherwise)."
+      },
+      "subject": {
+        "name": "subject",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Row key, e.g. `entity:okx`."
+      },
+      "as_of": {
+        "name": "as_of",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Latest snapshot end to consider."
+      },
+      "min_as_of": {
+        "name": "min_as_of",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Your freshness floor: nothing older is served, and a miss is a 404 before any 402."
+      },
+      "obs_subject": {
+        "name": "subject",
+        "in": "query",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Subject text, e.g. `us.treasury.federal_debt:2026-10-08`."
+      },
+      "window_end": {
+        "name": "window_end",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        }
+      },
+      "obs_as_of": {
+        "name": "as_of",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Newest round whose window ends at or before it; not with `window_end`."
+      },
+      "min_window_end": {
+        "name": "min_window_end",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Freshness floor (404 `too_old` before any 402)."
+      },
+      "outcome": {
+        "name": "outcome",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "enum": [
+            "all"
+          ]
+        },
+        "description": "`all` adds the rounds that settled no value."
+      },
+      "from": {
+        "name": "from",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "since": {
+        "name": "since",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "A commitment you checked before: the answer chains from it."
+      },
+      "at": {
+        "name": "at",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "The latest commitment (409 `commitment_moved` otherwise)."
+      },
+      "posts": {
+        "name": "posts",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^(0|[1-9][0-9]*)$"
+        }
+      },
+      "contributor": {
+        "name": "ONYX-CONTRIBUTOR",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Contributor pass (ADR-0025): fresh data discounted, answered `private`. GET only."
+      },
+      "payment": {
+        "name": "PAYMENT-SIGNATURE",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "x402 v2 payment payload (base64 JSON), answering a 402. GET only."
+      },
+      "prepaid": {
+        "name": "ONYX-PREPAID-VOUCHER",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}:(0|[1-9][0-9]{0,38}):0x[0-9a-fA-F]{130}$"
+        },
+        "description": "Prepaid voucher instead of an x402 payment (ROADMAP S7, ADR-0046 amendment 1): `0x<buyer>:<cumulative>:0x<65-byte signature>`, the buyer's EIP-712 signature of its running total, which must be the last total the server took plus this answer's price. Only on servers that take prepaid balances. GET only."
+      },
+      "ifNoneMatch": {
+        "name": "If-None-Match",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "Free answers only: a match is a 304."
+      },
+      "labelSet": {
+        "name": "set",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "The set content hash (format 3)."
+      },
+      "address": {
+        "name": "address",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "A namespaced address, 1 to 128 visible ASCII characters."
+      },
+      "ticket": {
+        "name": "ticket",
+        "in": "path",
+        "required": true,
+        "description": "The ticket a paid observation hold returned (64 hex digits); the bearer's secret.",
+        "schema": {
+          "type": "string",
+          "maxLength": 64
+        }
+      },
+      "est_subject": {
+        "name": "subject",
+        "in": "query",
+        "required": true,
+        "description": "The subject's text, as `/v1/observations` takes it.",
+        "schema": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 256
+        }
+      }
+    },
+    "headers": {
+      "ETag": {
+        "schema": {
+          "type": "string"
+        },
+        "description": "See docs/spec/delivery.md (Caching)."
+      },
+      "Cache-Control": {
+        "schema": {
+          "type": "string"
+        }
+      },
+      "PAYMENT-REQUIRED": {
+        "schema": {
+          "type": "string"
+        },
+        "description": "x402 v2 offer (base64 JSON)."
+      },
+      "PAYMENT-RESPONSE": {
+        "schema": {
+          "type": "string"
+        },
+        "description": "x402 v2 settle receipt (base64 JSON)."
+      },
+      "Retry-After": {
+        "schema": {
+          "type": "string"
+        }
+      },
+      "Location": {
+        "schema": {
+          "type": "string"
+        }
+      },
+      "ONYX-PREPAID-RESPONSE": {
+        "schema": {
+          "type": "string"
+        },
+        "description": "An answer paid with a prepaid voucher: `total=<cumulative>; spendable=<left>`."
+      }
+    },
+    "responses": {
+      "NotModified": {
+        "description": "Not modified (free answers only).",
+        "headers": {
+          "ETag": {
+            "$ref": "#/components/headers/ETag"
+          }
+        }
+      },
+      "Redirect": {
+        "description": "308 to the one canonical spelling of the URL.",
+        "headers": {
+          "Location": {
+            "$ref": "#/components/headers/Location"
+          }
+        }
+      },
+      "PaymentRequired": {
+        "description": "402 `payment_required` with an x402 offer in `PAYMENT-REQUIRED`, or `payment_failed` with `PAYMENT-RESPONSE`.",
+        "headers": {
+          "PAYMENT-REQUIRED": {
+            "$ref": "#/components/headers/PAYMENT-REQUIRED"
+          },
+          "PAYMENT-RESPONSE": {
+            "$ref": "#/components/headers/PAYMENT-RESPONSE"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      },
+      "Error": {
+        "description": "An error; `x-onyx-error-codes` lists every code per status.",
+        "headers": {
+          "Cache-Control": {
+            "$ref": "#/components/headers/Cache-Control"
+          }
+        },
+        "content": {
+          "application/json": {
+            "schema": {
+              "$ref": "#/components/schemas/Error"
+            }
+          }
+        }
+      }
+    }
+  },
+  "x-onyx-error-codes": {
+    "bad_json": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "bad_json_pointer": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "bad_request": {
+      "status": 400,
+      "description": "A path, query or body the route does not take: unknown or repeated query parameters, bad names, a HEAD carrying ONYX-CONTRIBUTOR."
+    },
+    "bad_series_id": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "bad_template": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "bad_url": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "control_characters": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "empty_field": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "field_too_long": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "invalid_payment": {
+      "status": 400,
+      "description": "A payment that does not parse or fails verification; any HEAD carrying PAYMENT-SIGNATURE."
+    },
+    "license_id_bad": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "license_id_missing": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "license_id_unexpected": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "not_keyed": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "payload_invalid": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "payload_route": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "personal_contact": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "pointer_without_endpoint": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "proof_not_supported": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "secret_in_url": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "source_url_required": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "payment_failed": {
+      "status": 402,
+      "description": "The settle failed; PAYMENT-RESPONSE says why."
+    },
+    "payment_required": {
+      "status": 402,
+      "description": "Pay with x402: the offer is in PAYMENT-REQUIRED."
+    },
+    "invalid_contributor_proof": {
+      "status": 403,
+      "description": "The ONYX-CONTRIBUTOR proof does not verify."
+    },
+    "label_rights_withheld": {
+      "status": 403,
+      "description": "ONYX_RIGHTS=fallback: label-derived data is withheld until its rights are cleared."
+    },
+    "not_a_contributor": {
+      "status": 403,
+      "description": "The proof's address has no accepted contribution."
+    },
+    "not_cross_checked": {
+      "status": 403,
+      "description": "The row is not cross-checked by its serving check."
+    },
+    "serving_check_failed": {
+      "status": 403,
+      "description": "The serving check refused the shard or row."
+    },
+    "serving_check_unavailable": {
+      "status": 403,
+      "description": "The metric's serving check cannot run."
+    },
+    "test_labels": {
+      "status": 403,
+      "description": "The shard uses a test.* label set; never served as real data."
+    },
+    "track_log_priced": {
+      "status": 403,
+      "description": "A track log holds a level-1 or level-2 value the paid API sells."
+    },
+    "track_registry_names_addresses": {
+      "status": 403,
+      "description": "The track registry names an address; never served."
+    },
+    "no_label_row": {
+      "status": 404,
+      "description": "The set lists no membership for this address (the server word, not a proof)."
+    },
+    "no_serving_check": {
+      "status": 404,
+      "description": "No serving check for this metric on this server."
+    },
+    "no_shard_at_as_of": {
+      "status": 404,
+      "description": "Every shard of the metric is newer than as_of."
+    },
+    "no_signed_report": {
+      "status": 404,
+      "description": "No signed report for this fact."
+    },
+    "no_track_record": {
+      "status": 404,
+      "description": "No track record; `reason` is none_published, no_rule or no_record."
+    },
+    "no_track_registry": {
+      "status": 404,
+      "description": "The publication carries no registry (version 1)."
+    },
+    "not_finalized": {
+      "status": 404,
+      "description": "The shard's root is not final yet."
+    },
+    "not_found": {
+      "status": 404,
+      "description": "No such route or receipt."
+    },
+    "row_not_found": {
+      "status": 404,
+      "description": "Index out of range."
+    },
+    "too_old": {
+      "status": 404,
+      "description": "No settled round at or after min_window_end."
+    },
+    "unknown_label_set": {
+      "status": 404,
+      "description": "No salted label set with this content hash."
+    },
+    "unknown_market": {
+      "status": 404,
+      "description": "No such market."
+    },
+    "unknown_metric": {
+      "status": 404,
+      "description": "No such metric."
+    },
+    "unknown_shard": {
+      "status": 404,
+      "description": "No such shard."
+    },
+    "unknown_subject": {
+      "status": 404,
+      "description": "No row for the subject (the server's word, not a proof of absence)."
+    },
+    "method_not_allowed": {
+      "status": 405,
+      "description": "Wrong method for the route; `Allow` names the right ones."
+    },
+    "commitment_moved": {
+      "status": 409,
+      "description": "`at` is not the latest commitment: fetch the record again."
+    },
+    "level3_not_servable": {
+      "status": 409,
+      "description": "The signed fact is not servable now; `reason` says why."
+    },
+    "payment_in_use": {
+      "status": 409,
+      "description": "This authorization already has an open settle for another request."
+    },
+    "proof_level_not_accepted": {
+      "status": 409,
+      "description": "The market's shard is at a level its policy refuses."
+    },
+    "root_mismatch": {
+      "status": 409,
+      "description": "The pinned ?root= is not the shard's final root."
+    },
+    "settled_value": {
+      "status": 409,
+      "description": "The fact settled a value: ask /v1/observations with outcome=all."
+    },
+    "unknown_commitment": {
+      "status": 409,
+      "description": "`since` names no commitment of the server's chain."
+    },
+    "body_too_large": {
+      "status": 413,
+      "description": "A submission is at most 64 KiB."
+    },
+    "export_too_large": {
+      "status": 413,
+      "description": "The export passes the row or byte cap."
+    },
+    "track_chain_too_long": {
+      "status": 413,
+      "description": "More than 4,096 commitments after `since`."
+    },
+    "track_log_too_large": {
+      "status": 413,
+      "description": "The log passes the row or check budget."
+    },
+    "refused": {
+      "status": 422,
+      "description": "The proposal cannot be taken; `route` says why."
+    },
+    "daily_quota": {
+      "status": 429,
+      "description": "The daily submission or check quota is used up."
+    },
+    "payer_busy": {
+      "status": 429,
+      "description": "The payer has 4 unsettled payments waiting; retry after 60 s."
+    },
+    "payer_limited": {
+      "status": 429,
+      "description": "Too many payments from this payer; see Retry-After."
+    },
+    "rate_limited": {
+      "status": 429,
+      "description": "Too many requests from this client; see Retry-After."
+    },
+    "forbidden_data": {
+      "status": 451,
+      "description": "The source's rights forbid redistribution."
+    },
+    "restricted_data": {
+      "status": 451,
+      "description": "The source's rights restrict redistribution."
+    },
+    "binding_mismatch": {
+      "status": 500,
+      "description": "The shard's binding differs from the ledger's; nothing served."
+    },
+    "catalog_mismatch": {
+      "status": 500,
+      "description": "The catalog entry does not match the shard; nothing served."
+    },
+    "internal": {
+      "status": 500,
+      "description": "An internal error."
+    },
+    "rows_mismatch": {
+      "status": 500,
+      "description": "Stored rows do not hash to the root; nothing served."
+    },
+    "clock_skew": {
+      "status": 503,
+      "description": "The server's clock is more than 300 s off the chain's."
+    },
+    "contributor_checks_busy": {
+      "status": 503,
+      "description": "Contributor checks are busy; see Retry-After."
+    },
+    "facilitator_busy": {
+      "status": 503,
+      "description": "The facilitator is busy; see Retry-After."
+    },
+    "facilitator_unavailable": {
+      "status": 503,
+      "description": "The payment facilitator cannot be reached."
+    },
+    "intake_busy": {
+      "status": 503,
+      "description": "Too many submission writes in flight."
+    },
+    "intake_full": {
+      "status": 503,
+      "description": "The journal holds its maximum number of submissions."
+    },
+    "intake_unavailable": {
+      "status": 503,
+      "description": "The submission journal cannot be read or written."
+    },
+    "level3_chain_unavailable": {
+      "status": 503,
+      "description": "No finalized block can be read."
+    },
+    "level3_clock_skew": {
+      "status": 503,
+      "description": "A time in the post log is more than 300 s ahead of this server's clock."
+    },
+    "level3_posts_delayed": {
+      "status": 503,
+      "description": "A level-3 post has been pending more than 600 s."
+    },
+    "level3_store_unreadable": {
+      "status": 503,
+      "description": "The level-3 post log cannot be read."
+    },
+    "overloaded": {
+      "status": 503,
+      "description": "Too many requests in flight; retry in 1 s."
+    },
+    "payment_pending": {
+      "status": 503,
+      "description": "Self-settle: retry the same request; it is served once the transfer is proven."
+    },
+    "receipt_log_unavailable": {
+      "status": 503,
+      "description": "The receipt log cannot be written; new payments refused, nothing charged."
+    },
+    "root_source_unavailable": {
+      "status": 503,
+      "description": "The root source cannot be read."
+    },
+    "rows_unavailable": {
+      "status": 503,
+      "description": "The rows cannot be read."
+    },
+    "serving_check_pending": {
+      "status": 503,
+      "description": "The serving check has not judged the current root yet."
+    },
+    "settle_intent_unavailable": {
+      "status": 503,
+      "description": "The settle intent log cannot be written."
+    },
+    "track_store_unreadable": {
+      "status": 503,
+      "description": "The track publication file cannot be read or checked."
+    },
+    "timeout": {
+      "status": 504,
+      "description": "The request took too long."
+    },
+    "prepaid_not_offered": {
+      "status": 400,
+      "description": "An ONYX-PREPAID-VOUCHER header on a server that takes x402 payments only."
+    },
+    "invalid_prepaid": {
+      "status": 400,
+      "description": "An ONYX-PREPAID-VOUCHER header that does not parse."
+    },
+    "prepaid_refused": {
+      "status": 402,
+      "description": "A voucher that is not the buyer's, does not add exactly the price to the last total (`last` and `price` say what to sign), exceeds the deposit, or comes while an exit is pending. Nothing was served or charged."
+    },
+    "prepaid_unavailable": {
+      "status": 503,
+      "description": "The server cannot read the buyer's account or record prepaid usage durably; nothing was charged."
+    },
+    "observe_payment_required": {
+      "status": 402,
+      "description": "No round settled this level-2 subject yet; `observe` offers one for a prepaid hold (price, deadline, that the value becomes public, the refund rule)."
+    },
+    "unknown_ticket": {
+      "status": 404,
+      "description": "No such paid observation ticket on this server."
+    },
+    "bad_want_signature": {
+      "status": 403,
+      "description": "The signature is not the buyer's over this week's want text."
+    },
+    "bad_want_value": {
+      "status": 400,
+      "description": "A want's value is not in its closed list."
+    },
+    "bounty_too_specific": {
+      "status": 400,
+      "description": "A want with anything but the four closed-list values (free text, a URL, a metric, a subject, a date), or extra fields beside want, buyer and signature."
+    },
+    "chain_unavailable": {
+      "status": 503,
+      "description": "The prepaid account could not be read on chain."
+    },
+    "journal_unavailable": {
+      "status": 503,
+      "description": "The want could not be written to the node's journal."
+    },
+    "no_prepaid_account": {
+      "status": 403,
+      "description": "Only an open prepaid deposit may post a want."
+    },
+    "too_many_wants": {
+      "status": 429,
+      "description": "An account holds at most 16 live wants."
+    },
+    "wants_closed": {
+      "status": 503,
+      "description": "This node has no prepaid contract, so it takes no wants (the board is still shown)."
+    }
+  }
+}

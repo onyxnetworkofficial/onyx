@@ -1,0 +1,20 @@
+[package]
+name = "onyx-miner"
+description = "Miner: fetch a shard's pinned inputs from the CAS, run the recipe, commit, reveal (ADR-0018)."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-merkle.workspace = true
+onyx-labels.workspace = true
+onyx-recipe-host.workspace = true
+onyx-coordinator = { path = "../onyx-coordinator" }
+thiserror.workspace = true
+secp256k1.workspace = true
+
+[lints]
+workspace = true

@@ -1,0 +1,55 @@
+{
+  "about": "ROADMAP C50 known-answer vectors for onyx-tlock (fixtures/tlock/PROVENANCE.md). Every file named here is a verbatim copy of its source_url (or a verbatim excerpt of it, said in 'excerpt'), fetched 2026-10-17 with no account.",
+  "chains": {
+    "quicknet": {
+      "info": "drand/quicknet-info.json",
+      "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/info"
+    },
+    "quicknet-t": {
+      "info": "drand/quicknet-t-info.json",
+      "source_url": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/info"
+    }
+  },
+  "interop": [
+    {
+      "name": "go-tlock testdata lorem, quicknet-t round 5423142",
+      "file": "go-tlock/lorem-tle-testnet-quicknet-t-2024-01-17-15-28.tle",
+      "source_url": "https://raw.githubusercontent.com/drand/tlock/7b54141a9733fd6fa207587a11148280e6fb020d/testdata/lorem-tle-testnet-quicknet-t-2024-01-17-15-28.tle",
+      "producer": "drand/tlock's Go tle (file in drand/tlock v1.2.0 testdata, decrypted by its TestDecryptVariousChainhashes)",
+      "chain": "quicknet-t",
+      "beacon": "drand/quicknet-t-round-5423142.json",
+      "beacon_url": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/public/5423142"
+    },
+    {
+      "name": "go-tlock TestInteropWithJS quicknet-t round 1624910",
+      "file": "go-tlock/tlock_test-interop-quicknet-t-1624910.age",
+      "source_url": "https://raw.githubusercontent.com/drand/tlock/7b54141a9733fd6fa207587a11148280e6fb020d/tlock_test.go",
+      "excerpt": "the armored block of TestInteropWithJS, subtest 'on testnet with quicknet-t' (made by tlock-js, decrypted by Go in that test)",
+      "producer": "drand/tlock-js, checked by drand/tlock's Go test",
+      "chain": "quicknet-t",
+      "beacon": "drand/quicknet-t-round-1624910.json",
+      "beacon_url": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/public/1624910"
+    },
+    {
+      "name": "tlock-js 'test vectors from go codebase', quicknet round 746511",
+      "file": "tlock-js/rfc-scheme-quicknet-746511.age",
+      "source_url": "https://raw.githubusercontent.com/drand/tlock-js/17d817ee259e79381111dd75009b0f022c39ace3/test/rfc-scheme.test.ts",
+      "excerpt": "the concatenated ciphertext string of 'should pass test vectors from go codebase'",
+      "producer": "drand/tlock's Go code (per the tlock-js test's name), checked by tlock-js",
+      "chain": "quicknet",
+      "beacon": "drand/quicknet-round-746511.json",
+      "beacon_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/746511"
+    }
+  ],
+  "rounds": [
+    { "chain": "quicknet", "file": "drand/quicknet-round-1.json", "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/1" },
+    { "chain": "quicknet", "file": "drand/quicknet-round-2.json", "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/2" },
+    { "chain": "quicknet", "file": "drand/quicknet-round-1000.json", "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/1000" },
+    { "chain": "quicknet", "file": "drand/quicknet-round-746511.json", "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/746511" },
+    { "chain": "quicknet", "file": "drand/quicknet-round-33154000.json", "source_url": "https://api.drand.sh/52db9ba70e0cc0f6eaf7803dd07447a1f5477735fd3f661792ba94600c84e971/public/33154000" },
+    { "chain": "quicknet-t", "file": "drand/quicknet-t-round-5423142.json", "source_url": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/public/5423142" },
+    { "chain": "quicknet-t", "file": "drand/quicknet-t-round-1624910.json", "source_url": "https://pl-us.testnet.drand.sh/cc9c398442737cbd141526600919edd69f1d6f9b4adb67e4d912fbc64341a9a5/public/1624910" }
+  ],
+  "zero_tail": "onyx-zero-tail.json",
+  "far_date": "onyx-far-date.json"
+}

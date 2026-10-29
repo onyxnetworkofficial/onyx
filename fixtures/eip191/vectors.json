@@ -1,0 +1,23 @@
+{
+ "generator": "cast wallet sign (Foundry), EIP-191 personal_sign",
+ "key": "keccak256(\"onyx test entity key 1\") - test only, holds nothing",
+ "address": "0xD05cb9639DddF72c44232596cEc9d2fAB355F5de",
+ "cases": [
+  {
+   "message": "",
+   "signature": "0x56a8131bb850d8ded46a54ba6b671e3ff6a5e8092ac74dfaf6be8245baa84cef31863648220c113aa0aa80d4dba2efc3b394fea87cd0d509ce8fb032abafbe9e1b"
+  },
+  {
+   "message": "Hello World",
+   "signature": "0x1837d6874b02743008ecb6f366826de331d3811e7375799e13f1bb66b69ed8a02bd1d2d746fe8f4f6b06503cad54cd44e011beccd880ed7acbfde8867fae6db71c"
+  },
+  {
+   "message": "Onyx address attestation v1\ndomain: onyx.devnet\nentity: entity:example\naddress: t:abc\nvalid_from: 100\nexpires: 200\nnonce: 07070707070707070707070707070707",
+   "signature": "0x4ecfc9368dbe0320863e4fa9706e61fc7f709bfdc2c720689ef24dd6cfa2bf4e6eb5b753c6d82311f7e95ecbc852edc6f93a0ccd2534d6c2a8506d02192518f11b"
+  },
+  {
+   "message": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+   "signature": "0x0c11853c80c55a16e0ff67ccf516e3e8b0b9833454deb6dabc4c5923e8b5d803439102dad3f799b8601f5a412b151aae72c8acc7f4c2ef7aee101b7e6a5e0da21b"
+  }
+ ]
+}

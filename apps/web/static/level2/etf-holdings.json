@@ -1,0 +1,955 @@
+{
+  "fetcher_id": "0xca08a973811488fb8de215b9ab1115f112dc7b6241c58447782eacd485da933a",
+  "flows_note": "Filings are quarterly (some funds tag the figure only in their annual 10-K), so a flow here is the change between two filed period ends, with both dates. Daily flows need the issuers' own daily holdings files: a separate source with its own terms check, not used here.",
+  "funds": [
+    {
+      "body_sha256": "3e22ba7a910d801db2fba459940422a755cd2df3e03697c32af6294cdf31a26c",
+      "cik": "0001980994",
+      "fact": "us-gaap:CryptoAssetNumberOfUnits",
+      "flows": [
+        {
+          "change_btc": "+24120.00000000",
+          "change_sats": "2412000000000",
+          "days": 90,
+          "from": "2024-12-31",
+          "from_accn": "0001437749-26-015538",
+          "from_sats": "55191800000000",
+          "to": "2025-03-31",
+          "to_accn": "0001437749-26-015538",
+          "to_sats": "57603800000000"
+        },
+        {
+          "change_btc": "+120837.00000000",
+          "change_sats": "12083700000000",
+          "days": 91,
+          "from": "2025-03-31",
+          "from_accn": "0001437749-26-015538",
+          "from_sats": "57603800000000",
+          "to": "2025-06-30",
+          "to_accn": "0001437749-26-026004",
+          "to_sats": "69687500000000"
+        },
+        {
+          "change_btc": "+73917.00000000",
+          "change_sats": "7391700000000",
+          "days": 184,
+          "from": "2025-06-30",
+          "from_accn": "0001437749-26-026004",
+          "from_sats": "69687500000000",
+          "to": "2025-12-31",
+          "to_accn": "0001437749-26-015538",
+          "to_sats": "77079200000000"
+        },
+        {
+          "change_btc": "+12952.00000000",
+          "change_sats": "1295200000000",
+          "days": 90,
+          "from": "2025-12-31",
+          "from_accn": "0001437749-26-015538",
+          "from_sats": "77079200000000",
+          "to": "2026-03-31",
+          "to_accn": "0001437749-26-015538",
+          "to_sats": "78374400000000"
+        },
+        {
+          "change_btc": "-49483.00000000",
+          "change_sats": "-4948300000000",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001437749-26-015538",
+          "from_sats": "78374400000000",
+          "to": "2026-06-30",
+          "to_accn": "0001437749-26-026004",
+          "to_sats": "73426100000000"
+        }
+      ],
+      "fund_name": "iShares Bitcoin Trust ETF",
+      "holdings": [
+        {
+          "accn": "0001437749-26-015538",
+          "as_filed": "551918",
+          "filed": "2026-05-07",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926015538/0001437749-26-015538-index.htm",
+          "form": "10-Q",
+          "held_btc": "551918.00000000",
+          "held_sats": "55191800000000",
+          "period_end": "2024-12-31",
+          "rows": 2
+        },
+        {
+          "accn": "0001437749-26-015538",
+          "as_filed": "576038",
+          "filed": "2026-05-07",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926015538/0001437749-26-015538-index.htm",
+          "form": "10-Q",
+          "held_btc": "576038.00000000",
+          "held_sats": "57603800000000",
+          "period_end": "2025-03-31",
+          "rows": 2
+        },
+        {
+          "accn": "0001437749-26-026004",
+          "as_filed": "696875",
+          "filed": "2026-08-06",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926026004/0001437749-26-026004-index.htm",
+          "form": "10-Q",
+          "held_btc": "696875.00000000",
+          "held_sats": "69687500000000",
+          "period_end": "2025-06-30",
+          "rows": 1
+        },
+        {
+          "accn": "0001437749-26-015538",
+          "as_filed": "770792",
+          "filed": "2026-05-07",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926015538/0001437749-26-015538-index.htm",
+          "form": "10-Q",
+          "held_btc": "770792.00000000",
+          "held_sats": "77079200000000",
+          "period_end": "2025-12-31",
+          "rows": 2
+        },
+        {
+          "accn": "0001437749-26-015538",
+          "as_filed": "783744",
+          "filed": "2026-05-07",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926015538/0001437749-26-015538-index.htm",
+          "form": "10-Q",
+          "held_btc": "783744.00000000",
+          "held_sats": "78374400000000",
+          "period_end": "2026-03-31",
+          "rows": 2
+        },
+        {
+          "accn": "0001437749-26-026004",
+          "as_filed": "734261",
+          "filed": "2026-08-06",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1980994/000143774926026004/0001437749-26-026004-index.htm",
+          "form": "10-Q",
+          "held_btc": "734261.00000000",
+          "held_sats": "73426100000000",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "ibit",
+      "metric": "sec.edgar.etf_btc_sats.ibit",
+      "name": "iShares Bitcoin Trust ETF",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "BlackRock (iShares Delaware Trust Sponsor)",
+      "template_id": "0xb22c5f1cee01fb51d31133d192e36b7c6e62f35decd4fd7d9be71273a2729cf3",
+      "ticker": "IBIT",
+      "unit": "pure",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001980994/us-gaap/CryptoAssetNumberOfUnits.json"
+    },
+    {
+      "body_sha256": "d77a60ac64660ceec6a8b6c46ba17d02d6c1c846f50b51bfecb54d32c938fd5c",
+      "cik": "0001852317",
+      "fact": "us-gaap:InvestmentOwnedBalanceShares",
+      "flows": [
+        {
+          "change_btc": "+128.00000000",
+          "change_sats": "12800000000",
+          "days": 365,
+          "from": "2024-12-31",
+          "from_accn": "0001193125-26-071484",
+          "from_sats": "20155600000000",
+          "to": "2025-12-31",
+          "to_accn": "0001193125-26-071484",
+          "to_sats": "20168400000000"
+        }
+      ],
+      "fund_name": "Fidelity Wise Origin Bitcoin Fund",
+      "holdings": [
+        {
+          "accn": "0001193125-26-071484",
+          "as_filed": "201556",
+          "filed": "2026-02-25",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1852317/000119312526071484/0001193125-26-071484-index.htm",
+          "form": "10-K",
+          "held_btc": "201556.00000000",
+          "held_sats": "20155600000000",
+          "period_end": "2024-12-31",
+          "rows": 1
+        },
+        {
+          "accn": "0001193125-26-071484",
+          "as_filed": "201684",
+          "filed": "2026-02-25",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1852317/000119312526071484/0001193125-26-071484-index.htm",
+          "form": "10-K",
+          "held_btc": "201684.00000000",
+          "held_sats": "20168400000000",
+          "period_end": "2025-12-31",
+          "rows": 1
+        }
+      ],
+      "key": "fbtc",
+      "metric": "sec.edgar.etf_btc_sats.fbtc",
+      "name": "Fidelity® Wise Origin® Bitcoin Fund",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "Fidelity (FD Funds Management)",
+      "template_id": "0x21e06c14c62c195931a5e25fbd5a432cf2f533996d9475aa88f32ee90aa3d577",
+      "ticker": "FBTC",
+      "unit": "shares",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001852317/us-gaap/InvestmentOwnedBalanceShares.json"
+    },
+    {
+      "body_sha256": "f0686137c34153df057350c0c705980d4e5944c874860909ca367ccf0a659887",
+      "cik": "0001588489",
+      "fact": "us-gaap:InvestmentOwnedBalanceContracts",
+      "flows": [
+        {
+          "change_btc": "-11956.62903100",
+          "change_sats": "-1195662903100",
+          "days": 90,
+          "from": "2024-12-31",
+          "from_accn": "0000950170-25-029408",
+          "from_sats": "20539885921900",
+          "to": "2025-03-31",
+          "to_accn": "0000950170-25-062731",
+          "to_sats": "19344223018800"
+        },
+        {
+          "change_btc": "-8343.51788300",
+          "change_sats": "-834351788300",
+          "days": 91,
+          "from": "2025-03-31",
+          "from_accn": "0000950170-25-062731",
+          "from_sats": "19344223018800",
+          "to": "2025-06-30",
+          "to_accn": "0000950170-25-101400",
+          "to_sats": "18509871230500"
+        },
+        {
+          "change_btc": "-8534.42088100",
+          "change_sats": "-853442088100",
+          "days": 92,
+          "from": "2025-06-30",
+          "from_accn": "0000950170-25-101400",
+          "from_sats": "18509871230500",
+          "to": "2025-09-30",
+          "to_accn": "0001193125-25-266861",
+          "to_sats": "17656429142400"
+        },
+        {
+          "change_btc": "-10972.79530200",
+          "change_sats": "-1097279530200",
+          "days": 92,
+          "from": "2025-09-30",
+          "from_accn": "0001193125-25-266861",
+          "from_sats": "17656429142400",
+          "to": "2025-12-31",
+          "to_accn": "0001193125-26-071956",
+          "to_sats": "16559149612200"
+        },
+        {
+          "change_btc": "-10887.64856200",
+          "change_sats": "-1088764856200",
+          "days": 90,
+          "from": "2025-12-31",
+          "from_accn": "0001193125-26-071956",
+          "from_sats": "16559149612200",
+          "to": "2026-03-31",
+          "to_accn": "0001193125-26-206329",
+          "to_sats": "15470384756000"
+        },
+        {
+          "change_btc": "-16198.09075600",
+          "change_sats": "-1619809075600",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001193125-26-206329",
+          "from_sats": "15470384756000",
+          "to": "2026-06-30",
+          "to_accn": "0001588489-26-000005",
+          "to_sats": "13850575680400"
+        }
+      ],
+      "fund_name": "Grayscale Bitcoin Trust ETF",
+      "holdings": [
+        {
+          "accn": "0000950170-25-029408",
+          "as_filed": "205398.859219",
+          "filed": "2025-02-28",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000095017025029408/0000950170-25-029408-index.htm",
+          "form": "10-K",
+          "held_btc": "205398.85921900",
+          "held_sats": "20539885921900",
+          "period_end": "2024-12-31",
+          "rows": 7
+        },
+        {
+          "accn": "0000950170-25-062731",
+          "as_filed": "193442.230188",
+          "filed": "2025-05-02",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000095017025062731/0000950170-25-062731-index.htm",
+          "form": "10-Q",
+          "held_btc": "193442.23018800",
+          "held_sats": "19344223018800",
+          "period_end": "2025-03-31",
+          "rows": 2
+        },
+        {
+          "accn": "0000950170-25-101400",
+          "as_filed": "185098.712305",
+          "filed": "2025-08-01",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000095017025101400/0000950170-25-101400-index.htm",
+          "form": "10-Q",
+          "held_btc": "185098.71230500",
+          "held_sats": "18509871230500",
+          "period_end": "2025-06-30",
+          "rows": 2
+        },
+        {
+          "accn": "0001193125-25-266861",
+          "as_filed": "176564.291424",
+          "filed": "2025-11-05",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000119312525266861/0001193125-25-266861-index.htm",
+          "form": "10-Q",
+          "held_btc": "176564.29142400",
+          "held_sats": "17656429142400",
+          "period_end": "2025-09-30",
+          "rows": 1
+        },
+        {
+          "accn": "0001193125-26-071956",
+          "as_filed": "165591.496122",
+          "filed": "2026-02-25",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000119312526071956/0001193125-26-071956-index.htm",
+          "form": "10-K",
+          "held_btc": "165591.49612200",
+          "held_sats": "16559149612200",
+          "period_end": "2025-12-31",
+          "rows": 3
+        },
+        {
+          "accn": "0001193125-26-206329",
+          "as_filed": "154703.84756",
+          "filed": "2026-05-05",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000119312526206329/0001193125-26-206329-index.htm",
+          "form": "10-Q",
+          "held_btc": "154703.84756000",
+          "held_sats": "15470384756000",
+          "period_end": "2026-03-31",
+          "rows": 1
+        },
+        {
+          "accn": "0001588489-26-000005",
+          "as_filed": "138505.756804",
+          "filed": "2026-08-04",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1588489/000158848926000005/0001588489-26-000005-index.htm",
+          "form": "10-Q",
+          "held_btc": "138505.75680400",
+          "held_sats": "13850575680400",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "gbtc",
+      "metric": "sec.edgar.etf_btc_sats.gbtc",
+      "name": "Grayscale Bitcoin Trust ETF",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "Grayscale Investments",
+      "template_id": "0xb172be12a4598802f87654d3bc657b113a703deb499486815834964cb4f2d555",
+      "ticker": "GBTC",
+      "unit": "Number",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001588489/us-gaap/InvestmentOwnedBalanceContracts.json"
+    },
+    {
+      "body_sha256": "bd435d979690d39910646bf7b75d7c458e0d5c6da30750725dae1256c9c49e25",
+      "cik": "0002015034",
+      "fact": "us-gaap:InvestmentOwnedBalanceContracts",
+      "flows": [
+        {
+          "change_btc": "+2582.11760000",
+          "change_sats": "258211760000",
+          "days": 90,
+          "from": "2024-12-31",
+          "from_accn": "0000950170-25-029405",
+          "from_sats": "3801291129900",
+          "to": "2025-03-31",
+          "to_accn": "0000950170-25-062727",
+          "to_sats": "4059502889900"
+        },
+        {
+          "change_btc": "+3430.32674500",
+          "change_sats": "343032674500",
+          "days": 91,
+          "from": "2025-03-31",
+          "from_accn": "0000950170-25-062727",
+          "from_sats": "4059502889900",
+          "to": "2025-06-30",
+          "to_accn": "0000950170-25-101399",
+          "to_sats": "4402535564400"
+        },
+        {
+          "change_btc": "+3710.88615200",
+          "change_sats": "371088615200",
+          "days": 92,
+          "from": "2025-06-30",
+          "from_accn": "0000950170-25-101399",
+          "from_sats": "4402535564400",
+          "to": "2025-09-30",
+          "to_accn": "0001193125-25-266856",
+          "to_sats": "4773624179600"
+        },
+        {
+          "change_btc": "+738.69479500",
+          "change_sats": "73869479500",
+          "days": 92,
+          "from": "2025-09-30",
+          "from_accn": "0001193125-25-266856",
+          "from_sats": "4773624179600",
+          "to": "2025-12-31",
+          "to_accn": "0001193125-26-071952",
+          "to_sats": "4847493659100"
+        },
+        {
+          "change_btc": "+3198.09527600",
+          "change_sats": "319809527600",
+          "days": 90,
+          "from": "2025-12-31",
+          "from_accn": "0001193125-26-071952",
+          "from_sats": "4847493659100",
+          "to": "2026-03-31",
+          "to_accn": "0001193125-26-206324",
+          "to_sats": "5167303186700"
+        },
+        {
+          "change_btc": "+2607.36863400",
+          "change_sats": "260736863400",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001193125-26-206324",
+          "from_sats": "5167303186700",
+          "to": "2026-06-30",
+          "to_accn": "0002015034-26-000008",
+          "to_sats": "5428040050100"
+        }
+      ],
+      "fund_name": "Grayscale Bitcoin Mini Trust ETF",
+      "holdings": [
+        {
+          "accn": "0000950170-25-029405",
+          "as_filed": "38012.911299",
+          "filed": "2025-02-28",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000095017025029405/0000950170-25-029405-index.htm",
+          "form": "10-K",
+          "held_btc": "38012.91129900",
+          "held_sats": "3801291129900",
+          "period_end": "2024-12-31",
+          "rows": 7
+        },
+        {
+          "accn": "0000950170-25-062727",
+          "as_filed": "40595.028899",
+          "filed": "2025-05-02",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000095017025062727/0000950170-25-062727-index.htm",
+          "form": "10-Q",
+          "held_btc": "40595.02889900",
+          "held_sats": "4059502889900",
+          "period_end": "2025-03-31",
+          "rows": 2
+        },
+        {
+          "accn": "0000950170-25-101399",
+          "as_filed": "44025.355644",
+          "filed": "2025-08-01",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000095017025101399/0000950170-25-101399-index.htm",
+          "form": "10-Q",
+          "held_btc": "44025.35564400",
+          "held_sats": "4402535564400",
+          "period_end": "2025-06-30",
+          "rows": 2
+        },
+        {
+          "accn": "0001193125-25-266856",
+          "as_filed": "47736.241796",
+          "filed": "2025-11-05",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000119312525266856/0001193125-25-266856-index.htm",
+          "form": "10-Q",
+          "held_btc": "47736.24179600",
+          "held_sats": "4773624179600",
+          "period_end": "2025-09-30",
+          "rows": 1
+        },
+        {
+          "accn": "0001193125-26-071952",
+          "as_filed": "48474.936591",
+          "filed": "2026-02-25",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000119312526071952/0001193125-26-071952-index.htm",
+          "form": "10-K",
+          "held_btc": "48474.93659100",
+          "held_sats": "4847493659100",
+          "period_end": "2025-12-31",
+          "rows": 3
+        },
+        {
+          "accn": "0001193125-26-206324",
+          "as_filed": "51673.031867",
+          "filed": "2026-05-05",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000119312526206324/0001193125-26-206324-index.htm",
+          "form": "10-Q",
+          "held_btc": "51673.03186700",
+          "held_sats": "5167303186700",
+          "period_end": "2026-03-31",
+          "rows": 1
+        },
+        {
+          "accn": "0002015034-26-000008",
+          "as_filed": "54280.400501",
+          "filed": "2026-08-04",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/2015034/000201503426000008/0002015034-26-000008-index.htm",
+          "form": "10-Q",
+          "held_btc": "54280.40050100",
+          "held_sats": "5428040050100",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "btc_mini",
+      "metric": "sec.edgar.etf_btc_sats.btc_mini",
+      "name": "Grayscale Bitcoin Mini Trust ETF",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "Grayscale Investments",
+      "template_id": "0xee0cf36171e92fe42f2cf7f06c4b2371ef95308f321af0bb17300e36b67a5201",
+      "ticker": "BTC",
+      "unit": "Bitcoin",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0002015034/us-gaap/InvestmentOwnedBalanceContracts.json"
+    },
+    {
+      "body_sha256": "38f03aa447e18e62a98f690b6aacae00a454c7930c51e728519f9bc55d09be13",
+      "cik": "0001869699",
+      "fact": "us-gaap:InvestmentOwnedBalanceContracts",
+      "flows": [
+        {
+          "change_btc": "+893.96430000",
+          "change_sats": "89396430000",
+          "days": 90,
+          "from": "2024-12-31",
+          "from_accn": "0001013762-25-002798",
+          "from_sats": "4660710280000",
+          "to": "2025-03-31",
+          "to_accn": "0001213900-25-042727",
+          "to_sats": "4750106710000"
+        },
+        {
+          "change_btc": "-778.24040000",
+          "change_sats": "-77824040000",
+          "days": 91,
+          "from": "2025-03-31",
+          "from_accn": "0001213900-25-042727",
+          "from_sats": "4750106710000",
+          "to": "2025-06-30",
+          "to_accn": "0001213900-25-075771",
+          "to_sats": "4672282670000"
+        },
+        {
+          "change_btc": "-2194.71850000",
+          "change_sats": "-219471850000",
+          "days": 92,
+          "from": "2025-06-30",
+          "from_accn": "0001213900-25-075771",
+          "from_sats": "4672282670000",
+          "to": "2025-09-30",
+          "to_accn": "0001213900-25-110782",
+          "to_sats": "4452810820000"
+        },
+        {
+          "change_btc": "-6758.76240000",
+          "change_sats": "-675876240000",
+          "days": 92,
+          "from": "2025-09-30",
+          "from_accn": "0001213900-25-110782",
+          "from_sats": "4452810820000",
+          "to": "2025-12-31",
+          "to_accn": "0001213900-26-021831",
+          "to_sats": "3776934580000"
+        },
+        {
+          "change_btc": "-2522.76210000",
+          "change_sats": "-252276210000",
+          "days": 90,
+          "from": "2025-12-31",
+          "from_accn": "0001213900-26-021831",
+          "from_sats": "3776934580000",
+          "to": "2026-03-31",
+          "to_accn": "0001213900-26-053859",
+          "to_sats": "3524658370000"
+        },
+        {
+          "change_btc": "-3068.35570000",
+          "change_sats": "-306835570000",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001213900-26-053859",
+          "from_sats": "3524658370000",
+          "to": "2026-06-30",
+          "to_accn": "0001213900-26-086191",
+          "to_sats": "3217822800000"
+        }
+      ],
+      "fund_name": "ARK 21Shares Bitcoin ETF",
+      "holdings": [
+        {
+          "accn": "0001013762-25-002798",
+          "as_filed": "46607.1028",
+          "filed": "2025-03-26",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000101376225002798/0001013762-25-002798-index.htm",
+          "form": "10-K",
+          "held_btc": "46607.10280000",
+          "held_sats": "4660710280000",
+          "period_end": "2024-12-31",
+          "rows": 7
+        },
+        {
+          "accn": "0001213900-25-042727",
+          "as_filed": "47501.0671",
+          "filed": "2025-05-13",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390025042727/0001213900-25-042727-index.htm",
+          "form": "10-Q",
+          "held_btc": "47501.06710000",
+          "held_sats": "4750106710000",
+          "period_end": "2025-03-31",
+          "rows": 4
+        },
+        {
+          "accn": "0001213900-25-075771",
+          "as_filed": "46722.8267",
+          "filed": "2025-08-13",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390025075771/0001213900-25-075771-index.htm",
+          "form": "10-Q",
+          "held_btc": "46722.82670000",
+          "held_sats": "4672282670000",
+          "period_end": "2025-06-30",
+          "rows": 3
+        },
+        {
+          "accn": "0001213900-25-110782",
+          "as_filed": "44528.1082",
+          "filed": "2025-11-14",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390025110782/0001213900-25-110782-index.htm",
+          "form": "10-Q",
+          "held_btc": "44528.10820000",
+          "held_sats": "4452810820000",
+          "period_end": "2025-09-30",
+          "rows": 1
+        },
+        {
+          "accn": "0001213900-26-021831",
+          "as_filed": "37769.3458",
+          "filed": "2026-03-02",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390026021831/0001213900-26-021831-index.htm",
+          "form": "10-K",
+          "held_btc": "37769.34580000",
+          "held_sats": "3776934580000",
+          "period_end": "2025-12-31",
+          "rows": 3
+        },
+        {
+          "accn": "0001213900-26-053859",
+          "as_filed": "35246.5837",
+          "filed": "2026-05-08",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390026053859/0001213900-26-053859-index.htm",
+          "form": "10-Q",
+          "held_btc": "35246.58370000",
+          "held_sats": "3524658370000",
+          "period_end": "2026-03-31",
+          "rows": 2
+        },
+        {
+          "accn": "0001213900-26-086191",
+          "as_filed": "32178.228",
+          "filed": "2026-08-06",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1869699/000121390026086191/0001213900-26-086191-index.htm",
+          "form": "10-Q",
+          "held_btc": "32178.22800000",
+          "held_sats": "3217822800000",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "arkb",
+      "metric": "sec.edgar.etf_btc_sats.arkb",
+      "name": "ARK 21Shares Bitcoin ETF",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "21Shares US (with ARK Investment Management)",
+      "template_id": "0x4ede66dc4add7024246111dd83617f8bdd3cdf2029bd91a454c62117027aa292",
+      "ticker": "ARKB",
+      "unit": "pure",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001869699/us-gaap/InvestmentOwnedBalanceContracts.json"
+    },
+    {
+      "body_sha256": "67d090aea0f8e55aae051cee2d63c7085d2e2dba85a1d4b44f9a2e3e2e5b71b3",
+      "cik": "0001992870",
+      "fact": "us-gaap:CryptoAssetNumberOfUnits",
+      "flows": [
+        {
+          "change_btc": "-638.81730000",
+          "change_sats": "-63881730000",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001140361-26-033208",
+          "from_sats": "630283360000",
+          "to": "2026-06-30",
+          "to_accn": "0001140361-26-033208",
+          "to_sats": "566401630000"
+        }
+      ],
+      "fund_name": "Franklin Bitcoin ETF",
+      "holdings": [
+        {
+          "accn": "0001140361-26-033208",
+          "as_filed": "6302.8336",
+          "filed": "2026-08-14",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1992870/000114036126033208/0001140361-26-033208-index.htm",
+          "form": "10-Q",
+          "held_btc": "6302.83360000",
+          "held_sats": "630283360000",
+          "period_end": "2026-03-31",
+          "rows": 1
+        },
+        {
+          "accn": "0001140361-26-033208",
+          "as_filed": "5664.0163",
+          "filed": "2026-08-14",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1992870/000114036126033208/0001140361-26-033208-index.htm",
+          "form": "10-Q",
+          "held_btc": "5664.01630000",
+          "held_sats": "566401630000",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "ezbc",
+      "metric": "sec.edgar.etf_btc_sats.ezbc",
+      "name": "Franklin Templeton Digital Holdings Trust",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "Franklin Templeton (Franklin Holdings)",
+      "template_id": "0x0547a97baaee38ac4c45f4f7bca0e52a55050008784d382f4182577c1cab9c19",
+      "ticker": "EZBC",
+      "unit": "Bitcoin",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001992870/us-gaap/CryptoAssetNumberOfUnits.json"
+    },
+    {
+      "body_sha256": "1ace9b8179f212659852317a078a44f6f3e8dd3d7cb3221e955f0896c6a25fc5",
+      "cik": "0001985840",
+      "fact": "us-gaap:InvestmentOwnedBalanceShares",
+      "flows": [
+        {
+          "change_btc": "-22.98000000",
+          "change_sats": "-2298000000",
+          "days": 273,
+          "from": "2024-12-31",
+          "from_accn": "0001999371-25-017892",
+          "from_sats": "15785000000",
+          "to": "2025-09-30",
+          "to_accn": "0001999371-25-017892",
+          "to_sats": "13487000000"
+        },
+        {
+          "change_btc": "+0.00000000",
+          "change_sats": "0",
+          "days": 92,
+          "from": "2025-09-30",
+          "from_accn": "0001999371-25-017892",
+          "from_sats": "13487000000",
+          "to": "2025-12-31",
+          "to_accn": "0001999371-26-007288",
+          "to_sats": "13487000000"
+        },
+        {
+          "change_btc": "+0.00000000",
+          "change_sats": "0",
+          "days": 90,
+          "from": "2025-12-31",
+          "from_accn": "0001999371-26-007288",
+          "from_sats": "13487000000",
+          "to": "2026-03-31",
+          "to_accn": "0001999371-26-010569",
+          "to_sats": "13487000000"
+        },
+        {
+          "change_btc": "+90.71000000",
+          "change_sats": "9071000000",
+          "days": 91,
+          "from": "2026-03-31",
+          "from_accn": "0001999371-26-010569",
+          "from_sats": "13487000000",
+          "to": "2026-06-30",
+          "to_accn": "0001213900-26-088483",
+          "to_sats": "22558000000"
+        }
+      ],
+      "fund_name": "Hashdex Bitcoin ETF",
+      "holdings": [
+        {
+          "accn": "0001999371-25-017892",
+          "as_filed": "157.85",
+          "filed": "2025-11-14",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1985840/000199937125017892/0001999371-25-017892-index.htm",
+          "form": "10-Q",
+          "held_btc": "157.85000000",
+          "held_sats": "15785000000",
+          "period_end": "2024-12-31",
+          "rows": 4
+        },
+        {
+          "accn": "0001999371-25-017892",
+          "as_filed": "134.87",
+          "filed": "2025-11-14",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1985840/000199937125017892/0001999371-25-017892-index.htm",
+          "form": "10-Q",
+          "held_btc": "134.87000000",
+          "held_sats": "13487000000",
+          "period_end": "2025-09-30",
+          "rows": 1
+        },
+        {
+          "accn": "0001999371-26-007288",
+          "as_filed": "134.87",
+          "filed": "2026-03-31",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1985840/000199937126007288/0001999371-26-007288-index.htm",
+          "form": "10-K",
+          "held_btc": "134.87000000",
+          "held_sats": "13487000000",
+          "period_end": "2025-12-31",
+          "rows": 3
+        },
+        {
+          "accn": "0001999371-26-010569",
+          "as_filed": "134.87",
+          "filed": "2026-05-12",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1985840/000199937126010569/0001999371-26-010569-index.htm",
+          "form": "10-Q",
+          "held_btc": "134.87000000",
+          "held_sats": "13487000000",
+          "period_end": "2026-03-31",
+          "rows": 1
+        },
+        {
+          "accn": "0001213900-26-088483",
+          "as_filed": "225.58",
+          "filed": "2026-08-12",
+          "filing_url": "https://www.sec.gov/Archives/edgar/data/1985840/000121390026088483/0001213900-26-088483-index.htm",
+          "form": "10-Q",
+          "held_btc": "225.58000000",
+          "held_sats": "22558000000",
+          "period_end": "2026-06-30",
+          "rows": 1
+        }
+      ],
+      "key": "defi",
+      "metric": "sec.edgar.etf_btc_sats.defi",
+      "name": "Hashdex Commodities Trust",
+      "observers": 3,
+      "refused": [],
+      "sponsor": "Hashdex Asset Management",
+      "template_id": "0x0a2be9c5f5411ed13bb3c965acf5cee6294fb7a1a660c8fff263290a92bc05df",
+      "ticker": "DEFI",
+      "unit": "shares",
+      "url": "https://data.sec.gov/api/xbrl/companyconcept/CIK0001985840/us-gaap/InvestmentOwnedBalanceShares.json"
+    }
+  ],
+  "level": 2,
+  "not_covered_note": "These funds file 10-Qs and 10-Ks with the SEC. EDGAR's data.sec.gov API serves only standard facts without XBRL dimensions; reading a filing's own XBRL needs www.sec.gov, which refuses Onyx's User-Agent until it names a contact address.",
+  "outside_us": [
+    {
+      "cik": null,
+      "name": "21Shares bitcoin exchange-traded products (Europe)",
+      "reason": "listed in Europe under an EU prospectus; EDGAR's company search lists 21Shares' US funds (ARKB is covered above) but no 21Shares bitcoin ETP",
+      "ticker": "21Shares ETPs"
+    },
+    {
+      "cik": null,
+      "name": "3iQ Bitcoin ETF (Canada)",
+      "reason": "listed in Canada and reports to Canadian regulators (SEDAR+); EDGAR lists other 3iQ entities but not this fund",
+      "ticker": "3iQ"
+    },
+    {
+      "cik": null,
+      "name": "Bosera HashKey Bitcoin ETF (Hong Kong)",
+      "reason": "authorized in Hong Kong and listed on HKEX; not an SEC registrant",
+      "ticker": "Bosera / HashKey"
+    },
+    {
+      "cik": null,
+      "name": "CoinShares physical bitcoin ETPs (Europe)",
+      "reason": "listed in Europe; not an SEC registrant (CoinShares' US fund BRRR is listed above)",
+      "ticker": "CoinShares ETPs"
+    },
+    {
+      "cik": null,
+      "name": "ETC Group bitcoin ETC (Germany)",
+      "reason": "listed in Germany under an EU prospectus; EDGAR has no entity for it",
+      "ticker": "ETC Group"
+    },
+    {
+      "cik": null,
+      "name": "Purpose Bitcoin ETF (Canada)",
+      "reason": "listed in Canada and reports to Canadian regulators (SEDAR+); EDGAR's company search finds no Purpose bitcoin entity",
+      "ticker": "Purpose"
+    }
+  ],
+  "rerun": "cargo run -p onyx-source-edgar --example etf-holdings -- --out apps/web/static/level2/etf-holdings.json",
+  "source": {
+    "attribution": "Source: U.S. Securities and Exchange Commission, EDGAR XBRL data (data.sec.gov)",
+    "name": "SEC EDGAR: XBRL company concept (data.sec.gov)",
+    "terms_quote": "Information presented on sec.gov is considered public information and may be copied or further distributed by users of the web site without the SEC's permission.",
+    "terms_url": "https://www.sec.gov/privacy",
+    "user_agent": "onyx-dev (contact pending)"
+  },
+  "status": "Level-2 source, recorded: three fetches from one machine replayed through the pinned fetcher; no bonded observer round has run on these feeds yet (ROADMAP P2h).",
+  "us_not_covered": [
+    {
+      "cik": "0001763415",
+      "name": "Bitwise Bitcoin ETF",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "BITB"
+    },
+    {
+      "cik": "0001838028",
+      "name": "VanEck Bitcoin ETF",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "HODL"
+    },
+    {
+      "cik": "0001841175",
+      "name": "CoinShares Bitcoin ETF",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "BRRR"
+    },
+    {
+      "cik": "0001855781",
+      "name": "Invesco Galaxy Bitcoin ETF",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "BTCO"
+    },
+    {
+      "cik": "0001850391",
+      "name": "WisdomTree Bitcoin Fund",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "BTCW"
+    },
+    {
+      "cik": "0002103612",
+      "name": "Morgan Stanley Bitcoin Trust",
+      "reason": "its quantity is tagged only in its own taxonomy or with XBRL dimensions, so it needs the filing itself on www.sec.gov (ROADMAP P2g)",
+      "ticker": "MSBT"
+    },
+    {
+      "cik": "0001767057",
+      "name": "Osprey Bitcoin Trust",
+      "reason": "a US trust traded over the counter (not an ETF) that files with the SEC; its tagged quantity and fair value imply a bitcoin price far from every other fund's filing for the same two days (2025-12-31 below, 2026-06-30 above), so the tag is not taken as its whole holding until the filing text is read (ROADMAP P2g)",
+      "ticker": "OBTC"
+    }
+  ],
+  "window_start": 1792382708
+}

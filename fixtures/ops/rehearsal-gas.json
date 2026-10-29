@@ -1,0 +1,23 @@
+{
+  "source": "scripts/demo-testnet.sh fork --dispute --sweep on branch reserve-live (from main c6a78a5; contracts unchanged; the driver now also settles and sells the reserve round in fork and testnet modes, ROADMAP A2), three times on 2026-10-13 (anvil fork of Base Sepolia, anvil dev key; REHEARSAL PASSED in all three runs; run 1 with the previous constants' plan, runs 2 and 3 with these; run 3 on the committed driver). Each field is the largest of the three runs. Run 1: 'deploy: 6 txs, 18364270 L2 gas', 'chain 171 transactions', 'spent 176 txs, 39746703 L2 gas', 'most gas miner 1301505, validator 822105, coordinator (with deploy) 29774898', 'most txs miner 10, validator 9, coordinator (with deploy) 74, registry owner 6'. Run 2: 'deploy: 6 txs, 18364270 L2 gas', 'chain 180 transactions', 'spent 185 txs, 40660037 L2 gas', 'most gas miner 1301503, validator 922744, coordinator (with deploy) 29925128', 'most txs miner 10, validator 11, coordinator (with deploy) 74, registry owner 6'. Run 3: 'deploy: 6 txs, 18364270 L2 gas', 'chain 180 transactions', 'spent 185 txs, 40709884 L2 gas', 'most gas miner 1301541, validator 861565, coordinator (with deploy) 30005788', 'most txs miner 10, validator 9, coordinator (with deploy) 74, registry owner 6'. Coordinator after deploy = with deploy minus deploy. Previous measurement (reserve-api 7eec445, without the reserve round): miner 957661, validator 795493, coordinator after deploy 8794715 in 60 txs, owner 4",
+  "deploy_gas": 18364270,
+  "deploy_txs": 6,
+  "coordinator_gas_after_deploy": 11641518,
+  "coordinator_txs": 68,
+  "max_miner_gas": 1301541,
+  "max_miner_txs": 10,
+  "max_validator_gas": 922744,
+  "max_validator_txs": 11,
+  "owner_txs_fork": 6,
+  "floored_metrics": 2,
+  "level2": {
+    "source": "scripts/demo-testnet.sh fork --dispute --level2 on branch revenue-books (from main 5ac9b59), 2026-10-16, anvil fork of Base Sepolia, anvil dev key, REHEARSAL PASSED; and the same run without --level2 right after for the difference. With: 'deploy: 6 txs, 18699033 L2 gas', 'most gas miner 1301503, validator 974910, coordinator (with deploy) 32041911', 'most txs miner 10, validator 11, coordinator (with deploy) 88, registry owner 7'. Without: 'deploy: 6 txs, 18699021 L2 gas', 'most gas miner 1301507, validator 972158, coordinator (with deploy) 30580419', 'most txs ... coordinator (with deploy) 74, registry owner 6'. Coordinator after deploy = with deploy minus deploy. Run 2 with --level2 (same day, after the review fixes): 'deploy: 6 txs, 18699033 L2 gas', 'most gas miner 1301515, validator 822117, coordinator (with deploy) 32294038', 'most txs miner 10, validator 9, coordinator (with deploy) 88, registry owner 7'. Each field is the largest of the two --level2 runs.",
+    "coordinator_gas_after_deploy": 13595005,
+    "coordinator_txs": 82,
+    "owner_txs_fork": 7,
+    "base_coordinator_gas_after_deploy": 11881398,
+    "base_coordinator_txs": 68,
+    "max_validator_gas": 974910,
+    "max_miner_gas": 1301507
+  }
+}

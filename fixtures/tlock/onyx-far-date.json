@@ -1,0 +1,40 @@
+{
+  "about": "Made by onyx-coordinator (ROADMAP C52, ADR-0027 amendment 15), NOT by drand/tlock: far copies of a body key kappa, tlock(round, kappa, sigma) with sigma = keccak256(\"onyx-sealed-far-sigma-v1\" || kappa || round as 8 bytes big endian)[..16], each locked to a published quicknet round in fixtures/tlock/drand and opened with its real signature. Cross-target consistency vectors (native and wasm32), not interop vectors. Regenerate: ONYX_BLESS=1 cargo test -p onyx-coordinator c52_far_date_vectors.",
+  "vectors": [
+    {
+      "beacon": "drand/quicknet-round-1.json",
+      "ciphertext": "b8add8a1f0dd0cb2dac0e8d8886eb01f535480ad297c509f7cf480be6411dc9f026264d42218e3ff09cbb81f42eb1ee1164656430bd2c781473cf11e0daefeef35315b83d5270c9ce7f5f27b114860d841647183f843de597d29c085c1c38fa29681912d46252cdc43c0f311c26071fad1c541d0038a8b870666c901923a2a2f",
+      "kappa": "31313131313131313131313131313131",
+      "round": 1,
+      "sigma": "23e45d8bf49084ec5a421a616f869cd6"
+    },
+    {
+      "beacon": "drand/quicknet-round-2.json",
+      "ciphertext": "aebe6fff4b7f3f71bb8f5cf5a5643087ae0dd5c7f4291aeac4674c881376942409dff82aeb15fafcc0782b80df84b0a61937dffddaeed5f25945597c5776777bfe10d649f4d83eb2c3fc650b0525b407a2bc39fc52ef085b9037ac3bcea9a67bf6936e5dcfce09923410759157f8c1fec307fc3c8c416b39e1ce68e5fb37d1a8",
+      "kappa": "f3392d17406e64d7fe0c95d6089ee4aa",
+      "round": 2,
+      "sigma": "4c4ae4ed9a9db61100bc749736c1179a"
+    },
+    {
+      "beacon": "drand/quicknet-round-1000.json",
+      "ciphertext": "a9c35b22694bb3f7b45cbd3b65e7af781264f120323073af2d2613ee14fd62698c71427485d216edb618a52ca105073d025592d84bd2ac4971bbc1322cee00cfe819b4e8080b13b6b40b68d661eb9635a8ee8126d2104e3ec3b5bda0457b8087d01d54e81349229252969125521224b3eb8360634c15962d03d219a41f93f87b",
+      "kappa": "33333333333333333333333300000000",
+      "round": 1000,
+      "sigma": "0ea836ed07751d12064fa43ea748cf58"
+    },
+    {
+      "beacon": "drand/quicknet-round-746511.json",
+      "ciphertext": "b9088a5f1018090d4377fe60f7c6cd28e3a0d79b44eeaf1661ada192753082ee8b2d5ac6b6661a1a8a623ab3204654930ce4e44a1e22adadaf7524ba6bdee761e5fbc0470afd3e5a2d8fb313511d7e90be1bfc982fa3df235ff26ad6237aed0dbd570aafcafc4243224a1e310a55b196cc7464ffd43d757028be1f8f7e43f719",
+      "kappa": "00000000000000000000000000000000",
+      "round": 746511,
+      "sigma": "3d3ac69afd6a083f54ccf6ee47b5f379"
+    },
+    {
+      "beacon": "drand/quicknet-round-33154000.json",
+      "ciphertext": "a9a564882bc1526abcae90469bd3f0a8b13290c7ad61b782114cd0e61ef84fe991ccc2b704a56a7b6240c047f8b4953614bbc1500885c1f54a01e70cd8bba24f52fc52b0423ffd6951f9cc365e8d6fb83103472d860741f4b51a6721508e0396a526f09951beaf5b197d766194f5efacf28aff6426050e68851ef89b1878363f",
+      "kappa": "ffffffffffffffffffffffffffffffff",
+      "round": 33154000,
+      "sigma": "8a1d60b65763efd7d79aa6f93d159445"
+    }
+  ]
+}

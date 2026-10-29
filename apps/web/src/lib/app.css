@@ -1,0 +1,1541 @@
+/* Layout: a dark onyx slab opens every page (the network's name, drawn as
+   banded stone), then light/dark themed sections: big visuals, one-line
+   captions, details folded away. Identity carried over from the first demo. */
+/* Layout: one polished-onyx look across the site (the network's name): a live
+   stone slab opens every page, then glass panels on near-black green with
+   hairline borders, a light that follows the pointer, big visuals and
+   one-line captions. Single dark look by choice; every color is set here.
+   Dark only (W3 decision, docs/website-plan.md): the slab, the glass panels and the chart
+   palette are drawn for one ground, and every text pair on it is >= 5.7:1 and every chart
+   fill >= 3:1 (tests/contrast.py). No prefers-color-scheme light theme: a second palette
+   would double the contrast surface for no reader who cannot use this one. */
+:root {
+	color-scheme: dark;
+	--bg: #080909;
+	--bg-2: #0d0e0e;
+	--panel: rgb(22 23 23 / 0.7);
+	--panel-solid: #141515;
+	--panel-2: rgb(255 255 255 / 0.025);
+	--ink: #f1eee6;
+	--muted: #9a978f;
+	--line: rgb(255 255 255 / 0.08);
+	--line-strong: rgb(255 255 255 / 0.14);
+	--accent: #ebe5d6;
+	--accent-2: #b9b1a0;
+	--accent-ink: #0b0c0b;
+	--accent-soft: rgb(235 229 214 / 0.07);
+	--btc: #f2b14a;
+	--btc-soft: rgb(242 177 74 / 0.12);
+	/* Chart line for running totals: a third hue, apart from In (cream) and Out (amber). */
+	--line-net: #7fb4e6;
+	/* Mining-pool shares (6 named + other listed pools + unknown); muted, distinct on the dark ground. */
+	--pool-1: #ebe5d6;
+	--pool-2: #f2b14a;
+	--pool-3: #7fb4e6;
+	--pool-4: #6fd6a8;
+	--pool-5: #c79be6;
+	--pool-6: #e6948a;
+	/* W3: was #5f5d58 (2.78:1 on --panel-solid); now >= 3.8:1 on every panel. Unknown is
+	   drawn hatched (a pattern, not a hue), so the two neutral shares stay apart. */
+	--pool-other: #75726b;
+	--code-bg: rgb(255 255 255 / 0.04);
+	--good: #6fd6a8;
+	--bad: #ff8178;
+	--warn: #f2b14a;
+	/* W10: every surface colour and shadow the components use is a token here. */
+	--header-bg: rgb(6 11 10 / 0.72);
+	--slab-glass: rgb(7 8 8 / 0.55);
+	--scrim: rgb(0 0 0 / 0.55);
+	--hover: rgb(255 255 255 / 0.06);
+	--line-bright: rgb(255 255 255 / 0.22);
+	--accent-line: rgb(235 229 214 / 0.3);
+	--good-soft: rgb(111 214 168 / 0.08);
+	--good-line: rgb(111 214 168 / 0.35);
+	/* W12: the footer wordmark's fade (decoration, hidden from screen readers). */
+	--wordmark-top: rgb(235 229 214 / 0.22);
+	--wordmark-end: rgb(235 229 214 / 0.02);
+	/* Shadows: panel (resting card), lift (card on hover), pop (menus, palette, floating
+	   cards), btn / btn-hover (the filled button), rings and glows for status dots, and the
+	   inset bars that mark the active item. */
+	--shadow: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 20px 40px -24px rgb(0 0 0 / 0.9);
+	--shadow-lift: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 24px 48px -24px rgb(0 0 0 / 0.95), 0 24px 48px -28px rgb(235 229 214 / 0.3);
+	--shadow-pop: 0 1px 0 rgb(255 255 255 / 0.04) inset, 0 32px 80px -24px rgb(0 0 0 / 0.9);
+	--shadow-btn: 0 1px 0 rgb(255 255 255 / 0.6) inset, 0 8px 24px -12px rgb(235 229 214 / 0.45);
+	--shadow-btn-hover: 0 1px 0 rgb(255 255 255 / 0.6) inset, 0 12px 24px -10px rgb(235 229 214 / 0.55);
+	--shadow-ring-good: 0 0 0 4px var(--good-soft);
+	--shadow-ring-btc: 0 0 0 4px var(--btc-soft);
+	--shadow-glow-good: 0 0 0 4px rgb(111 214 168 / 0.12), 0 0 12px rgb(111 214 168 / 0.45);
+	--shadow-mark: inset 0 0 0 1.5px var(--slab-accent), 0 0 12px rgb(235 229 214 / 0.25);
+	--shadow-underline: inset 0 -2px 0 var(--accent);
+	--shadow-underline-good: inset 0 -2px 0 var(--good);
+	--shadow-edge: inset 2px 0 0 var(--accent);
+	--slab: #070808;
+	--slab-ink: #f1eee6;
+	--slab-muted: #a8a49a;
+	--slab-line: rgb(255 255 255 / 0.1);
+	--slab-accent: #ebe5d6;
+	--display: 'Instrument Serif', Georgia, 'Times New Roman', serif;
+	--body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+	--mono: 'IBM Plex Mono', ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+	/* W10: one type scale. Every font size on the site is one of these (tests/e2e.mjs checks
+	   the computed sizes). xs: captions, axes, chips, table heads; sm: small text, tables, code
+	   and mono values; base: body; md: ledes, card titles; lg, xl, 2xl: figures and in-panel
+	   headings (xl and 2xl shrink on phones); h2, h1, hero: page headings; display: the footer
+	   wordmark; field: form fields (16 px, so phones do not zoom into them). */
+	--text-xs: 12px;
+	--text-sm: 13px;
+	--text-base: 15px;
+	--text-field: 16px;
+	--text-md: 18px;
+	--text-lg: 22px;
+	--text-xl: clamp(22px, 2.6vw, 28px);
+	--text-2xl: clamp(28px, 3vw, 36px);
+	--text-h2: clamp(30px, 4.4vw, 46px);
+	--text-h1: clamp(44px, 7.4vw, 88px);
+	/* W12 round 5: the home title was 68 px, smaller than every inner page's 88 px title; now 80 px
+	   on a wide screen (two lines in the hero's column), so the first page leads. */
+	/* W12 round 8: on a phone the title grows with the screen (46 px at 390 px, was 42), so the first
+	   screen opens on a confident two-line title; 80 px on a wide screen as before. */
+	--text-hero: clamp(40px, max(min(11.6vw, 46px), 6.2vw), 80px);
+	--text-display: clamp(80px, 18vw, 220px);
+	/* Line heights: display (h1, wordmark), none (one-line figures and glyphs), tight
+	   (headings), snug (small text, tooltips, card titles), body (running text). */
+	--lh-display: 0.96;
+	--lh-none: 1;
+	--lh-tight: 1.15;
+	--lh-snug: 1.35;
+	--lh-body: 1.55;
+	/* Spacing: a 4 px grid (2 px for hairline gaps). Padding, margins and gaps use only these. */
+	--sp-0: 2px;
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 20px;
+	--sp-6: 24px;
+	--sp-7: 32px;
+	--sp-8: 40px;
+	--sp-9: 48px;
+	--sp-10: 64px;
+	/* W12 round 10: --sp-11 (80 px) and --sp-12 (96 px) removed: the 404 page's taller slab was
+	   their only use. */
+	/* Corners: xs bars and tags, sm fields and code, md inner cards and tooltips, lg panels,
+	   pill buttons and chips (50% for dots and rings). */
+	--radius-xs: 4px;
+	--radius-sm: 8px;
+	--radius-md: 12px;
+	--radius-lg: 18px;
+	--radius-pill: 999px;
+	/* Motion: one duration and easing for hover, focus and press (off under reduced motion
+	   or the header's pause button). */
+	--ease: cubic-bezier(0.2, 0.7, 0.2, 1);
+	--dur: 160ms;
+	/* W12 round 10: a status change (a rail, a ring, a seal turning good or bad) takes one slower
+	   step; it replaces six one-off durations (0.15, 0.18, 0.2, 0.25, 0.3, 0.4 s, most with plain ease). */
+	--dur-slow: 320ms;
+}
+*,
+*::before,
+*::after {
+	box-sizing: border-box;
+}
+/* The sticky header never covers the element that has focus (W3, WCAG 2.4.11). */
+html {
+	scroll-padding-top: 80px;
+}
+body {
+	margin: 0;
+	background: radial-gradient(1200px 600px at 85% -10%, rgb(235 229 214 / 0.05), transparent 60%),
+		radial-gradient(900px 500px at -10% 40%, rgb(242 177 74 / 0.03), transparent 60%),
+		var(--bg);
+	color: var(--ink);
+	font-family: var(--body);
+	font-size: var(--text-base);
+	line-height: var(--lh-body);
+	-webkit-font-smoothing: antialiased;
+}
+h1,
+h2 {
+	font-family: var(--display);
+	font-weight: 400;
+	margin: 0;
+	text-wrap: balance;
+	letter-spacing: -0.01em;
+}
+h1 {
+	font-size: var(--text-h1);
+	line-height: var(--lh-display);
+	letter-spacing: -0.02em;
+}
+/* Metadata lines: real values (heights, hashes, versions), never slogans. */
+.meta {
+	font-family: var(--mono);
+	font-size: var(--text-sm);
+	color: var(--muted);
+	font-variant-numeric: tabular-nums;
+}
+/* W12 round 1: a value line in mono measures up to 110 characters (the body's 62ch, in the
+   wider mono face, cut "Blocks … · one bar per six blocks (about an hour)" to three lines in a
+   1,000 px panel), and breaks between its parts, not inside a range or a figure (.nw). */
+p.meta {
+	max-width: 110ch;
+	text-wrap: pretty;
+}
+.nw {
+	white-space: nowrap;
+}
+/* W12 round 3: a code name, path or command in running text never breaks inside itself (Chrome
+   broke "btc-entity-reserve-v1" after a hyphen and "crates/onyx-api/…" after "onyx-"); it moves
+   to the next line whole. One longer than a phone line (.cmd) breaks only between its words; its
+   hyphenated words sit in .nw spans. */
+:is(p, li, dd, label) > :is(code, span.mono) {
+	white-space: nowrap;
+}
+:is(p, li, dd, label) > :is(code, span.mono).cmd {
+	white-space: normal;
+}
+h2 {
+	font-size: var(--text-h2);
+	line-height: var(--lh-tight);
+}
+h3 {
+	font-size: var(--text-base);
+	font-weight: 600;
+	margin: 0;
+}
+p {
+	margin: 0;
+	max-width: 62ch;
+}
+/* Lists take their spacing from the grid around them, like paragraphs (W10). */
+ul,
+ol {
+	margin: 0;
+	padding-left: var(--sp-5);
+}
+code,
+.mono {
+	font-family: var(--mono);
+	font-size: var(--text-sm);
+}
+.hash {
+	font-family: var(--mono);
+	font-size: var(--text-sm);
+	word-break: break-all;
+}
+.muted {
+	color: var(--muted);
+}
+.lede {
+	font-size: var(--text-md);
+	color: var(--muted);
+}
+.wrap {
+	max-width: 1080px;
+	margin: 0 auto;
+	padding-inline: var(--sp-5);
+}
+/* W12 round 2: one vertical rhythm. --section-y above and below each section (was 64 px, which
+   left 130-200 px empty bands between panels); the number and rule of the next section's opener
+   mark the break instead. 96 px between sections on a wide screen, 64 px on a phone. */
+:root {
+	--section-y: var(--sp-9);
+}
+@media (max-width: 560px) {
+	:root {
+		--section-y: var(--sp-7);
+	}
+}
+.section {
+	display: grid;
+	gap: var(--sp-6);
+	padding-block: var(--section-y);
+}
+@media (max-width: 560px) {
+	.section {
+		gap: var(--sp-4);
+	}
+}
+/* W12 round 2: a section of two panels sits side by side on a wide screen (each prose panel had
+   held a 62-character column in a 1,040 px card, the right half empty); the opener spans both. */
+.section.two {
+	grid-template-columns: repeat(2, minmax(0, 1fr));
+	gap: var(--sp-6) var(--sp-4);
+}
+.section.two > .panel {
+	align-content: start;
+}
+/* W12 round 7: in two panels side by side, a footer sits at its panel's foot, so the two footers'
+   hairlines line up (a short panel's note floated mid-card beside the taller one's). */
+@media (min-width: 861px) {
+	.section.two > .panel:has(> .pfoot:last-child) {
+		display: flex;
+		flex-direction: column;
+	}
+	.section.two > .panel > .pfoot:last-child {
+		margin-top: auto;
+	}
+}
+@media (max-width: 860px) {
+	.section.two {
+		grid-template-columns: minmax(0, 1fr);
+	}
+}
+/* W12 section opener (one rule for every page): each titled section on a page opens with its
+   number in mono and a hairline to the right edge ("01 ———"), then its heading. The number is
+   decoration (alt text "" keeps it out of the heading's spoken name); the rule spans every
+   column of a two-column section. */
+main {
+	counter-reset: section;
+}
+section.section:has(h2) {
+	counter-increment: section;
+}
+section.section:has(h2)::before {
+	content: counter(section, decimal-leading-zero) / '';
+	grid-column: 1 / -1;
+	display: block;
+	padding-right: var(--sp-4);
+	font-family: var(--mono);
+	font-size: var(--text-xs);
+	line-height: var(--lh-none);
+	letter-spacing: 0.08em;
+	color: var(--muted);
+	background: linear-gradient(var(--line-strong), var(--line-strong)) no-repeat right center / calc(100% - 4ch) 1px;
+}
+/* Section text: a lede under a section heading reads at body size in a 68-character
+   measure (W12: the long ones were walls of 18 px grey); the page's own lede on the slab
+   keeps --text-md. Notes (.fine) are sentences in the body face, small and muted; .meta stays
+   for value lines (heights, hashes, counts) in mono. */
+.section .lede {
+	font-size: var(--text-base);
+	line-height: var(--lh-body);
+	max-width: 68ch;
+}
+.fine {
+	font-size: var(--text-sm);
+	line-height: var(--lh-body);
+	color: var(--muted);
+	max-width: 68ch;
+}
+/* Figure tiles (W12, one style for Home, Data and Run): the figure large in mono, its label
+   small under it; a hairline of light along the top edge. */
+.stats {
+	display: grid;
+	grid-template-columns: repeat(4, minmax(0, 1fr));
+	gap: var(--sp-3);
+}
+@media (max-width: 760px) {
+	.stats {
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+	}
+}
+.stat {
+	display: grid;
+	align-content: start;
+	gap: var(--sp-1);
+	padding: var(--sp-5);
+	border-radius: var(--radius-lg);
+	background: linear-gradient(var(--panel), var(--panel)) padding-box,
+		linear-gradient(180deg, var(--line-bright), var(--line) 40%) border-box;
+	border: 1px solid transparent;
+	box-shadow: var(--shadow);
+	min-width: 0;
+}
+/* W12 round 3: one card family. A fact card (a name over its value: Run's contracts, the root and
+   payouts) and a note tile (a title over a sentence: Run's pricing) share the figure tile's
+   surface; only what is inside differs. */
+.fact,
+.tile {
+	display: grid;
+	align-content: start;
+	min-width: 0;
+	border-radius: var(--radius-lg);
+	background: linear-gradient(var(--panel), var(--panel)) padding-box,
+		linear-gradient(180deg, var(--line-bright), var(--line) 40%) border-box;
+	border: 1px solid transparent;
+	box-shadow: var(--shadow);
+}
+.facts {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(min(100%, 14rem), 1fr));
+	gap: var(--sp-3);
+}
+.fact {
+	gap: var(--sp-1);
+	padding: var(--sp-4) var(--sp-5);
+}
+.fact > span,
+.fact > dt {
+	color: var(--muted);
+	font-size: var(--text-sm);
+	line-height: var(--lh-snug);
+}
+.fact > b {
+	font-weight: 500;
+	font-size: var(--text-base);
+	line-height: var(--lh-snug);
+	overflow-wrap: anywhere;
+}
+/* A fact list (dl.facts: name dt, value dd) holds sentences as well as figures (W12 round 4). */
+dl.facts {
+	margin: 0;
+}
+.fact > dd {
+	margin: 0;
+	min-width: 0;
+	font-size: var(--text-base);
+	line-height: var(--lh-body);
+}
+.fact > dd.mono {
+	font-size: var(--text-sm);
+}
+a.fact {
+	color: var(--ink);
+	text-decoration: none;
+	transition:
+		transform var(--dur) var(--ease),
+		box-shadow var(--dur) var(--ease);
+}
+a.fact:hover {
+	transform: translateY(-2px);
+	box-shadow: var(--shadow-lift);
+}
+a.fact:hover > b {
+	color: var(--accent);
+	text-decoration: underline;
+	text-decoration-color: var(--accent-line);
+	text-underline-offset: 0.2em;
+}
+/* Phones: the cards of one group become one card, a row per fact (name left, value right) under
+   hairlines; each row at least 44 px, so a linked one is a full tap target. */
+@media (max-width: 560px) {
+	.facts {
+		gap: 0;
+		padding: 0 var(--sp-4);
+		border-radius: var(--radius-lg);
+		background: linear-gradient(var(--panel), var(--panel)) padding-box,
+			linear-gradient(180deg, var(--line-bright), var(--line) 40%) border-box;
+		border: 1px solid transparent;
+		box-shadow: var(--shadow);
+	}
+	.facts > .fact {
+		grid-template-columns: minmax(0, 1fr) auto;
+		align-items: center;
+		align-content: center;
+		gap: var(--sp-3);
+		min-height: 44px;
+		padding: var(--sp-3) 0;
+		border-radius: 0;
+		background: none;
+		border: 0;
+		border-bottom: 1px solid var(--line);
+		box-shadow: none;
+	}
+	.facts > .fact:last-child {
+		border-bottom: 0;
+	}
+	/* Sentences, not figures: each name over its value, full width. */
+	.facts.stack > .fact {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--sp-1);
+	}
+	.facts > .fact > b {
+		text-align: right;
+	}
+	.facts > .fact > b.mono {
+		font-size: var(--text-sm);
+	}
+	.facts > a.fact:hover {
+		transform: none;
+		box-shadow: none;
+	}
+}
+/* W12 round 10: one nesting rule. A card inside a panel is an inner card: --radius-md, the quiet
+   inner surface (hairline, --panel-2), no shadow of its own, like Explorer's block cards and seal
+   boxes, Labels' set card and Home's market result. The Reserves API facts were the one card in a
+   panel drawn as a top-level card (18 px corners, a gradient edge and a drop shadow). */
+@media (min-width: 561px) {
+	.panel .facts > .fact {
+		border-radius: var(--radius-md);
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		box-shadow: none;
+	}
+}
+@media (max-width: 560px) {
+	.panel .facts {
+		border-radius: var(--radius-md);
+		background: var(--panel-2);
+		border: 1px solid var(--line);
+		box-shadow: none;
+	}
+}
+/* W12 round 3: a note about a panel is the panel's last row, under a hairline (it floated as a
+   grey paragraph between sections); the note keeps its 68-character measure, the rule spans the
+   panel. A note about a group of cards sits in its own quiet bar under them (.notebar). */
+.pfoot {
+	display: grid;
+	gap: var(--sp-2);
+	padding-top: var(--sp-4);
+	border-top: 1px solid var(--line);
+}
+/* W12 round 7: a footer line is a caption: up to about 100 characters it reads on one line (at the
+   68-character measure a one-sentence footer broke onto a second line with the panel's right half
+   empty). A long footer takes .duo: two text columns from 900 px, like a long lede. */
+.pfoot > .fine {
+	max-width: 88ch;
+}
+.pfoot.duo > p + p {
+	margin-top: 0;
+}
+@media (min-width: 900px) {
+	.pfoot.duo {
+		display: block;
+	}
+	.pfoot.duo:has(> p + p) {
+		display: flex;
+	}
+	.pfoot.duo > .fine {
+		max-width: none;
+	}
+}
+/* A check's chain of values ("24 block rows Σ range row → root … pinned"): each value a chip,
+   each operator travels with a value (.eqp: an arrow or Σ leads the value after it, a list dot
+   trails the one before), so a wrap never strands one alone (W12 round 4; one rule for Data and
+   Run, was a copy on each page). */
+.eq {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--sp-2) var(--sp-3);
+	font-size: var(--text-sm);
+}
+.eqp {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-3);
+	min-width: 0;
+}
+.eq > span:not(.op, .eqp),
+.eqp > span:not(.op) {
+	padding: var(--sp-1) var(--sp-3);
+	border-radius: var(--radius-sm);
+	background: var(--code-bg);
+	border: 1px solid var(--line);
+}
+.eq .op {
+	color: var(--muted);
+}
+/* W12 round 5: a long section lede (or a long note) reads in two text columns on a wide screen.
+   It held one 68-character column of 6-9 grey lines with the right half of the page empty; now
+   it takes half the height across the full width. Two paragraphs take a column each; one long
+   paragraph flows from the first column into the second. The reading order is the source order;
+   on a tablet or phone it is one column again. */
+/* One column: paragraphs of a .duo keep the space they had as separate grid items. */
+.duo > p + p {
+	margin-top: var(--sp-4);
+}
+@media (min-width: 900px) {
+	.duo {
+		columns: 2;
+		column-gap: var(--sp-8);
+		column-rule: 1px solid var(--line);
+	}
+	.duo > p + p {
+		margin-top: 0;
+	}
+	/* W12 round 7: two paragraphs take a column each, as before, but each column is as wide as its
+	   share of the text (flex shrinks each paragraph from its one-line length in proportion), so
+	   the two end on about the same line (they had split 3 lines beside 5). The rule is the second
+	   paragraph's left edge, where the column rule was. Reading order: first paragraph, then second. */
+	.duo:has(> p + p) {
+		display: flex;
+		columns: auto;
+		gap: var(--sp-5);
+		/* Chrome paints a column rule in a flex gap too (gap decorations); the border below is it. */
+		column-rule: none;
+	}
+	/* A paragraph's measure (max-width) still caps its column: flex weighs the shrink by the
+	   unclamped one-line length. */
+	.duo:has(> p + p) > p {
+		flex: 1 1 auto;
+		min-width: 30%;
+	}
+	.duo:has(> p + p) > p + p {
+		padding-left: var(--sp-5);
+		border-left: 1px solid var(--line);
+	}
+}
+/* Line breaks that avoid a one-word last line in a column. */
+.duo > p,
+.pfoot > p {
+	text-wrap: pretty;
+}
+/* W12 round 6: a note bar spans the cards above it (it hugged a 68-character note and left the
+   right half empty under a full row of cards); a short note reads on one line, a long one takes
+   .duo (two text columns from 900 px; the bar's grid gap would set the column gap, so it is a
+   block there). */
+.notebar {
+	justify-self: stretch;
+	display: grid;
+	gap: var(--sp-2);
+	padding: var(--sp-4) var(--sp-5);
+	border-radius: var(--radius-lg);
+	border: 1px solid var(--line);
+	background: var(--panel-2);
+}
+.notebar > p {
+	max-width: none;
+}
+.notebar.duo > p + p {
+	margin-top: 0;
+}
+@media (min-width: 900px) {
+	.notebar.duo {
+		display: block;
+		column-gap: var(--sp-8);
+	}
+	.notebar.duo:has(> p + p) {
+		display: flex;
+		column-gap: var(--sp-5);
+	}
+}
+/* W12 round 6: a short section of one paragraph sets its heading beside its text on a wide screen
+   (the paragraph held 60% of the width under the heading, the right half empty); the opener's rule
+   still spans both. Reading order: heading, then text. */
+@media (min-width: 900px) {
+	.section.side {
+		grid-template-columns: minmax(0, 5fr) minmax(0, 7fr);
+		column-gap: var(--sp-8);
+		align-items: start;
+	}
+	.section.side > h2 {
+		padding-top: var(--sp-1);
+	}
+}
+.stat > b {
+	font-family: var(--mono);
+	font-size: var(--text-xl);
+	font-weight: 500;
+	line-height: var(--lh-tight);
+	font-variant-numeric: tabular-nums;
+	letter-spacing: -0.02em;
+	overflow-wrap: anywhere;
+}
+.stat > span {
+	color: var(--muted);
+	font-size: var(--text-sm);
+	line-height: var(--lh-snug);
+}
+/* Phones: two tiles a row; 12 px sides keep an 11-character figure (0.000261830 ETH) on one
+   line at 390 px. */
+@media (max-width: 560px) {
+	.stat {
+		padding: var(--sp-4) var(--sp-3);
+	}
+}
+/* Page opener on the slab (W12): a kicker naming the page ("02 / Data"), the title, then the
+   page's lede in the body face (.slablede, sentences) and fact lines in mono (.slabmeta). */
+.kicker {
+	display: flex;
+	align-items: center;
+	gap: var(--sp-3);
+	margin-bottom: var(--sp-5);
+	font-family: var(--mono);
+	font-size: var(--text-xs);
+	line-height: var(--lh-none);
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--slab-muted);
+}
+.kicker::before {
+	content: '';
+	width: var(--sp-7);
+	height: 1px;
+	background: var(--slab-accent);
+}
+.slablede {
+	font-size: var(--text-md);
+	line-height: var(--lh-body);
+	color: var(--slab-muted);
+	max-width: 56ch;
+}
+h1 + .slablede {
+	margin-top: var(--sp-5);
+}
+.slablede + .slablede,
+.slablede + .slabmeta {
+	margin-top: var(--sp-2);
+}
+/* W12 round 9: an inner page's lede and fact lines sit in one block after the title (.slabside).
+   On a wide screen it is a glass card in a right-hand column, its foot on the title's foot, as Home's
+   drawing sits beside its title: the title stands alone at the left and the first section rises
+   (the lede stacked under the title left the slab's right half empty). Phones: under the title. */
+.slabside {
+	margin-top: var(--sp-5);
+	min-width: 0;
+}
+.slabside:has(> .slabmeta:first-child) {
+	margin-top: var(--sp-4);
+}
+@media (min-width: 961px) {
+	.slab .wrap:has(> .slabside) {
+		display: grid;
+		grid-template-columns: minmax(0, 1fr) minmax(0, 420px);
+		grid-template-rows: 1fr auto;
+		column-gap: var(--sp-9);
+		align-items: end;
+	}
+	.slab .wrap:has(> .slabside) > .kicker {
+		grid-column: 1;
+		grid-row: 1;
+		align-self: end;
+	}
+	.slab .wrap:has(> .slabside) > h1 {
+		grid-column: 1;
+		grid-row: 2;
+	}
+	.slabside {
+		grid-column: 2;
+		grid-row: 1 / span 2;
+		align-self: end;
+		margin-top: 0;
+		padding: var(--sp-5) var(--sp-6);
+		border: 1px solid var(--slab-line);
+		border-radius: var(--radius-lg);
+		background: var(--slab-glass);
+		backdrop-filter: blur(10px);
+		box-shadow: var(--shadow);
+	}
+	.slabside .slablede {
+		max-width: none;
+	}
+	/* W12 round 10: a side card that holds a fact line and a row of perks (API) takes a 520 px column:
+	   the fact line reads in two lines (was three) and the perks two a row (were one a row), so the
+	   card is 151 px tall (was 203 px) and the slab ends 53 px higher at 1,280 px. */
+	.slab .wrap:has(> .slabside.wide) {
+		grid-template-columns: minmax(0, 1fr) minmax(0, 520px);
+	}
+}
+/* Gentle rise as sections scroll in; at rest everything is visible. */
+@supports (animation-timeline: view()) {
+	@media (prefers-reduced-motion: no-preference) {
+		.section,
+		.reveal {
+			animation: rise linear both;
+			animation-timeline: view();
+			animation-range: entry 0% entry 40%;
+		}
+	}
+}
+@keyframes rise {
+	from {
+		transform: translateY(24px);
+	}
+}
+/* W12 round 13: and a section below the first screen fades in as it comes into view (#lib/fade.ts sets
+   data-fade on it; one on the first screen at load never gets it, so no text there is dimmed). Screen
+   only, motion on only: reduced motion, the pause button and print show every section at once. */
+@media screen and (prefers-reduced-motion: no-preference) {
+	/* Only the fade in is animated (review C61-R2, merged-tree gate): a section set to wait below the
+	   screen goes to 0 at once instead of fading out over --dur-slow from load, which a loaded e2e run
+	   read part-way (W12 "below the first screen wait unshown", 0 of 5 at opacity 0). */
+	main .section[data-fade='in'] {
+		transition: opacity var(--dur-slow) var(--ease);
+	}
+	:root:not([data-motion='off']) main .section[data-fade='wait'] {
+		opacity: 0;
+	}
+}
+/* Film grain over everything, very faint. */
+body::after {
+	content: '';
+	position: fixed;
+	inset: 0;
+	pointer-events: none;
+	z-index: 50;
+	opacity: 0.05;
+	background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='2' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+}
+/* Section head (W10, one rule for every page): the heading and its status on one row; inside
+   a panel the heading steps down to --text-xl. */
+.sh {
+	display: flex;
+	flex-wrap: wrap;
+	justify-content: space-between;
+	align-items: center;
+	gap: var(--sp-3);
+}
+.panel .sh h2 {
+	font-size: var(--text-xl);
+}
+/* W12 round 8: a panel's own title is set like a panel heading (display face, --text-xl) wherever it
+   is not an h2: Home's "What stops cheating" tiles and Data's check cards were bold sans beside the
+   serif panel headings of Explorer and Labels. Markup keeps its element (a span or b, not a heading). */
+.ptitle {
+	font-family: var(--display);
+	font-size: var(--text-xl);
+	font-weight: 400;
+	line-height: var(--lh-tight);
+	letter-spacing: -0.01em;
+	color: var(--ink);
+	text-wrap: balance;
+	/* Review of round 14: a word longer than its panel breaks instead of running out of it (a 60-letter
+	   word in the empty track panel's new title ran past its 375 px panel). `break-word`, not `anywhere`:
+	   it leaves each title's min-content width alone, so no panel row that sizes to its titles moves. */
+	overflow-wrap: break-word;
+}
+/* W12 round 12: one rule for list-item titles. A title that names its item (Home's five roles, Run's
+   steps and indexer rounds, Run's three earning cards) is set in the display face one step below a
+   panel title (--text-lg); they were bold or medium sans beside serif panel and card titles. A label
+   inside a chart or table (the rehearsal's gantt rows, company names, seal names) stays in the body
+   face, where it reads as data. */
+.ititle {
+	font-family: var(--display);
+	font-size: var(--text-lg);
+	font-weight: 400;
+	line-height: var(--lh-tight);
+	letter-spacing: -0.005em;
+	color: var(--ink);
+	text-wrap: balance;
+	/* Review of round 12: a word longer than its column (a run step's title comes from the run
+	   file) breaks instead of running out of its card; at 375 px it scrolled the page sideways. */
+	overflow-wrap: anywhere;
+}
+/* The fact lines under a page's title on the slab (W12 round 1: one line at 1,280 px; on a
+   phone they break between parts, never inside a time range). */
+.slabmeta {
+	color: var(--slab-muted);
+	max-width: 96ch;
+}
+h1 + .slabmeta {
+	margin-top: var(--sp-4);
+}
+.slabmeta + .slabmeta {
+	margin-top: var(--sp-1);
+}
+.head {
+	display: grid;
+	gap: var(--sp-2);
+}
+.panel {
+	position: relative;
+	background: linear-gradient(var(--panel), var(--panel)) padding-box,
+		linear-gradient(160deg, var(--line-strong), rgb(255 255 255 / 0.03) 40%, rgb(235 229 214 / 0.14)) border-box;
+	border: 1px solid transparent;
+	border-radius: var(--radius-lg);
+	padding: var(--sp-6);
+	display: grid;
+	gap: var(--sp-4);
+	min-width: 0;
+	box-shadow: var(--shadow);
+	backdrop-filter: blur(8px);
+	isolation: isolate;
+	/* One column that can shrink: a wide child (a select, a long row) wraps or scrolls
+	   inside the card instead of widening it past the card's edge (W2, Explorer at 360 px). */
+	grid-template-columns: minmax(0, 1fr);
+}
+/* Light that follows the pointer (set by the layout). */
+.panel::before {
+	content: '';
+	position: absolute;
+	inset: 0;
+	border-radius: inherit;
+	background: radial-gradient(420px circle at var(--mx, 50%) var(--my, -200px), rgb(235 229 214 / 0.06), transparent 45%);
+	pointer-events: none;
+	z-index: -1;
+}
+.row {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--sp-3);
+	align-items: center;
+}
+.kv {
+	display: grid;
+	grid-template-columns: max-content minmax(0, 1fr);
+	gap: var(--sp-2) var(--sp-4);
+	align-items: baseline;
+	margin: 0;
+}
+.kv dt {
+	color: var(--muted);
+	font-size: var(--text-sm);
+}
+.kv dd {
+	margin: 0;
+	min-width: 0;
+}
+@media (max-width: 560px) {
+	.kv {
+		grid-template-columns: minmax(0, 1fr);
+		gap: var(--sp-0);
+	}
+	.kv dd {
+		margin-bottom: var(--sp-2);
+	}
+}
+button,
+.btn {
+	font: inherit;
+	font-weight: 500;
+	border-radius: var(--radius-pill);
+	padding: var(--sp-2) var(--sp-4);
+	cursor: pointer;
+	border: 1px solid var(--line-bright);
+	background: linear-gradient(180deg, #fbf8f0, var(--accent) 50%, #d8d1bf);
+	color: var(--accent-ink);
+	box-shadow: var(--shadow-btn);
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-2);
+	text-decoration: none;
+	-webkit-tap-highlight-color: transparent;
+	transition:
+		transform var(--dur) var(--ease),
+		box-shadow var(--dur) var(--ease),
+		background-color var(--dur) var(--ease),
+		border-color var(--dur) var(--ease),
+		color var(--dur) var(--ease),
+		filter var(--dur) var(--ease);
+}
+/* W10 states, the same on every control: hover lifts (filled) or lightens (ghost), press
+   sinks 1 px, focus shows the ring below, disabled fades. */
+button:hover:not(:disabled),
+.btn:hover {
+	transform: translateY(-1px);
+	box-shadow: var(--shadow-btn-hover);
+}
+button.ghost,
+.btn.ghost {
+	background: var(--code-bg);
+	border-color: var(--line-strong);
+	color: var(--ink);
+	box-shadow: none;
+}
+button.ghost:hover:not(:disabled),
+.btn.ghost:hover {
+	background: var(--hover);
+	border-color: var(--line-bright);
+	box-shadow: none;
+}
+/* Press: sink 1 px and dim; the dimming shows on buttons whose own hover keeps them still. */
+button:active:not(:disabled),
+.btn:active {
+	transform: translateY(1px);
+	box-shadow: none;
+	filter: brightness(0.86);
+}
+button:disabled {
+	opacity: 0.5;
+	cursor: default;
+}
+/* Links: underlined in running text, a heavier underline on hover. */
+a {
+	color: var(--accent);
+	text-underline-offset: 0.2em;
+	text-decoration-thickness: 1px;
+	text-decoration-color: var(--accent-line);
+	transition:
+		color var(--dur) var(--ease),
+		text-decoration-color var(--dur) var(--ease);
+}
+a:hover:not(.btn) {
+	color: var(--ink);
+	text-decoration-color: currentColor;
+}
+summary {
+	cursor: pointer;
+	transition: color var(--dur) var(--ease);
+}
+/* A fold's label underlines on hover, like a link (its colour is often set by the fold). */
+summary:hover {
+	color: var(--ink);
+	text-decoration: underline;
+	text-decoration-color: var(--accent-line);
+	text-underline-offset: 0.2em;
+}
+select,
+input {
+	transition: border-color var(--dur) var(--ease);
+}
+select:hover,
+input[type='search']:hover {
+	border-color: var(--line-bright);
+}
+/* Every control shows a 2 px ring when reached by keyboard (W3: charts and scrolling
+   boxes with tabindex="0" too). --accent on the darkest panel is 14:1. */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
+summary:focus-visible,
+[tabindex='0']:focus-visible {
+	outline: 2px solid var(--accent);
+	outline-offset: 2px;
+}
+/* Icons (W10): every lucide icon in one stroke, at 16 px (inline, in buttons), 18 px (icon
+   tiles) or 22 px (large marks); tests/e2e.mjs checks both. */
+svg.lucide {
+	stroke-width: 1.75;
+	flex: none;
+}
+/* Text for screen readers only (chart summaries, icon meanings). */
+.sr-only {
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
+}
+select,
+input[type='search'] {
+	max-width: 100%;
+	font: inherit;
+	padding: var(--sp-2) var(--sp-3);
+	border-radius: var(--radius-md);
+	border: 1px solid var(--line-strong);
+	background: var(--panel-solid);
+	color: var(--ink);
+}
+input[type='range'] {
+	width: 100%;
+	border: 0;
+	background: transparent;
+	accent-color: var(--accent);
+	cursor: pointer;
+	transition: filter var(--dur) var(--ease);
+}
+input[type='range']:hover {
+	filter: brightness(1.2);
+}
+.tablebox {
+	overflow-x: auto;
+}
+table {
+	border-collapse: collapse;
+	width: 100%;
+	font-size: var(--text-sm);
+	font-variant-numeric: tabular-nums;
+}
+th,
+td {
+	text-align: left;
+	padding: var(--sp-2) var(--sp-3);
+	border-bottom: 1px solid var(--line);
+	white-space: nowrap;
+}
+th {
+	color: var(--muted);
+	font-weight: 500;
+	font-size: var(--text-sm);
+}
+/* Column heads in the caption style (W10): the chart labels' small caps line. */
+thead th {
+	font-size: var(--text-xs);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+	vertical-align: bottom;
+}
+tbody tr {
+	transition: background-color var(--dur) var(--ease);
+}
+tbody tr:hover {
+	background: var(--panel-2);
+}
+td.r,
+th.r {
+	text-align: right;
+}
+/* W12 round 11: in a panel the panel's edge, or the footer's or fold's own hairline under the table,
+   closes it; the last row drew a second rule 16-26 px above that one. */
+.panel tbody tr:last-child > :is(td, th) {
+	border-bottom: 0;
+}
+pre.code {
+	background: var(--code-bg);
+	border-radius: var(--radius-md);
+	padding: var(--sp-4);
+	overflow-x: auto;
+	margin: 0;
+	font-family: var(--mono);
+	font-size: var(--text-sm);
+	white-space: pre;
+}
+details.more {
+	border-top: 1px solid var(--line);
+	padding-top: var(--sp-3);
+}
+details.more > summary {
+	color: var(--muted);
+	font-size: var(--text-sm);
+}
+/* One fold marker on every <details> (W10): "+" closed, "−" open, in mono --accent. The Run
+   page's transaction folds draw theirs inside the label. */
+details > summary {
+	list-style: none;
+}
+details > summary::-webkit-details-marker {
+	display: none;
+}
+details:not(.txset) > summary::before {
+	content: '+ ';
+	font-family: var(--mono);
+	color: var(--accent);
+	/* MP3: keep the space when the summary is a flex row (it collapsed to "+Contracts"). */
+	white-space: pre;
+}
+details:not(.txset)[open] > summary::before {
+	content: '− ';
+}
+details.more > :not(summary) {
+	margin-top: var(--sp-3);
+}
+.log {
+	font-family: var(--mono);
+	font-size: var(--text-sm);
+	display: grid;
+	gap: var(--sp-1);
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+.chip {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-2);
+	font-family: var(--mono);
+	font-size: var(--text-xs);
+	border: 1px solid var(--line);
+	border-radius: var(--radius-pill);
+	padding: var(--sp-1) var(--sp-3);
+	color: var(--muted);
+	background: var(--panel-2);
+}
+/* W12 round 11: one segmented switch (Run's run picker, Data's company, scale, range and day
+   switches; was a copy on each page). Its options are quiet text buttons in a pill track; the
+   chosen one is filled. Hover lightens an option in place (the chosen one brightens): no lift and no
+   glow (an option took the filled button's hover, rising 1 px with a cream glow under a transparent
+   chip); press dims it.
+   Review: scoped to the switch's role="group": a bare .seg also styled PoolShares' bar segments
+   (<span class="seg mark">), giving each a 4 px padding, a border and pill corners, so a 1-block
+   pool drew 11 px beside a 29-block pool's 40 px at 375 px (the bar stopped being to scale). */
+.seg[role='group'] {
+	display: inline-flex;
+	gap: var(--sp-1);
+	padding: var(--sp-1);
+	border-radius: var(--radius-pill);
+	border: 1px solid var(--line);
+	background: var(--panel-2);
+}
+.chipbtn {
+	border: 0;
+	background: transparent;
+	color: var(--muted);
+	font: inherit;
+	font-size: var(--text-sm);
+	padding: var(--sp-1) var(--sp-3);
+	border-radius: var(--radius-pill);
+	box-shadow: none;
+	cursor: pointer;
+	/* after the font shorthand, which resets it */
+	font-variant-numeric: tabular-nums;
+}
+.chipbtn:hover:not(:disabled),
+.chipbtn:active:not(:disabled) {
+	transform: none;
+	box-shadow: none;
+	color: var(--ink);
+	background: var(--hover);
+}
+.chipbtn[aria-pressed='true'],
+.chipbtn[aria-pressed='true']:hover:not(:disabled) {
+	background: var(--accent);
+	color: var(--accent-ink);
+}
+/* The chosen option brightens a touch on hover (and still dims on press). */
+.chipbtn[aria-pressed='true']:hover:not(:disabled, :active) {
+	filter: brightness(1.06);
+}
+/* W12 round 11: figures that sit in a row of values or change in place (switches, chips, pills,
+   fact and key/value lists, legends, buttons whose label counts) take tabular figures, so a count
+   that ticks or a column of values does not shift sideways. Running text keeps proportional ones. */
+button,
+.btn,
+.chip,
+.kv,
+.facts,
+.chart-legend,
+.stat,
+.log,
+label {
+	font-variant-numeric: tabular-nums;
+}
+
+/* Phones (W2): a table marked .stack shows each row as a block of label/value lines
+   (labels from data-label), so it fits the screen instead of scrolling sideways. */
+@media (max-width: 560px) {
+	table.stack,
+	table.stack tbody,
+	table.stack tr,
+	table.stack td,
+	table.stack tbody th {
+		display: block;
+		width: 100%;
+	}
+	table.stack thead {
+		position: absolute;
+		width: 1px;
+		height: 1px;
+		overflow: hidden;
+		clip-path: inset(50%);
+	}
+	table.stack caption {
+		display: block;
+	}
+	table.stack tr {
+		padding-block: var(--sp-2);
+		border-bottom: 1px solid var(--line);
+	}
+	/* Review of W12 round 11: in a panel the stacked last row draws no rule either (the row, not its
+	   cells, carries the rule here; the footer's hairline or the panel's edge closes it). */
+	.panel table.stack tbody tr:last-child {
+		border-bottom: 0;
+	}
+	table.stack td,
+	table.stack td.r,
+	table.stack tbody th {
+		position: relative;
+		padding: var(--sp-1) 0 var(--sp-1) 42%;
+		border: 0;
+		white-space: normal;
+		overflow-wrap: anywhere;
+		text-align: left;
+	}
+	table.stack td::before,
+	table.stack tbody th::before {
+		content: attr(data-label);
+		position: absolute;
+		left: 0;
+		width: 38%;
+		color: var(--muted);
+		font-family: var(--body);
+		font-size: var(--text-sm);
+		white-space: normal;
+		text-align: left;
+	}
+}
+
+/* Phones (W2): every control a 44 x 44 px tap target (WCAG 2.5.5), whatever its look
+   on a wide screen. Links inside running text keep their size (the inline exception). */
+@media (max-width: 760px) {
+	button,
+	.btn,
+	select,
+	input[type='search'] {
+		min-height: 44px;
+	}
+	button {
+		min-width: 44px;
+		justify-content: center;
+	}
+	summary {
+		min-height: 44px;
+		padding-block: var(--sp-3);
+	}
+	input[type='range'] {
+		height: 44px;
+		margin: 0;
+	}
+	/* Links that stand alone in a cell or a list row. */
+	dd > a:only-child,
+	li > a:only-child {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+	}
+	/* Links in running text: a taller hit area without moving the lines. */
+	p a,
+	td a,
+	.muted a,
+	.meta a {
+		padding-block: var(--sp-1);
+	}
+}
+
+/* No motion (W3, WCAG 2.3.3): when the system asks for reduced motion, or the viewer
+   presses the header's pause button (<html data-motion="off">), nothing animates or
+   slides; state changes still show, at once. */
+@media (prefers-reduced-motion: reduce) {
+	*,
+	*::before,
+	*::after {
+		animation: none !important;
+		transition: none !important;
+		scroll-behavior: auto !important;
+	}
+}
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+	animation: none !important;
+	transition: none !important;
+	scroll-behavior: auto !important;
+}
+
+/* Data tables under the charts (W3): the same numbers as the drawing, for screen
+   readers, keyboards and anyone who wants the figures. Built only when opened. */
+.datatable .tablebox {
+	max-height: 420px;
+	overflow: auto;
+	border: 1px solid var(--line);
+	border-radius: var(--radius-md);
+	padding: var(--sp-1) var(--sp-3);
+}
+.datatable caption {
+	text-align: left;
+	color: var(--muted);
+	font-size: var(--text-sm);
+	padding-bottom: var(--sp-2);
+}
+.datatable thead th {
+	position: sticky;
+	top: 0;
+	background: var(--panel-solid);
+}
+
+/* Charts (W6): one style for every chart, drawn by ChartFrame and the helpers in
+   src/lib/chart.ts. Axes: IBM Plex Mono 12 px in --muted, hairline grid, the zero line
+   stronger. Marks: --accent above zero / in, --btc below zero / out, --line-net for lines,
+   --pool-* for categories. One tooltip, one highlight band, one legend, one empty state. */
+.chart {
+	position: relative;
+	display: grid;
+	gap: var(--sp-2);
+	touch-action: pan-y;
+}
+.chart svg {
+	display: block;
+	overflow: visible;
+}
+.chart .grid {
+	stroke: var(--line);
+	stroke-width: 1;
+}
+.chart .grid.zero,
+.chart .tick {
+	stroke: var(--line-strong);
+}
+.chart .axis {
+	fill: var(--muted);
+	font-family: var(--mono);
+	font-size: var(--text-xs);
+	font-variant-numeric: tabular-nums;
+}
+.chart .axis.label {
+	text-transform: uppercase;
+}
+.chart .axis.value {
+	fill: var(--ink);
+}
+.chart-label {
+	font-size: var(--text-xs);
+	color: var(--muted);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.chart .in,
+.chart .pos {
+	fill: var(--accent);
+}
+.chart .out,
+.chart .neg {
+	fill: var(--btc);
+}
+.chart .line {
+	fill: none;
+	stroke: var(--line-net);
+	stroke-width: 2;
+	stroke-linejoin: round;
+	stroke-linecap: round;
+}
+/* W11: a reserve week that ended lower: the line in the "down / out" colour, and a triangle
+   (▼ lower, ▲ higher) at its end, so the direction reads without colour too. */
+.chart .line.down {
+	stroke: var(--btc);
+}
+.chart .trend {
+	fill: var(--line-net);
+}
+.chart .trend.down,
+.chart .line.down ~ .dot {
+	fill: var(--btc);
+}
+.chart .dot {
+	fill: var(--line-net);
+	stroke: var(--panel-solid);
+	stroke-width: 2;
+}
+.chart .mark {
+	transition: opacity var(--dur) var(--ease);
+}
+.chart .dim {
+	opacity: 0.35;
+}
+.chart .hl {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	border-radius: var(--radius-sm);
+	background: var(--accent-soft);
+	pointer-events: none;
+}
+.chart .tip {
+	position: absolute;
+	display: grid;
+	padding: var(--sp-2) var(--sp-3);
+	border-radius: var(--radius-md);
+	background: var(--panel-solid);
+	border: 1px solid var(--line-strong);
+	box-shadow: var(--shadow-pop);
+	font-size: var(--text-xs);
+	line-height: var(--lh-snug);
+	color: var(--muted);
+	pointer-events: none;
+	z-index: 3;
+	font-variant-numeric: tabular-nums;
+}
+.chart .tip b {
+	color: var(--ink);
+	font-family: var(--mono);
+	font-weight: 500;
+}
+.chart .tip em {
+	font-style: normal;
+	color: var(--ink);
+	font-family: var(--mono);
+}
+.chart .tip .ok {
+	color: var(--good);
+}
+.chart .tip .no {
+	color: var(--bad);
+}
+.chart-empty {
+	margin: 0;
+	padding: var(--sp-7) 0;
+	text-align: center;
+	color: var(--muted);
+	font-size: var(--text-sm);
+	max-width: none;
+}
+/* Legend: swatch, label; the unit and any controls on the right. */
+.chart-legend {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--sp-2) var(--sp-4);
+	font-size: var(--text-sm);
+	color: var(--muted);
+}
+.chart-legend > span {
+	display: inline-flex;
+	align-items: center;
+}
+.chart-legend .unit,
+.chart-legend .controls {
+	margin-left: auto;
+}
+.chart-legend .unit + .controls {
+	margin-left: 0;
+}
+.chart-legend .controls {
+	flex-wrap: wrap;
+	gap: var(--sp-2) var(--sp-3);
+}
+/* W12 round 4: one data-table switch for a panel of small multiples (TableGroup), with the
+   folds' own "+" / "−" marker. */
+.tablesw {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--sp-1);
+	min-height: 34px;
+	padding: 0 var(--sp-4) 0 var(--sp-3);
+	border: 1px solid var(--line-strong);
+	border-radius: var(--radius-pill);
+	background: var(--panel-2);
+	box-shadow: none;
+	color: var(--ink);
+	font-size: var(--text-sm);
+	font-weight: 500;
+}
+.tablesw::before {
+	content: '+';
+	width: 1.4ch;
+	font-family: var(--mono);
+	color: var(--accent);
+}
+.tablesw[aria-expanded='true']::before {
+	content: '−';
+}
+@media (max-width: 760px) {
+	.tablesw {
+		min-height: 44px;
+	}
+}
+.tablesw:hover:not(:disabled) {
+	transform: none;
+	box-shadow: none;
+	border-color: var(--accent-2);
+}
+.key {
+	display: inline-block;
+	flex: none;
+	width: 10px;
+	height: 10px;
+	border-radius: var(--radius-xs);
+	margin-right: var(--sp-2);
+	vertical-align: -1px;
+	background: var(--accent);
+}
+.key.line {
+	width: 14px;
+	height: 2px;
+	border-radius: var(--radius-xs);
+	vertical-align: 3px;
+	background: var(--line-net);
+}
+/* Unknown share: a pattern, not a hue (W3), the same in the bars and the legend. */
+.key.hatch,
+.hatch {
+	background: repeating-linear-gradient(45deg, var(--muted) 0 2px, transparent 2px 5px);
+}
+.key.hatch {
+	outline: 1px solid var(--line-strong);
+}
+
+/* Page transitions (View Transitions API): a short fade with a small rise. */
+@media (prefers-reduced-motion: no-preference) {
+	::view-transition-old(root) {
+		animation: vt-out 160ms ease-in both;
+	}
+	::view-transition-new(root) {
+		animation: vt-in 240ms ease-out both;
+	}
+}
+@keyframes vt-out {
+	to {
+		opacity: 0;
+	}
+}
+@keyframes vt-in {
+	from {
+		opacity: 0;
+		transform: translateY(10px);
+	}
+}

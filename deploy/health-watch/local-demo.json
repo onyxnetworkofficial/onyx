@@ -1,0 +1,10 @@
+{
+  "_about": "Overlay for a local rehearsal (scripts/demo-local.sh: anvil, chain 31337, settlement only, payments off): scripts/health-watch.py --config deploy/health-watch/local-demo.json. Every threshold stays the launch one; only the chain and the addresses change.",
+  "chain_id": 31337,
+  "addresses": {
+    "_source": "anvil's first dev account (public test key, holds nothing outside anvil); demo-local deploys no OnyxRevenue.",
+    "deployer": "0xf39fd6e51aad88f6f4ce6ab8827279cfffb92266",
+    "revenue": null,
+    "usdc": null
+  }
+}

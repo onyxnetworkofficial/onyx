@@ -1,0 +1,14 @@
+# Runs onyx-health-watch.service every minute (launch checklist section 3: poll every minute).
+# Install: see onyx-health-watch.service.
+
+[Unit]
+Description=Onyx health watch every minute
+
+[Timer]
+OnBootSec=60
+OnUnitActiveSec=60
+AccuracySec=5
+Persistent=false
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,10 @@
+{
+  "keys": [
+    {
+      "scheme": "eip191",
+      "signer": "0x4dd06c3352bd4921922c906141e5a3f52af9c739"
+    }
+  ],
+  "source": "example.signed",
+  "version": 1
+}

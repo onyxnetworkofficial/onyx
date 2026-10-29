@@ -1,0 +1,46 @@
+{
+ "note": "Ladders of the two Base Sepolia level-2 values (ROADMAP B6), as the client check (`level2-check`, ADR-0048) accepted them from https://onyx.cryptagraph.com on 2026-10-27, after checking each round off chain and on chain at the registry. No value is in a ladder: `value` is its keccak key.",
+ "chainId": 84532,
+ "registry": "0x497389e04f7d58e07a79ac8d395c3927aecbdf2b",
+ "checked": "2026-10-27",
+ "values": [
+  {
+   "id": "usgs",
+   "metric": "usgs.earthquakes.m5_count",
+   "subject": "usgs.earthquakes.m5_world:2026-07-19",
+   "round": "0x1dba7dafe04d5b36da6dbba568e6834f887230c1185f29e7764d88ec20ad071c",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793059500,
+      "evidence": "0x100129e003055e76b79df71b695b778f3be0444b5a28a2fbf7f2dc4e54fc9d49",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0xc0982cef162cdd63e6cc57cbb25366732bbfead5134304e1b94d6dac23ab8363"
+   }
+  },
+  {
+   "id": "ncei",
+   "metric": "noaa.ghcnd.usw00003017.tmax",
+   "subject": "noaa.ghcnd.usw00003017:2026-09-27",
+   "round": "0xbdb43692a4582cf451a3c4e68c12c61d5bb2c8de975256c53cf6d6d1b13d2228",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793059500,
+      "evidence": "0x0ab9bee9537a31c65a16a47541293093b6c9156f9d1786ece6c470b57235ef6d",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0x2f23fb20cade1b16b74761c0e2ada52ef111050c4f9d05758cffef95bb808e66"
+   }
+  }
+ ]
+}

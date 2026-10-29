@@ -1,0 +1,6 @@
+{
+  "discountBps": 10000,
+  "readsPerMinute": 60,
+  "rowsPerDay": 5000,
+  "windowDays": 30
+}

@@ -1,0 +1,33 @@
+[package]
+name = "onyx-source-fiscaldata"
+description = "Level-2 source: one record of the U.S. Treasury Fiscal Data API (open data, no account), read by a pinned fetcher."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-source-page = { path = "../source-page" }
+serde_json.workspace = true
+# The round runner (feature `round`) uses the coordinator; the web verifier
+# (wasm32) uses the fetcher only, without it.
+onyx-coordinator = { path = "../../crates/onyx-coordinator", optional = true }
+# The runner writes the results store the query API serves (feature `round`).
+onyx-api = { path = "../../crates/onyx-api", optional = true }
+# The shared level-2 runner (NS3); `round` wraps it for this source.
+onyx-level2 = { path = "../../crates/onyx-level2", optional = true }
+# Approved submissions fed into the round (PRODUCT-PLAN.md U4, feature `round`).
+onyx-intake = { workspace = true, optional = true }
+thiserror = { workspace = true, optional = true }
+
+[features]
+round = ["dep:onyx-coordinator", "dep:onyx-api", "dep:onyx-level2", "dep:onyx-intake", "dep:thiserror"]
+
+[dev-dependencies]
+# Tests and the example always build with the round runner.
+onyx-source-fiscaldata = { path = ".", features = ["round"] }
+
+[lints]
+workspace = true

@@ -1,0 +1,4 @@
+crates/onyx-coordinator/src/validate.rs:879:27: replace && with || in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:885:42: replace || with && in Validation<R>::settle
+crates/onyx-coordinator/src/validate.rs:1374:9: replace Ledger<R>::entries -> &[LedgerEntry] with Vec::leak(Vec::new())
+crates/onyx-coordinator/src/validate.rs:1442:9: replace Ledger<R>::record_validators with ()
