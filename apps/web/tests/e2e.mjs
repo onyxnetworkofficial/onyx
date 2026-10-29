@@ -367,7 +367,7 @@ try {
 		expect(first.includes(ranked[0][0]) && first.includes(`${ranked[0][1]} ·`), `pools: largest pool is ${ranked[0][0]} with ${ranked[0][1]} blocks`);
 		const note = await sec.getByTestId('pool-note').innerText();
 		const total = Object.values(poolsDoc.totals).reduce((a, b) => a + b, 0);
-		expect(note.startsWith(`${total} blocks, ${poolsDoc.days.length} days`), `pools: ${total} blocks over ${poolsDoc.days.length} days`);
+		expect(note.startsWith(`${total.toLocaleString('en-US')} blocks, ${poolsDoc.days.length} days`), `pools: ${total} blocks over ${poolsDoc.days.length} days`);
 		expect(note.includes('not proof of ownership'), 'pools: the note says the table is a claim, not proof of ownership');
 		if (poolsDoc.totals.unknown) expect((await sec.getByTestId('pool-share-unknown').innerText()).includes(`${poolsDoc.totals.unknown} ·`), 'pools: unknown blocks shown honestly');
 		const t = await sec.innerText();
