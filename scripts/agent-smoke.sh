@@ -43,6 +43,14 @@ start() {
   return 1
 }
 
+# The demo API serves the test-label shard: without the label data (not public until its rights are
+# cleared, DATA-LICENSE.md) only the toolkit's own tests run, and their live part is reported skipped.
+if [ ! -f fixtures/labels/test.onyx.entities.btc.v2.json ]; then
+  node --test apps/agent/test/*.test.mjs >"$work/test.log" 2>&1 || { cat "$work/test.log"; exit 1; }
+  grep -E '^# (pass|fail|skipped)' "$work/test.log"
+  echo "AGENT SMOKE PASSED (toolkit tests; the live part needs the label data, not public yet)"
+  exit 0
+fi
 free="$(start free)"
 paid="$(start paid --paid)"
 ONYX_AGENT_FREE_URL="$free" ONYX_AGENT_PAID_URL="$paid" ONYX_CHECK_BIN="$PWD/$target/onyx-check" \
