@@ -3,6 +3,7 @@
 
 pub mod cas;
 pub mod cast_chain;
+pub mod corrections;
 pub mod dispute;
 pub mod keyfile;
 pub mod observe;

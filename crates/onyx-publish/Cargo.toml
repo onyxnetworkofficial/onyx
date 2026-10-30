@@ -1,0 +1,28 @@
+[package]
+name = "onyx-publish"
+description = "Publisher tool for large datasets (contributor loop CL5, ADR-0059): CSV or JSON Lines in, checked shards and a manifest out, signed with a test key, anchored in OnyxSignedBook, uploaded to a node. Test network only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "onyx-publish"
+path = "src/main.rs"
+
+[dependencies]
+onyx-core.workspace = true
+onyx-bulk.workspace = true
+onyx-api = { path = "../onyx-api", features = ["http-client"] }
+borsh.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "macros"] }
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"] }
+hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"] }
+http-body-util = "0.1"
+
+[lints]
+workspace = true

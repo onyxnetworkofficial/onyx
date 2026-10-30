@@ -1,0 +1,20 @@
+[package]
+name = "onyx-bulk"
+description = "Large publisher datasets (contributor loop CL5, ADR-0059): schema, rows, bounded shards with per-row Merkle proofs, a signed and anchored manifest, and the client check of a served row."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-merkle.workspace = true
+onyx-labels.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

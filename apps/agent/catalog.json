@@ -85,6 +85,66 @@
 			"rights": "U.S. government work"
 		},
 		{
+			"id": "us.treasury.tga_closing_balance",
+			"title": "U.S. Treasury cash balance",
+			"what": "The Treasury General Account closing balance from the Daily Treasury Statement, in millions of dollars.",
+			"level": 2,
+			"source": "U.S. Treasury Fiscal Data",
+			"unit": "USD millions",
+			"rights": "U.S. government open data",
+			"api": "/v1/observations/us.treasury.tga_closing_balance"
+		},
+		{
+			"id": "noaa.ghcnd.usw00094728.tmax",
+			"title": "Daily high temperature, New York",
+			"what": "The highest temperature NOAA recorded in Central Park, New York, on a day, read 30 days later.",
+			"level": 2,
+			"source": "NOAA NCEI GHCN-Daily",
+			"unit": "°C",
+			"rights": "U.S. government work",
+			"api": "/v1/observations/noaa.ghcnd.usw00094728.tmax"
+		},
+		{
+			"id": "noaa.ghcnd.usw00094728.prcp",
+			"title": "Daily rain, New York",
+			"what": "The rain NOAA recorded in Central Park, New York, on a day, read 30 days later.",
+			"level": 2,
+			"source": "NOAA NCEI GHCN-Daily",
+			"unit": "mm",
+			"rights": "U.S. government work",
+			"api": "/v1/observations/noaa.ghcnd.usw00094728.prcp"
+		},
+		{
+			"id": "noaa.ghcnd.usw00003017.prcp",
+			"title": "Daily rain, Denver",
+			"what": "The rain NOAA recorded at Denver International Airport on a day, read 30 days later.",
+			"level": 2,
+			"source": "NOAA NCEI GHCN-Daily",
+			"unit": "mm",
+			"rights": "U.S. government work",
+			"api": "/v1/observations/noaa.ghcnd.usw00003017.prcp"
+		},
+		{
+			"id": "us.treasury.tga_total_deposits",
+			"title": "U.S. Treasury daily deposits",
+			"what": "The total deposits into the Treasury General Account on a day, from the Daily Treasury Statement, in millions of dollars.",
+			"level": 2,
+			"source": "U.S. Treasury Fiscal Data",
+			"unit": "USD millions",
+			"rights": "U.S. government open data",
+			"api": "/v1/observations/us.treasury.tga_total_deposits"
+		},
+		{
+			"id": "usgs.earthquakes.la300km_m2_5_count",
+			"title": "Earthquakes near Los Angeles",
+			"what": "How many earthquakes of magnitude 2.5 or more the USGS catalog lists within 300 km of Los Angeles on a day, read 100 days later.",
+			"level": 2,
+			"source": "USGS earthquake catalog",
+			"unit": "earthquakes",
+			"rights": "Facts from a U.S. public-domain catalog",
+			"api": "/v1/observations/usgs.earthquakes.la300km_m2_5_count"
+		},
+		{
 			"id": "sec.crypto-units",
 			"title": "Crypto-asset units in SEC filings",
 			"what": "The crypto-asset units a company tagged in its SEC filing for a period.",

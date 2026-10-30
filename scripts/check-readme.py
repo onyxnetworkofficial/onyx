@@ -19,6 +19,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 # Folders that have no Cargo.toml description of their own.
 FOLDERS = {
     "apps/agent": "The agent toolkit: an API client and an MCP server built from the OpenAPI file; answers are checked by onyx-check",
+    "apps/contrib": "The contributor client (onyx-contrib): keep API keys in the system keychain and contribute their data over MCP; keys never leave the machine",
     "apps/demo": "The first demo site: one page that walks the pipeline and reruns the real recipe in the browser",
     "apps/web": "The website (SvelteKit): every page runs the network's own Rust checks, compiled to WebAssembly",
     "recipes/out": "The built recipe WASM files and their Keccak-256 ids (reproducible, committed)",
@@ -28,6 +29,7 @@ FOLDERS = {
     "fixtures": "Pinned inputs, goldens and shared test vectors (Rust, Solidity and the browser read the same files)",
     "fuzz": "cargo-fuzz targets over decoders, stores and proofs (opt-in, nightly)",
     "scripts": "Checks, builds, rehearsals, recounts and data refreshes (scripts/README.md)",
+    "sources": "Reviewed source manifests: a public JSON API reaches level 2 as data, with its terms and one recording (ADR-0053)",
     "experiments/tlsn-fiscaldata": "A real TLSNotary proof of a U.S. Treasury API answer with a hidden header, verified offline (its own workspace)",
 }
 SKIP_TOP = {"target", "node_modules", ".git", ".github", ".claude"}
@@ -37,6 +39,7 @@ IN_GIT = os.path.isdir(os.path.join(ROOT, ".git")) or os.path.isfile(os.path.joi
 DOCS = {
     "NORTH-STAR.md": "The north star: what the partners asked for, what makes Onyx new, and the build list",
     "TRACKER.md": "The vision, every idea, and the decision log",
+    "contributor-loop.md": "The contributor loop (CL1-CL8): easy data contribution, one system for users",
     "north-star-loop.md": "The north star work loop (NL0-NL5): items, results, log",
     "agents.md": "Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21)",
     "join.md": "Join a round as an independent observer: the join kit, from key to sealed reveal (NL16)",

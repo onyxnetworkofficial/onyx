@@ -17,6 +17,8 @@ onyx-recipe-sdk.workspace = true
 onyx-track = { workspace = true, features = ["wire"] }
 # Data submissions (ROADMAP S1, ADR-0038): answers, route, checks, fetch policy.
 onyx-intake.workspace = true
+# CL5 (ADR-0059): large publisher datasets (bulk_serve).
+onyx-bulk.workspace = true
 borsh.workspace = true
 hex.workspace = true
 serde.workspace = true
@@ -31,13 +33,13 @@ hyper = { version = "1", default-features = false, features = ["client", "http1"
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"], optional = true }
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"], optional = true }
 http-body-util = { version = "0.1", optional = true }
-# The submission check pull's resolver (`submit::PublicResolver`), feature `http-client`.
-tower-service = { version = "0.3", optional = true }
+# The submission check pull's transport (`submit::HttpsFetch`, CL3: shared with the observers).
+onyx-fetch = { workspace = true, optional = true }
 
 [features]
 # HTTPS transport for the x402 facilitator (x402::HyperPost, rustls). Off in tests.
 # Also the submission check pull (`submit::HttpsFetch`: public addresses only, no redirects).
-http-client = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:http-body-util", "dep:tower-service", "tokio/net"]
+http-client = ["dep:hyper", "dep:hyper-util", "dep:hyper-rustls", "dep:http-body-util", "dep:onyx-fetch", "tokio/net"]
 
 [dev-dependencies]
 # test-util: a paused clock for the send-timeout test (E10).
@@ -52,6 +54,11 @@ required-features = ["http-client"]
 
 [[example]]
 name = "prepaid-rehearsal"
+required-features = ["http-client"]
+
+# CL6 (ADR-0056): credits and the relay on a local anvil (scripts/credits-anvil.sh).
+[[example]]
+name = "credits-rehearsal"
 required-features = ["http-client"]
 
 [lints]

@@ -44,6 +44,14 @@
     },
     {
       "name": "Estimates"
+    },
+    {
+      "name": "Bulk",
+      "description": "Large publisher datasets (contributor loop CL5, ADR-0059): shards of rows under a manifest signed by the publisher and anchored in OnyxSignedBook. Free reading on the test network."
+    },
+    {
+      "name": "Credits",
+      "description": "One spendable balance per account (contributor loop CL6, ADR-0056): the account's OnyxPrepaidV2 balance, credited by deposits, earned shares, refunds and payouts, spent with prepaid vouchers on answers and relayed actions. Amounts are decimal strings in the asset's smallest unit beside an `asset` object; no field names the asset. Test network only."
     }
   ],
   "paths": {
@@ -1585,6 +1593,580 @@
           }
         }
       }
+    },
+    "/v1/bulk": {
+      "get": {
+        "operationId": "listBulkDatasets",
+        "summary": "Bulk datasets this node holds",
+        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`.",
+        "tags": [
+          "Bulk"
+        ],
+        "responses": {
+          "200": {
+            "description": "The datasets",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkList"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/{publisher}/{dataset}": {
+      "get": {
+        "operationId": "getBulkDataset",
+        "summary": "A bulk dataset's latest manifest, anchor, versions and shards",
+        "description": "Every shard entry comes with its proof under the manifest's `shards_root`, and its tier (hot, warm, or null when not uploaded yet).",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkPublisher"
+          },
+          {
+            "$ref": "#/components/parameters/bulkDataset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The dataset",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkDataset"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/{publisher}/{dataset}/rows": {
+      "get": {
+        "operationId": "getBulkRows",
+        "summary": "Rows in a key range, each with its proofs",
+        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkPublisher"
+          },
+          {
+            "$ref": "#/components/parameters/bulkDataset"
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^-?[0-9]+$"
+            },
+            "description": "Smallest key (a whole number)."
+          },
+          {
+            "name": "to",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^-?[0-9]+$"
+            },
+            "description": "Largest key (a whole number)."
+          },
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 0
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 1000
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The rows with proofs",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkRows"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/manifests": {
+      "post": {
+        "operationId": "postBulkManifest",
+        "summary": "Hand a node an anchored manifest",
+        "description": "Taken only when the node's finalized block shows the signed report recorded in the pinned OnyxSignedBook, the fact accepted on exactly that report and the key active. Version 1 opens a dataset; later versions must keep every earlier shard and add at least one. Returns the shards the node still needs. Outside the 12 s request deadline (300 s, two uploads at a time).",
+        "tags": [
+          "Bulk"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BulkManifestUpload"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already held",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkUploadAnswer"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Taken",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkUploadAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/{publisher}/{dataset}/shards/{root}": {
+      "put": {
+        "operationId": "putBulkShard",
+        "summary": "Upload one shard file of a held manifest",
+        "description": "The body is the shard file as built (`application/octet-stream`, no content encoding), exactly the entry's byte count. It must check against the schema and hash to `root` with the entry's rows and key range.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkPublisher"
+          },
+          {
+            "$ref": "#/components/parameters/bulkDataset"
+          },
+          {
+            "$ref": "#/components/parameters/bulkRoot"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/octet-stream": {
+              "schema": {
+                "type": "string",
+                "contentMediaType": "application/octet-stream"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Already stored",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkShardAnswer"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Stored",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkShardAnswer"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/credits/schedule": {
+      "get": {
+        "operationId": "getCreditsSchedule",
+        "summary": "The credits asset and the relay's fixed fees",
+        "description": "The asset, the relayer's address, the fixed fee of each relayed action (no price feed), the schedule's hash and the relay's limits.",
+        "tags": [
+          "Credits"
+        ],
+        "responses": {
+          "200": {
+            "description": "The schedule",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditsSchedule"
+                }
+              }
+            }
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/credits/{account}": {
+      "get": {
+        "operationId": "getCreditsAccount",
+        "summary": "An account's credits",
+        "description": "Without a proof: what the chain shows (deposited, redeemed, exitAt) at the finalized block. With the account's own fresh ONYX-ACCOUNT-PROOF: also its arrivals by origin and the journal's spent, held and spendable.",
+        "tags": [
+          "Credits"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/account"
+          },
+          {
+            "$ref": "#/components/parameters/accountProof"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The account",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditsAccount"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/credits/{account}/lines": {
+      "get": {
+        "operationId": "getCreditLines",
+        "summary": "An account's own credit lines",
+        "description": "The account's journal lines (answers, holds, charges, releases, relay fees) and its on-chain arrivals. Only with the account's own fresh, unused ONYX-ACCOUNT-PROOF: which data an account bought is never shown to anyone else.",
+        "tags": [
+          "Credits"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/account"
+          },
+          {
+            "$ref": "#/components/parameters/accountProof"
+          },
+          {
+            "$ref": "#/components/parameters/linesAfter"
+          },
+          {
+            "$ref": "#/components/parameters/linesLimit"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The lines",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CreditLines"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/relay": {
+      "post": {
+        "operationId": "postRelay",
+        "summary": "Send a self-signed action, its gas paid from credits",
+        "description": "Only actions that carry the actor's own signature (observer commits, receipts and sealed reveals; EIP-3009 deposits). Paid by the actor's ONYX-PREPAID-VOUCHER adding exactly the action's fee from `/v1/credits/schedule`. The voucher is held, the call simulated and sent; the fee is charged only when the transaction is mined without a revert, otherwise the hold is released.",
+        "tags": [
+          "Credits"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/relayVoucher"
+          }
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RelayRequest"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Mined and charged",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RelayResult"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "402": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -1701,7 +2283,7 @@
           "error"
         ],
         "additionalProperties": true,
-        "description": "Every error. Some carry fields beside `error` (`limits` on a level-2 402, `route` on a refused submission, `reason` on track and signed refusals, `last` and `price` on a `prepaid_refused` with the wrong total)."
+        "description": "Every error. Some carry fields beside `error` (`limits` on a level-2 402, `route` on a refused submission, `reason` on track and signed refusals, `last` and `price` on a `prepaid_refused` with the wrong total; `fee` and `asset` on a `relay_fee_required`; `tx` on a `relay_reverted` or `relay_pending`)."
       },
       "Export": {
         "type": "object",
@@ -2418,6 +3000,33 @@
               "type": "object",
               "description": "A published round of the same fact that settled no value (`outcome=all` only)."
             }
+          },
+          "recheck": {
+            "type": "object",
+            "description": "CL7 (ADR-0057 item 6): the paired `.recheck` metric's settled round of the same subject, when it has one. `matches` is whether the recheck value is within the recheck template's tolerance of this value. A recheck that disagrees is a note (\"rechecked later: the source now says otherwise\"), never a fall: the value keeps its level. Check it with `client::verify_recheck` against the recheck's own answer at `/v1/observations/{metric}.recheck`. Absent while the recheck has not settled (the answer then revalidates instead of being cached as immutable).",
+            "properties": {
+              "result": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "valueHash": {
+                "$ref": "#/components/schemas/Hash"
+              },
+              "recordedAt": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The recheck round's settle time (unix seconds)."
+              },
+              "matches": {
+                "type": "boolean"
+              }
+            },
+            "required": [
+              "matches",
+              "recordedAt",
+              "result",
+              "valueHash"
+            ],
+            "additionalProperties": false
           },
           "ladder": {
             "oneOf": [
@@ -3976,6 +4585,451 @@
             "description": "EIP-191 signature of the want text for this week: onyx-want-v1, then kind=, domain=, region=, cadence= and week= lines."
           }
         }
+      },
+      "BulkList": {
+        "type": "object",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked).",
+        "properties": {
+          "datasets": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        }
+      },
+      "BulkDataset": {
+        "type": "object",
+        "description": "`manifest` (root, Borsh `header`, version, schema, rights, counts, key range, shards_root), `anchor` (signed report, digest, report_hash, fact, key, signer, sequence, chain_id, book, recorded_at, accepted_at, checked_at), `versions`, `shards` (entry, proof, tier)."
+      },
+      "BulkRows": {
+        "type": "object",
+        "description": "`manifest`, `anchor` (as BulkDataset), `query`, `shards` (entry with proof under `shards_root`), `rows` ({shard, index, key, row (Borsh hex), values, proof}), `next_page`, `proof` (what each proof binds). docs/spec/bulk-datasets.md."
+      },
+      "BulkManifestUpload": {
+        "type": "object",
+        "required": [
+          "manifest",
+          "report"
+        ],
+        "properties": {
+          "manifest": {
+            "type": "string",
+            "description": "0x hex of the Borsh Manifest (at most 8 MiB)."
+          },
+          "report": {
+            "type": "string",
+            "description": "0x hex of the Borsh SignedReport whose value is the manifest root."
+          }
+        }
+      },
+      "BulkUploadAnswer": {
+        "type": "object",
+        "description": "publisher, dataset, version, root, shards, and `missing`: the shards ({index, root, bytes}) the node does not hold yet."
+      },
+      "BulkShardAnswer": {
+        "type": "object",
+        "description": "root, index, stored."
+      },
+      "Amount": {
+        "type": "string",
+        "pattern": "^(0|[1-9][0-9]*)$",
+        "description": "An amount in the asset's smallest unit, as a decimal string."
+      },
+      "Asset": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "symbol",
+          "decimals",
+          "chainId",
+          "address"
+        ],
+        "properties": {
+          "symbol": {
+            "type": "string"
+          },
+          "decimals": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 255
+          },
+          "chainId": {
+            "type": "integer",
+            "minimum": 1
+          },
+          "address": {
+            "$ref": "#/components/schemas/Address"
+          }
+        },
+        "description": "The asset the ledger counts in, read from the chain. At mainnet a token replaces it; routes and shapes stay."
+      },
+      "CreditsSchedule": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "asset",
+          "ledger",
+          "relay",
+          "relayer",
+          "scheduleHash",
+          "actions",
+          "limits"
+        ],
+        "properties": {
+          "asset": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "ledger": {
+            "type": "string",
+            "description": "`eip155:<chain>:<OnyxPrepaidV2>`: what account proofs sign."
+          },
+          "relay": {
+            "type": "boolean"
+          },
+          "relayer": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Address"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "scheduleHash": {
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/Hash"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "actions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "action",
+                "fee"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string",
+                  "enum": [
+                    "post_commit",
+                    "post_receipt",
+                    "post_sealed_reveal",
+                    "deposit"
+                  ]
+                },
+                "fee": {
+                  "$ref": "#/components/schemas/Amount"
+                }
+              }
+            }
+          },
+          "limits": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "perAccountPerHour",
+                  "failedPerDay",
+                  "dailyGasBudget",
+                  "maxBaseFeeWei",
+                  "accountGasPerDay"
+                ],
+                "properties": {
+                  "perAccountPerHour": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "failedPerDay": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "dailyGasBudget": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "maxBaseFeeWei": {
+                    "$ref": "#/components/schemas/Amount"
+                  },
+                  "accountGasPerDay": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            ]
+          }
+        }
+      },
+      "CreditsAccount": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account",
+          "asset",
+          "view",
+          "deposited",
+          "redeemed",
+          "exitAt"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "asset": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "view": {
+            "type": "string",
+            "enum": [
+              "public",
+              "account"
+            ],
+            "description": "`public`: only what the chain shows. `account`: with the account's own proof."
+          },
+          "deposited": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "redeemed": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "exitAt": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "credited": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "deposit",
+              "earned",
+              "refund",
+              "payout"
+            ],
+            "properties": {
+              "deposit": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "earned": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "refund": {
+                "$ref": "#/components/schemas/Amount"
+              },
+              "payout": {
+                "$ref": "#/components/schemas/Amount"
+              }
+            }
+          },
+          "spent": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "held": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "spendable": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
+      },
+      "CreditLines": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "account",
+          "asset",
+          "lines",
+          "next",
+          "arrivals"
+        ],
+        "properties": {
+          "account": {
+            "$ref": "#/components/schemas/Address"
+          },
+          "asset": {
+            "$ref": "#/components/schemas/Asset"
+          },
+          "lines": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "seq",
+                "kind",
+                "action",
+                "amount",
+                "cumulative",
+                "reference",
+                "at"
+              ],
+              "properties": {
+                "seq": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "kind": {
+                  "type": "string",
+                  "enum": [
+                    "answer",
+                    "observe_hold",
+                    "observe_charge",
+                    "relay_hold",
+                    "gas",
+                    "release"
+                  ]
+                },
+                "action": {
+                  "oneOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "amount": {
+                  "$ref": "#/components/schemas/Amount"
+                },
+                "cumulative": {
+                  "$ref": "#/components/schemas/Amount"
+                },
+                "reference": {
+                  "$ref": "#/components/schemas/Hash"
+                },
+                "at": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          },
+          "next": {
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "arrivals": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "origin",
+                "amount",
+                "block",
+                "tx"
+              ],
+              "properties": {
+                "origin": {
+                  "type": "string",
+                  "enum": [
+                    "deposit",
+                    "earned",
+                    "refund",
+                    "payout",
+                    "unknown"
+                  ]
+                },
+                "amount": {
+                  "$ref": "#/components/schemas/Amount"
+                },
+                "block": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "tx": {
+                  "$ref": "#/components/schemas/Hash"
+                }
+              }
+            }
+          }
+        }
+      },
+      "RelayRequest": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "args"
+        ],
+        "properties": {
+          "action": {
+            "type": "string",
+            "enum": [
+              "post_commit",
+              "post_receipt",
+              "post_sealed_reveal",
+              "deposit"
+            ]
+          },
+          "args": {
+            "type": "object",
+            "description": "post_commit and post_receipt: fact, attempt (integer), observer, round, commit, signature. post_sealed_reveal: fact, attempt, observer, round, ex, ey, ciphertext (at most 1,438 bytes), keyProof (52 bytes), signature. deposit: from, amount, validAfter, validBefore (decimal strings), nonce, signature (EIP-3009 ReceiveWithAuthorization to OnyxPrepaidV2). Hex is lowercase 0x."
+          }
+        }
+      },
+      "RelayResult": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "action",
+          "tx",
+          "block",
+          "gasUsed",
+          "fee",
+          "charged",
+          "total",
+          "spendable"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "tx": {
+            "$ref": "#/components/schemas/Hash"
+          },
+          "block": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "gasUsed": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "fee": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "charged": {
+            "type": "boolean",
+            "description": "False only if the journal could not record the fee (the operator's loss, never the account's)."
+          },
+          "total": {
+            "$ref": "#/components/schemas/Amount"
+          },
+          "spendable": {
+            "$ref": "#/components/schemas/Amount"
+          }
+        }
       }
     },
     "parameters": {
@@ -4261,6 +5315,82 @@
           "minLength": 1,
           "maxLength": 256
         }
+      },
+      "bulkPublisher": {
+        "name": "publisher",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The publisher's source id (dotted id), as in its keys document."
+      },
+      "bulkDataset": {
+        "name": "dataset",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The dataset id (dotted id), unique per publisher."
+      },
+      "bulkRoot": {
+        "name": "root",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Hash"
+        },
+        "description": "The shard's Merkle root as listed in the manifest."
+      },
+      "account": {
+        "name": "account",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "$ref": "#/components/schemas/Address"
+        },
+        "description": "The account: a lowercase 0x address."
+      },
+      "accountProof": {
+        "name": "ONYX-ACCOUNT-PROOF",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string"
+        },
+        "description": "The account's own proof (base64 JSON `{address, issued, signature}`, EIP-191 over `onyx-account-read-v1` / account / issued / ledger `eip155:<chain>:<OnyxPrepaidV2>`), at most 120 s old, single use."
+      },
+      "relayVoucher": {
+        "name": "ONYX-PREPAID-VOUCHER",
+        "in": "header",
+        "required": false,
+        "schema": {
+          "type": "string",
+          "pattern": "^0x[0-9a-fA-F]{40}:(0|[1-9][0-9]{0,38}):0x[0-9a-fA-F]{130}$"
+        },
+        "description": "The actor's own prepaid voucher: its last total plus exactly the action's fee (`/v1/credits/schedule`). Without it: 402 `relay_fee_required`."
+      },
+      "linesAfter": {
+        "name": "after",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "description": "Only lines after this `seq` (the previous page's `next`)."
+      },
+      "linesLimit": {
+        "name": "limit",
+        "in": "query",
+        "required": false,
+        "schema": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 200
+        },
+        "description": "At most this many lines (default and cap 200)."
       }
     },
     "headers": {
@@ -4357,6 +5487,10 @@
     }
   },
   "x-onyx-error-codes": {
+    "account_proof_required": {
+      "status": 403,
+      "description": "`/v1/credits/{account}/lines` needs the account's own proof."
+    },
     "bad_json": {
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
@@ -4381,21 +5515,209 @@
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
     },
+    "bad_want_signature": {
+      "status": 403,
+      "description": "The signature is not the buyer's over this week's want text."
+    },
+    "bad_want_value": {
+      "status": 400,
+      "description": "A want's value is not in its closed list."
+    },
+    "binding_mismatch": {
+      "status": 500,
+      "description": "The shard's binding differs from the ledger's; nothing served."
+    },
+    "body_too_large": {
+      "status": 413,
+      "description": "A submission is at most 64 KiB."
+    },
+    "bounty_too_specific": {
+      "status": 400,
+      "description": "A want with anything but the four closed-list values (free text, a URL, a metric, a subject, a date), or extra fields beside want, buyer and signature."
+    },
+    "bulk_bad_manifest": {
+      "status": 422,
+      "description": "A bulk manifest that does not decode or validate (format, ids, counts, shards_root, rights and the rights statement), or a report that does not sign its root for its key (ADR-0059)."
+    },
+    "bulk_chain_unavailable": {
+      "status": 503,
+      "description": "The chain node could not be read for the bulk anchor; retry."
+    },
+    "bulk_dataset_forked": {
+      "status": 409,
+      "description": "Two anchored manifests exist for one version of the dataset (the publisher key equivocated or was stolen): not served until reviewed."
+    },
+    "bulk_encoded_body": {
+      "status": 400,
+      "description": "A shard sent with a content encoding: the node never decompresses a body."
+    },
+    "bulk_node_full": {
+      "status": 503,
+      "description": "This node holds no more bulk data (ONYX_BULK_MAX_GIB)."
+    },
+    "bulk_not_anchored": {
+      "status": 409,
+      "description": "The manifest's signed report is not recorded and accepted in the signed book at the node's finalized block, or the key is not active (`reason`). Retry once the anchor is final."
+    },
+    "bulk_not_servable": {
+      "status": 409,
+      "description": "The manifest's signed report no longer holds in the signed book (key retired, compromised or suspended, or the fact disputed): `reason`."
+    },
+    "bulk_not_successor": {
+      "status": 409,
+      "description": "A bulk version out of order, or one that drops or changes an earlier shard, schema or rights."
+    },
+    "bulk_quota_exceeded": {
+      "status": 413,
+      "description": "The publisher's bytes or datasets on this node would pass its quota (ONYX_BULK_QUOTA_GIB, ONYX_BULK_MAX_DATASETS)."
+    },
+    "bulk_shard_mismatch": {
+      "status": 422,
+      "description": "The shard file does not check against the schema, or its root, rows or key range differ from the manifest entry."
+    },
+    "bulk_shard_missing": {
+      "status": 409,
+      "description": "The rows asked lie in a shard the publisher has not uploaded to this node yet."
+    },
+    "bulk_shard_size": {
+      "status": 413,
+      "description": "The shard body is not exactly the size its manifest entry states."
+    },
+    "bulk_unknown_dataset": {
+      "status": 404,
+      "description": "No such bulk dataset on this node."
+    },
+    "bulk_unknown_shard": {
+      "status": 404,
+      "description": "The shard root is in no held manifest of the dataset."
+    },
+    "catalog_mismatch": {
+      "status": 500,
+      "description": "The catalog entry does not match the shard; nothing served."
+    },
+    "chain_unavailable": {
+      "status": 503,
+      "description": "The prepaid account could not be read on chain."
+    },
+    "clock_skew": {
+      "status": 503,
+      "description": "The server's clock is more than 300 s off the chain's."
+    },
+    "commitment_moved": {
+      "status": 409,
+      "description": "`at` is not the latest commitment: fetch the record again."
+    },
+    "contributor_checks_busy": {
+      "status": 503,
+      "description": "Contributor checks are busy; see Retry-After."
+    },
     "control_characters": {
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "credits_busy": {
+      "status": 503,
+      "description": "`/v1/credits`: too many chain reads or proofs this minute; retry later."
+    },
+    "credits_unavailable": {
+      "status": 503,
+      "description": "`/v1/credits`: the account or its arrivals cannot be read from the chain, or the journal cannot be read."
+    },
+    "daily_quota": {
+      "status": 429,
+      "description": "The daily submission or check quota is used up."
     },
     "empty_field": {
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
     },
+    "export_too_large": {
+      "status": 413,
+      "description": "The export passes the row or byte cap."
+    },
+    "facilitator_busy": {
+      "status": 503,
+      "description": "The facilitator is busy; see Retry-After."
+    },
+    "facilitator_unavailable": {
+      "status": 503,
+      "description": "The payment facilitator cannot be reached."
+    },
     "field_too_long": {
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
     },
+    "forbidden_data": {
+      "status": 451,
+      "description": "The source's rights forbid redistribution."
+    },
+    "intake_busy": {
+      "status": 503,
+      "description": "Too many submission writes in flight."
+    },
+    "intake_full": {
+      "status": 503,
+      "description": "The journal holds its maximum number of submissions."
+    },
+    "intake_unavailable": {
+      "status": 503,
+      "description": "The submission journal cannot be read or written."
+    },
+    "internal": {
+      "status": 500,
+      "description": "An internal error."
+    },
+    "invalid_account": {
+      "status": 400,
+      "description": "`/v1/credits/{account}`: not a lowercase 0x address."
+    },
+    "invalid_account_proof": {
+      "status": 403,
+      "description": "An ONYX-ACCOUNT-PROOF that is malformed, for another account or ledger, older than 120 s, or already used."
+    },
+    "invalid_contributor_proof": {
+      "status": 403,
+      "description": "The ONYX-CONTRIBUTOR proof does not verify."
+    },
     "invalid_payment": {
       "status": 400,
       "description": "A payment that does not parse or fails verification; any HEAD carrying PAYMENT-SIGNATURE."
+    },
+    "invalid_prepaid": {
+      "status": 400,
+      "description": "An ONYX-PREPAID-VOUCHER header that does not parse."
+    },
+    "invalid_relay": {
+      "status": 400,
+      "description": "`/v1/relay`: a body that is not exactly `{action, args}` with that action's arguments, or a malformed voucher header."
+    },
+    "journal_unavailable": {
+      "status": 503,
+      "description": "The want could not be written to the node's journal."
+    },
+    "label_rights_withheld": {
+      "status": 403,
+      "description": "ONYX_RIGHTS=fallback: label-derived data is withheld until its rights are cleared."
+    },
+    "level3_chain_unavailable": {
+      "status": 503,
+      "description": "No finalized block can be read."
+    },
+    "level3_clock_skew": {
+      "status": 503,
+      "description": "A time in the post log is more than 300 s ahead of this server's clock."
+    },
+    "level3_not_servable": {
+      "status": 409,
+      "description": "The signed fact is not servable now; `reason` says why."
+    },
+    "level3_posts_delayed": {
+      "status": 503,
+      "description": "A level-3 post has been pending more than 600 s."
+    },
+    "level3_store_unreadable": {
+      "status": 503,
+      "description": "The level-3 post log cannot be read."
     },
     "license_id_bad": {
       "status": 400,
@@ -4409,85 +5731,17 @@
       "status": 400,
       "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
     },
-    "not_keyed": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "payload_invalid": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "payload_route": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "personal_contact": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "pointer_without_endpoint": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "proof_not_supported": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "secret_in_url": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "source_url_required": {
-      "status": 400,
-      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
-    },
-    "payment_failed": {
-      "status": 402,
-      "description": "The settle failed; PAYMENT-RESPONSE says why."
-    },
-    "payment_required": {
-      "status": 402,
-      "description": "Pay with x402: the offer is in PAYMENT-REQUIRED."
-    },
-    "invalid_contributor_proof": {
-      "status": 403,
-      "description": "The ONYX-CONTRIBUTOR proof does not verify."
-    },
-    "label_rights_withheld": {
-      "status": 403,
-      "description": "ONYX_RIGHTS=fallback: label-derived data is withheld until its rights are cleared."
-    },
-    "not_a_contributor": {
-      "status": 403,
-      "description": "The proof's address has no accepted contribution."
-    },
-    "not_cross_checked": {
-      "status": 403,
-      "description": "The row is not cross-checked by its serving check."
-    },
-    "serving_check_failed": {
-      "status": 403,
-      "description": "The serving check refused the shard or row."
-    },
-    "serving_check_unavailable": {
-      "status": 403,
-      "description": "The metric's serving check cannot run."
-    },
-    "test_labels": {
-      "status": 403,
-      "description": "The shard uses a test.* label set; never served as real data."
-    },
-    "track_log_priced": {
-      "status": 403,
-      "description": "A track log holds a level-1 or level-2 value the paid API sells."
-    },
-    "track_registry_names_addresses": {
-      "status": 403,
-      "description": "The track registry names an address; never served."
+    "method_not_allowed": {
+      "status": 405,
+      "description": "Wrong method for the route; `Allow` names the right ones."
     },
     "no_label_row": {
       "status": 404,
       "description": "The set lists no membership for this address (the server word, not a proof)."
+    },
+    "no_prepaid_account": {
+      "status": 403,
+      "description": "Only an open prepaid deposit may post a want."
     },
     "no_serving_check": {
       "status": 404,
@@ -4509,6 +5763,14 @@
       "status": 404,
       "description": "The publication carries no registry (version 1)."
     },
+    "not_a_contributor": {
+      "status": 403,
+      "description": "The proof's address has no accepted contribution."
+    },
+    "not_cross_checked": {
+      "status": 403,
+      "description": "The row is not cross-checked by its serving check."
+    },
     "not_finalized": {
       "status": 404,
       "description": "The shard's root is not final yet."
@@ -4517,13 +5779,217 @@
       "status": 404,
       "description": "No such route or receipt."
     },
+    "not_keyed": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "observe_payment_required": {
+      "status": 402,
+      "description": "No round settled this level-2 subject yet; `observe` offers one for a prepaid hold (price, deadline, that the value becomes public, the refund rule)."
+    },
+    "overloaded": {
+      "status": 503,
+      "description": "Too many requests in flight; retry in 1 s."
+    },
+    "payer_busy": {
+      "status": 429,
+      "description": "The payer has 4 unsettled payments waiting; retry after 60 s."
+    },
+    "payer_limited": {
+      "status": 429,
+      "description": "Too many payments from this payer; see Retry-After."
+    },
+    "payload_invalid": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "payload_route": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "payment_failed": {
+      "status": 402,
+      "description": "The settle failed; PAYMENT-RESPONSE says why."
+    },
+    "payment_in_use": {
+      "status": 409,
+      "description": "This authorization already has an open settle for another request."
+    },
+    "payment_pending": {
+      "status": 503,
+      "description": "Self-settle: retry the same request; it is served once the transfer is proven."
+    },
+    "payment_required": {
+      "status": 402,
+      "description": "Pay with x402: the offer is in PAYMENT-REQUIRED."
+    },
+    "personal_contact": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "pointer_without_endpoint": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "prepaid_not_offered": {
+      "status": 400,
+      "description": "An ONYX-PREPAID-VOUCHER header on a server that takes x402 payments only."
+    },
+    "prepaid_refused": {
+      "status": 402,
+      "description": "A voucher that is not the buyer's, does not add exactly the price to the last total (`last` and `price` say what to sign), exceeds the deposit, or comes while an exit is pending. Nothing was served or charged."
+    },
+    "prepaid_unavailable": {
+      "status": 503,
+      "description": "The server cannot read the buyer's account or record prepaid usage durably; nothing was charged."
+    },
+    "proof_level_not_accepted": {
+      "status": 409,
+      "description": "The market's shard is at a level its policy refuses."
+    },
+    "proof_not_supported": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "rate_limited": {
+      "status": 429,
+      "description": "Too many requests from this client; see Retry-After."
+    },
+    "receipt_log_unavailable": {
+      "status": 503,
+      "description": "The receipt log cannot be written; new payments refused, nothing charged."
+    },
+    "refused": {
+      "status": 422,
+      "description": "The proposal cannot be taken; `route` says why."
+    },
+    "relay_busy": {
+      "status": 503,
+      "description": "`/v1/relay`: the base fee is above the relay's cap, the day's gas budget is spent, or the chain cannot be reached; nothing was charged."
+    },
+    "relay_fee_required": {
+      "status": 402,
+      "description": "`/v1/relay` without an ONYX-PREPAID-VOUCHER; `fee` and `asset` beside `error` say what to sign."
+    },
+    "relay_not_offered": {
+      "status": 404,
+      "description": "`/v1/relay`: this server relays no actions, or not this one."
+    },
+    "relay_not_signed": {
+      "status": 403,
+      "description": "`/v1/relay`: the action does not carry its actor's signature (CL6-2); nothing was held or sent."
+    },
+    "relay_payer_mismatch": {
+      "status": 403,
+      "description": "`/v1/relay`: the voucher is not the actor's own; an account pays only for its own actions."
+    },
+    "relay_pending": {
+      "status": 504,
+      "description": "`/v1/relay`: the transaction was not mined in time (`tx` beside `error`); the hold is released and nothing is charged."
+    },
+    "relay_rate_limited": {
+      "status": 429,
+      "description": "`/v1/relay`: the account's relays per hour, or its failed relays today, are spent (counted before anything is sent)."
+    },
+    "relay_reverted": {
+      "status": 422,
+      "description": "`/v1/relay`: the transaction reverted on chain (`tx` beside `error`); nothing was charged."
+    },
+    "relay_would_revert": {
+      "status": 422,
+      "description": "`/v1/relay`: the simulated call reverts; nothing was sent or charged."
+    },
+    "restricted_data": {
+      "status": 451,
+      "description": "The source's rights restrict redistribution."
+    },
+    "root_mismatch": {
+      "status": 409,
+      "description": "The pinned ?root= is not the shard's final root."
+    },
+    "root_source_unavailable": {
+      "status": 503,
+      "description": "The root source cannot be read."
+    },
     "row_not_found": {
       "status": 404,
       "description": "Index out of range."
     },
+    "rows_mismatch": {
+      "status": 500,
+      "description": "Stored rows do not hash to the root; nothing served."
+    },
+    "rows_unavailable": {
+      "status": 503,
+      "description": "The rows cannot be read."
+    },
+    "secret_in_url": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "serving_check_failed": {
+      "status": 403,
+      "description": "The serving check refused the shard or row."
+    },
+    "serving_check_pending": {
+      "status": 503,
+      "description": "The serving check has not judged the current root yet."
+    },
+    "serving_check_unavailable": {
+      "status": 403,
+      "description": "The metric's serving check cannot run."
+    },
+    "settle_intent_unavailable": {
+      "status": 503,
+      "description": "The settle intent log cannot be written."
+    },
+    "settled_value": {
+      "status": 409,
+      "description": "The fact settled a value: ask /v1/observations with outcome=all."
+    },
+    "source_url_required": {
+      "status": 400,
+      "description": "A proposal that fails validation (onyx_intake; docs/spec/submissions.md)."
+    },
+    "test_labels": {
+      "status": 403,
+      "description": "The shard uses a test.* label set; never served as real data."
+    },
+    "timeout": {
+      "status": 504,
+      "description": "The request took too long."
+    },
+    "too_many_wants": {
+      "status": 429,
+      "description": "An account holds at most 16 live wants."
+    },
     "too_old": {
       "status": 404,
       "description": "No settled round at or after min_window_end."
+    },
+    "track_chain_too_long": {
+      "status": 413,
+      "description": "More than 4,096 commitments after `since`."
+    },
+    "track_log_priced": {
+      "status": 403,
+      "description": "A track log holds a level-1 or level-2 value the paid API sells."
+    },
+    "track_log_too_large": {
+      "status": 413,
+      "description": "The log passes the row or check budget."
+    },
+    "track_registry_names_addresses": {
+      "status": 403,
+      "description": "The track registry names an address; never served."
+    },
+    "track_store_unreadable": {
+      "status": 503,
+      "description": "The track publication file cannot be read or checked."
+    },
+    "unknown_commitment": {
+      "status": 409,
+      "description": "`since` names no commitment of the server's chain."
     },
     "unknown_label_set": {
       "status": 404,
@@ -4545,229 +6011,9 @@
       "status": 404,
       "description": "No row for the subject (the server's word, not a proof of absence)."
     },
-    "method_not_allowed": {
-      "status": 405,
-      "description": "Wrong method for the route; `Allow` names the right ones."
-    },
-    "commitment_moved": {
-      "status": 409,
-      "description": "`at` is not the latest commitment: fetch the record again."
-    },
-    "level3_not_servable": {
-      "status": 409,
-      "description": "The signed fact is not servable now; `reason` says why."
-    },
-    "payment_in_use": {
-      "status": 409,
-      "description": "This authorization already has an open settle for another request."
-    },
-    "proof_level_not_accepted": {
-      "status": 409,
-      "description": "The market's shard is at a level its policy refuses."
-    },
-    "root_mismatch": {
-      "status": 409,
-      "description": "The pinned ?root= is not the shard's final root."
-    },
-    "settled_value": {
-      "status": 409,
-      "description": "The fact settled a value: ask /v1/observations with outcome=all."
-    },
-    "unknown_commitment": {
-      "status": 409,
-      "description": "`since` names no commitment of the server's chain."
-    },
-    "body_too_large": {
-      "status": 413,
-      "description": "A submission is at most 64 KiB."
-    },
-    "export_too_large": {
-      "status": 413,
-      "description": "The export passes the row or byte cap."
-    },
-    "track_chain_too_long": {
-      "status": 413,
-      "description": "More than 4,096 commitments after `since`."
-    },
-    "track_log_too_large": {
-      "status": 413,
-      "description": "The log passes the row or check budget."
-    },
-    "refused": {
-      "status": 422,
-      "description": "The proposal cannot be taken; `route` says why."
-    },
-    "daily_quota": {
-      "status": 429,
-      "description": "The daily submission or check quota is used up."
-    },
-    "payer_busy": {
-      "status": 429,
-      "description": "The payer has 4 unsettled payments waiting; retry after 60 s."
-    },
-    "payer_limited": {
-      "status": 429,
-      "description": "Too many payments from this payer; see Retry-After."
-    },
-    "rate_limited": {
-      "status": 429,
-      "description": "Too many requests from this client; see Retry-After."
-    },
-    "forbidden_data": {
-      "status": 451,
-      "description": "The source's rights forbid redistribution."
-    },
-    "restricted_data": {
-      "status": 451,
-      "description": "The source's rights restrict redistribution."
-    },
-    "binding_mismatch": {
-      "status": 500,
-      "description": "The shard's binding differs from the ledger's; nothing served."
-    },
-    "catalog_mismatch": {
-      "status": 500,
-      "description": "The catalog entry does not match the shard; nothing served."
-    },
-    "internal": {
-      "status": 500,
-      "description": "An internal error."
-    },
-    "rows_mismatch": {
-      "status": 500,
-      "description": "Stored rows do not hash to the root; nothing served."
-    },
-    "clock_skew": {
-      "status": 503,
-      "description": "The server's clock is more than 300 s off the chain's."
-    },
-    "contributor_checks_busy": {
-      "status": 503,
-      "description": "Contributor checks are busy; see Retry-After."
-    },
-    "facilitator_busy": {
-      "status": 503,
-      "description": "The facilitator is busy; see Retry-After."
-    },
-    "facilitator_unavailable": {
-      "status": 503,
-      "description": "The payment facilitator cannot be reached."
-    },
-    "intake_busy": {
-      "status": 503,
-      "description": "Too many submission writes in flight."
-    },
-    "intake_full": {
-      "status": 503,
-      "description": "The journal holds its maximum number of submissions."
-    },
-    "intake_unavailable": {
-      "status": 503,
-      "description": "The submission journal cannot be read or written."
-    },
-    "level3_chain_unavailable": {
-      "status": 503,
-      "description": "No finalized block can be read."
-    },
-    "level3_clock_skew": {
-      "status": 503,
-      "description": "A time in the post log is more than 300 s ahead of this server's clock."
-    },
-    "level3_posts_delayed": {
-      "status": 503,
-      "description": "A level-3 post has been pending more than 600 s."
-    },
-    "level3_store_unreadable": {
-      "status": 503,
-      "description": "The level-3 post log cannot be read."
-    },
-    "overloaded": {
-      "status": 503,
-      "description": "Too many requests in flight; retry in 1 s."
-    },
-    "payment_pending": {
-      "status": 503,
-      "description": "Self-settle: retry the same request; it is served once the transfer is proven."
-    },
-    "receipt_log_unavailable": {
-      "status": 503,
-      "description": "The receipt log cannot be written; new payments refused, nothing charged."
-    },
-    "root_source_unavailable": {
-      "status": 503,
-      "description": "The root source cannot be read."
-    },
-    "rows_unavailable": {
-      "status": 503,
-      "description": "The rows cannot be read."
-    },
-    "serving_check_pending": {
-      "status": 503,
-      "description": "The serving check has not judged the current root yet."
-    },
-    "settle_intent_unavailable": {
-      "status": 503,
-      "description": "The settle intent log cannot be written."
-    },
-    "track_store_unreadable": {
-      "status": 503,
-      "description": "The track publication file cannot be read or checked."
-    },
-    "timeout": {
-      "status": 504,
-      "description": "The request took too long."
-    },
-    "prepaid_not_offered": {
-      "status": 400,
-      "description": "An ONYX-PREPAID-VOUCHER header on a server that takes x402 payments only."
-    },
-    "invalid_prepaid": {
-      "status": 400,
-      "description": "An ONYX-PREPAID-VOUCHER header that does not parse."
-    },
-    "prepaid_refused": {
-      "status": 402,
-      "description": "A voucher that is not the buyer's, does not add exactly the price to the last total (`last` and `price` say what to sign), exceeds the deposit, or comes while an exit is pending. Nothing was served or charged."
-    },
-    "prepaid_unavailable": {
-      "status": 503,
-      "description": "The server cannot read the buyer's account or record prepaid usage durably; nothing was charged."
-    },
-    "observe_payment_required": {
-      "status": 402,
-      "description": "No round settled this level-2 subject yet; `observe` offers one for a prepaid hold (price, deadline, that the value becomes public, the refund rule)."
-    },
     "unknown_ticket": {
       "status": 404,
       "description": "No such paid observation ticket on this server."
-    },
-    "bad_want_signature": {
-      "status": 403,
-      "description": "The signature is not the buyer's over this week's want text."
-    },
-    "bad_want_value": {
-      "status": 400,
-      "description": "A want's value is not in its closed list."
-    },
-    "bounty_too_specific": {
-      "status": 400,
-      "description": "A want with anything but the four closed-list values (free text, a URL, a metric, a subject, a date), or extra fields beside want, buyer and signature."
-    },
-    "chain_unavailable": {
-      "status": 503,
-      "description": "The prepaid account could not be read on chain."
-    },
-    "journal_unavailable": {
-      "status": 503,
-      "description": "The want could not be written to the node's journal."
-    },
-    "no_prepaid_account": {
-      "status": 403,
-      "description": "Only an open prepaid deposit may post a want."
-    },
-    "too_many_wants": {
-      "status": 429,
-      "description": "An account holds at most 16 live wants."
     },
     "wants_closed": {
       "status": 503,

@@ -1,8 +1,8 @@
 {
- "note": "Ladders of the two Base Sepolia level-2 values (ROADMAP B6), as the client check (`level2-check`, ADR-0048) accepted them from https://onyx.cryptagraph.com on 2026-10-27, after checking each round off chain and on chain at the registry. No value is in a ladder: `value` is its keccak key.",
+ "note": "Ladders of the Base Sepolia level-2 values (ROADMAP B6), as the client check (`level2-check`, ADR-0048) accepted them from https://onyx.cryptagraph.com after checking each round off chain and on chain at the registry: earthquakes and the Denver high on 2026-10-27; the Treasury cash balance, New York's high and rain, Denver's rain and Los Angeles earthquakes on 2026-10-29 (contributor loop CL1); the Treasury's daily deposits, the first manifest source, on 2026-10-30 (CL3, `level2-manifest check`). No value is in a ladder: `value` is its keccak key.",
  "chainId": 84532,
  "registry": "0x497389e04f7d58e07a79ac8d395c3927aecbdf2b",
- "checked": "2026-10-27",
+ "checked": "2026-10-30",
  "values": [
   {
    "id": "usgs",
@@ -40,6 +40,120 @@
      }
     ],
     "value": "0x2f23fb20cade1b16b74761c0e2ada52ef111050c4f9d05758cffef95bb808e66"
+   }
+  },
+  {
+   "id": "tga",
+   "metric": "us.treasury.tga_closing_balance",
+   "subject": "us.treasury.operating_cash:2026-10-27",
+   "round": "0xc586867191bb1cb2658589489c95efbee5950733dc92aaefa0937350fdba42eb",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793232300,
+      "evidence": "0x08c007410931d0e70c1a2bd2388be3602ed3154924da4b1bacff51cc2dc05313",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0x72bf84d53cc7a3ec27bedc81aae3d55a3ed143c9312159f982b9efdc8dc48c20"
+   }
+  },
+  {
+   "id": "ny-tmax",
+   "metric": "noaa.ghcnd.usw00094728.tmax",
+   "subject": "noaa.ghcnd.usw00094728:2026-09-27",
+   "round": "0xaddc3ee67a10cd7913b4e0754933c9059de21aff402d78d28f9268e513c88b1d",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793059500,
+      "evidence": "0xc17bfa3fd9f7aa7e5e4e560e95ce2f50deafa57137509a6a82aa76d98f327317",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0xf4d0b14676125d3547810e7a5cbd2238fb51f59fea509d72ec6a933121017ed6"
+   }
+  },
+  {
+   "id": "ny-prcp",
+   "metric": "noaa.ghcnd.usw00094728.prcp",
+   "subject": "noaa.ghcnd.usw00094728:2026-09-27",
+   "round": "0xf5fb60e4988bd5e6f5b6f3f5a76b987db6f0d7aa4d865dd06406a5bc2868ba06",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793059500,
+      "evidence": "0xa599055ff74e9672cdc62f5805a91621ec17e8bf5c8e268e5deeeb2bc3265f0f",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0x604a45fe1076c21872b38d0eeb427224969cb5ce3ff6458472db1863fff08355"
+   }
+  },
+  {
+   "id": "den-prcp",
+   "metric": "noaa.ghcnd.usw00003017.prcp",
+   "subject": "noaa.ghcnd.usw00003017:2026-09-27",
+   "round": "0x61994924db56214176fc19dce131fb34fdb5c7e1b51f53ad36aeb09ce6076098",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793059500,
+      "evidence": "0xe0a7b9ec344263cf318bb5f6f78f11cbdc16ae8314bddde29a1386695e8f5df5",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0x0310eb7713af44de4a5016de0c459f6a5789fdb922a5ffccdd85e02450951f4f"
+   }
+  },
+  {
+   "id": "la300",
+   "metric": "usgs.earthquakes.la300km_m2_5_count",
+   "subject": "usgs.earthquakes.la300km_m2_5:2026-07-20",
+   "round": "0x8efb57d811853ef8695e00a85fbb47e73d5f90e68979bd6d138f4587b0f9cd8a",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793145900,
+      "evidence": "0xcef2e6ce9e2f11c6f9f4654de0d4d5a2575630719158c28a8dd93f40912012ca",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0x9f84f26a150e7123fb8e48c5069489383bae64d0b113c41062ad3f518b1a6a73"
+   }
+  },
+  {
+   "id": "tga-deposits",
+   "metric": "us.treasury.tga_total_deposits",
+   "subject": "us.treasury.tga_deposits:2026-10-28",
+   "round": "0xe0001998052d14c709f552c542da326f7a3baf343b9da41627c6e91a7ad836cf",
+   "ladder": {
+    "level": 2,
+    "steps": [
+     {
+      "at": 1793318700,
+      "evidence": "0x7541a307328bc2cc6f2fd70acf9e9212bff68d0505df996ddece624a11d3e65a",
+      "level": 2,
+      "name": "re-observed",
+      "record": "OnyxRegistry.ObservationRecorded"
+     }
+    ],
+    "value": "0xef0ed240ea275454ef09b85cba3567f4aa653e03794418c75302ba2da1e8d6a1"
    }
   }
  ]

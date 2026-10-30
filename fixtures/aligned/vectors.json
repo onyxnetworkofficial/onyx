@@ -1,0 +1,1863 @@
+{
+  "about": "Golden vectors of time alignment (ADR-0058, contributor loop CL8): the bucketed subject rule, the composite id, and each alignment's answer (lower median, band, disagreement flag, the four clocks, answer id). Regenerate only with an ADR change: ONYX_BLESS=1 cargo test -p onyx-core --test aligned.",
+  "alignments": [
+    {
+      "answer": {
+        "answerId": "0x4fefd22591e97fc18222e8a9c387bd285b79d16884ccaebae7e8526ac1cebe1a",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67013.00",
+          "min": "67011.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "29",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67013.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67011.00",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.00",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "five venues agree, with a tie"
+    },
+    {
+      "answer": {
+        "answerId": "0xf9d6f4b6771c0f51a613717aab7ed3873120c3cf094f9cd95695c7dc5ba77e06",
+        "asOf": 1793062800,
+        "band": {
+          "max": "69022.87",
+          "min": "67012.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": true,
+        "rights": "allowed",
+        "spreadPpm": "30007",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67013.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "69022.87",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.00",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "one far venue (3% high)"
+    },
+    {
+      "answer": {
+        "answerId": "0x51bc58e19068743b90839d049ec5022945127a4d93233a2fbfdd4b379762e926",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67548.60",
+          "min": "67012.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": true,
+        "rights": "allowed",
+        "spreadPpm": "8007",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67013.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.00",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67548.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a wash print at the bucket edge moves one thin venue's close 0.8%"
+    },
+    {
+      "answer": {
+        "answerId": "0x61039520c64645f04fc8a2451dc810b2271fff74d9b1763fd7dc8765878b1ee3",
+        "asOf": 1793062800,
+        "band": {
+          "max": "69022.87",
+          "min": "67012.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": true,
+        "rights": "allowed",
+        "spreadPpm": "30007",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "69022.87",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "69022.87",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.00",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "two venues pushed the same way do not move the median"
+    },
+    {
+      "answer": {
+        "answerId": "0x90989a8a49ca2b3e7b0e33b0a7bc26b5a46279891f8a6fafd82c147ea131c681",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "pending",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": false,
+            "metric": "venue.a.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.a"
+          },
+          {
+            "included": false,
+            "metric": "venue.b.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.b"
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.c"
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "empty bucket: no venue observed yet (pending)"
+    },
+    {
+      "answer": {
+        "answerId": "0xaa3482d8ae06f2d7e61e56b91a075344a308edb2a2a87d0c1cabf7dbc50e669e",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "insufficient",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": false,
+            "metric": "venue.a.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.a"
+          },
+          {
+            "included": false,
+            "metric": "venue.b.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.b"
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.c"
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "every venue lapsed"
+    },
+    {
+      "answer": {
+        "answerId": "0x1b75347db596e3016150f81b9a1133e8111c122845d9f3f8407390c85021ab13",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "pending",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "134025.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "134025.00",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "not_observed",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "a paid subset: three of five observed, two still observable (pending)"
+    },
+    {
+      "answer": {
+        "answerId": "0x6bec691413f0a66d430e3527a72b71a9411790a453d934f518dcc22198130b9b",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "insufficient",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "134025.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "134025.00",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "the same subset once the others lapsed: no value"
+    },
+    {
+      "answer": {
+        "answerId": "0x4bcd93caec05450b77130a231b09846174941c2ea0410aa04d20351e5b8e1df4",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "three of five included, two unavailable: a majority"
+    },
+    {
+      "answer": {
+        "answerId": "0x0b4a928e901fe1000b71c6ca456bb2158ec99076c42e2b7a1eb501e06ba2470a",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "insufficient",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.c"
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "no_result",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "two of five included is never a value"
+    },
+    {
+      "answer": {
+        "answerId": "0xede014ca2ca7c1bb5fe574c624530c7d27b305a26c76724ce08679992aca49e2",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "insufficient",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.c"
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "no_result",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "two venues only: insufficient"
+    },
+    {
+      "answer": {
+        "answerId": "0xc4fe5fe0a15632c85c3e4db005f90a53062de836848d42307011d08deca98828",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.70",
+          "min": "67012.30"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "5",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.b.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.b"
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.70",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.30",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a halted venue is listed unavailable"
+    },
+    {
+      "answer": {
+        "answerId": "0x34787f3bccc3e19b28b93ad711fe140b5fbe65a006d3bc4857fb0ce324d0de47",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.c"
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a venue clock 5 s fast"
+    },
+    {
+      "answer": {
+        "answerId": "0x34787f3bccc3e19b28b93ad711fe140b5fbe65a006d3bc4857fb0ce324d0de47",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.c"
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a venue answering the previous bucket"
+    },
+    {
+      "answer": {
+        "answerId": "0x34787f3bccc3e19b28b93ad711fe140b5fbe65a006d3bc4857fb0ce324d0de47",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.c"
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a fact observed before the bucket closed (late prints)"
+    },
+    {
+      "answer": {
+        "answerId": "0x34787f3bccc3e19b28b93ad711fe140b5fbe65a006d3bc4857fb0ce324d0de47",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.c"
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a fact recorded before its window closed"
+    },
+    {
+      "answer": {
+        "answerId": "0x34787f3bccc3e19b28b93ad711fe140b5fbe65a006d3bc4857fb0ce324d0de47",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.60",
+          "min": "67012.40"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "2",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.c"
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.60",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.40",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "a reveal outside its window"
+    },
+    {
+      "answer": {
+        "answerId": "0x46401230f7059a74912e28ab349555b16aa6b3476626fa455c0e575f9e981b95",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67022.50",
+          "min": "67012.50"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "149",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67022.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67022.50",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "rights_withheld",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "even count: the lower median"
+    },
+    {
+      "answer": {
+        "answerId": "0xdeee811a2503659b51b0b7b8e8e0662d3f84620e3271f9e98dc6f3544bdcc01c",
+        "asOf": 1793062800,
+        "band": {
+          "max": "67012.50",
+          "min": "67012.50"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "0",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "67012.50",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.d.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.d",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.e.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "67012.50",
+            "venue": "venue.e",
+            "venueTime": 1793059200
+          }
+        ]
+      },
+      "name": "all equal: no spread"
+    },
+    {
+      "answer": {
+        "answerId": "0xbd8a05350a6b7871a4e2dc66b66733dc1104e110c92229f2ddd79699647ad712",
+        "asOf": 1793062800,
+        "band": {
+          "max": "10050.00",
+          "min": "10000.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": "5000",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "10000.00",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10000.00",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10000.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10050.00",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "exactly at the threshold: no flag"
+    },
+    {
+      "answer": {
+        "answerId": "0xe95018bd2cee56e0de0fda2e6de9f988f8fce50942d0b7095a70eba2dec4ab96",
+        "asOf": 1793062800,
+        "band": {
+          "max": "10050.01",
+          "min": "10000.00"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": true,
+        "rights": "allowed",
+        "spreadPpm": "5001",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "10000.00",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10000.00",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10000.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "10050.01",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "one unit over the threshold: flag"
+    },
+    {
+      "answer": {
+        "answerId": "0xfd62907deba4c39acd2123616ca164aa133e23245353e5e5a9e6fe04bf8c47d9",
+        "asOf": 1793062800,
+        "band": {
+          "max": "0.01",
+          "min": "-0.01"
+        },
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": true,
+        "rights": "allowed",
+        "spreadPpm": "18446744073709551615",
+        "status": "aligned",
+        "unit": "USD",
+        "value": "0.00",
+        "venues": [
+          {
+            "included": true,
+            "metric": "venue.a.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "-0.01",
+            "venue": "venue.a",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.b.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "0.00",
+            "venue": "venue.b",
+            "venueTime": 1793059200
+          },
+          {
+            "included": true,
+            "metric": "venue.c.aaa_usd.1h",
+            "observedFrom": 1793063110,
+            "observedTo": 1793063200,
+            "recordedAt": {
+              "block": 4242,
+              "time": 1793063500
+            },
+            "value": "0.01",
+            "venue": "venue.c",
+            "venueTime": 1793059200
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "a zero median with a spread"
+    },
+    {
+      "answer": {
+        "answerId": "0x9849177c0854303d1e3aba4f608729c68d0fa15cd275eadafe4e55841131ae5e",
+        "asOf": 1793062800,
+        "band": null,
+        "bucket": {
+          "end": 1793062800,
+          "start": 1793059200
+        },
+        "disagreement": false,
+        "rights": "allowed",
+        "spreadPpm": null,
+        "status": "insufficient",
+        "unit": "USD",
+        "value": null,
+        "venues": [
+          {
+            "included": false,
+            "metric": "venue.a.aaa_usd.1h",
+            "reason": "lapsed",
+            "venue": "venue.a"
+          },
+          {
+            "included": false,
+            "metric": "venue.b.aaa_usd.1h",
+            "reason": "unavailable",
+            "venue": "venue.b"
+          },
+          {
+            "included": false,
+            "metric": "venue.c.aaa_usd.1h",
+            "reason": "no_result",
+            "venue": "venue.c"
+          },
+          {
+            "included": false,
+            "metric": "venue.d.aaa_usd.1h",
+            "reason": "rights_withheld",
+            "venue": "venue.d"
+          },
+          {
+            "included": false,
+            "metric": "venue.e.aaa_usd.1h",
+            "reason": "clock_mismatch",
+            "venue": "venue.e"
+          }
+        ]
+      },
+      "name": "every reason at once"
+    }
+  ],
+  "bucket_rule": [
+    {
+      "name": "first second of the observable range",
+      "result": {
+        "spec_id": "0xeff9363699646756dcce7e21627791fd1403904694ce554393d604b031533568",
+        "url": "https://a.venue.example/v1/candles?pair=AAA-USD&interval=1h&start=1793059200&start_ms=1793059200000",
+        "window_end": 1793063220
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "last second of the observable range",
+      "result": {
+        "spec_id": "0x8ae33f71f06245b5bae88dbb0f260b9aad20d5492408d64b6e1488a1efea3876",
+        "url": "https://a.venue.example/v1/candles?pair=AAA-USD&interval=1h&start=1793059200&start_ms=1793059200000",
+        "window_end": 1793066820
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793066700
+    },
+    {
+      "name": "one second before the bucket settles (late prints)",
+      "result": {
+        "error": "date not observable in this window: the bucket is not closed and settled yet"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063099
+    },
+    {
+      "name": "inside the bucket itself",
+      "result": {
+        "error": "date not observable in this window: the bucket is not closed and settled yet"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793061000
+    },
+    {
+      "name": "one second after the range",
+      "result": {
+        "error": "date not observable in this window: the bucket is too old"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793066701
+    },
+    {
+      "name": "a start off the grid",
+      "result": {
+        "error": "not this metric's registered feed: bucketed subject"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059201",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "a start with a leading zero",
+      "result": {
+        "error": "not this metric's registered feed: bucketed subject"
+      },
+      "subject": "venue.a.aaa_usd.1h:01793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "a start with a sign",
+      "result": {
+        "error": "not this metric's registered feed: bucketed subject"
+      },
+      "subject": "venue.a.aaa_usd.1h:+1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "a start in milliseconds",
+      "result": {
+        "error": "date not observable in this window: the bucket is not closed and settled yet"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200000",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "a date instead of a start",
+      "result": {
+        "error": "not this metric's registered feed: bucketed subject"
+      },
+      "subject": "venue.a.aaa_usd.1h:2026-10-27",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 3600, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xaeeba1336f6d7ff2c3c67af2e7d45e01811309a628fc292906890710f53346db",
+      "window_start": 1793063100
+    },
+    {
+      "name": "a daily bucket on the day grid",
+      "result": {
+        "spec_id": "0xc8b0e8a2b25753e3e239a48f0dd20e10090f3c336964437d90787f119e23ce74",
+        "url": "https://a.venue.example/v1/candles?pair=AAA-USD&interval=1h&start=1793059200&start_ms=1793059200000",
+        "window_end": 1793146020
+      },
+      "subject": "venue.a.aaa_usd.1h:1793059200",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 86400, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xc5d4a7521d1bc5c38ee9b38b3a77ed3a085edd5bb15c0f41e5c70a2d24196315",
+      "window_start": 1793145900
+    },
+    {
+      "name": "an hour start on a daily grid",
+      "result": {
+        "error": "not this metric's registered feed: bucketed subject"
+      },
+      "subject": "venue.a.aaa_usd.1h:1793062800",
+      "subject_rule": "Bucketed { prefix: \"venue.a.aaa_usd.1h\", bucket_secs: 86400, min_delay_secs: 300, max_delay_secs: 3900 }",
+      "template_id": "0xc5d4a7521d1bc5c38ee9b38b3a77ed3a085edd5bb15c0f41e5c70a2d24196315",
+      "window_start": 1793232000
+    }
+  ],
+  "bucket_start": 1793059200,
+  "composite": {
+    "disagree_ppm": 5000,
+    "id": "0x2f8d8856f8439b446ea5449949513d28fcb790567d2c9aa5a53f613af32c0851",
+    "metric": "aligned.aaa_usd.1h",
+    "min_venues": 3
+  }
+}

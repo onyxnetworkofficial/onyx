@@ -6283,6 +6283,244 @@ mod level2 {
         let (s, _, _) = get(&free, URI, &[("if-none-match", etag)]).await;
         assert_eq!(s, StatusCode::NOT_MODIFIED);
     }
+
+    mod cl7_recheck {
+        //! CL7 (ADR-0057 item 6): a value answer gains the paired `.recheck`
+        //! metric's note. A recheck that disagrees is a note next to the
+        //! value, never a fall; the client recomputes the note from the
+        //! recheck's own verified answer.
+        use super::*;
+        use crate::client::verify_recheck;
+        use onyx_core::recheck_of;
+
+        const DAY: u64 = 86_400;
+        const SUBJECT: &str = "test.daily:1970-01-01";
+        /// Day 1 (the original's first allowed day) and day 3 (the recheck's).
+        const START: u64 = DAY + 1_500;
+        const RSTART: u64 = 3 * DAY + 1_500;
+        const NOW: u64 = 4 * DAY;
+
+        fn daily() -> FeedTemplate {
+            FeedTemplate {
+                feed: "test.daily.v1".into(),
+                metric: MetricId("test.daily".into()),
+                fetcher: keccak256(b"test fetcher"),
+                url_template: "https://example.test/{date}.json".into(),
+                selector: "/value".into(),
+                kind: ObservationKind::Numeric {
+                    scale: 2,
+                    tolerance: 5,
+                },
+                window_secs: 300,
+                min_observers: 3,
+                rights: rights(Redistribution::Allowed),
+                subject: SubjectRule::Daily {
+                    prefix: "test.daily".into(),
+                    min_days: 1,
+                    max_days: 1,
+                },
+            }
+        }
+
+        fn recheck() -> FeedTemplate {
+            recheck_of(&daily(), 2, 1).expect("recheck")
+        }
+
+        fn subj() -> Subject {
+            Subject::Aggregate(SUBJECT.into())
+        }
+
+        /// One honest round of `t` from `start` where every observer answers `v`.
+        fn round(t: &FeedTemplate, start: u64, v: i128) -> Transcript {
+            let spec = t.instantiate(&subj(), start).expect("allowed window");
+            let cfg = ObserveConfig {
+                commit_close: spec.window_end + 60,
+                reveal_close: spec.window_end + 180,
+                reward: 10,
+                outlier_slash: 100,
+                miss_slash: 20,
+            };
+            let observers: Vec<Observer> = (1..=3u8)
+                .map(|i| Observer {
+                    address: obs_addr(i),
+                    bond: 1_000,
+                })
+                .collect();
+            let draw =
+                onyx_coordinator::observe::DrawSeed::for_pool(&observers, 10, Hash32([3; 32]), 0);
+            let rid = onyx_coordinator::observe::round_id(&spec.id(), &cfg, &observers, &draw);
+            let ob = Observation {
+                answer: Answer::Number(v),
+                observed_at: start + 10,
+                page_hash: keccak256(&v.to_be_bytes()),
+            };
+            let mut commits = Vec::new();
+            let mut reveals = Vec::new();
+            for o in &observers {
+                let salt = keccak256(&o.address);
+                let (c, r) = test_keys::signed(
+                    &test_keys::ordered_secret(&o.address).expect("test key"),
+                    &rid,
+                    draw.attempt,
+                    &ob,
+                    &salt,
+                );
+                commits.push(c);
+                reveals.push(r);
+            }
+            Transcript {
+                subject: subj(),
+                window_start: start,
+                cfg,
+                pool: observers.clone(),
+                draw,
+                observers,
+                commits,
+                reveals,
+                sealed: Default::default(),
+                answer: Answer::Number(v),
+            }
+        }
+
+        fn store(t: &FeedTemplate, rounds: &[Transcript]) -> ObservationFeed {
+            let text = ObservationStore::to_json(t, rounds, None).to_string();
+            ObservationStore::from_json(&text, NOW, &pins(t)).expect("store loads")
+        }
+
+        /// The original value 42.00 and, when given, the recheck's value.
+        fn fixture(recheck_value: Option<Option<i128>>) -> Fixture {
+            let f = build(Setup::default());
+            let mut c = f.state.catalog.write().expect("lock");
+            c.add_observations(store(&daily(), &[round(&daily(), START, 4_200)]))
+                .expect("adds");
+            if let Some(v) = recheck_value {
+                let r = recheck();
+                let rounds: Vec<Transcript> = v.map(|v| round(&r, RSTART, v)).into_iter().collect();
+                c.add_observations(store(&r, &rounds))
+                    .expect("adds the recheck");
+            }
+            drop(c);
+            f
+        }
+
+        fn uri(metric: &str) -> String {
+            format!("/v1/observations/{metric}?subject={SUBJECT}")
+        }
+
+        fn verify(t: &FeedTemplate, b: &Value) -> VerifiedObservation {
+            let s = subj();
+            verify_observation(
+                b,
+                &ObservationExpect {
+                    template: t,
+                    subject: &s,
+                    window_end: None,
+                    min_window_end: 0,
+                    now: NOW,
+                },
+            )
+            .expect("verifies")
+        }
+
+        #[tokio::test]
+        async fn a_recheck_that_disagrees_is_a_note_never_a_fall() {
+            let f = fixture(Some(Some(4_206)));
+            let (s, h, b) = get(&f, &uri("test.daily"), &[]).await;
+            assert_eq!(s, StatusCode::OK, "{b}");
+            assert_eq!(b["recheck"]["matches"], json!(false));
+            assert_eq!(b["proofLevel"], json!(2), "the value keeps its level");
+            assert_eq!(b["ladder"]["level"], json!(2));
+            assert_eq!(b["value"], json!("42.00"));
+            assert!(
+                cc(&h).contains("immutable"),
+                "the note is final: {}",
+                cc(&h)
+            );
+            let value = verify(&daily(), &b);
+            let (s, _, rb) = get(&f, &uri("test.daily.recheck"), &[]).await;
+            assert_eq!(s, StatusCode::OK, "{rb}");
+            assert!(rb.get("recheck").is_none(), "no recheck of a recheck");
+            let rv = verify(&recheck(), &rb);
+            let note = verify_recheck(&b, &value, &recheck(), &rv).expect("the note holds");
+            assert!(!note.matches);
+            assert_eq!(note.result, rv.checked.result);
+            assert_eq!(note.recorded_at, rv.checked.settled_unix);
+            assert_eq!(b["recheck"]["recordedAt"], json!(rv.checked.settled_unix));
+            // A server that flips the note, or names another result, is caught.
+            for (k, bad) in [
+                ("matches", json!(true)),
+                ("result", json!(b["resultHash"].clone())),
+                ("recordedAt", json!(1)),
+            ] {
+                let mut forged = b.clone();
+                forged["recheck"][k] = bad;
+                verify_observation(
+                    &forged,
+                    &ObservationExpect {
+                        template: &daily(),
+                        subject: &subj(),
+                        window_end: None,
+                        min_window_end: 0,
+                        now: NOW,
+                    },
+                )
+                .expect("the shape is fine");
+                assert!(
+                    verify_recheck(&forged, &value, &recheck(), &rv).is_err(),
+                    "{k}"
+                );
+            }
+            let mut extra = b.clone();
+            extra["recheck"]["level"] = json!(4);
+            assert!(matches!(
+                verify_observation(
+                    &extra,
+                    &ObservationExpect {
+                        template: &daily(),
+                        subject: &subj(),
+                        window_end: None,
+                        min_window_end: 0,
+                        now: NOW,
+                    },
+                ),
+                Err(VerifyError::UnexpectedField(_))
+            ));
+            // The note cannot be recomputed from the value's own answer.
+            assert!(verify_recheck(&b, &value, &recheck(), &value).is_err());
+        }
+
+        #[tokio::test]
+        async fn a_recheck_within_the_tolerance_matches() {
+            let f = fixture(Some(Some(4_195)));
+            let (_, _, b) = get(&f, &uri("test.daily"), &[]).await;
+            assert_eq!(b["recheck"]["matches"], json!(true));
+        }
+
+        /// A paired recheck feed with no round yet: no note, and the answer is
+        /// not cached as immutable (it may still gain one). No paired feed:
+        /// the answer is as before CL7.
+        #[tokio::test]
+        async fn a_pending_recheck_keeps_the_answer_revalidating() {
+            let f = fixture(Some(None));
+            let (s, h, b) = get(&f, &uri("test.daily"), &[]).await;
+            assert_eq!(s, StatusCode::OK, "{b}");
+            assert!(b.get("recheck").is_none());
+            assert!(!cc(&h).contains("immutable"), "{}", cc(&h));
+            let f = fixture(None);
+            let (_, h, b) = get(&f, &uri("test.daily"), &[]).await;
+            assert!(b.get("recheck").is_none());
+            assert!(cc(&h).contains("immutable"), "{}", cc(&h));
+        }
+
+        /// The ETag changes once the recheck's note is served, so a cached
+        /// answer without it is not revalidated as current.
+        #[tokio::test]
+        async fn the_etag_names_the_recheck_once_served() {
+            let (_, h1, _) = get(&fixture(None), &uri("test.daily"), &[]).await;
+            let (_, h2, _) = get(&fixture(Some(Some(4_300))), &uri("test.daily"), &[]).await;
+            assert_ne!(h1[header::ETAG], h2[header::ETAG]);
+        }
+    }
 }
 
 /// AUD-1-F4: unauthenticated lookups of shards with no final root do not

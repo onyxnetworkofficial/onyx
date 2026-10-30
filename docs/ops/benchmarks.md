@@ -1,7 +1,7 @@
 # Benchmarks
 
 Measured 2026-10-08 on an AMD Ryzen 5 5600X (6 cores / 12 threads, 60 GiB RAM), Linux, rustc 1.98.0,
-release builds, wasmi 2.0.0, wasmtime 49.0.2 (numbers measured on 49.0.2; the pin is 49.0.4 since 2026-10-20). Numbers are wall-clock and vary by machine; rerun with
+release builds, wasmi 2.0.0, wasmtime 49.0.2 (numbers measured on 49.0.2; the pin is 49.0.5 since 2026-10-30). Numbers are wall-clock and vary by machine; rerun with
 the commands below before relying on them. Nothing here is a claim about other projects.
 
 ## Reference recipe on real blocks

@@ -9,11 +9,13 @@
 //! All types derive Borsh and encode canonically (ADR-0002). All hashes are
 //! Keccak-256 (ADR-0003). No type carries a float (ADR-0009).
 
+pub mod aligned;
 pub mod canonical;
 pub mod claim;
 pub mod commitment;
 pub mod estimate;
 pub mod feed;
+pub mod feed_json;
 pub mod fetch;
 pub mod hash;
 pub mod ids;
@@ -36,7 +38,10 @@ pub use commitment::{
     CommitmentFields, MinerAddress, RuntimeProfile, SchemaId, ShardSpec,
 };
 pub use estimate::{is_estimate_id, ErrorBand, Estimate, EstimateError, ESTIMATE_PREFIX};
-pub use feed::{day_number, DateLag, FeedTemplate, SubjectRule, TemplateError};
+pub use feed::{
+    day_number, recheck_of, Bucket, DateLag, FeedTemplate, SubjectRule, TemplateError,
+    RECHECK_SUFFIX,
+};
 pub use hash::{keccak256, Hash32, RecipeId};
 pub use ids::{AddressCanon, AddressProof, ProofOutcome, ProofVector};
 pub use ladder::{value_key, Contradiction, Ladder, LadderError, Step};

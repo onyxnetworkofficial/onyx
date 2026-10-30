@@ -1,0 +1,84 @@
+{
+  "descriptor": {
+    "access": "public",
+    "asserts": [
+      {
+        "expect": {
+          "array_len": 1
+        },
+        "pointer": "/candles"
+      },
+      {
+        "expect": {
+          "bucket_start": "unix_secs"
+        },
+        "pointer": "/candles/0/t"
+      },
+      {
+        "expect": "positive",
+        "pointer": "/candles/0/volume"
+      },
+      {
+        "expect": {
+          "str": "1h"
+        },
+        "pointer": "/interval"
+      },
+      {
+        "expect": {
+          "str": "AAA-USD"
+        },
+        "pointer": "/pair"
+      }
+    ],
+    "max_bytes": 4096,
+    "pointer": "/candles/0/close",
+    "unit": "USD",
+    "value": "decimal_string",
+    "version": 1
+  },
+  "earliest_public_offset_secs": 0,
+  "fetcher_id": "0xf4a29aa9115ffabbcadbd77a00cf6976f6e8600f12914d3dc12dc1f7b36f1b9b",
+  "id": "demo.venue_d.aaa_usd.1h",
+  "limits": {
+    "max_rounds_per_day": 24,
+    "min_fetch_gap_secs": 1,
+    "origin_budget": 16
+  },
+  "metric": "demo.venue_d.aaa_usd.1h",
+  "name": "Synthetic venue D (local fixture): AAA-USD hourly close",
+  "note": "CL8 aligned demo (ADR-0058): synthetic venue D on loopback (outlier: a thin venue whose close a wash print at the bucket edge moved 3% up); FIXTURE, never a real venue",
+  "recording": "recording/1793059200.json",
+  "template": {
+    "kind": {
+      "numeric": {
+        "scale": 2,
+        "tolerance": "0"
+      }
+    },
+    "min_observers": 5,
+    "rights": {
+      "attribution": null,
+      "license": "CC0-1.0",
+      "redistribution": "allowed",
+      "source": "demo.venue_d",
+      "terms": ""
+    },
+    "selector": "/candles/0/close",
+    "subject": {
+      "bucketed": {
+        "bucket_secs": 3600,
+        "max_delay_secs": 3900,
+        "min_delay_secs": 300,
+        "prefix": "demo.venue_d.aaa_usd.1h"
+      }
+    },
+    "url_template": "https://venue-d.example.org/v1/candles?pair=AAA-USD&interval=1h&start={bucket_start}",
+    "window_secs": 120
+  },
+  "template_id": "0x6a86a7592b884e54a11c6d88ce45c14cb729a5c7a05126bb5ec3631a0003729b",
+  "terms_quote": "Synthetic demo data, CC0: anyone may copy and redistribute it.",
+  "terms_row": "S83",
+  "terms_url": "https://venue-d.example.org/terms",
+  "v": 1
+}

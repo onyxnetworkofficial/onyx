@@ -16,6 +16,10 @@ const API_TRACK: &str = include_str!("../../onyx-api/src/track_serve.rs");
 const API_LABELS: &str = include_str!("../../onyx-api/src/labels_serve.rs");
 /// The bounty board (north-star loop NL9), merged into the router by the node.
 const API_WANTS: &str = include_str!("../../onyx-api/src/wants.rs");
+/// Bulk datasets (CL5, ADR-0059): read routes under the guard, uploads outside it.
+const API_BULK: &str = include_str!("../../onyx-api/src/bulk_serve.rs");
+/// Credits and the relay (CL6, ADR-0056), merged into the router by the node.
+const API_CREDITS: &str = include_str!("../../onyx-api/src/credits.rs");
 
 /// The config without comments, one trimmed line each.
 fn lines() -> Vec<&'static str> {
@@ -81,18 +85,24 @@ fn api_routes() -> Vec<&'static str> {
     // North-star loop NL9: the bounty board (GET, and POST in the @submit group).
     routes.extend(routes_of(API_WANTS, "pub fn routes("));
     routes.push("/v1/submit/{id}");
+    // CL5: bulk datasets (reads in @api; the two uploads in @bulk_upload).
+    routes.extend(routes_of(API_BULK, "pub fn routes("));
+    routes.extend(routes_of(API_BULK, "pub fn upload_routes("));
+    // CL6: credits reads in @api, the relay's POST in @submit.
+    routes.extend(routes_of(API_CREDITS, "pub fn routes("));
     routes
 }
 
 #[test]
 fn every_api_route_is_proxied_and_nothing_else() {
-    // Both bounded method groups are checked below; no hidden proxy blocks.
+    // The three bounded method groups are checked below; no hidden proxy blocks.
     for key in ["path", "method", "reverse_proxy"] {
-        assert_eq!(count(key), 2, "{key} lines in the Caddyfile");
+        assert_eq!(count(key), 3, "{key} lines in the Caddyfile");
     }
     assert_eq!(count("@api"), 1);
     assert_eq!(count("@submit"), 1);
-    assert_eq!(count("handle"), 3);
+    assert_eq!(count("@bulk_upload"), 1);
+    assert_eq!(count("handle"), 4);
     let patterns = args("path");
     assert!(!patterns.is_empty());
     let covers = |p: &str, route: &str| match p.strip_suffix('*') {
@@ -226,8 +236,14 @@ fn submission_methods_body_caps_and_all_extra_routes_match_the_node() {
     assert_eq!(block_args("@submit", "method"), ["POST"]);
     assert_eq!(
         block_args("@submit", "path"),
-        ["/v1/submit", "/v1/submit/check", "/v1/wants"]
+        ["/v1/submit", "/v1/submit/check", "/v1/wants", "/v1/relay"]
     );
+    // CL6: the relay's POST rides in the same bounded group; the node refuses more than 8 KiB.
+    assert_eq!(
+        routes_of(API_CREDITS, "pub fn relay_routes("),
+        ["/v1/relay"]
+    );
+    const { assert!(onyx_api::credits::MAX_RELAY_BODY < onyx_api::submit::MAX_BODY) };
     // NL9: the board posts a want in the same bounded group; the node caps it far lower.
     assert_eq!(
         routes_of(API_WANTS, "pub fn routes("),
@@ -252,5 +268,44 @@ fn submission_methods_body_caps_and_all_extra_routes_match_the_node() {
     let app = include_str!("../src/app.rs");
     assert!(app.contains("crate::submissions::routes(c.submissions.as_deref())"));
     assert!(app.contains("extra.merge(intake)"));
+    assert!(app.contains("onyx_api::credits::relay_routes(st)"));
     assert!(app.contains("router_with(state, extra)"));
+}
+
+/// CL5 (ADR-0059): the bulk uploads are a separate POST/PUT group whose body cap holds one 64 MiB
+/// shard and whose answer wait covers the node's upload deadline; the routes are the node's.
+#[test]
+fn bulk_upload_group_matches_the_node() {
+    assert_eq!(
+        routes_of(API_BULK, "pub fn upload_routes("),
+        [
+            "/v1/bulk/manifests",
+            "/v1/bulk/{publisher}/{dataset}/shards/{root}"
+        ]
+    );
+    // rustfmt may break a long `.route(` call over lines: compare without whitespace.
+    let flat: String = API_BULK.split_whitespace().collect();
+    assert!(flat.contains(".route(\"/v1/bulk/manifests\",post(post_manifest))"));
+    assert!(
+        flat.contains(".route(\"/v1/bulk/{publisher}/{dataset}/shards/{root}\",put(put_shard),)")
+    );
+    assert_eq!(block_args("@bulk_upload", "method"), ["POST", "PUT"]);
+    assert_eq!(block_args("@bulk_upload", "path"), ["/v1/bulk/*"]);
+    let cap = block_args("handle @bulk_upload", "max_size")[0];
+    let mib: u64 = cap
+        .strip_suffix("MiB")
+        .and_then(|n| n.parse().ok())
+        .expect("MiB");
+    assert!(mib << 20 > onyx_bulk::shard::MAX_SHARD_BYTES);
+    assert!((mib << 20) as usize > onyx_api::bulk_serve::MAX_MANIFEST_BODY);
+    assert!(
+        secs(block_args("handle @bulk_upload", "response_header_timeout")[0])
+            >= onyx_api::bulk_serve::UPLOAD_TIMEOUT.as_secs()
+    );
+    assert_eq!(
+        block_args("handle @bulk_upload", "reverse_proxy"),
+        block_args("handle @api", "reverse_proxy")
+    );
+    let app = include_str!("../src/app.rs");
+    assert!(app.contains("router_with(state, extra).merge(bulk_uploads)"));
 }

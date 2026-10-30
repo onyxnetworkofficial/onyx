@@ -13,8 +13,8 @@
 //! process: never printed, never on a `cast` command line.
 
 use crate::{
-    append_attempt, append_results, check_new_store, config, drawn_round, observer_turn,
-    parse_pool, run_and_save_with, store, Observers, Page, RoundRun, Source,
+    append_attempt, append_results, check_new_store, drawn_round_with, observer_turn, parse_pool,
+    run_and_save_with, store, Observers, Page, RoundRun, Source,
 };
 use onyx_api::observations::{Attempt, ObservationStore};
 use onyx_coordinator::cast_chain::{
@@ -343,6 +343,18 @@ pub fn apply_announcement(
     std::fs::create_dir_all(&state).map_err(|e| format!("{}: {e}", state.display()))?;
     let pool_path = state.join("announced-pool.json");
     write_atomic(&pool_path, &pool_text)?;
+    // Review CL4-R1-5: the seats of a keyed round, checked against the pool before any commit.
+    if !a["seats"].is_null() {
+        if flag(args, "--seats")?.is_some() {
+            return Err("--seats comes from --announcement: give one, not both".into());
+        }
+        let seats_path = state.join("announced-seats.json");
+        write_atomic(
+            &seats_path,
+            &serde_json::to_string(&a["seats"]).map_err(|e| e.to_string())?,
+        )?;
+        out.extend(["--seats".into(), seats_path.display().to_string()]);
+    }
     out.extend([
         "--pool".into(),
         pool_path.display().to_string(),
@@ -385,14 +397,31 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
         return Ok(());
     }
     let book = need(args, "--book")?;
-    let pool_text =
-        std::fs::read_to_string(need(args, "--pool")?).map_err(|e| format!("--pool: {e}"))?;
-    let pool = parse_pool(&pool_text)?;
     let spool = need(args, "--spool")?;
     let window_start: u64 = need(args, "--window-start")?
         .parse()
         .map_err(|e| format!("--window-start: {e}"))?;
     let record_date = record_date(src, args, window_start)?;
+    // ADR-0054 (CL4): a keyed source draws from the round's keyed snapshot of `--seats`; with
+    // too few drawable seats there is no round, and the value stays level 4, said so.
+    let (pool_text, pool) = if src.key_placement().is_some() {
+        let sp = src.spec(&record_date, window_start)?;
+        match keyed_pool(src, args, &sp)? {
+            Ok(p) => p,
+            Err(statement) => {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&statement).map_err(|e| e.to_string())?
+                );
+                return Ok(());
+            }
+        }
+    } else {
+        let pool_text =
+            std::fs::read_to_string(need(args, "--pool")?).map_err(|e| format!("--pool: {e}"))?;
+        let pool = parse_pool(&pool_text)?;
+        (pool_text, pool)
+    };
     if flag(args, "--receipt-key")?.is_none() {
         return Err(
             "--receipt-key FILE is required: the deployment's own receipt key (ROADMAP B3)".into(),
@@ -536,7 +565,7 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
     // North-star loop NL16 (docs/join.md): the round as an outside observer
     // needs it, written before the draw is announced. It holds no secret.
     if let Some(path) = flag(args, "--announce")? {
-        let a = announcement(
+        let mut a = announcement(
             src,
             cast.chain_id()?,
             &need(args, "--registry")?,
@@ -546,6 +575,13 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
             &pool_text,
             reveal_key.is_some(),
         )?;
+        // Review CL4-R1-5: a keyed round's announcement carries the seats, so every keyed
+        // observer recomputes the snapshot and refuses any other pool.
+        if src.key_placement().is_some() {
+            let seats = std::fs::read_to_string(need(args, "--seats")?)
+                .map_err(|e| format!("--seats: {e}"))?;
+            a["seats"] = serde_json::from_str(&seats).map_err(|e| format!("--seats: {e}"))?;
+        }
         let s = serde_json::to_string_pretty(&a).map_err(|e| e.to_string())?;
         write_atomic(Path::new(&path), &format!("{s}\n"))?;
         eprintln!("wrote the round announcement {path}");
@@ -585,7 +621,7 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
             e.error
         }
     })?;
-    let out = json!({
+    let mut out = json!({
         "metric": t.metric.0,
         // The pin a node serving the store needs (ONYX_OBSERVATION_TEMPLATES).
         "template": t.id().to_string(),
@@ -611,11 +647,53 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
         "far_round": r.sealed.time_lock.as_ref().map(|t| t.far_round),
         "openings": r.sealed.time_lock.as_ref().map_or(0, |t| t.openings.len()),
     });
+    if src.key_placement().is_some() {
+        out["keyed"] = crate::keyed::keyed_shown(pool.len(), t.min_observers);
+        out["proof_level"] = json!(if r.claim.is_some() { 2 } else { 4 });
+    }
     println!(
         "{}",
         serde_json::to_string_pretty(&out).map_err(|e| e.to_string())?
     );
     Ok(())
+}
+
+/// The pool of a keyed round (ADR-0054, CL4): the round's keyed snapshot of `--seats`
+/// ([`crate::keyed::snapshot_for`]: signed seats for this source and terms, bond, bond age,
+/// history, one seat per operator). A `--pool` given too must equal it. `Ok(Err(statement))`
+/// when too few seats are drawable: no round, the level-4 statement instead.
+#[allow(clippy::type_complexity)]
+fn keyed_pool(
+    src: &dyn Source,
+    args: &[String],
+    sp: &onyx_core::ObservationSpec,
+) -> Result<Result<(String, Vec<onyx_coordinator::observe::Observer>), Json>, String> {
+    use crate::keyed::{one_holder_statement, pool_to_json, snapshot_for, KeyedError};
+    let path = need(args, "--seats")
+        .map_err(|_| "a keyed source draws from --seats FILE (the holders' signed seats)")?;
+    let seats = std::fs::read_to_string(&path).map_err(|e| format!("--seats: {e}"))?;
+    match snapshot_for(src, &seats, sp) {
+        Err(e @ KeyedError::TooFewSeats { have, .. }) => {
+            Ok(Err(one_holder_statement(src, have, &e.to_string())))
+        }
+        Err(e) => Err(e.to_string()),
+        Ok(s) => {
+            for (a, why) in &s.left_out {
+                eprintln!("keyed seat 0x{}: left out of this round ({why})", hex(a));
+            }
+            if let Some(p) = flag(args, "--pool")? {
+                let given =
+                    parse_pool(&std::fs::read_to_string(&p).map_err(|e| format!("--pool: {e}"))?)?;
+                if given != s.pool {
+                    return Err(
+                        "--pool is not this round's keyed snapshot of --seats (ADR-0054 item 6)"
+                            .into(),
+                    );
+                }
+            }
+            Ok(Ok((pool_to_json(&s.pool)?, s.pool)))
+        }
+    }
 }
 
 /// One independent level-2 observer (ROADMAP B2, B6): the process's exit
@@ -626,7 +704,21 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
 /// minutes on Base Sepolia) and `--address` (print the key's address and
 /// exit). On a live chain it signs its own commit with its `--key-file` key.
 pub fn observer(src: &dyn Source, args: &[String]) -> i32 {
-    match observer_run(src, args) {
+    observer_with(src, args, None)
+}
+
+/// [`observer`] with another transport for the source fetch (`None`: the live
+/// [`onyx_fetch::HttpsFetch::new`]); the local keyed demo passes its loopback fixture. A
+/// keyed source (ADR-0054, CL4) needs `--api-key-stdin`: the holder's own provider key on
+/// standard input (`onyx-contrib keyed observe` hands it from the vault), never a flag, a
+/// file or the environment. It is held as an [`onyx_fetch::ApiKey`] and goes only into the
+/// fetch to the template's host.
+pub fn observer_with(
+    src: &dyn Source,
+    args: &[String],
+    transport: Option<onyx_fetch::HttpsFetch>,
+) -> i32 {
+    match observer_run(src, args, transport) {
         Ok(code) => code,
         Err(e) => {
             eprintln!("observer: {e}");
@@ -635,13 +727,31 @@ pub fn observer(src: &dyn Source, args: &[String]) -> i32 {
     }
 }
 
-fn observer_run(src: &dyn Source, args: &[String]) -> Result<i32, String> {
+fn observer_run(
+    src: &dyn Source,
+    args: &[String],
+    transport: Option<onyx_fetch::HttpsFetch>,
+) -> Result<i32, String> {
     let key = read_key_file(Path::new(&need(args, "--key-file")?))?;
     let me = key_address(&key).ok_or("not a valid key")?;
     if args.iter().any(|a| a == "--address") {
         println!("0x{}", hex(&me));
         return Ok(0);
     }
+    // ADR-0054 item 2 (THREATS CL4-1): the provider key, from standard input only.
+    let api_key = if args.iter().any(|a| a == "--api-key-stdin") {
+        Some(onyx_fetch::ApiKey::from_reader(std::io::stdin().lock()).map_err(|e| e.to_string())?)
+    } else {
+        None
+    };
+    let keyed = match (src.key_placement(), api_key) {
+        (Some(p), Some(k)) => Some((p, k)),
+        (Some(_), None) => {
+            return Err("a keyed source: give your own provider key on standard input with --api-key-stdin (onyx-contrib keyed observe does it from your vault)".into())
+        }
+        (None, Some(_)) => return Err("--api-key-stdin: this source is public and takes no key".into()),
+        (None, None) => None,
+    };
     // North-star loop NL16: an outside observer joins with the announcement.
     let (expanded, announced_chain) = apply_announcement(src, args)?;
     let args = expanded.as_slice();
@@ -662,7 +772,18 @@ fn observer_run(src: &dyn Source, args: &[String]) -> Result<i32, String> {
         .map_err(|e| format!("--receipt-wait: {e}"))?;
     let record_date = record_date(src, args, window_start)?;
     let sp = src.spec(&record_date, window_start)?;
-    let cfg = config(&sp);
+    let cfg = src.observe_config(&sp);
+    // ADR-0054 item 6, review CL4-R1-5: a keyed observer always checks the pool is the
+    // round's keyed snapshot of the seats (the operator rule, bond age and history), never
+    // just any pool a coordinator announces.
+    if keyed.is_some() {
+        let seats = match flag(args, "--seats")? {
+            Some(p) => Some(std::fs::read_to_string(&p).map_err(|e| format!("--seats: {e}"))?),
+            None => None,
+        };
+        crate::keyed::check_observer_pool(src, seats.as_deref(), &sp, &pool)
+            .map_err(|e| format!("{tag}: {e}"))?;
+    }
     // The observer's own chain reader; its sender is its own account.
     let mut chain_args = args.to_vec();
     chain_args.extend(["--coordinator".into(), format!("0x{}", hex(&me))]);
@@ -706,10 +827,27 @@ fn observer_run(src: &dyn Source, args: &[String]) -> Result<i32, String> {
             n => ChainWait::DEFAULT.retry(|| chain.draw_of(&fact, n - 1))?,
         };
         if let Some(rec) = latest.filter(|r| r.beacon != Hash32::ZERO) {
-            match drawn_round(&sp, &pool, &rec, &me) {
+            match drawn_round_with(&sp, &cfg, &pool, &rec, &me) {
                 Ok(Some((seed, _, id))) => break (seed, id),
                 Ok(None) => {
                     eprintln!("{tag}: not drawn for attempt {}", rec.attempt);
+                    // Review CL4-R1-3: an undrawn keyed seat still fetches once at its
+                    // own private slot and discards the page, so the keys that fetch in
+                    // a window are the whole snapshot, never just the drawn addresses.
+                    if let Some(k) = &keyed {
+                        let slot = crate::keyed::random_fetch_time(&sp)?;
+                        if slot >= clock.now() && slot <= sp.window_end {
+                            clock.wait_until(slot);
+                            let _ = fetch(
+                                &sp.url,
+                                src.fetch_limits(),
+                                transport.as_ref(),
+                                Some(k),
+                                &tag,
+                            );
+                            eprintln!("{tag}: cover fetch done (not drawn; the page is discarded)");
+                        }
+                    }
                     return Ok(0);
                 }
                 // An earlier draw of the fact (another window: a re-draw's
@@ -745,14 +883,40 @@ fn observer_run(src: &dyn Source, args: &[String]) -> Result<i32, String> {
         None => {
             // Partner tracker M2: each observer fetches at its own slot in
             // the window, not all at the window start (onyx_core::fetch).
-            clock.wait_until(onyx_core::fetch::fetch_time(&sp, &id, &me));
+            // ADR-0054 item 10 (THREATS CL4-7): a keyed observer's slot is
+            // its own random draw, never derived from public data.
+            let slot = match &keyed {
+                Some(_) => crate::keyed::random_fetch_time(&sp)?,
+                None => onyx_core::fetch::fetch_time(&sp, &id, &me),
+            };
+            clock.wait_until(slot);
             let fetched_unix = clock.now();
             if fetched_unix > sp.window_end {
                 return Err(format!("{tag}: the window closed before the fetch"));
             }
             let body = match flag(args, "--body")? {
                 Some(p) => Some(std::fs::read(&p).map_err(|e| format!("--body: {e}"))?),
-                None => curl(&sp.url),
+                None => fetch(
+                    &sp.url,
+                    src.fetch_limits(),
+                    transport.as_ref(),
+                    keyed.as_ref(),
+                    &tag,
+                ),
+            };
+            // Review CL4-R1-1: a value that holds a piece of the key is never committed.
+            let body = match &keyed {
+                Some((_, k)) => {
+                    let had = body.is_some();
+                    let b = crate::keyed::keyed_page(src, &sp, body, k);
+                    if had && b.is_none() {
+                        eprintln!(
+                            "{tag}: the value read holds a piece of the key: answering Unavailable"
+                        );
+                    }
+                    b
+                }
+                None => body,
             };
             let t = observer_turn(
                 src,
@@ -761,12 +925,21 @@ fn observer_run(src: &dyn Source, args: &[String]) -> Result<i32, String> {
                 seed.attempt,
                 &key,
                 &Page { fetched_unix, body },
-            )?;
+            )
+            .map_err(|e| match &keyed {
+                Some((_, k)) => k.redact(&e),
+                None => e,
+            })?;
             save(&saved, &id, seed.attempt, &t)?;
             t
         }
     };
 
+    // Review CL4-R1-2: a keyed observer posts its commit at the window's end, whatever its
+    // private fetch second, so the commit's time says nothing about when its key fetched.
+    if keyed.is_some() {
+        clock.wait_until(crate::keyed::keyed_commit_time(&sp));
+    }
     // 4. The commit, posted on chain by the observer itself. Review
     // C11-R1-5: a restart past commit close goes on when its own commit is
     // already on chain (step 5 checks it is inside the phase), so a crash
@@ -1279,16 +1452,35 @@ fn load(path: &Path, round: &Hash32, me: &[u8; 20]) -> Result<Option<Turn>, Stri
     Ok(Some((Hash32(commit), sig, reveal)))
 }
 
-/// One HTTPS fetch of the pinned record (no shell, https only, 20 s, a
-/// neutral User-Agent).
-fn curl(url: &str) -> Option<Vec<u8>> {
-    let out = Command::new("curl")
-        .args([
-            "-sS", "--fail", "--proto", "=https", "-m", "20", "-A", "onyx-dev", url,
-        ])
-        .output()
-        .ok()?;
-    out.status.success().then_some(out.stdout)
+/// One HTTPS fetch of the pinned record through the SSRF-safe transport (CL3, ADR-0053 item 7,
+/// `onyx_fetch`): one resolution, public addresses only, connect by address, https on 443, no
+/// redirects, at most the source's cap on the wire and after gzip, 20 s for the whole fetch, the
+/// neutral User-Agent `onyx-observer/1`. `None` (no answer) on any refusal, logged.
+/// A keyed source (ADR-0054) adds the holder's own key in the place its template names, for
+/// this one request to the template's host ([`onyx_fetch::HttpsFetch::get_keyed`]); the error
+/// text has the key removed. `transport` replaces the live one (the local keyed demo only).
+fn fetch(
+    url: &str,
+    limits: onyx_fetch::Limits,
+    transport: Option<&onyx_fetch::HttpsFetch>,
+    keyed: Option<&(onyx_fetch::KeyPlacement, onyx_fetch::ApiKey)>,
+    tag: &str,
+) -> Option<Vec<u8>> {
+    let f = match transport {
+        Some(t) => Ok(t.clone()),
+        None => onyx_fetch::HttpsFetch::new(limits),
+    };
+    let got = f.and_then(|f| match keyed {
+        Some((place, key)) => f.get_keyed_blocking(url, place, key),
+        None => f.get_blocking(url),
+    });
+    match got {
+        Ok(body) => Some(body),
+        Err(e) => {
+            eprintln!("{tag}: no answer from the source: {e}");
+            None
+        }
+    }
 }
 
 pub(crate) fn hex(b: &[u8]) -> String {

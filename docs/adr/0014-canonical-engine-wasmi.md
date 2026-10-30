@@ -23,7 +23,7 @@ assumption is the one our reproducer breaks, and Stylus needed a native-overflow
    - `floats(false)` plus our validator allowlist; `portable-dispatch` so the interpreter loop does
      not rely on compiler tail calls (native stack).
 2. `HOST_ID = "onyx-host.0.5.0.wasmi.2.0.0"` names this engine; `RuntimeProfile.host` pins it.
-3. wasmtime 49.0.4 (was 49.0.2; bumped 2026-10-14 to 49.0.3 for RUSTSEC-2026-0353..0357, 2026-10-20 to 49.0.4 for RUSTSEC-2026-0378/0379) stays as `fast::FastHost` with **Cranelift `OptLevel::None`**, the call-depth
+3. wasmtime 49.0.5 (was 49.0.2; bumped 2026-10-14 to 49.0.3 for RUSTSEC-2026-0353..0357, 2026-10-20 to 49.0.4 for RUSTSEC-2026-0378/0379, 2026-10-30 to 49.0.5 for RUSTSEC-2026-0422/0423) stays as `fast::FastHost` with **Cranelift `OptLevel::None`**, the call-depth
    instrumentation and the frame-slot bound. Its results are advisory: they are never committed, and
    its fuel numbers differ from wasmi's. Tests require both engines to agree on outcome and leaves.
 4. Load caps from measurement (docs/ops/benchmarks.md): module <= 1 MiB, function <= 256 KiB,

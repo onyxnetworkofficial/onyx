@@ -9,6 +9,8 @@ publish.workspace = true
 
 [dependencies]
 onyx-core.workspace = true
+# The observers' strict JSON reader (CL3): the preview refuses what they refuse.
+onyx-json.workspace = true
 borsh.workspace = true
 thiserror.workspace = true
 hex.workspace = true

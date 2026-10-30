@@ -10,8 +10,19 @@ publish.workspace = true
 [dependencies]
 onyx-core.workspace = true
 onyx-coordinator = { path = "../onyx-coordinator" }
+# CL4 (ADR-0054): EIP-191 signatures of keyed seats.
+onyx-labels.workspace = true
 onyx-api = { path = "../onyx-api" }
+# CL3 (ADR-0053): the generic JSON fetcher and the SSRF-safe transport observers fetch with.
+onyx-json.workspace = true
+onyx-fetch.workspace = true
 serde_json.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+# The local fixture server of the end-to-end demo (tests and examples only).
+onyx-fetch = { workspace = true, features = ["fixture"] }
+hex.workspace = true
 
 [lints]
 workspace = true

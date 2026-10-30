@@ -13,7 +13,7 @@
 
 use crate::evm_tx::{SendError, Sender};
 use crate::prepaid::{Account, Voucher};
-use crate::prepaid_gate::{AccountSource, PrepaidState, Usage};
+use crate::prepaid_gate::{is_gas_bill, AccountSource, PrepaidState, Usage};
 use crate::roots::JsonRpc;
 use crate::x402::BoxFuture;
 use onyx_core::{keccak256, Hash32};
@@ -106,6 +106,13 @@ pub fn redeem_calldata(vs: &[Voucher]) -> Vec<u8> {
     d
 }
 
+/// Calldata of `OnyxPrepaidV2.payRelayer(uint128)`.
+pub fn pay_relayer_calldata(amount: u128) -> Vec<u8> {
+    let mut d = selector("payRelayer(uint128)").to_vec();
+    d.extend_from_slice(&word_u128(amount));
+    d
+}
+
 /// Calldata of `allocate((uint64,bytes32,uint128)[])`.
 pub fn allocate_calldata(items: &[(u64, Hash32, u128)]) -> Vec<u8> {
     let mut d = selector("allocate((uint64,bytes32,uint128)[])").to_vec();
@@ -181,6 +188,10 @@ pub struct PassReport {
     pub allocated_amount: u128,
     /// The allocate transaction, when one was sent and mined.
     pub allocate_tx: Option<String>,
+    /// Relay fees (gas lines, ADR-0056) paid to the relayer with `payRelayer`.
+    pub relayer_paid: u128,
+    /// The `payRelayer` transaction, when one was sent and mined.
+    pub relayer_tx: Option<String>,
     /// Usage lines left for a later pass (their voucher is not redeemed yet).
     pub waiting: usize,
 }
@@ -193,9 +204,19 @@ pub struct PrepaidReporter<T: JsonRpc> {
     contract: [u8; 20],
     marks: PathBuf,
     deadline: Duration,
+    /// `OnyxPrepaidV2.maxRelayPerDay`: one pass pays at most this to the relayer (0: v1, which
+    /// has no `payRelayer`; gas lines then wait).
+    relay_cap: u128,
 }
 
 impl<T: JsonRpc> PrepaidReporter<T> {
+    /// Pay gas lines (ADR-0056) to the relayer, at most `cap` per pass: the contract's
+    /// `maxRelayPerDay`.
+    pub fn with_relay_cap(mut self, cap: u128) -> Self {
+        self.relay_cap = cap;
+        self
+    }
+
     /// A reporter over `state`'s journal, reading accounts with `reader` (latest block) and
     /// sending with `sender` (the contract's reporter key) to the `OnyxPrepaid` at `contract`;
     /// each transaction waits at most `deadline`. It never changes the server's books.
@@ -215,6 +236,7 @@ impl<T: JsonRpc> PrepaidReporter<T> {
             contract,
             marks: PathBuf::from(marks),
             deadline,
+            relay_cap: 0,
         }
     }
 
@@ -299,6 +321,10 @@ impl<T: JsonRpc> PrepaidReporter<T> {
             .filter(|u| !marks.contains(&u.line))
             .count()
             .saturating_sub(ready.len());
+        // Gas lines (ADR-0056) go to the relayer with `payRelayer`, never to a book.
+        let (gas, ready): (Vec<&Usage>, Vec<&Usage>) = ready
+            .into_iter()
+            .partition(|u| is_gas_bill(u.round, &u.shard));
         let mut books: BTreeMap<(u64, Hash32), (u128, Vec<usize>)> = BTreeMap::new();
         for u in &ready {
             if books.len() == MAX_BATCH && !books.contains_key(&(u.round, u.shard)) {
@@ -308,26 +334,103 @@ impl<T: JsonRpc> PrepaidReporter<T> {
             e.0 = e.0.checked_add(u.price).ok_or("allocation overflow")?;
             e.1.push(u.line);
         }
-        if books.is_empty() {
-            return Ok(report);
+        if !books.is_empty() {
+            let lines: Vec<usize> = books.values().flat_map(|(_, l)| l.clone()).collect();
+            let items: Vec<(u64, Hash32, u128)> =
+                books.iter().map(|((r, s), (a, _))| (*r, *s, *a)).collect();
+            let m = self
+                .send_marked(&mut marks, &lines, &allocate_calldata(&items))
+                .await
+                .map_err(|e| format!("allocate: {e}"))?;
+            report.allocated = items.len();
+            report.allocated_amount = items.iter().map(|i| i.2).sum();
+            report.allocate_tx = Some(m);
         }
-        let lines: Vec<usize> = books.values().flat_map(|(_, l)| l.clone()).collect();
-        let items: Vec<(u64, Hash32, u128)> =
-            books.iter().map(|((r, s), (a, _))| (*r, *s, *a)).collect();
-        // Marked before the send: a crash or an unknown outcome never pays these lines twice.
+        // Review CL6-R1-6: the contract caps payRelayer per UTC day, so pay at most what today's
+        // cap has left (read from the chain), never more than one pass's lines.
+        let room = if gas.is_empty() || self.relay_cap == 0 {
+            0
+        } else {
+            self.relay_room().await?
+        };
+        let mut fee = 0u128;
+        let mut lines = Vec::new();
+        for u in gas {
+            match fee.checked_add(u.price) {
+                Some(f) if f <= room => {
+                    fee = f;
+                    lines.push(u.line);
+                }
+                _ => break,
+            }
+        }
+        if fee != 0 {
+            let m = self
+                .send_marked(&mut marks, &lines, &pay_relayer_calldata(fee))
+                .await
+                .map_err(|e| format!("payRelayer: {e}"))?;
+            report.relayer_paid = fee;
+            report.relayer_tx = Some(m);
+        }
+        Ok(report)
+    }
+
+    /// What `payRelayer` may still pay today: `maxRelayPerDay` (as configured) less
+    /// `relayPaidToday` when `relayDay` is the latest block's UTC day.
+    async fn relay_room(&self) -> Result<u128, String> {
+        let word = |r: Vec<u8>, what: &str| -> Result<u128, String> {
+            if r.len() != 32 || r[..16].iter().any(|b| *b != 0) {
+                return Err(format!("{what}: not one uint128 word"));
+            }
+            Ok(u128::from_be_bytes(
+                r[16..].try_into().map_err(|_| what.to_string())?,
+            ))
+        };
+        let day = word(
+            self.sender
+                .call(&self.contract, &selector("relayDay()"))
+                .await?,
+            "relayDay()",
+        )?;
+        let paid = word(
+            self.sender
+                .call(&self.contract, &selector("relayPaidToday()"))
+                .await?,
+            "relayPaidToday()",
+        )?;
+        let block = self
+            .sender
+            .rpc()
+            .call("eth_getBlockByNumber", json!(["latest", false]))
+            .await?;
+        let ts = u128::from_str_radix(
+            block["timestamp"]
+                .as_str()
+                .ok_or("latest block without a timestamp")?
+                .trim_start_matches("0x"),
+            16,
+        )
+        .map_err(|e| e.to_string())?;
+        let today = if day == ts / 86_400 { paid } else { 0 };
+        Ok(self.relay_cap.saturating_sub(today))
+    }
+
+    /// Mark `lines` paid BEFORE sending `data` (a crash or an unknown outcome never pays them
+    /// twice), and unmark them only when nothing moved. Returns the mined transaction's hash.
+    async fn send_marked(
+        &self,
+        marks: &mut BTreeSet<usize>,
+        lines: &[usize],
+        data: &[u8],
+    ) -> Result<String, String> {
         marks.extend(lines.iter().copied());
-        self.write_marks(&marks)?;
+        self.write_marks(marks)?;
         match self
             .sender
-            .send(&self.contract, &allocate_calldata(&items), 0, self.deadline)
+            .send(&self.contract, data, 0, self.deadline)
             .await
         {
-            Ok(m) => {
-                report.allocated = items.len();
-                report.allocated_amount = items.iter().map(|i| i.2).sum();
-                report.allocate_tx = Some(m.hash);
-                Ok(report)
-            }
+            Ok(m) => Ok(m.hash),
             Err(e) => {
                 let nothing_moved = matches!(
                     e,
@@ -338,12 +441,12 @@ impl<T: JsonRpc> PrepaidReporter<T> {
                         | SendError::Stuck(_)
                 );
                 if nothing_moved {
-                    for l in &lines {
+                    for l in lines {
                         marks.remove(l);
                     }
-                    self.write_marks(&marks)?;
+                    self.write_marks(marks)?;
                 }
-                Err(format!("allocate: {e}"))
+                Err(e.to_string())
             }
         }
     }
@@ -391,5 +494,73 @@ mod tests {
         ret[0] = 1;
         assert!(decode_account(&ret).is_err(), "above uint128");
         assert!(decode_account(&ret[..64]).is_err());
+    }
+
+    /// A node answering the relay cap's reads: `relayDay()`, `relayPaidToday()` and the latest
+    /// block's time.
+    struct CapNode {
+        day: u128,
+        paid: u128,
+        time: u64,
+    }
+    impl JsonRpc for CapNode {
+        fn call<'a>(
+            &'a self,
+            method: &'a str,
+            params: serde_json::Value,
+        ) -> BoxFuture<'a, Result<serde_json::Value, String>> {
+            let r = match method {
+                "eth_call" => {
+                    let data = params[0]["data"].as_str().unwrap_or_default().to_owned();
+                    let sel = |s: &str| format!("0x{}", hex::encode(selector(s)));
+                    let w = if data == sel("relayDay()") {
+                        self.day
+                    } else if data == sel("relayPaidToday()") {
+                        self.paid
+                    } else {
+                        return Box::pin(async { Err("unexpected call".to_string()) });
+                    };
+                    Ok(json!(format!("0x{}", hex::encode(word_u128(w)))))
+                }
+                "eth_getBlockByNumber" => Ok(json!({"timestamp": format!("0x{:x}", self.time)})),
+                _ => Err(format!("unexpected {method}")),
+            };
+            Box::pin(async move { r })
+        }
+    }
+
+    /// Review CL6-R1-6: a pass pays the relayer at most what today's on-chain cap has left; a new
+    /// UTC day starts from the whole cap.
+    #[tokio::test]
+    async fn a_second_pass_in_a_day_pays_only_what_the_cap_leaves() {
+        let dir = crate::journal::test_dir("prepaid-cap");
+        let domain = crate::prepaid::domain_separator(31_337, &[0x5a; 20]);
+        struct NoAccounts;
+        impl AccountSource for NoAccounts {
+            fn account<'a>(&'a self, _: [u8; 20]) -> BoxFuture<'a, Result<Account, String>> {
+                Box::pin(async { Ok(Account::default()) })
+            }
+        }
+        let state = Arc::new(
+            PrepaidState::open(dir.join("j"), domain, Arc::new(NoAccounts), 60).expect("open"),
+        );
+        let t = 1_790_000_000u64;
+        for (day, paid, want) in [
+            (u128::from(t / 86_400), 600_000u128, 400_000u128),
+            (u128::from(t / 86_400), 1_000_000, 0),
+            (u128::from(t / 86_400 - 1), 1_000_000, 1_000_000),
+        ] {
+            let node = CapNode { day, paid, time: t };
+            let sender = Arc::new(Sender::new(node, 31_337, [7; 32]).expect("key"));
+            let r = PrepaidReporter::new(
+                state.clone(),
+                Arc::new(NoAccounts),
+                sender,
+                [0x5a; 20],
+                Duration::from_secs(1),
+            )
+            .with_relay_cap(1_000_000);
+            assert_eq!(r.relay_room().await, Ok(want), "day {day}, paid {paid}");
+        }
     }
 }

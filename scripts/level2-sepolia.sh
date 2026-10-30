@@ -5,7 +5,12 @@
 # later, then the coordinator waits until the commit phase is FINAL on Base Sepolia (about 20
 # minutes) before it reads the commits, receipts the reveals and records the value on chain.
 #
-# Usage: scripts/level2-sepolia.sh <usgs|ncei|fiscaldata> <export dir> [state dir]
+# Usage: scripts/level2-sepolia.sh <usgs|ncei|fiscaldata|manifest> <export dir> [state dir]
+#   manifest      a CL3 manifest source (ADR-0053, no per-source code): ONYX_L2_MANIFEST names
+#                 its manifest.json (default sources/us.treasury.tga_total_deposits/manifest.json);
+#                 the coordinator registers its template if the registry does not hold it yet and
+#                 refuses another template under its metric (THREATS CL3-8); its store is
+#                 <export dir>/observations/<manifest folder name>.json
 #   <export dir>  the --export-node directory of the testnet run (its deployment.json names the
 #                 registry); the round's results store is written to
 #                 <export dir>/observations/<source>.json (appended, never replaced) and its
@@ -34,13 +39,18 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$PWD
-[ $# -ge 2 ] || { echo "usage: $0 <usgs|ncei|fiscaldata> <export dir> [state dir]" >&2; exit 2; }
+[ $# -ge 2 ] || { echo "usage: $0 <usgs|ncei|fiscaldata|manifest> <export dir> [state dir]" >&2; exit 2; }
 src=$1
 export_dir=$(cd "$2" && pwd)
 case "$src" in
-  usgs | ncei | fiscaldata) ;;
+  usgs | ncei | fiscaldata | manifest) ;;
   *) echo "unknown source $src" >&2; exit 2 ;;
 esac
+manifest=""
+if [ "$src" = manifest ]; then
+  manifest=$(realpath -e "${ONYX_L2_MANIFEST:-sources/us.treasury.tga_total_deposits/manifest.json}")
+  [ -z "${ONYX_L2_SERIES:-}" ] || { echo "ONYX_L2_SERIES does not apply to a manifest source" >&2; exit 2; }
+fi
 series=${ONYX_L2_SERIES:-}
 case "$series" in
   "" | [a-z0-9]*[a-z0-9]) ;;
@@ -48,6 +58,7 @@ case "$series" in
 esac
 [ -z "${series//[a-z0-9._]/}" ] || { echo "ONYX_L2_SERIES: lowercase letters, digits, dots and underscores only" >&2; exit 2; }
 name=$src${series:+-$series}
+[ -z "$manifest" ] || name=$(basename "$(dirname "$manifest")")
 state=${3:-$HOME/.cache/onyx-b6/$name}
 FOUNDRY_BIN=${FOUNDRY_BIN:-$HOME/.foundry/bin}
 RPC=${ONYX_L2_RPC:-https://sepolia.base.org}
@@ -74,13 +85,26 @@ COORD=$(castw call "$SETTLEMENT" "coordinator()(address)")
 OWNER=$(castw call "$REG" "owner()(address)")
 REPORTER=$(castw call "$REVENUE" "reporter()(address)")
 
-CARGO_INCREMENTAL=0 cargo build -q -p "onyx-source-$src" --example level2-coordinator --example level2-observer
 # Private copies: every dated source's examples share these names in target/debug/examples, so a
 # build of another source during the round would swap the files under this run.
 bin=$work/bin
 mkdir "$bin"
-cp "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-coordinator" \
-  "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-observer" "$bin/"
+if [ -n "$manifest" ]; then
+  CARGO_INCREMENTAL=0 cargo build -q -p onyx-level2 --example level2-manifest
+  cp "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-manifest" "$bin/"
+  # The same two commands as a dated source's, bound to this manifest.
+  for role in coordinator observer; do
+    printf '#!/bin/sh\nexec %q %s --manifest %q --repo %q "$@"\n' \
+      "$bin/level2-manifest" "$role" "$manifest" "$REPO" >"$bin/level2-$role"
+    chmod 700 "$bin/level2-$role"
+  done
+  pin_cmd=("$bin/level2-manifest" pin --manifest "$manifest" --repo "$REPO")
+else
+  CARGO_INCREMENTAL=0 cargo build -q -p "onyx-source-$src" --example level2-coordinator --example level2-observer
+  cp "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-coordinator" \
+    "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-observer" "$bin/"
+  pin_cmd=("$bin/level2-coordinator" --pin)
+fi
 addr_of() { "$bin/level2-observer" --key-file "$1" --address; }
 
 # The receipt key of this deployment (ROADMAP B3): made once, never printed.
@@ -169,7 +193,7 @@ cat "$state/logs/round.json"
 # this run failing must not leave a served store without its pin (NL15 did, NL24).
 if python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); sys.exit(0 if r["outcome"].startswith("Value(") and r["level2_claim"] is True else 1)' "$state/logs/round.json"; then
   # The node's pin for this store (ONYX_OBSERVATION_TEMPLATES; scripts/deploy-api.sh reads it).
-  pin=$("$bin/level2-coordinator" --pin)
+  pin=$("${pin_cmd[@]}")
   pins=$export_dir/observations/pins
   touch "$pins"
   { grep -v "^${pin%%=*}=" "$pins" || true; echo "$pin"; } >"$pins.new"

@@ -161,6 +161,31 @@ data` (nothing to re-read), `via S5 S6` (covered by those rows, which must be re
 Dates are the catalogue's F1 read (2026-10-14, launch checklist LC-27); none was re-read for this
 table.
 
+## 6. Hosts cleared for source manifests (CL3, ADR-0053 item 6)
+
+A source manifest (`sources/<id>/manifest.json`) loads only when its URL's host is listed here
+with **OK**, under a section 1 row whose decision starts with **OK**, and the manifest names
+that row (`terms_row`; THREATS CL3-7, `onyx_level2::manifest::ClearedHosts`). A reviewer adds a
+row only after reading the host's terms: redistribution allowed with no account, key, payment or
+contact header. Clearance is per host, so only a host that serves one publisher's data is
+listed (never a shared host such as a code or file host; review CL3-R1-8). `BLOCKED_HOSTS`
+(section 1's blocked rows) wins over this table.
+
+A keyed source (ADR-0054, contributor loop CL4: contributors fetch with their own API keys) needs
+a row whose decision is exactly **OK keyed**: the reviewer read the provider's terms and they
+allow passing on data obtained with a personal key, and the value is the same for every key (a
+public series behind a metering key). A plain **OK** never clears a keyed manifest. No host has
+an `OK keyed` row yet (`fixtures/keyed-demo` has a synthetic one for the local demo only).
+
+Market venues for aligned feeds (contributor loop CL8, ADR-0058) are reviewed one by one in
+[market-venues.md](market-venues.md) before any row is added here. None is cleared on
+2026-10-30, so no venue host is listed (`fixtures/aligned-demo` has synthetic rows for the local
+demo only).
+
+| Host | Row | Decision | Manifests |
+|---|---|---|---|
+| api.fiscaldata.treasury.gov | S10 | OK | `sources/us.treasury.tga_total_deposits` (the Fiscal Data terms cover every dataset of the API, adapters/source-fiscaldata/fixtures/PROVENANCE.md) |
+
 ## Scope, assumptions, open questions
 
 - Scope: sources only. Each build still needs its own spec or ADR and review.

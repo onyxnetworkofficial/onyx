@@ -1,0 +1,32 @@
+[package]
+name = "onyx-fetch"
+description = "The SSRF-safe HTTPS GET every Onyx pull uses (ADR-0053 item 7, CL3): one resolution, public addresses only, connect by address, https on 443, no redirects, no cookies, no proxy, size caps on the wire and after gzip, one deadline."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-intake.workspace = true
+thiserror.workspace = true
+tokio = { version = "1", default-features = false, features = ["rt", "net", "time", "io-util"] }
+tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12"] }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
+webpki-roots = "1"
+hyper = { version = "1", default-features = false, features = ["client", "http1"] }
+hyper-util = { version = "0.1", default-features = false, features = ["tokio"] }
+http-body-util = "0.1"
+flate2 = "1"
+
+[features]
+# A local fixture server and a transport that connects to it (tests and the local
+# end-to-end demo only; never enabled by a binary that fetches a live source).
+fixture = []
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros", "test-util", "io-util", "net", "time"] }
+onyx-fetch = { path = ".", features = ["fixture"] }
+
+[lints]
+workspace = true

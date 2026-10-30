@@ -1,0 +1,203 @@
+{
+  "descriptor": {
+    "access": "public",
+    "asserts": [
+      {
+        "expect": {
+          "array_len": 1
+        },
+        "pointer": "/data"
+      },
+      {
+        "expect": {
+          "keys_exactly": [
+            "account_type",
+            "open_today_bal",
+            "record_date"
+          ]
+        },
+        "pointer": "/data/0"
+      },
+      {
+        "expect": {
+          "str": "Total TGA Deposits (Table II)"
+        },
+        "pointer": "/data/0/account_type"
+      },
+      {
+        "expect": "subject_date",
+        "pointer": "/data/0/record_date"
+      },
+      {
+        "expect": {
+          "int": 1
+        },
+        "pointer": "/meta/count"
+      }
+    ],
+    "max_bytes": 16384,
+    "pointer": "/data/0/open_today_bal",
+    "unit": "million USD",
+    "value": "decimal_string",
+    "version": 1
+  },
+  "earliest_public_offset_secs": 0,
+  "fetcher_id": "0x8fb86ca972ca973ce8c7c10017549a528287bdd7e6035878278d70c08da8450f",
+  "id": "us.treasury.tga_total_deposits",
+  "limits": {
+    "max_rounds_per_day": 4,
+    "min_fetch_gap_secs": 1,
+    "origin_budget": 16
+  },
+  "metric": "us.treasury.tga_total_deposits",
+  "name": "U.S. Treasury Fiscal Data: Daily Treasury Statement, total deposits into the Treasury General Account",
+  "note": "Daily Treasury Statement total TGA deposits: rights reviewed (sources/us.treasury.tga_total_deposits/PROVENANCE.md), generic fetcher, manifest pinned",
+  "recording": "recording/2026-10-27.json",
+  "template": {
+    "kind": {
+      "numeric": {
+        "scale": 0,
+        "tolerance": "0"
+      }
+    },
+    "min_observers": 5,
+    "rights": {
+      "attribution": "Source: U.S. Department of the Treasury, Bureau of the Fiscal Service (fiscaldata.treasury.gov)",
+      "license": "onyx:us-treasury-fiscal-data-open",
+      "redistribution": "allowed",
+      "source": "us.treasury.fiscaldata",
+      "terms": ""
+    },
+    "selector": "/data/0/open_today_bal",
+    "subject": {
+      "dated": {
+        "lag": {
+          "first_day": "2026-01-01",
+          "holidays": [
+            "2026-01-01",
+            "2026-01-19",
+            "2026-02-16",
+            "2026-05-25",
+            "2026-06-19",
+            "2026-07-03",
+            "2026-09-07",
+            "2026-10-12",
+            "2026-11-11",
+            "2026-11-26",
+            "2026-12-25",
+            "2027-01-01",
+            "2027-01-18",
+            "2027-02-15",
+            "2027-05-31",
+            "2027-06-18",
+            "2027-07-05",
+            "2027-09-06",
+            "2027-10-11",
+            "2027-11-11",
+            "2027-11-25",
+            "2027-12-24",
+            "2027-12-31",
+            "2028-01-17",
+            "2028-02-21",
+            "2028-05-29",
+            "2028-06-19",
+            "2028-07-04",
+            "2028-09-04",
+            "2028-10-09",
+            "2028-11-10",
+            "2028-11-23",
+            "2028-12-25",
+            "2029-01-01",
+            "2029-01-15",
+            "2029-02-19",
+            "2029-05-28",
+            "2029-06-19",
+            "2029-07-04",
+            "2029-09-03",
+            "2029-10-08",
+            "2029-11-12",
+            "2029-11-22",
+            "2029-12-25",
+            "2030-01-01",
+            "2030-01-21",
+            "2030-02-18",
+            "2030-05-27",
+            "2030-06-19",
+            "2030-07-04",
+            "2030-09-02",
+            "2030-10-14",
+            "2030-11-11",
+            "2030-11-28",
+            "2030-12-25",
+            "2031-01-01",
+            "2031-01-20",
+            "2031-02-17",
+            "2031-05-26",
+            "2031-06-19",
+            "2031-07-04",
+            "2031-09-01",
+            "2031-10-13",
+            "2031-11-11",
+            "2031-11-27",
+            "2031-12-25",
+            "2032-01-01",
+            "2032-01-19",
+            "2032-02-16",
+            "2032-05-31",
+            "2032-06-18",
+            "2032-07-05",
+            "2032-09-06",
+            "2032-10-11",
+            "2032-11-11",
+            "2032-11-25",
+            "2032-12-24",
+            "2032-12-31",
+            "2033-01-17",
+            "2033-02-21",
+            "2033-05-30",
+            "2033-06-20",
+            "2033-07-04",
+            "2033-09-05",
+            "2033-10-10",
+            "2033-11-11",
+            "2033-11-24",
+            "2033-12-26",
+            "2034-01-02",
+            "2034-01-16",
+            "2034-02-20",
+            "2034-05-29",
+            "2034-06-19",
+            "2034-07-04",
+            "2034-09-04",
+            "2034-10-09",
+            "2034-11-10",
+            "2034-11-23",
+            "2034-12-25",
+            "2035-01-01",
+            "2035-01-15",
+            "2035-02-19",
+            "2035-05-28",
+            "2035-06-19",
+            "2035-07-04",
+            "2035-09-03",
+            "2035-10-08",
+            "2035-11-12",
+            "2035-11-22",
+            "2035-12-25"
+          ],
+          "last_day": "2035-12-31",
+          "max_calendar_days": 10,
+          "min_business_days": 1
+        },
+        "prefix": "us.treasury.tga_deposits"
+      }
+    },
+    "url_template": "https://api.fiscaldata.treasury.gov/services/api/fiscal_service/v1/accounting/dts/operating_cash_balance?fields=record_date,account_type,open_today_bal&filter=record_date:eq:{date},account_type:eq:Total%20TGA%20Deposits%20(Table%20II)",
+    "window_secs": 300
+  },
+  "template_id": "0xfa5a480a9b8a4a5f8779f9c477a3ba35652497fb8fe4b2da5f9aed8e132e34bf",
+  "terms_quote": "available to copy, adapt, redistribute, or otherwise use for non-commercial and commercial purposes",
+  "terms_row": "S10",
+  "terms_url": "https://fiscaldata.treasury.gov/about-us/",
+  "v": 1
+}

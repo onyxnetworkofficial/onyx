@@ -12,6 +12,8 @@ cd "$(dirname "$0")/.."
 cargo build --locked -q -p onyx-check
 cargo build --locked -q -p onyx-source-btc --example serve-api
 target="${CARGO_TARGET_DIR:-target}/debug"
+# An absolute CARGO_TARGET_DIR (a shared cache) stays as it is; a relative one is under this checkout.
+case $target in /*) ;; *) target=$PWD/$target ;; esac
 work="$(mktemp -d "${TMPDIR:-/tmp}/onyx-agent-smoke.XXXXXX")"
 pids=()
 cleanup() {
@@ -53,7 +55,10 @@ if [ ! -f fixtures/labels/test.onyx.entities.btc.v2.json ]; then
 fi
 free="$(start free)"
 paid="$(start paid --paid)"
-ONYX_AGENT_FREE_URL="$free" ONYX_AGENT_PAID_URL="$paid" ONYX_CHECK_BIN="$PWD/$target/onyx-check" \
+# An absolute CARGO_TARGET_DIR (a shared cache) is used as is; a relative one is under this checkout.
+check_bin="$target/onyx-check"
+[[ "$check_bin" = /* ]] || check_bin="$PWD/$check_bin"
+ONYX_AGENT_FREE_URL="$free" ONYX_AGENT_PAID_URL="$paid" ONYX_CHECK_BIN="$check_bin" \
   node --test apps/agent/test/*.test.mjs >"$work/test.log" 2>&1 || { cat "$work/test.log"; exit 1; }
 grep -E '^# (pass|fail|skipped)' "$work/test.log"
 grep -q '^# skipped 0$' "$work/test.log" || { echo "live agent tests were skipped"; exit 1; }

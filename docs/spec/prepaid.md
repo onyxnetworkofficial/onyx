@@ -63,6 +63,18 @@ more uses a fresh address per deposit. Shielded pools are out of scope (legal ad
 
 - Node: `ONYX_PREPAID` (docs/ops/config.md, ADR-0046 amendment 3).
 
+## Credits ledger (CL6, ADR-0056 and its amendment 1)
+`OnyxPrepaidV2` is the same balance with more ways in: `depositFor` (the origin tag is the
+payer's: 1 deposit, 2 earned from `OnyxRevenueV2.withdrawToCredits`, 3 refund and 4 payout from
+sources the owner names), `depositWithAuthorization` (EIP-3009 `receiveWithAuthorization`, for an
+account with no ETH, through the relayer) and one more way out, `payRelayer` (relay fees from the
+pool to the immutable relayer, capped per day). Rules R-CR-1..7 of the ADR hold: no credit from
+nothing, earned only from paid demand, no transfer between accounts, no negative balance. The
+voucher, its header and the exit are unchanged; vouchers are bound to their contract. HTTP:
+`/v1/credits/schedule`, `/v1/credits/{account}` (public chain view; journal numbers with the
+account's own `ONYX-ACCOUNT-PROOF`), `/v1/credits/{account}/lines` (proof only) and `POST
+/v1/relay` (docs/api/openapi.json, tag Credits). Threats: THREATS.md CL6.
+
 ## Open questions
 A deployed `OnyxPrepaid` on Base Sepolia, and an alert when the pool stays above zero (an
 allocation that was cut short, THREATS PRE-10).

@@ -7,7 +7,9 @@
 //! - label set: [`LabelSet::content_hash`];
 //! - attestation: [`Attestation::content_hash`];
 //! - params and other blobs: `keccak256(bytes)`;
-//! - row batch: the Merkle root over the rows (`onyx_merkle`).
+//! - row batch: the Merkle root over the rows (`onyx_merkle`);
+//! - published bulk shard (CL5, ADR-0059): the Merkle root over its rows, with
+//!   its own cap ([`onyx_bulk::shard::MAX_SHARD_BYTES`]).
 
 use borsh::BorshDeserialize;
 use onyx_core::{keccak256, to_canonical_bytes, Hash32};
@@ -32,6 +34,9 @@ pub enum Kind {
     Blob,
     /// Borsh `Vec<Vec<u8>>` of output rows, keyed by their Merkle root.
     Rows,
+    /// A publisher's bulk shard (CL5, ADR-0059): the same layout as `Rows`,
+    /// keyed by the Merkle root over its rows, at most 64 MiB and 2^18 rows.
+    Shard,
 }
 
 impl Kind {
@@ -42,6 +47,7 @@ impl Kind {
             Kind::Attestation => "attest",
             Kind::Blob => "blob",
             Kind::Rows => "rows",
+            Kind::Shard => "bulk",
         }
     }
 }
@@ -59,6 +65,7 @@ pub const MAX_OBJECT_BYTES: usize = 32 << 20;
 pub fn max_bytes(kind: Kind) -> usize {
     match kind {
         Kind::Rows => MAX_ROWS_BYTES,
+        Kind::Shard => onyx_bulk::shard::MAX_SHARD_BYTES as usize,
         _ => MAX_OBJECT_BYTES,
     }
 }
@@ -99,6 +106,11 @@ pub fn key_of(kind: Kind, bytes: &[u8]) -> Option<Hash32> {
         Kind::Rows => Vec::<Vec<u8>>::try_from_slice(bytes)
             .ok()
             .filter(|rows| !rows.is_empty() && rows.iter().all(|r| r.len() >= 8))
+            .map(|rows| MerkleTree::from_rows(&rows).root()),
+        // A bulk shard's framing is read with its caps (row count, row
+        // length) before anything is allocated per row (THREATS CL5-4).
+        Kind::Shard => onyx_bulk::shard::split_rows(bytes)
+            .ok()
             .map(|rows| MerkleTree::from_rows(&rows).root()),
     }
 }
@@ -391,6 +403,35 @@ mod tests {
         f.set_len(MAX_OBJECT_BYTES as u64 + 1).expect("sparse");
         assert_eq!(cas.get(Kind::Blob, &big), None);
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// CL5 (ADR-0059, THREATS CL5-1, CL5-4): a bulk shard is keyed by the
+    /// Merkle root over its rows under its own kind and cap; a file that is not
+    /// a shard (a lying row count, trailing bytes) is not an object, and a
+    /// shard is never served as a recipe row batch.
+    #[test]
+    fn bulk_shards_have_their_own_kind_and_cap() {
+        let cas = MemCas::new();
+        let rows = vec![b"a".to_vec(), b"bc".to_vec()];
+        let file = onyx_bulk::shard::encode_shard(&rows);
+        let k = cas.put(Kind::Shard, &file).expect("shard");
+        assert_eq!(k, MerkleTree::from_rows(&rows).root());
+        assert_eq!(cas.get(Kind::Shard, &k), Some(file.clone()));
+        assert!(!cas.has(Kind::Rows, &k));
+        let mut trailing = file.clone();
+        trailing.push(0);
+        assert_eq!(
+            cas.put(Kind::Shard, &trailing),
+            Err(CasError::BadObject(Kind::Shard))
+        );
+        let mut lying = file;
+        lying[0] = 0xff;
+        assert_eq!(
+            cas.put(Kind::Shard, &lying),
+            Err(CasError::BadObject(Kind::Shard))
+        );
+        assert_eq!(max_bytes(Kind::Shard), 64 << 20);
+        assert_eq!(key_of(Kind::Shard, &vec![0u8; (64 << 20) + 1]), None);
     }
 
     #[test]

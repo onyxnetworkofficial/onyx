@@ -144,6 +144,181 @@ pub async fn read_prepaid<T: JsonRpc + ?Sized>(
     Ok((reporter, token, revenue, delay))
 }
 
+/// CL6 (ADR-0056 item 4): the relayer's key is its own. Refuses a relayer that is any of the
+/// `roles` (the reporter, the owners, the coordinator), as `check_distinct` does for the level-2
+/// keys (ADR-0027 amendment 9).
+pub fn check_relay_key(relayer: [u8; 20], roles: &[(&str, [u8; 20])]) -> Res<()> {
+    for (name, a) in roles {
+        if *a == relayer {
+            return Err(format!(
+                "ONYX_RELAY_KEY_FILE holds the key of {}, which is also {name}: the relayer needs a key of its own",
+                hx(&relayer)
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// The prepaid journal of `contract` (review CL6-R1-1): `prepaid-0x<contract>.journal`, so moving
+/// to a new `OnyxPrepaid` (v2) starts a journal of its own. A journal kept under the old name
+/// `prepaid.journal` is still used; `PrepaidState::open` refuses it when its vouchers belong to
+/// another contract (move it aside, keep it for the old contract's reporter).
+pub fn prepaid_journal(state_dir: &std::path::Path, contract: &[u8; 20]) -> std::path::PathBuf {
+    let legacy = state_dir.join("prepaid.journal");
+    if legacy.exists() {
+        return legacy;
+    }
+    state_dir.join(format!("prepaid-0x{}.journal", hex::encode(contract)))
+}
+
+/// Decode an ABI `string` return.
+fn abi_string(ret: &[u8]) -> Res<String> {
+    let word = |i: usize| -> Res<usize> {
+        let w = ret.get(i..i + 32).ok_or("string: short answer")?;
+        if w[..24].iter().any(|b| *b != 0) {
+            return Err("string: offset or length too large".into());
+        }
+        Ok(u64::from_be_bytes(w[24..].try_into().map_err(|_| "string")?) as usize)
+    };
+    let at = word(0)?;
+    let len = word(at)?;
+    let bytes = ret
+        .get(at + 32..at + 32 + len)
+        .ok_or("string: short answer")?;
+    let s = String::from_utf8(bytes.to_vec()).map_err(|_| "string: not UTF-8")?;
+    if s.is_empty() || s.len() > 16 || !s.bytes().all(|b| b.is_ascii_graphic()) {
+        return Err(format!("symbol {s:?} is not a short printable name"));
+    }
+    Ok(s)
+}
+
+async fn read_raw<T: JsonRpc + ?Sized>(rpc: &T, to: [u8; 20], sig: &str) -> Res<Vec<u8>> {
+    let selector = &onyx_core::keccak256(sig.as_bytes()).0[..4];
+    let ans = rpc
+        .call(
+            "eth_call",
+            serde_json::json!([{"to": hx(&to), "data": hx(selector)}, "latest"]),
+        )
+        .await?;
+    ans.as_str()
+        .and_then(|s| hex::decode(s.trim_start_matches("0x")).ok())
+        .ok_or_else(|| format!("{sig}: not hex: {ans}"))
+}
+
+/// The credits routes (CL6, ADR-0056) over the prepaid `books`, and the relay when a relay key
+/// is set: the key must be `OnyxPrepaidV2.relayer()` and no other role's. Returns the state and
+/// the contract's `maxRelayPerDay` (0 without a relay).
+async fn credits_state(
+    c: &NodeConfig,
+    d: &Deployment,
+    contract: [u8; 20],
+    books: Arc<PrepaidState>,
+    operator: [u8; 20],
+    relay: Option<Sender<Rpc>>,
+) -> Res<(Arc<onyx_api::credits::CreditsState>, u128)> {
+    use onyx_api::credits::{Asset, ChainCredits, CreditsState, FeeSchedule, Relay, RelayPolicy};
+    let token = d.usdc.ok_or("ONYX_PREPAID needs the deployment's token")?;
+    let (symbol, decimals) = startup_step(
+        "credits asset",
+        STARTUP_TRIES,
+        STARTUP_FIRST_WAIT,
+        || async {
+            let symbol = abi_string(&read_raw(&rpc(c), token, "symbol()").await?)?;
+            let dec = read_word(&rpc(c), token, "decimals()").await?;
+            if dec[..31].iter().any(|b| *b != 0) {
+                return Err("decimals(): not a uint8".to_string());
+            }
+            Ok((symbol, dec[31]))
+        },
+    )
+    .await?;
+    let asset = Asset {
+        symbol,
+        decimals,
+        chain_id: d.chain_id,
+        address: token,
+    };
+    let chain = Arc::new(ChainCredits::new(
+        rpc(c),
+        contract,
+        c.credits_from_block.or(d.deploy_block).unwrap_or(0),
+    ));
+    let mut st = CreditsState::new(books, chain, asset, contract, Arc::new(now_unix));
+    let Some(sender) = relay else {
+        return Ok((Arc::new(st), 0));
+    };
+    let me = sender.address();
+    let rp = rpc(c);
+    let named = read_address(&rp, contract, "relayer()")
+        .await
+        .map_err(|e| {
+            format!(
+                "ONYX_RELAY_KEY_FILE needs ONYX_PREPAID to be an OnyxPrepaidV2 (relayer(): {e})"
+            )
+        })?;
+    if named != me {
+        return Err(format!(
+            "ONYX_RELAY_KEY_FILE holds the key of {}, but OnyxPrepaidV2.relayer() is {}",
+            hx(&me),
+            hx(&named)
+        ));
+    }
+    let mut roles = vec![
+        ("the reporter (ONYX_OPERATOR_KEY_FILE)", operator),
+        (
+            "OnyxPrepaidV2.owner()",
+            read_address(&rp, contract, "owner()").await?,
+        ),
+        (
+            "the settlement coordinator",
+            read_coordinator(&rp, d.settlement).await?,
+        ),
+    ];
+    if let Some(rev) = d.revenue {
+        roles.push((
+            "OnyxRevenue.owner()",
+            read_address(&rp, rev, "owner()").await?,
+        ));
+    }
+    if let Some(reg) = d.registry {
+        roles.push((
+            "OnyxRegistry.owner()",
+            read_address(&rp, reg, "owner()").await?,
+        ));
+    }
+    check_relay_key(me, &roles)?;
+    let cap_word = read_word(&rp, contract, "maxRelayPerDay()").await?;
+    if cap_word[..16].iter().any(|b| *b != 0) {
+        return Err("maxRelayPerDay(): not a uint128".into());
+    }
+    let cap = u128::from_be_bytes(cap_word[16..].try_into().map_err(|_| "maxRelayPerDay()")?);
+    // The token's EIP-712 domain, for checking relayed deposits; none: deposits are not relayed.
+    let token_domain = read_word(&rp, token, "DOMAIN_SEPARATOR()")
+        .await
+        .ok()
+        .and_then(|w| <[u8; 32]>::try_from(w.as_slice()).ok());
+    let schedule = FeeSchedule::parse(&c.relay_fees, crate::config::MAX_RELAY_FEE)
+        .map_err(|e| format!("ONYX_RELAY_FEES: {e}"))?;
+    let policy = RelayPolicy {
+        max_base_fee: RelayPolicy::default().max_base_fee.min(c.max_fee_per_gas),
+        ..RelayPolicy::default()
+    };
+    eprintln!(
+        "onyx-node: relay on: relayer {}, fees {} (hash {}), deposits {}",
+        hx(&me),
+        c.relay_fees,
+        schedule.hash(),
+        if token_domain.is_some() {
+            "relayed"
+        } else {
+            "not relayed (no DOMAIN_SEPARATOR)"
+        }
+    );
+    let relay = Relay::new(Arc::new(sender), schedule, policy, d.registry, token_domain);
+    st = st.with_relay(relay)?;
+    Ok((Arc::new(st), cap))
+}
+
 /// Refuses an `OnyxPrepaid` that is not this deployment's: another token, another
 /// `OnyxRevenue`, or another reporter than the operator key (its redemptions would revert).
 pub fn check_prepaid(
@@ -245,6 +420,12 @@ fn load_with(get: impl Fn(&str) -> Option<String>, allow_mainnet: bool) -> Res<L
     let raw: serde_json::Value =
         serde_json::from_str(&text).map_err(|e| format!("ONYX_DEPLOYMENT: {e}"))?;
     let deployment = Deployment::from_json(&raw, config.env, config.allow_mainnet)?;
+    if config.bulk.is_some() && deployment.signed_book.is_none() {
+        return Err(
+            "ONYX_BULK_DIR needs the manifest's signedBook, signedBookCodeHash and signedBookReviewer: bulk manifests are anchored in the signed book (ADR-0059)"
+                .into(),
+        );
+    }
     if config.signed_reports.is_some() && deployment.signed_book.is_none() {
         return Err(
             "ONYX_SIGNED_REPORTS needs the manifest's signedBook, signedBookCodeHash and signedBookReviewer (scripts/deploy-signed-book.sh --manifest)"
@@ -722,6 +903,15 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
     // ROADMAP S7 (ADR-0046 amendment 3): prepaid vouchers beside x402, and the pass that
     // redeems and allocates them, at least every half exit delay.
     let mut prepaid_books = None;
+    // CL6 (ADR-0056): the credits routes beside prepaid, and the relay with its own key.
+    let mut credits = None;
+    let relay_sender = c
+        .relay_key_file
+        .as_deref()
+        .map(read_key_file)
+        .transpose()?
+        .map(&sender)
+        .transpose()?;
     let prepaid_pass = match (c.prepaid, prepaid_sender) {
         (None, _) => None,
         (Some(_), None) => return Err("ONYX_PREPAID needs the reporter's key".into()),
@@ -737,7 +927,7 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             let domain = onyx_api::prepaid::domain_separator(d.chain_id, &contract);
             let books = Arc::new(
                 PrepaidState::open(
-                    c.state_dir.join("prepaid.journal"),
+                    prepaid_journal(&c.state_dir, &contract),
                     domain,
                     Arc::new(ChainAccounts::new(rpc(&c), contract)),
                     60,
@@ -755,13 +945,17 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 hx(&contract),
                 every.as_secs()
             );
+            let (credit_state, relay_cap) =
+                credits_state(&c, &d, contract, books.clone(), s.address(), relay_sender).await?;
+            credits = Some(credit_state);
             let pass = PrepaidReporter::new(
                 books,
                 Arc::new(ChainAccounts::latest(rpc(&c), contract)),
                 s,
                 contract,
                 Duration::from_secs(120),
-            );
+            )
+            .with_relay_cap(relay_cap);
             Some((pass, every))
         }
     };
@@ -884,6 +1078,45 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         }
         _ => None,
     };
+    // CL5 (ADR-0059): publishers' large datasets, anchored in the pinned
+    // signed book. Read routes join `extra` (under the guard); the two upload
+    // routes are merged outside it with their own limits and deadline.
+    let bulk_store = match (signed_book, &c.bulk) {
+        (Some(pin), Some(b)) => {
+            let store = onyx_api::bulk_serve::BulkStore::open(
+                onyx_api::bulk_serve::BulkBook {
+                    chain_id: pin.chain_id,
+                    book: pin.book,
+                },
+                Arc::new(rpc(&c)),
+                Arc::new(now_unix),
+                &b.dir,
+                &b.warm,
+                b.limits,
+            )
+            .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?;
+            eprintln!(
+                "onyx-node: bulk datasets on (ONYX_BULK_DIR), anchored in signed book {}",
+                hx(&pin.book)
+            );
+            Some(Arc::new(store))
+        }
+        _ => None,
+    };
+    if let Some(store) = bulk_store.clone() {
+        tokio::spawn(async move {
+            loop {
+                tokio::time::sleep(Duration::from_secs(3_600)).await;
+                let s = store.clone();
+                let moved = tokio::task::spawn_blocking(move || s.sweep())
+                    .await
+                    .unwrap_or(0);
+                if moved > 0 {
+                    eprintln!("onyx-node: bulk: {moved} quiet shard(s) moved to warm");
+                }
+            }
+        });
+    }
     // Open before binding the listener; damaged/locked intake must fail startup.
     let intake = crate::submissions::routes(c.submissions.as_deref())
         .map_err(|e| format!("ONYX_SUBMISSIONS: {e}"))?;
@@ -1029,11 +1262,24 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         None => track,
     };
     let extra = extra.merge(intake).merge(labels).merge(wants);
+    let extra = match credits {
+        Some(st) => extra
+            .merge(onyx_api::credits::routes(st.clone()))
+            .merge(onyx_api::credits::relay_routes(st)),
+        None => extra,
+    };
+    let (extra, bulk_uploads) = match &bulk_store {
+        Some(store) => (
+            extra.merge(onyx_api::bulk_serve::routes(store.clone())),
+            onyx_api::bulk_serve::upload_routes(store.clone()),
+        ),
+        None => (extra, axum::Router::new()),
+    };
     let server = tokio::spawn(async move {
         // Header read timeout and a connection cap (AUD-1-F5).
         crate::serve::serve_with(
             listener,
-            router_with(state, extra),
+            router_with(state, extra).merge(bulk_uploads),
             limits,
             &trusted,
             async {
@@ -1332,6 +1578,34 @@ mod tests {
             check_prepaid([0xab; 20], Some([0x0c; 20]), None, got).is_err(),
             "revenue"
         );
+    }
+
+    /// CL6 (ADR-0056 item 4): the relayer's key is never another role's, and a token's ABI
+    /// `string` symbol decodes only when it is a short printable name.
+    #[test]
+    fn the_relay_key_is_its_own_and_the_symbol_decodes_strictly() {
+        let roles = [
+            ("the reporter", [1u8; 20]),
+            ("OnyxPrepaidV2.owner()", [2; 20]),
+        ];
+        assert!(check_relay_key([3; 20], &roles).is_ok());
+        let e = check_relay_key([2; 20], &roles).expect_err("owner");
+        assert!(e.contains("OnyxPrepaidV2.owner()"), "{e}");
+        assert!(check_relay_key([1; 20], &roles).is_err());
+        let enc = |s: &[u8]| {
+            let mut v = vec![0u8; 64];
+            v[31] = 32;
+            v[63] = s.len() as u8;
+            let mut b = s.to_vec();
+            b.resize(s.len().div_ceil(32) * 32, 0);
+            v.extend_from_slice(&b);
+            v
+        };
+        assert_eq!(abi_string(&enc(b"USDC")).expect("ok"), "USDC");
+        assert!(abi_string(&enc(b"")).is_err());
+        assert!(abi_string(&enc(b"a b")).is_err());
+        assert!(abi_string(&enc(b"seventeen-chars!!")).is_err());
+        assert!(abi_string(&enc(b"USDC")[..66]).is_err(), "short answer");
     }
 
     use crate::catalog_file::{ShardEntry, CATALOG_VERSION};

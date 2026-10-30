@@ -59,6 +59,13 @@ pub fn main_for(src: &dyn Source, rec: Recorded, args: &[String]) -> Result<(), 
     // taken before anything is sent (review R10-4).
     let _lock = lock_book(std::path::Path::new(&book))?;
     let mut cast = CastChain::from_args(args)?;
+    // CL8 (ADR-0058 item 4): a local demo records each settled round on chain (as the live
+    // coordinator does), so a venue fact carries the chain's clock (`ObservationRecorded`).
+    if args.iter().any(|a| a == "--record-rounds") {
+        if let Some(c) = cast.as_mut() {
+            c.record_rounds = true;
+        }
+    }
     // ROADMAP B3: the receipt key is checked before anything is sent.
     let pool: Vec<[u8; 20]> = rehearsal_pool(src).iter().map(|o| o.address).collect();
     let receipt_key = receipt_key_from_args(args, cast.as_mut(), &pool)?;

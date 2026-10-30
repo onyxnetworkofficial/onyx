@@ -13,6 +13,8 @@ path = "src/main.rs"
 
 [dependencies]
 onyx-core.workspace = true
+# CL5 (ADR-0059): the bulk range check.
+onyx-bulk.workspace = true
 onyx-api = { path = "../onyx-api", features = ["http-client"] }
 hex.workspace = true
 serde_json.workspace = true

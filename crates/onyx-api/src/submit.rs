@@ -20,12 +20,14 @@
 //! in memory only). Nothing is published from here: a reviewer reads the
 //! journal.
 //!
-//! The real transport, [`HttpsFetch`] (feature `http-client`), resolves the
-//! host itself and refuses every address that is not public
-//! ([`onyx_intake::is_public_ip`]: private, loopback, link-local, metadata),
-//! connects only to the addresses it checked, speaks https only, follows no
-//! redirect, reads at most [`onyx_intake::MAX_BODY_BYTES`] and gives up after
-//! [`onyx_intake::FETCH_TIMEOUT_SECS`]. Tests use fixture fetchers.
+//! The real transport, [`HttpsFetch`] (feature `http-client`), is
+//! `onyx_fetch::HttpsFetch` (CL3, ADR-0053 item 7, shared with the level-2
+//! observers): it resolves the host once and refuses every address that is
+//! not public ([`onyx_intake::is_public_ip`]: private, loopback, link-local,
+//! metadata), connects only to the addresses it checked, speaks https on 443
+//! only, follows no redirect, reads at most [`onyx_intake::MAX_BODY_BYTES`]
+//! (also after gzip) and gives up after [`onyx_intake::FETCH_TIMEOUT_SECS`].
+//! Tests use fixture fetchers.
 
 use crate::cache::Caches;
 use crate::journal::Binding;
@@ -608,80 +610,49 @@ fn review_api_error(error: ReviewError) -> ApiError {
 
 /// The real transport (feature `http-client`): see the module docs.
 #[cfg(feature = "http-client")]
-pub use https::{HttpsFetch, PublicResolver, USER_AGENT};
+pub use https::{HttpsFetch, USER_AGENT};
 
 #[cfg(feature = "http-client")]
 mod https {
-    use super::{check_status, FetchError, PageFetch};
+    use super::{FetchError, PageFetch};
     use crate::x402::BoxFuture;
-    use http_body_util::BodyExt as _;
-    use hyper_util::client::legacy::connect::dns::Name;
-    use hyper_util::client::legacy::connect::HttpConnector;
-    use onyx_intake::{is_public_ip, FETCH_TIMEOUT_SECS, MAX_BODY_BYTES};
-    use std::net::SocketAddr;
-    use std::task::{Context, Poll};
-    use std::time::Duration;
+    use onyx_fetch::FetchError as E;
 
     /// The User-Agent of a check pull: the project's name, nothing about
     /// the submitter or the operator.
-    pub const USER_AGENT: &str = "onyx-submit-check/1";
+    pub const USER_AGENT: &str = onyx_fetch::CHECK_USER_AGENT;
 
-    /// A resolver that answers only when every address of the name is public
-    /// ([`is_public_ip`]); the connector then connects to exactly those.
-    #[derive(Clone, Copy, Debug, Default)]
-    pub struct PublicResolver;
-
-    impl tower_service::Service<Name> for PublicResolver {
-        type Response = std::vec::IntoIter<SocketAddr>;
-        type Error = std::io::Error;
-        type Future = BoxFuture<'static, Result<Self::Response, Self::Error>>;
-
-        fn poll_ready(&mut self, _: &mut Context<'_>) -> Poll<Result<(), Self::Error>> {
-            Poll::Ready(Ok(()))
-        }
-
-        fn call(&mut self, name: Name) -> Self::Future {
-            let host = name.as_str().to_string();
-            Box::pin(async move {
-                let addrs: Vec<SocketAddr> =
-                    tokio::net::lookup_host((host.as_str(), 0)).await?.collect();
-                public_only(&host, addrs).map(Vec::into_iter)
-            })
-        }
-    }
-
-    /// `addrs` when there is at least one and every one is public.
+    /// `addrs` when there is at least one and every one is public
+    /// ([`onyx_fetch::public_only`]).
+    #[cfg(test)]
     pub(super) fn public_only(
         host: &str,
-        addrs: Vec<SocketAddr>,
-    ) -> std::io::Result<Vec<SocketAddr>> {
-        if addrs.is_empty() {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::NotFound,
-                format!("{host} has no address"),
-            ));
-        }
-        if let Some(bad) = addrs.iter().find(|a| !is_public_ip(a.ip())) {
-            return Err(std::io::Error::new(
-                std::io::ErrorKind::PermissionDenied,
-                format!(
-                    "{host} resolves to {}, which is not a public address",
-                    bad.ip()
-                ),
-            ));
-        }
-        Ok(addrs)
+        addrs: Vec<std::net::SocketAddr>,
+    ) -> Result<Vec<std::net::SocketAddr>, FetchError> {
+        let ips: Vec<std::net::IpAddr> = addrs.iter().map(|a| a.ip()).collect();
+        onyx_fetch::public_only(host, &ips)
+            .map(|()| addrs)
+            .map_err(map_error)
     }
 
-    type Client = hyper_util::client::legacy::Client<
-        hyper_rustls::HttpsConnector<HttpConnector<PublicResolver>>,
-        http_body_util::Empty<hyper::body::Bytes>,
-    >;
+    fn map_error(e: E) -> FetchError {
+        match e {
+            E::BadUrl(why) | E::Refused(why) => FetchError::Refused(why),
+            E::Redirect(s) => FetchError::Redirect(s),
+            E::Status(s) => FetchError::Status(s),
+            E::TooLarge(n) => FetchError::TooLarge(n),
+            E::Timeout(s) => FetchError::Timeout(s),
+            E::Encoding(why) | E::Unreachable(why) => FetchError::Unreachable(why),
+        }
+    }
 
-    /// HTTPS GET with the public-address resolver, webpki roots, no redirects,
-    /// a byte cap and one deadline.
+    /// The check pull's transport: [`onyx_fetch::HttpsFetch`] (CL3, ADR-0053
+    /// item 7) with the intake's caps ([`onyx_fetch::Limits::check_pull`]):
+    /// one resolution, public addresses only, connect by address, https on
+    /// 443, no redirects, a byte cap and one deadline.
+    #[derive(Debug)]
     pub struct HttpsFetch {
-        client: Client,
+        inner: Result<onyx_fetch::HttpsFetch, E>,
     }
 
     impl Default for HttpsFetch {
@@ -693,81 +664,10 @@ mod https {
     impl HttpsFetch {
         /// A new transport.
         pub fn new() -> Self {
-            let mut http = HttpConnector::new_with_resolver(PublicResolver);
-            // The https connector below speaks TLS over this; it refuses http.
-            http.enforce_http(false);
-            http.set_connect_timeout(Some(Duration::from_secs(5)));
-            let https = hyper_rustls::HttpsConnectorBuilder::new()
-                .with_webpki_roots()
-                .https_only()
-                .enable_http1()
-                .wrap_connector(http);
-            let client =
-                hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new())
-                    .pool_max_idle_per_host(0)
-                    .build(https);
-            HttpsFetch { client }
-        }
-
-        async fn fetch(&self, url: &str) -> Result<Vec<u8>, FetchError> {
-            // The connector skips the resolver for an IP literal and would
-            // connect to it directly: refuse every literal here (the URL
-            // rules refuse them too, onyx_intake::HttpsUrl).
-            let uri: hyper::Uri = url.parse().map_err(|e: hyper::http::uri::InvalidUri| {
-                FetchError::Unreachable(e.to_string())
-            })?;
-            let host = uri.host().unwrap_or_default();
-            if host
-                .trim_start_matches('[')
-                .trim_end_matches(']')
-                .parse::<std::net::IpAddr>()
-                .is_ok()
-            {
-                return Err(FetchError::Refused(format!(
-                    "{host} is an IP address, which is not a public address the check may name"
-                )));
-            }
-            let req = hyper::Request::get(url)
-                .header("user-agent", USER_AGENT)
-                .header("accept", "application/json")
-                .body(http_body_util::Empty::new())
-                .map_err(|e| FetchError::Unreachable(e.to_string()))?;
-            let r = self.client.request(req).await.map_err(|e| {
-                // The resolver's refusal surfaces as a connect error.
-                let text = format!("{e:?}");
-                if text.contains("not a public address") || text.contains("has no address") {
-                    FetchError::Refused(text_of(&text))
-                } else {
-                    FetchError::Unreachable(e.to_string())
-                }
-            })?;
-            check_status(r.status().as_u16())?;
-            let declared = r
-                .headers()
-                .get("content-length")
-                .and_then(|v| v.to_str().ok())
-                .and_then(|v| v.parse::<u64>().ok());
-            if declared.is_some_and(|n| n > MAX_BODY_BYTES as u64) {
-                return Err(FetchError::TooLarge(MAX_BODY_BYTES));
-            }
-            let bytes = http_body_util::Limited::new(r.into_body(), MAX_BODY_BYTES)
-                .collect()
-                .await
-                .map_err(|_| FetchError::TooLarge(MAX_BODY_BYTES))?
-                .to_bytes();
-            Ok(bytes.to_vec())
-        }
-    }
-
-    /// The resolver's sentence out of a connect error's debug text.
-    fn text_of(debug: &str) -> String {
-        for key in ["which is not a public address", "has no address"] {
-            if let Some(end) = debug.find(key) {
-                let start = debug[..end].rfind('"').map_or(0, |i| i + 1);
-                return debug[start..end + key.len()].to_string();
+            HttpsFetch {
+                inner: onyx_fetch::HttpsFetch::new(onyx_fetch::Limits::check_pull()),
             }
         }
-        "the host's address is not public".into()
     }
 
     impl PageFetch for HttpsFetch {
@@ -777,9 +677,10 @@ mod https {
             _host: &'a str,
         ) -> BoxFuture<'a, Result<Vec<u8>, FetchError>> {
             Box::pin(async move {
-                tokio::time::timeout(Duration::from_secs(FETCH_TIMEOUT_SECS), self.fetch(url))
-                    .await
-                    .map_err(|_| FetchError::Timeout(FETCH_TIMEOUT_SECS))?
+                match &self.inner {
+                    Ok(f) => f.get(url).await.map_err(map_error),
+                    Err(e) => Err(map_error(e.clone())),
+                }
             })
         }
     }

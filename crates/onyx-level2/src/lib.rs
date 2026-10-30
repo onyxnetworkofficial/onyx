@@ -28,7 +28,10 @@ use onyx_core::{
 };
 use onyx_core::{FeedTemplate, Fetcher, StaticRegistry};
 
+pub mod aligned;
+pub mod keyed;
 pub mod live;
+pub mod manifest;
 pub mod markets;
 pub mod rehearse;
 use serde_json::{json, Value as Json};
@@ -72,6 +75,48 @@ pub trait Source {
     /// source during the day itself.
     fn earliest_public(&self, date: &str) -> Result<u64, String> {
         start_of_day(date)
+    }
+    /// How an observer fetches the source (CL3, ADR-0053 item 7): a manifest source's
+    /// descriptor sets the cap and asks for JSON; an adapter's source reads at most
+    /// [`onyx_fetch::MAX_BYTES_CEILING`] (1 MiB) with `Accept: */*`.
+    fn fetch_limits(&self) -> onyx_fetch::Limits {
+        onyx_fetch::Limits::observer_any()
+    }
+    /// Where a keyed source's key goes (ADR-0054, CL4); `None` for a public source (the
+    /// default). A keyed source's observers fetch with their own key, at a private slot, and
+    /// reveal a blinded page hash ([`keyed`]).
+    fn key_placement(&self) -> Option<onyx_fetch::KeyPlacement> {
+        None
+    }
+    /// A keyed source's seat rules: its source id and the hash of the terms a holder accepts
+    /// ([`keyed::terms_hash`]); `None` for a public source.
+    fn keyed_seat_rules(&self) -> Option<(String, Hash32)> {
+        None
+    }
+    /// The round's timing and economics: [`config`], or [`keyed::keyed_config`] for a keyed
+    /// source (`outlier_slash == miss_slash`, ADR-0054 item 7).
+    fn observe_config(&self, spec: &ObservationSpec) -> ObserveConfig {
+        if self.key_placement().is_some() {
+            keyed::keyed_config(spec)
+        } else {
+            config(spec)
+        }
+    }
+}
+
+/// An observer's observation of `page` for `src`: [`observe`], and for a keyed source the
+/// private form ([`keyed::private_observation`]: window-start time, blinded page hash).
+pub fn observe_page(
+    src: &dyn Source,
+    spec: &ObservationSpec,
+    page: &Page,
+) -> Result<Observation, String> {
+    let o = observe(src.fetcher(), spec, page.body.as_deref(), page.fetched_unix)
+        .map_err(|e| format!("observe: {e}"))?;
+    if src.key_placement().is_some() {
+        keyed::private_observation(spec, o)
+    } else {
+        Ok(o)
     }
 }
 
@@ -529,7 +574,19 @@ pub fn drawn_round(
     draw_of: &DrawRecord,
     me: &[u8; 20],
 ) -> Result<Option<(DrawSeed, Vec<Observer>, Hash32)>, String> {
-    let cfg = config(spec);
+    drawn_round_with(spec, &config(spec), pool, draw_of, me)
+}
+
+/// [`drawn_round`] under the source's own round config ([`Source::observe_config`]; a keyed
+/// source's differs).
+pub fn drawn_round_with(
+    spec: &ObservationSpec,
+    cfg: &ObserveConfig,
+    pool: &[Observer],
+    draw_of: &DrawRecord,
+    me: &[u8; 20],
+) -> Result<Option<(DrawSeed, Vec<Observer>, Hash32)>, String> {
+    let cfg = *cfg;
     let seed = DrawSeed::for_pool(pool, draw_of.beacon_height, draw_of.beacon, draw_of.attempt);
     check_commit_allowed(
         &seed,
@@ -567,8 +624,7 @@ pub fn observer_turn(
     page: &Page,
 ) -> Result<(Hash32, ObserverSig, SignedReveal), String> {
     let me = onyx_coordinator::keyfile::key_address(secret).ok_or("not a valid secp256k1 key")?;
-    let o = observe(src.fetcher(), spec, page.body.as_deref(), page.fetched_unix)
-        .map_err(|e| format!("observe: {e}"))?;
+    let o = observe_page(src, spec, page)?;
     let salt = random_salt().map_err(|e| format!("salt: {e}"))?;
     let h = observation_commit(round_id, &me, &o, &salt);
     let cs = sign_commit(secret, round_id, attempt, &h).ok_or("bad key")?;
@@ -790,7 +846,7 @@ fn run_with(
             save,
         );
     }
-    let cfg = config(&spec);
+    let cfg = src.observe_config(&spec);
     let pool = match observers {
         Observers::Simulated(_) => rehearsal_pool(src),
         Observers::Independent(p) => p.to_vec(),
@@ -953,8 +1009,7 @@ fn commit_phase(
     let mut reveals = Vec::new();
     for ((i, page), drawn) in (1..=u8::MAX).zip(pages).zip(&observers) {
         let a = drawn.address;
-        let o = observe(src.fetcher(), spec, page.body.as_deref(), page.fetched_unix)
-            .map_err(|e| format!("observer {i}: {e}"))?;
+        let o = observe_page(src, spec, page).map_err(|e| format!("observer {i}: {e}"))?;
         // Each observer draws its own random salt and keeps it (ATT-R2-F2).
         let s = random_salt().map_err(|e| format!("observer {i} salt: {e}"))?;
         // Each simulated observer signs with its own (fake) key.
@@ -1424,6 +1479,17 @@ pub fn summary(
         "proof_level": 2,
         "response_body": String::from_utf8_lossy(body),
     });
+    // ADR-0054 items 2, 3 and 6: a keyed source's page is never published (it can echo the
+    // key or the account), and its value carries the keyed evidence and the shown odds.
+    if src.key_placement().is_some() {
+        if let Some(m) = v.as_object_mut() {
+            m.remove("response_body");
+            m.insert(
+                "keyed".into(),
+                keyed::keyed_shown(run.pool.len(), run.spec.min_observers),
+            );
+        }
+    }
     if sealed {
         let commits = run
             .commits

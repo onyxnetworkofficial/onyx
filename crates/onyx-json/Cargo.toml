@@ -1,0 +1,19 @@
+[package]
+name = "onyx-json"
+description = "Strict JSON reader and the generic level-2 JSON fetcher (ADR-0053, CL3): duplicate keys, exponents, byte-order marks and deep nesting refused; numbers read from their exact text, never through a float. No I/O; builds for WebAssembly."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+thiserror.workspace = true
+borsh.workspace = true
+
+[dev-dependencies]
+hex.workspace = true
+
+[lints]
+workspace = true

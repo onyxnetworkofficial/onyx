@@ -187,6 +187,10 @@ fn public_v6(a: Ipv6Addr) -> bool {
     if s[..5] == [0; 5] && (s[5] == 0xffff || s[5] == 0) {
         return public_v4(embedded(s[6], s[7]));
     }
+    // ::ffff:0:a.b.c.d (IPv4-translated, RFC 2765; review CL3-R1-4).
+    if s[..4] == [0; 4] && s[4] == 0xffff && s[5] == 0 {
+        return public_v4(embedded(s[6], s[7]));
+    }
     // 64:ff9b::/96 (NAT64) and 64:ff9b:1::/48 (local-use NAT64).
     if s[0] == 0x64 && s[1] == 0xff9b {
         return s[2] == 0 && s[3..6] == [0; 3] && public_v4(embedded(s[6], s[7]));
@@ -202,7 +206,12 @@ fn public_v6(a: Ipv6Addr) -> bool {
         || (s[0] == 0x2001 && s[1] == 0x0db8) // 2001:db8::/32 documentation
         || (s[0] == 0x2001 && s[1] == 0)      // 2001::/32 Teredo
         || (s[0] == 0x0100 && s[1..4] == [0; 3]) // 100::/64 discard
-        || (s[0] == 0x3fff && s[1] < 0x1000)) // 3fff::/20 documentation
+        || (s[0] == 0x3fff && s[1] < 0x1000) // 3fff::/20 documentation
+        // Review CL3-R1-4: 2001:2::/48 benchmarking, 2001:10::/28 and 2001:20::/28 ORCHID,
+        // 5f00::/16 (segment routing).
+        || (s[0] == 0x2001 && s[1] == 0x0002 && s[2] == 0)
+        || (s[0] == 0x2001 && (s[1] & 0xfff0 == 0x0010 || s[1] & 0xfff0 == 0x0020))
+        || s[0] == 0x5f00)
 }
 
 /// What a preview shows of a pulled value.
@@ -271,6 +280,10 @@ impl Preview {
 pub fn preview(body: &[u8], pointer: Option<&str>) -> Preview {
     let value = match pointer {
         None => PreviewValue::NoPointer,
+        // Review CL3-R1-3: a body the observers' strict reader refuses (a duplicate key, a
+        // byte-order mark, a lone surrogate, nesting over 64) previews as not JSON, never as a
+        // value the observers would not read.
+        Some(_) if onyx_json::parse(body, usize::MAX).is_err() => PreviewValue::NotJson,
         Some(p) => match serde_json::from_slice::<Json>(body) {
             Err(_) => PreviewValue::NotJson,
             Ok(doc) => match doc.pointer(p) {
@@ -353,10 +366,40 @@ mod tests {
             ("ff02::1", false),
             ("100::1", false),
             ("3fff::1", false),
+            // Review CL3-R1-4.
+            ("::ffff:0:7f00:1", false),
+            ("::ffff:0:a9fe:a9fe", false),
+            ("::ffff:0:808:808", true),
+            ("2001:2::1", false),
+            ("2001:10::1", false),
+            ("2001:20::1", false),
+            ("5f00::1", false),
+            ("2001:4860:4860::8888", true),
         ] {
             let a: IpAddr = ip.parse().expect("ip");
             assert_eq!(is_public_ip(a), public, "{ip}");
         }
+    }
+
+    /// Review CL3-R1-3: the preview refuses what the observers' strict reader refuses, so a
+    /// submitter is never shown a value no observer would read.
+    #[test]
+    fn the_preview_refuses_what_observers_refuse() {
+        for body in [
+            &br#"{"v":"1","v":"999"}"#[..],
+            b"\xef\xbb\xbf{\"v\":\"1\"}",
+            br#"{"v":"1","w":"\ud800"}"#,
+        ] {
+            assert_eq!(
+                preview(body, Some("/v")).value,
+                PreviewValue::NotJson,
+                "{body:?}"
+            );
+        }
+        assert_eq!(
+            preview(br#"{"v":"1"}"#, Some("/v")).value,
+            PreviewValue::Text("1".into())
+        );
     }
 
     #[test]

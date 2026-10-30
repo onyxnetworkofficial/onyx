@@ -150,7 +150,7 @@
 	// NS5 (ADR-0048): the Base Sepolia values' level and its public history.
 	let ladderFile = $state<LadderFile | null>(null);
 	let ladderError = $state('');
-	const LADDER_LABEL: Record<string, string> = { usgs: 'Earthquakes', ncei: 'Denver high' };
+	const LADDER_LABEL: Record<string, string> = { usgs: 'Earthquakes', ncei: 'Denver high', tga: 'Treasury cash balance', 'ny-tmax': 'New York high', 'ny-prcp': 'New York rain', 'den-prcp': 'Denver rain', la300: 'Earthquakes near Los Angeles', 'tga-deposits': 'Treasury daily deposits' };
 
 	onMount(() => {
 		loadLadders()
@@ -1303,7 +1303,7 @@ scripts/recount-eth-chain-stats.py</pre>
 				<p class="muted lede" data-testid="daily-testnet">
 					The same rounds also ran live on Base Sepolia, a public test network, on <span class="nw">27 Oct 2026</span>: earthquakes on <span class="nw">19 Jul 2026</span> and the Denver high on
 					<span class="nw">27 Sep 2026</span>. Seven observer processes with their own keys, five drawn; each posted its own commit on chain, and the registry records
-					both values (<a href="https://sepolia.basescan.org/address/0x497389e04f7d58e07a79ac8d395c3927aecbdf2b#events" target="_blank" rel="noopener" data-testid="daily-testnet-registry">registry on Basescan</a>).
+					both values (<a href="https://sepolia.basescan.org/address/0x497389e04f7d58e07a79ac8d395c3927aecbdf2b#events" target="_blank" rel="noopener" data-testid="daily-testnet-registry">registry on Basescan</a>), and six more since: the Treasury cash balance and deposits, New York's high and rain, Denver's rain and Los Angeles earthquakes.
 					All seven run on one machine for one operator, so this tests the round, not independence. Values from free public sources are free to
 					read: the query API serves both with their full transcript, at no charge: <a href="https://onyx.cryptagraph.com/v1/observations/usgs.earthquakes.m5_count?subject=usgs.earthquakes.m5_world:2026-07-19" data-testid="daily-testnet-usgs">earthquakes</a>,
 					<a href="https://onyx.cryptagraph.com/v1/observations/noaa.ghcnd.usw00003017.tmax?subject=noaa.ghcnd.usw00003017:2026-09-27" data-testid="daily-testnet-ncei">temperature</a>.

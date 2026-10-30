@@ -8,7 +8,7 @@ const L = await import(new URL('../src/lib/ladder.ts', import.meta.url).href);
 
 export async function ns5(browser, base, root, expect) {
 	const file = JSON.parse(await readFile(join(root, 'level2/ladders-base-sepolia.json'), 'utf8'));
-	expect(file.values.length === 2 && file.values.every((v) => L.checkLadder(v.ladder, 2).length === 0), 'NS5 ladder: the shipped ladders pass the check');
+	expect(file.values.length === 8 && file.values.every((v) => L.checkLadder(v.ladder, 2).length === 0), 'NS5 ladder: the shipped ladders pass the check');
 	// Free public-source values: their ladders ship whole in every build (THREATS NS5-8).
 	const sealed = !!file.values[0].ladder.sealed;
 	expect(!sealed, 'NS5 ladder: the ladders of free public-source values ship unsealed');

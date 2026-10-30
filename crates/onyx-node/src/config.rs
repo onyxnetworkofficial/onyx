@@ -83,6 +83,10 @@ pub struct NodeConfig {
     /// changes. Needs the manifest's `signedBook`; `/v1/signed/{fact}` serves
     /// a fact only against `settleable` at a finalized block.
     pub signed_reports: Option<PathBuf>,
+    /// `ONYX_BULK_DIR` (CL5, ADR-0059): publishers' large datasets (manifests,
+    /// tiers file, hot shards) and the `/v1/bulk` routes. Needs the
+    /// manifest's `signedBook` (manifests are anchored there).
+    pub bulk: Option<BulkConfig>,
     /// `ONYX_TRACK_PUBLICATIONS`: the track-record coordinator's publication
     /// file (ROADMAP C20, a Borsh `Publication`), re-read when it changes; `/v1/track` serves it. Unset: nothing
     /// published (every record a 404 `no_track_record`).
@@ -129,6 +133,17 @@ pub struct NodeConfig {
     /// no round settled yet are offered for a prepaid hold, and the operator's round command
     /// runs one round per paid fact. Needs `ONYX_PREPAID` (holds are prepaid vouchers).
     pub observe: Option<PathBuf>,
+    /// `ONYX_RELAY_KEY_FILE` (CL6, ADR-0056): the relayer's own key (0600 file of 64 hex
+    /// digits). With it, `POST /v1/relay` sends self-signed actions paid from credits. Needs
+    /// `ONYX_PREPAID` naming an `OnyxPrepaidV2` whose `relayer()` is this key's address; the key
+    /// must not be the operator key (checked again against the chain's roles at start).
+    pub relay_key_file: Option<PathBuf>,
+    /// `ONYX_RELAY_FEES` (CL6): the fixed fee of each relayed action, `name=fee,...` in the
+    /// asset's smallest unit (default [`DEFAULT_RELAY_FEES`]).
+    pub relay_fees: String,
+    /// `ONYX_CREDITS_FROM_BLOCK` (CL6): the block `OnyxPrepaidV2` was deployed at; the credits
+    /// routes index its `Credited` events from there (default: the manifest's deploy block).
+    pub credits_from_block: Option<u64>,
     /// `ONYX_GATE_REFRESH_SECS` (default 60, 1..=86400): time between runs
     /// of the serving checks (ADR-0034 Amendment 1, review RESAPI-R1 F3), so
     /// a listed shard that finalizes after the start is judged without a
@@ -342,6 +357,31 @@ impl NodeConfig {
                 "ONYX_OBSERVE needs ONYX_PREPAID: a round is paid by a prepaid hold".into(),
             );
         }
+        let relay_key_file = get("ONYX_RELAY_KEY_FILE")
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+            .map(PathBuf::from);
+        if relay_key_file.is_some() && prepaid.is_none() {
+            return Err(
+                "ONYX_RELAY_KEY_FILE needs ONYX_PREPAID: relays are paid from prepaid credits"
+                    .into(),
+            );
+        }
+        if relay_key_file.is_some() && relay_key_file == operator_key_file {
+            return Err("ONYX_RELAY_KEY_FILE must be the relayer's own key, not the operator key (ADR-0056 item 4)".into());
+        }
+        let relay_fees = get("ONYX_RELAY_FEES")
+            .map(|v| v.trim().to_owned())
+            .filter(|v| !v.is_empty())
+            .unwrap_or_else(|| DEFAULT_RELAY_FEES.into());
+        onyx_api::credits::FeeSchedule::parse(&relay_fees, MAX_RELAY_FEE)
+            .map_err(|e| format!("ONYX_RELAY_FEES: {e}"))?;
+        let credits_from_block = match get("ONYX_CREDITS_FROM_BLOCK").as_deref().map(str::trim) {
+            None | Some("") => None,
+            Some(v) => Some(v.parse::<u64>().map_err(|_| {
+                format!("ONYX_CREDITS_FROM_BLOCK must be a block number, not {v:?}")
+            })?),
+        };
         let facilitator_url = match payments {
             PaymentMode::Facilitator => Some(onyx_api::x402::facilitator_url_from_env(
                 onyx_api::x402::BASE_SEPOLIA,
@@ -587,6 +627,7 @@ impl NodeConfig {
                 .map(|p| p.trim().to_string())
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
+            bulk: BulkConfig::from_env(&get)?,
             track_publications: get("ONYX_TRACK_PUBLICATIONS")
                 .map(|p| p.trim().to_string())
                 .filter(|p| !p.is_empty())
@@ -617,6 +658,9 @@ impl NodeConfig {
             reporter_every,
             prepaid,
             observe,
+            relay_key_file,
+            relay_fees,
+            credits_from_block,
             gate_every,
             token_domain: (
                 get("ONYX_USDC_EIP712_NAME").unwrap_or_else(|| "USDC".into()),
@@ -761,6 +805,13 @@ pub fn read_secret_file(path: &std::path::Path, what: &str) -> Result<String, St
     Ok(v.to_string())
 }
 
+/// The relay fees until they are set from measured gas on Base Sepolia (ADR-0056 open question
+/// 1), in the asset's smallest unit (for a 6-decimal asset: 0.001, 0.001, 0.003 and 0.002).
+pub const DEFAULT_RELAY_FEES: &str =
+    "post_commit=1000,post_receipt=1000,post_sealed_reveal=3000,deposit=2000";
+/// The highest relay fee a configuration may set (one whole unit of a 6-decimal asset).
+pub const MAX_RELAY_FEE: u128 = 1_000_000;
+
 /// Read the operator key from `path`: 64 hex digits (an optional `0x` and
 /// surrounding whitespace allowed). Refuses a file other users can read or
 /// write (Unix), so a key is never left world-readable. Errors never contain
@@ -789,6 +840,67 @@ pub fn read_key_file(path: &std::path::Path) -> Result<[u8; 32], String> {
         ));
     }
     Ok(k)
+}
+
+/// `ONYX_BULK_*` (CL5, ADR-0059).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BulkConfig {
+    /// `ONYX_BULK_DIR`.
+    pub dir: PathBuf,
+    /// `ONYX_BULK_WARM_DIR` (default `<ONYX_BULK_DIR>/warm`): warm shards.
+    pub warm: PathBuf,
+    /// `ONYX_BULK_QUOTA_GIB` (default 16), `ONYX_BULK_MAX_DATASETS` (64),
+    /// `ONYX_BULK_MAX_GIB` (256), `ONYX_BULK_WARM_AFTER_DAYS` (7).
+    pub limits: onyx_api::bulk_serve::BulkLimits,
+}
+
+impl BulkConfig {
+    fn from_env(get: &impl Fn(&str) -> Option<String>) -> Result<Option<BulkConfig>, String> {
+        let keys = [
+            "ONYX_BULK_WARM_DIR",
+            "ONYX_BULK_QUOTA_GIB",
+            "ONYX_BULK_MAX_DATASETS",
+            "ONYX_BULK_MAX_GIB",
+            "ONYX_BULK_WARM_AFTER_DAYS",
+        ];
+        let Some(dir) = get("ONYX_BULK_DIR")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+        else {
+            if let Some(k) = keys.iter().find(|k| get(k).is_some()) {
+                return Err(format!("{k} is set but ONYX_BULK_DIR is not"));
+            }
+            return Ok(None);
+        };
+        let num = |k: &str, default: u64, max: u64| -> Result<u64, String> {
+            match get(k) {
+                None => Ok(default),
+                Some(v) => v
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (1..=max).contains(n))
+                    .ok_or_else(|| format!("{k} must be 1..={max}")),
+            }
+        };
+        let d = onyx_api::bulk_serve::BulkLimits::default();
+        let limits = onyx_api::bulk_serve::BulkLimits {
+            quota_bytes: num("ONYX_BULK_QUOTA_GIB", d.quota_bytes >> 30, 1 << 20)? << 30,
+            max_datasets: num("ONYX_BULK_MAX_DATASETS", d.max_datasets as u64, 10_000)? as usize,
+            max_total_bytes: num("ONYX_BULK_MAX_GIB", d.max_total_bytes >> 30, 1 << 20)? << 30,
+            warm_after_secs: num(
+                "ONYX_BULK_WARM_AFTER_DAYS",
+                d.warm_after_secs / 86_400,
+                3_650,
+            )? * 86_400,
+        };
+        let warm = get("ONYX_BULK_WARM_DIR")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map_or_else(|| dir.join("warm"), PathBuf::from);
+        Ok(Some(BulkConfig { dir, warm, limits }))
+    }
 }
 
 #[cfg(test)]
@@ -1143,6 +1255,49 @@ mod tests {
         }
         m.insert("ONYX_PREPAID", "");
         assert_eq!(load(&m).expect("unset").prepaid, None);
+    }
+
+    /// CL6: a relay key needs prepaid credits, is never the operator key, and its fees parse.
+    #[test]
+    fn relay_needs_prepaid_its_own_key_and_valid_fees() {
+        let mut m = base();
+        m.insert("ONYX_RELAY_KEY_FILE", "/run/credentials/onyx/relay-key");
+        assert!(load(&m)
+            .expect_err("no prepaid")
+            .contains("ONYX_RELAY_KEY_FILE needs ONYX_PREPAID"));
+        m.insert("ONYX_PAYMENTS", "facilitator");
+        m.insert(
+            "ONYX_OPERATOR_KEY_FILE",
+            "/run/credentials/onyx/operator-key",
+        );
+        m.insert("ONYX_PREPAID", "0x1111111111111111111111111111111111111111");
+        let c = load(&m).expect("ok");
+        assert_eq!(
+            c.relay_key_file,
+            Some(PathBuf::from("/run/credentials/onyx/relay-key"))
+        );
+        assert_eq!(c.relay_fees, DEFAULT_RELAY_FEES);
+        m.insert("ONYX_RELAY_KEY_FILE", "/run/credentials/onyx/operator-key");
+        assert!(load(&m).expect_err("same key").contains("own key"));
+        m.insert("ONYX_RELAY_KEY_FILE", "/run/credentials/onyx/relay-key");
+        for bad in [
+            "post_commit=0",
+            "post_commit=1000001",
+            "transfer=5",
+            "post_commit",
+        ] {
+            m.insert("ONYX_RELAY_FEES", bad);
+            assert!(
+                load(&m).expect_err(bad).contains("ONYX_RELAY_FEES"),
+                "{bad}"
+            );
+        }
+        m.insert("ONYX_RELAY_FEES", "post_commit=1500");
+        assert_eq!(load(&m).expect("ok").relay_fees, "post_commit=1500");
+        m.insert("ONYX_CREDITS_FROM_BLOCK", "123");
+        assert_eq!(load(&m).expect("ok").credits_from_block, Some(123));
+        m.insert("ONYX_CREDITS_FROM_BLOCK", "-1");
+        assert!(load(&m).is_err());
     }
 
     /// ADR-0049: ONYX_OBSERVE only with prepaid holds.

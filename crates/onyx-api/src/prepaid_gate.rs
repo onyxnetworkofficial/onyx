@@ -37,6 +37,23 @@ pub const PREPAID_RESPONSE: &str = "onyx-prepaid-response";
 /// The longest a voucher header may be (2 + 40 + 1 + 39 digits + 1 + 2 + 130).
 const MAX_HEADER: usize = 220;
 
+/// The `metric` of a hold taken for a relayed action (ADR-0056 item 4, [`crate::credits`]); its
+/// `subject` is the action's name. Observe rounds never use it, and the observe state skips it.
+pub const RELAY_HOLD_METRIC: &str = "onyx.relay";
+/// The round of the bill a relay fee is charged to: not a revenue book. The reporter pays these
+/// lines to the relayer with `OnyxPrepaidV2.payRelayer`, never with `allocate`.
+pub const GAS_ROUND: u64 = u64::MAX - 1;
+
+/// The shard of the gas bill (`keccak256("onyx-relay-gas-v1")`).
+pub fn gas_shard() -> Hash32 {
+    onyx_core::keccak256(b"onyx-relay-gas-v1")
+}
+
+/// Whether `(round, shard)` is the gas bill.
+pub fn is_gas_bill(round: u64, shard: &Hash32) -> bool {
+    round == GAS_ROUND && *shard == gas_shard()
+}
+
 /// Parse a [`PREPAID_VOUCHER`] header. `None` when it is not exactly that shape.
 pub fn parse_voucher(s: &str) -> Option<Voucher> {
     if s.len() > MAX_HEADER {
@@ -143,7 +160,9 @@ impl PrepaidState {
     /// Books for the `OnyxPrepaid` of EIP-712 domain `domain`, with the usage journal at `path`
     /// (created if missing; each buyer's latest voucher and request key are loaded back). A torn
     /// last line (a crash during its write: that answer was never served) is dropped; any other
-    /// bad line refuses the journal.
+    /// bad line refuses the journal. The journal is bound to `domain` (one contract on one chain)
+    /// by `<journal>.domain`, written on first open: a journal of another contract is refused
+    /// (review CL6-R1-1: its vouchers would be charged again and break every redemption).
     pub fn open(
         path: impl AsRef<Path>,
         domain: [u8; 32],
@@ -151,6 +170,22 @@ impl PrepaidState {
         max_age: u64,
     ) -> Result<PrepaidState, String> {
         let path = path.as_ref().to_path_buf();
+        let mut bind = path.as_os_str().to_owned();
+        bind.push(".domain");
+        let bind = PathBuf::from(bind);
+        let want = format!("0x{}\n", hex::encode(domain));
+        let unbound = match std::fs::read_to_string(&bind) {
+            Ok(t) if t == want => false,
+            Ok(_) => {
+                return Err(format!(
+                    "prepaid journal {} belongs to another OnyxPrepaid (another EIP-712 domain in {}); a new contract needs a new journal",
+                    path.display(),
+                    bind.display()
+                ))
+            }
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => true,
+            Err(e) => return Err(format!("prepaid journal binding {}: {e}", bind.display())),
+        };
         let text = match std::fs::read_to_string(&path) {
             Ok(t) => t,
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => String::new(),
@@ -172,9 +207,31 @@ impl PrepaidState {
                 }
                 return Err(format!("prepaid journal line {}: unreadable", i + 1));
             };
+            // Review CL6-R1-1: every voucher in the journal is this contract's (a journal kept
+            // from before the binding file existed is checked line by line).
+            let signed = match &parsed {
+                Line::Usage(u) => u.voucher.signed(&domain),
+                Line::Hold { voucher, .. } => voucher.signed(&domain),
+                Line::Release { .. } => true,
+            };
+            if !signed {
+                return Err(format!(
+                    "prepaid journal line {}: a voucher of another OnyxPrepaid; a new contract needs a new journal",
+                    i + 1
+                ));
+            }
             replay(&mut buyers, &mut tickets, &mut ended, parsed)
                 .map_err(|e| format!("prepaid journal line {}: {e}", i + 1))?;
             at += line.len();
+        }
+        // Every line checked: bind the journal to this contract from now on.
+        if unbound {
+            let mut open = std::fs::OpenOptions::new();
+            open.create_new(true).write(true);
+            crate::journal::owner_only(&mut open);
+            open.open(&bind)
+                .and_then(|mut f| f.write_all(want.as_bytes()).and_then(|()| f.sync_all()))
+                .map_err(|e| format!("prepaid journal binding {}: {e}", bind.display()))?;
         }
         // Owner-only, as the intake journal: it pairs each buyer with the books it paid for,
         // which the chain never shows (THREATS PRE-8).
@@ -211,6 +268,11 @@ impl PrepaidState {
     pub fn with_hold_limit(mut self, secs: u64) -> Self {
         self.hold_limit = secs;
         self
+    }
+
+    /// The EIP-712 domain separator of the contract this journal belongs to.
+    pub fn domain(&self) -> [u8; 32] {
+        self.domain
     }
 
     /// The journal's path.
@@ -252,6 +314,17 @@ impl PrepaidState {
         Ok(account)
     }
 
+    /// The server's book of `buyer` (the chain's account as last read, the latest voucher and the
+    /// held one), if it was ever read or charged.
+    pub fn book(&self, buyer: &[u8; 20]) -> Option<PrepaidBook> {
+        self.inner
+            .lock()
+            .ok()?
+            .buyers
+            .get(buyer)
+            .map(|b| b.book.clone())
+    }
+
     /// Every complete line of the usage journal, in order (a torn last line is not one).
     pub fn usage(&self) -> Result<Vec<Usage>, String> {
         let _held = self.inner.lock().map_err(|_| "prepaid books poisoned")?;
@@ -272,6 +345,98 @@ impl PrepaidState {
             }
         }
         Ok(out)
+    }
+
+    /// The journal lines of `account` after the line `after` (all when `None`), at most `limit`,
+    /// in journal order, and the `seq` to ask after for the next page (`None`: no more). For
+    /// the account's own view only (`/v1/credits/{account}/lines`, ADR-0056 item 5): the
+    /// journal pairs the account with what it bought.
+    pub fn account_lines(
+        &self,
+        account: [u8; 20],
+        after: Option<usize>,
+        limit: usize,
+    ) -> Result<(Vec<AccountLine>, Option<usize>), String> {
+        // Read without the books' lock, so a read never holds up a charge: the journal is
+        // append-only and a line being written (no newline yet) ends the read.
+        let text = std::fs::read_to_string(&self.path)
+            .map_err(|e| format!("prepaid journal {}: {e}", self.path.display()))?;
+        // Holds of this account by ticket: (price, metric, subject).
+        let mut holds: BTreeMap<Hash32, (u128, String, String)> = BTreeMap::new();
+        let mut out: Vec<AccountLine> = Vec::new();
+        let mut next = None;
+        for (seq, line) in text.split_inclusive('\n').enumerate() {
+            if !line.ends_with('\n') {
+                break;
+            }
+            let raw = line.trim_end_matches('\n');
+            let parsed = line_of(raw)
+                .ok_or_else(|| format!("prepaid journal line {}: unreadable", seq + 1))?;
+            let item = match parsed {
+                Line::Usage(u) if u.voucher.buyer == account => {
+                    let hold = holds.get(&u.key);
+                    let (kind, action) = if is_gas_bill(u.round, &u.shard) {
+                        (LineKind::Gas, hold.map(|h| h.2.clone()))
+                    } else if hold.is_some() {
+                        (LineKind::ObserveCharge, None)
+                    } else {
+                        (LineKind::Answer, None)
+                    };
+                    AccountLine {
+                        seq,
+                        kind,
+                        action,
+                        amount: u.price,
+                        cumulative: u.voucher.cumulative,
+                        reference: u.key,
+                        at: line_at(raw),
+                    }
+                }
+                Line::Hold { voucher, held } if voucher.buyer == account => {
+                    let price = hold_price(raw).unwrap_or(0);
+                    let relay = held.metric == RELAY_HOLD_METRIC;
+                    holds.insert(
+                        held.ticket,
+                        (price, held.metric.clone(), held.subject.clone()),
+                    );
+                    AccountLine {
+                        seq,
+                        kind: if relay {
+                            LineKind::RelayHold
+                        } else {
+                            LineKind::ObserveHold
+                        },
+                        action: relay.then(|| held.subject.clone()),
+                        amount: price,
+                        cumulative: voucher.cumulative,
+                        reference: held.ticket,
+                        at: held.created,
+                    }
+                }
+                Line::Release { ticket, buyer } if buyer == account => {
+                    let h = holds.get(&ticket);
+                    AccountLine {
+                        seq,
+                        kind: LineKind::Release,
+                        action: h.filter(|h| h.1 == RELAY_HOLD_METRIC).map(|h| h.2.clone()),
+                        amount: h.map_or(0, |h| h.0),
+                        cumulative: 0,
+                        reference: ticket,
+                        at: line_at(raw),
+                    }
+                }
+                _ => continue,
+            };
+            if after.is_some_and(|a| seq <= a) {
+                continue;
+            }
+            if out.len() == limit {
+                next = out.last().map(|l| l.seq);
+                break;
+            }
+            out.push(item);
+        }
+        Ok((out, next))
     }
 
     /// Take `v` for an answer priced `price` on the book `(round, shard)`, for the request `key`:
@@ -326,6 +491,19 @@ impl PrepaidState {
     /// synced. The held voucher is never counted or redeemed until [`Self::commit_hold`].
     /// Blocking (file IO): call it off the async threads.
     pub fn hold(&self, v: Voucher, price: u128, held: Held, now: u64) -> Result<(), ChargeError> {
+        self.hold_incoming(v, price, held, now, 0)
+    }
+
+    /// [`Self::hold`] for a relayed deposit: the voucher may reach the deposit plus `incoming`
+    /// ([`PrepaidBook::hold_incoming`]). Blocking (file IO).
+    pub fn hold_incoming(
+        &self,
+        v: Voucher,
+        price: u128,
+        held: Held,
+        now: u64,
+        incoming: u128,
+    ) -> Result<(), ChargeError> {
         if self.hold_limit == 0 || held.deadline.saturating_sub(now) > self.hold_limit {
             return Err(PrepaidError::HoldTooLong {
                 limit: self.hold_limit,
@@ -341,7 +519,8 @@ impl PrepaidState {
         if b.read_at == 0 || now.saturating_sub(b.read_at) > self.max_age {
             return Err(ChargeError::Unavailable);
         }
-        b.book.hold(v.clone(), price, &self.domain)?;
+        b.book
+            .hold_incoming(v.clone(), price, &self.domain, incoming)?;
         let line = hold_line(&v, price, &held);
         if !append(&mut inner.journal, &line) {
             if let Some(b) = inner.buyers.get_mut(&v.buyer) {
@@ -511,6 +690,72 @@ fn usage_of(line: &str) -> Option<Usage> {
         shard: Hash32(shard),
         key: Hash32(key),
     })
+}
+
+/// What a journal line of one account is (ADR-0056 item 3, the credits journal).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LineKind {
+    /// A paid answer.
+    Answer,
+    /// A held observation round (ADR-0049).
+    ObserveHold,
+    /// A held round that was served and charged.
+    ObserveCharge,
+    /// A held relayed action (ADR-0056 item 4).
+    RelayHold,
+    /// A relayed action that was mined without a revert: its fee is charged.
+    Gas,
+    /// A hold dropped: nothing was charged.
+    Release,
+}
+
+impl LineKind {
+    /// The API's name of the kind.
+    pub fn name(self) -> &'static str {
+        match self {
+            LineKind::Answer => "answer",
+            LineKind::ObserveHold => "observe_hold",
+            LineKind::ObserveCharge => "observe_charge",
+            LineKind::RelayHold => "relay_hold",
+            LineKind::Gas => "gas",
+            LineKind::Release => "release",
+        }
+    }
+}
+
+/// One journal line of one account.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AccountLine {
+    /// The line's index in the journal (0 first).
+    pub seq: usize,
+    /// What it is.
+    pub kind: LineKind,
+    /// The relayed action, for relay holds, gas lines and their releases.
+    pub action: Option<String>,
+    /// The amount spent, held or released, in the asset's smallest unit.
+    pub amount: u128,
+    /// The voucher total after the line (0 for a release).
+    pub cumulative: u128,
+    /// The request key or the hold's ticket.
+    pub reference: Hash32,
+    /// Unix seconds.
+    pub at: u64,
+}
+
+fn line_at(line: &str) -> u64 {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|v| v.get("at").and_then(Value::as_u64))
+        .unwrap_or(0)
+}
+
+fn hold_price(line: &str) -> Option<u128> {
+    serde_json::from_str::<Value>(line)
+        .ok()?
+        .get("price")?
+        .as_str()?
+        .parse()
+        .ok()
 }
 
 /// A hold's facts beside its held voucher (ADR-0049): which ticket, which fact, until when.
@@ -921,6 +1166,43 @@ mod tests {
         );
         s.refresh(v.buyer, 10).await.expect("read");
         assert_eq!(s.hold(v, 1000, held(1), 10), Ok(()));
+    }
+
+    /// Review CL6-R1-1: a journal written for one contract is refused for another.
+    #[test]
+    fn a_journal_from_another_contract_is_refused() {
+        let dir = crate::journal::test_dir("prepaid-bind");
+        let path = dir.join("prepaid.journal");
+        let src = Arc::new(Fixed(Account::default()));
+        drop(PrepaidState::open(&path, domain(), src.clone(), 60).expect("first open binds"));
+        assert!(
+            PrepaidState::open(&path, domain(), src.clone(), 60).is_ok(),
+            "same contract"
+        );
+        let other = domain_separator(84532, &[0x12; 20]);
+        let e = PrepaidState::open(&path, other, src, 60)
+            .err()
+            .expect("refused");
+        assert!(e.contains("another OnyxPrepaid"), "{e}");
+        // A journal kept from before the binding file: its vouchers are checked one by one.
+        let path2 = dir.join("legacy.journal");
+        let src2 = Arc::new(Fixed(Account {
+            deposited: 5000,
+            redeemed: 0,
+            exiting: false,
+        }));
+        let line = usage_line(
+            &Voucher::sign(&[1; 32], &other, 1000).expect("sign"),
+            1000,
+            (1, Hash32([3; 32])),
+            Hash32(KEY),
+            10,
+        );
+        std::fs::write(&path2, format!("{line}\n")).expect("write");
+        let e = PrepaidState::open(&path2, domain(), src2, 60)
+            .err()
+            .expect("refused");
+        assert!(e.contains("another OnyxPrepaid"), "{e}");
     }
 
     #[tokio::test]

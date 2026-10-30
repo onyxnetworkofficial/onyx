@@ -48,7 +48,7 @@ Environment=ONYX_OPERATOR_KEY_FILE=%d/operator-key
 #Environment=ONYX_RPC_URL_FILE=%d/rpc-url
 Environment=ONYX_STATE_DIR=/var/lib/onyx/state
 Environment=ONYX_CAS_DIR=/var/lib/onyx/cas
-StateDirectory=onyx onyx/state onyx/cas
+StateDirectory=onyx onyx/state onyx/cas onyx/bulk
 StateDirectoryMode=0700
 DynamicUser=yes
 Restart=on-failure

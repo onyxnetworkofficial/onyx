@@ -13,6 +13,8 @@ borsh.workspace = true
 thiserror.workspace = true
 onyx-labels.workspace = true
 onyx-merkle.workspace = true
+# CL5 (ADR-0059): the CAS kind of a published bulk shard and its caps.
+onyx-bulk.workspace = true
 hex.workspace = true
 serde_json.workspace = true
 onyx-recipe-host.workspace = true

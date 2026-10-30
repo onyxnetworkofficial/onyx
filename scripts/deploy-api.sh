@@ -33,6 +33,8 @@
 #   ONYX_API_MCP       the agent connector at https://<domain>/mcp: apps/agent in /opt/onyx-mcp
 #                      run by deploy/systemd/onyx-mcp.service (proposals on; skipped with a note when
 #                      the host has no Node 20 or later)
+#   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 16 GiB in all,
+#                      8 GiB per publisher, when the export's deployment.json pins a signed book
 #   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (32 connections per address on 443),
 #                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
@@ -61,7 +63,7 @@ fi
 stage=$(mktemp -d "${HOME}/.cache/onyx-deploy-api.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 # The export's settings, with this host's public URL, node URL, proxy, health and payment settings.
-grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=)' \
+grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=|ONYX_BULK_[A-Z_]*=)' \
   "$export_dir/node.service.env" > "$stage/node.env"
 cat >> "$stage/node.env" <<EOF
 ONYX_LISTEN=127.0.0.1:8080
@@ -75,6 +77,14 @@ intake=${ONYX_API_INTAKE:-1}
 mcp=${ONYX_API_MCP:-1}
 conn_cap=${ONYX_API_CONN_CAP:-1}
 [ "$intake" = 0 ] || echo "ONYX_SUBMISSIONS=/var/lib/onyx/state/submissions.journal" >>"$stage/node.env"
+# Publishers' large datasets (contributor loop CL5, ADR-0059, docs/ops/bulk-publish.md): on when the
+# export's manifest pins a signed book (the node takes only manifests anchored there), off with
+# ONYX_API_BULK=0. The limits fit the host's disk (about 34 GB free on 2026-10-30): 16 GiB for every
+# publisher together, 8 GiB for one.
+bulk=${ONYX_API_BULK:-1}
+if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=16 ONYX_BULK_QUOTA_GIB=8 >>"$stage/node.env"
+fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
 # pinned by <export>/observations/pins (metric=0x<template id>, one per line); the node checks
 # each store against its pin and the registry on chain before it serves it.

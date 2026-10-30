@@ -27,3 +27,4 @@ explain the rules and the reasons.
 | [parametric-insurance.md](parametric-insurance.md) | A test policy that pays when an observed value crosses a threshold (draft) | not built (NL18) |
 | [dataset-backing.md](dataset-backing.md) | Dataset backing: stake behind a dataset, earn from its fees, lose on a checked error (draft, NS12 input) | not built (S12) |
 | [ladder-slice-2.md](ladder-slice-2.md) | Proof ladder slice 2: cross-lane rises, contradictions, level-3 ladders, `onyx-check` row levels | built 2026-10-28 (C64, NL13; ADR-0048 amendment 2), no `v: 2` route yet |
+| [contributor-loop-overview.md](contributor-loop-overview.md) | The contributor loop CL2-CL8 together: dependencies and order of work (ADR-0053..0058, draft) | not built (CL2-CL8) |

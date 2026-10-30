@@ -29,6 +29,9 @@
 //!   health watch (NL10-4).
 //! - A recompute whose rows do not hash to the chain root is refused and
 //!   never stored (a conflict).
+//! - A publisher's bulk shard (CL5, ADR-0059, CAS kind `Shard`) moves between
+//!   hot and warm like a row batch but never goes cold: it has no recipe and
+//!   no chain input to rebuild it from.
 
 use crate::cas::{Cas, CasError, FsCas, Kind, MemCas};
 use crate::recompute::{compute, ComputeError, RecomputeEnv};
@@ -36,7 +39,7 @@ use onyx_core::{Hash32, ShardSpec, Snapshot};
 use onyx_labels::attest::AttestCache;
 use onyx_labels::ATTESTATION_EVIDENCE;
 use onyx_merkle::MerkleTree;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
 use std::sync::Mutex;
 
@@ -221,6 +224,8 @@ pub struct TieredStore<H: CasPrune, W: CasPrune> {
     hot: H,
     warm: W,
     tiers: Mutex<BTreeMap<Hash32, Tier>>,
+    /// Tracked roots that are bulk shards (kind `Shard`), not row batches.
+    bulk: Mutex<BTreeSet<Hash32>>,
 }
 
 impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
@@ -230,7 +235,34 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             hot,
             warm,
             tiers: Mutex::new(BTreeMap::new()),
+            bulk: Mutex::new(BTreeSet::new()),
         }
+    }
+
+    /// True if `root` is a tracked bulk shard (CL5).
+    pub fn is_bulk(&self, root: &Hash32) -> bool {
+        self.bulk.lock().is_ok_and(|b| b.contains(root))
+    }
+
+    /// The kind `root`'s rows are stored as.
+    fn kind_of(&self, root: &Hash32) -> Kind {
+        if self.is_bulk(root) {
+            Kind::Shard
+        } else {
+            Kind::Rows
+        }
+    }
+
+    /// Every tracked bulk shard with its tier.
+    pub fn bulk_tiers(&self) -> Vec<(Hash32, Tier)> {
+        let bulk: Vec<Hash32> = self
+            .bulk
+            .lock()
+            .map(|b| b.iter().copied().collect())
+            .unwrap_or_default();
+        bulk.into_iter()
+            .filter_map(|r| self.tier(&r).map(|t| (r, t)))
+            .collect()
     }
 
     /// The hot store (kept inputs live here).
@@ -279,14 +311,13 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
         from: &dyn CasPrune,
         to: &dyn CasPrune,
     ) -> Result<(), TierError> {
-        let bytes = from
-            .get(Kind::Rows, root)
-            .ok_or(TierError::Missing(*root))?;
-        let key = to.put(Kind::Rows, &bytes).map_err(TierError::Store)?;
-        if key != *root || to.get(Kind::Rows, root).as_deref() != Some(&bytes[..]) {
+        let kind = self.kind_of(root);
+        let bytes = from.get(kind, root).ok_or(TierError::Missing(*root))?;
+        let key = to.put(kind, &bytes).map_err(TierError::Store)?;
+        if key != *root || to.get(kind, root).as_deref() != Some(&bytes[..]) {
             return Err(TierError::CopyNotReadBack(*root));
         }
-        from.prune(Kind::Rows, root).map_err(TierError::Store)
+        from.prune(kind, root).map_err(TierError::Store)
     }
 
     /// hot to warm.
@@ -317,6 +348,11 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
         chain_root: &Hash32,
     ) -> Result<(), TierError> {
         self.expect(root, Tier::Warm)?;
+        if self.is_bulk(root) {
+            return Err(TierError::NotRecomputable(
+                "a published bulk shard has no recipe: it stays hot or warm",
+            ));
+        }
         if root != chain_root {
             return Err(TierError::RootMismatch {
                 got: *root,
@@ -363,7 +399,14 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             .lock()
             .map_err(|e| TierError::File(e.to_string()))?
             .iter()
-            .map(|(k, t)| (hex::encode(k.0), serde_json::Value::from(t.as_str())))
+            .map(|(k, t)| {
+                let t = if self.is_bulk(k) {
+                    format!("bulk:{}", t.as_str())
+                } else {
+                    t.as_str().to_string()
+                };
+                (hex::encode(k.0), serde_json::Value::from(t))
+            })
             .collect();
         let text = serde_json::Value::Object(map).to_string();
         let tmp = path.with_extension("tmp");
@@ -382,19 +425,29 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             .as_object()
             .ok_or_else(|| TierError::File("not an object".into()))?;
         let mut out = BTreeMap::new();
+        let mut bulk = BTreeSet::new();
         for (k, t) in obj {
             let mut key = [0u8; 32];
             hex::decode_to_slice(k, &mut key).map_err(|e| TierError::File(e.to_string()))?;
             let key = Hash32(key);
-            let tier = t
+            let text = t
                 .as_str()
-                .and_then(Tier::parse)
+                .ok_or_else(|| TierError::File(format!("bad tier for {k}")))?;
+            let (kind, text) = match text.strip_prefix("bulk:") {
+                Some(rest) => (Kind::Shard, rest),
+                None => (Kind::Rows, text),
+            };
+            let tier = Tier::parse(text)
+                .filter(|t| kind == Kind::Rows || *t != Tier::Cold)
                 .ok_or_else(|| TierError::File(format!("bad tier for {k}")))?;
             let present = match tier {
-                Tier::Hot => self.hot.has(Kind::Rows, &key),
-                Tier::Warm => self.warm.has(Kind::Rows, &key),
+                Tier::Hot => self.hot.has(kind, &key),
+                Tier::Warm => self.warm.has(kind, &key),
                 Tier::Cold => true,
             };
+            if kind == Kind::Shard {
+                bulk.insert(key);
+            }
             if !present {
                 return Err(TierError::Missing(key));
             }
@@ -404,6 +457,10 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             .tiers
             .lock()
             .map_err(|e| TierError::File(e.to_string()))? = out;
+        *self
+            .bulk
+            .lock()
+            .map_err(|e| TierError::File(e.to_string()))? = bulk;
         Ok(())
     }
 }
@@ -411,9 +468,14 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
 impl<H: CasPrune, W: CasPrune> Cas for TieredStore<H, W> {
     fn put(&self, kind: Kind, bytes: &[u8]) -> Result<Hash32, CasError> {
         let key = self.hot.put(kind, bytes)?;
-        if kind == Kind::Rows {
+        if kind == Kind::Rows || kind == Kind::Shard {
             if let Ok(mut t) = self.tiers.lock() {
                 t.insert(key, Tier::Hot);
+            }
+        }
+        if kind == Kind::Shard {
+            if let Ok(mut b) = self.bulk.lock() {
+                b.insert(key);
             }
         }
         Ok(key)
@@ -421,7 +483,9 @@ impl<H: CasPrune, W: CasPrune> Cas for TieredStore<H, W> {
 
     fn get(&self, kind: Kind, key: &Hash32) -> Option<Vec<u8>> {
         match kind {
-            Kind::Rows => self.hot.get(kind, key).or_else(|| self.warm.get(kind, key)),
+            Kind::Rows | Kind::Shard => {
+                self.hot.get(kind, key).or_else(|| self.warm.get(kind, key))
+            }
             _ => self.hot.get(kind, key),
         }
     }
@@ -868,5 +932,55 @@ mod tests {
             1,
             "the request asked at 10 s is not overdue yet"
         );
+    }
+
+    /// CL5 (ADR-0059): a bulk shard moves hot to warm and back with the copy
+    /// read back first, survives a save and load as a bulk shard, and never
+    /// goes cold (no recipe rebuilds it; THREATS CL5-8).
+    #[test]
+    fn bulk_shards_move_hot_and_warm_never_cold() {
+        let w = World::new();
+        let t = store();
+        let file = onyx_bulk::shard::encode_shard(&[b"x".to_vec(), b"y".to_vec()]);
+        let root = t.put(Kind::Shard, &file).expect("put");
+        assert!(t.is_bulk(&root));
+        assert_eq!(t.tier(&root), Some(Tier::Hot));
+        t.to_warm(&root).expect("warm");
+        assert!(!t.hot().has(Kind::Shard, &root));
+        assert_eq!(t.get(Kind::Shard, &root), Some(file.clone()));
+        assert_eq!(t.bulk_tiers(), vec![(root, Tier::Warm)]);
+        let env = RecomputeEnv {
+            reg: &w.reg,
+            cas: &w.cas,
+            host: &w.host,
+            source: &|_: &ShardSpec| Some(SOURCE.to_vec()),
+        };
+        assert!(matches!(
+            t.to_cold(&root, &w.spec(1), &env, &AttestCache::default(), &root),
+            Err(TierError::NotRecomputable(_))
+        ));
+        assert_eq!(t.tier(&root), Some(Tier::Warm));
+        t.warm_to_hot(&root).expect("hot");
+        assert_eq!(t.tier(&root), Some(Tier::Hot));
+        // Save and load keep the kind.
+        let dir = std::env::temp_dir().join(format!("onyx-tiers-bulk-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = dir.join("tiers.json");
+        t.save(&path).expect("save");
+        assert!(std::fs::read_to_string(&path)
+            .expect("read")
+            .contains("bulk:hot"));
+        let t2 = TieredStore::new(MemCas::new(), MemCas::new());
+        t2.hot().put(Kind::Shard, &file).expect("put");
+        t2.load(&path).expect("load");
+        assert!(t2.is_bulk(&root));
+        // A file claiming a cold bulk shard is refused.
+        std::fs::write(
+            &path,
+            format!("{{\"{}\":\"bulk:cold\"}}", hex::encode(root.0)),
+        )
+        .expect("w");
+        assert!(t2.load(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

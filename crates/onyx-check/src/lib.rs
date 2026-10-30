@@ -705,3 +705,141 @@ pub async fn check_offer<T: JsonRpc + ?Sized>(
         Err(_) => OfferOutcome::Refused("malformed_offer", "amount is not a whole number".into()),
     }
 }
+
+/// What the caller asked a bulk node for (`onyx-check --bulk`): the answer
+/// must be about exactly this publisher and dataset (review CL5-R2), at least
+/// this version, and the rows in this key range.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BulkAsked {
+    /// Publisher source id.
+    pub publisher: String,
+    /// Dataset id.
+    pub dataset: String,
+    /// Lowest version accepted (an older one is a rollback).
+    pub min_version: u32,
+    /// Smallest key asked.
+    pub from: Option<i128>,
+    /// Largest key asked.
+    pub to: Option<i128>,
+}
+
+/// The completeness note every bulk report carries (THREATS CL5-9).
+pub const BULK_COMPLETENESS: &str = "every row returned is proven and the page has no gap inside it; rows at the edges of the page (or a page answered empty) are not proven complete yet";
+
+/// How a bulk range check ended (CL5, ADR-0059; `onyx-check --bulk`).
+// One per run: a `Box` buys nothing.
+#[allow(clippy::large_enum_variant)]
+#[derive(Debug)]
+pub enum BulkOutcome {
+    /// Every row proven to its shard, every shard to the manifest, the
+    /// manifest root signed by the publisher, and (when a node was given)
+    /// that signed report recorded and accepted in the book at the caller's
+    /// finalized block with the key active (exit 0).
+    Verified {
+        /// The off-chain check.
+        checked: onyx_bulk::wire::Checked,
+        /// The caller's chain read, if any.
+        anchor: Option<onyx_api::bulk_serve::AnchorView>,
+    },
+    /// Refused (exit 1).
+    Refused(String),
+    /// The caller's node could not be read (exit 3).
+    Undecided(String),
+}
+
+impl BulkOutcome {
+    /// Exit code: 0 verified, 1 refused, 3 undecided.
+    pub fn code(&self) -> i32 {
+        match self {
+            BulkOutcome::Verified { .. } => 0,
+            BulkOutcome::Refused(_) => 1,
+            BulkOutcome::Undecided(_) => 3,
+        }
+    }
+
+    /// The JSON report.
+    pub fn report(&self) -> Value {
+        match self {
+            BulkOutcome::Verified { checked: c, anchor } => {
+                let mut r = json!({
+                    "ok": true,
+                    "chainChecked": anchor.is_some(),
+                    "publisher": c.header.publisher.0,
+                    "dataset": c.header.dataset,
+                    "version": c.header.version,
+                    "manifestRoot": c.manifest_root.to_string(),
+                    "digest": c.digest.to_string(),
+                    "signer": format!("0x{}", hex::encode(c.signer)),
+                    "rows": c.rows.len(),
+                    "firstKey": c.rows.first().map(|r| r.2.to_string()),
+                    "lastKey": c.rows.last().map(|r| r.2.to_string()),
+                    "completeness": BULK_COMPLETENESS,
+                });
+                match anchor {
+                    Some(a) => {
+                        r["anchor"] = json!({
+                            "chainId": a.chain_id,
+                            "book": format!("0x{}", hex::encode(a.book)),
+                            "fact": a.fact.to_string(),
+                            "acceptedAt": a.accepted_at,
+                            "checkedAt": {"number": a.block_number, "hash": a.block_hash.to_string()},
+                        })
+                    }
+                    None => r["warning"] = json!(UNCHECKED_WARNING),
+                }
+                r
+            }
+            BulkOutcome::Refused(e) | BulkOutcome::Undecided(e) => json!({
+                "ok": false,
+                "decided": matches!(self, BulkOutcome::Refused(_)),
+                "code": if matches!(self, BulkOutcome::Refused(_)) { "bulk_refused" } else { "chain_unavailable" },
+                "error": e,
+                "retryLater": matches!(self, BulkOutcome::Undecided(_)),
+            }),
+        }
+    }
+}
+
+/// Check a `GET /v1/bulk/{publisher}/{dataset}/rows` answer for the asked
+/// key range: the proofs and signature off chain
+/// ([`onyx_bulk::wire::check_rows_answer`]), then, with `node` =
+/// `(rpc, chain id, book)`, the book read at the caller's own finalized block
+/// ([`onyx_api::bulk_serve::read_anchor`]).
+pub async fn check_bulk(
+    answer: &Value,
+    asked: &BulkAsked,
+    node: Option<(&dyn JsonRpc, u64, [u8; 20])>,
+) -> BulkOutcome {
+    let checked = match onyx_bulk::wire::check_rows_answer(answer, asked.from, asked.to) {
+        Ok(c) => c,
+        Err(e) => return BulkOutcome::Refused(e.to_string()),
+    };
+    if checked.header.publisher.0 != asked.publisher || checked.header.dataset != asked.dataset {
+        return BulkOutcome::Refused(format!(
+            "the answer is about {}/{}, not the {}/{} asked",
+            checked.header.publisher.0, checked.header.dataset, asked.publisher, asked.dataset
+        ));
+    }
+    if checked.header.version < asked.min_version {
+        return BulkOutcome::Refused(format!(
+            "the answer is version {}, older than the {} asked",
+            checked.header.version, asked.min_version
+        ));
+    }
+    let Some((rpc, chain_id, book)) = node else {
+        return BulkOutcome::Verified {
+            checked,
+            anchor: None,
+        };
+    };
+    match onyx_api::bulk_serve::read_anchor(rpc, chain_id, &book, &checked.report, &checked.signer).await {
+        Err(e) => BulkOutcome::Undecided(e),
+        Ok(onyx_api::bulk_serve::AnchorState::Not(why)) => BulkOutcome::Refused(format!(
+            "the manifest's signed report is not anchored in your book at your finalized block: {why}"
+        )),
+        Ok(onyx_api::bulk_serve::AnchorState::Anchored(a)) => BulkOutcome::Verified {
+            checked,
+            anchor: Some(a),
+        },
+    }
+}

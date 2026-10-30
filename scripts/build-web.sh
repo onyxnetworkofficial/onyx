@@ -222,8 +222,10 @@ python3 -I - apps/web/build <<'PY'
 import decimal, json, pathlib, sys
 saved = 0
 for p in sorted(pathlib.Path(sys.argv[1]).rglob("*.json")):
-    if "app" in p.relative_to(sys.argv[1]).parts[:1]:
-        continue  # Vite's own files
+    if p.relative_to(sys.argv[1]).parts[:1] in (("app",), (".well-known",)):
+        # Vite's own files; and .well-known documents, whose Keccak a signed book records
+        # (CL5 keys document): they ship byte for byte.
+        continue
     text = p.read_text(encoding="utf-8")
     out, in_str, esc = [], False, False
     for ch in text:

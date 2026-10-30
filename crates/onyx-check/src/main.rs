@@ -6,6 +6,8 @@
 //!            [--registry 0x… [--ladder-state ~/.onyx/ladders]]
 //! onyx-check --answer - --asked @asked.json --unchecked
 //! onyx-check --offer offer.json --manifest deploy.json --max-amount 10000 --rpc https://…
+//! onyx-check --bulk rows.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N] \
+//!            (--rpc https://sepolia.base.org --chain-id 84532 --book 0x… | --unchecked)
 //! ```
 //! Writes one JSON report to stdout. Exit 0 verified (or payable), 1 refused,
 //! 2 usage error, 3 nothing decided (your node could not be read, or your
@@ -14,8 +16,8 @@
 use onyx_api::roots::HttpJsonRpc;
 use onyx_api::x402::{check_facilitator_url, HyperPost};
 use onyx_check::{
-    address, check_offer, check_on_bound, check_unchecked, parse_asked, Bind, Node, UsageError,
-    MAX_ANSWER_BYTES,
+    address, check_bulk, check_offer, check_on_bound, check_unchecked, parse_asked, Bind, Node,
+    UsageError, MAX_ANSWER_BYTES,
 };
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -25,7 +27,8 @@ use std::time::Duration;
 const USAGE: &str = "usage: onyx-check --answer <file|-> --asked <json|@file> \
 (--rpc <url> --chain-id <n> --contract <0x…> [--registry <0x…> [--ladder-state <dir>]] \
 | --unchecked)\n   or: onyx-check --offer <file|-> \
---manifest <file> --max-amount <n> --rpc <url>";
+--manifest <file> --max-amount <n> --rpc <url>\n   or: onyx-check --bulk <file|-> --publisher <id> --dataset <id> [--min-version <n>] [--from <n>] [--to <n>] \
+(--rpc <url> --chain-id <n> --book <0x…> | --unchecked)";
 
 /// Each node call gives up after this long.
 const RPC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -43,6 +46,11 @@ enum Mode {
         max_amount: u128,
         rpc: String,
     },
+    Bulk {
+        answer: String,
+        asked: onyx_check::BulkAsked,
+        node: Option<(String, u64, [u8; 20])>,
+    },
 }
 
 const VALUED: &[&str] = &[
@@ -56,6 +64,13 @@ const VALUED: &[&str] = &[
     "--offer",
     "--manifest",
     "--max-amount",
+    "--bulk",
+    "--from",
+    "--to",
+    "--book",
+    "--publisher",
+    "--dataset",
+    "--min-version",
 ];
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> {
@@ -75,6 +90,67 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
             }
             _ => return Err(UsageError(format!("unknown argument {a}\n{USAGE}"))),
         }
+    }
+    if let Some(answer) = v.remove("--bulk") {
+        let int = |k: &str, v: Option<String>| {
+            v.map(|x| {
+                x.parse::<i128>()
+                    .map_err(|_| UsageError(format!("{k}: not a whole number: {x}")))
+            })
+            .transpose()
+        };
+        let from = int("--from", v.remove("--from"))?;
+        let to = int("--to", v.remove("--to"))?;
+        let publisher = v.remove("--publisher").ok_or_else(|| {
+            UsageError("--bulk needs --publisher: the publisher you asked for".into())
+        })?;
+        let dataset = v.remove("--dataset").ok_or_else(|| {
+            UsageError("--bulk needs --dataset: the dataset you asked for".into())
+        })?;
+        let min_version = v
+            .remove("--min-version")
+            .map(|x| {
+                x.parse::<u32>()
+                    .map_err(|_| UsageError(format!("--min-version: not a number: {x}")))
+            })
+            .transpose()?
+            .unwrap_or(1);
+        let node = match (
+            v.remove("--rpc"),
+            v.remove("--chain-id"),
+            v.remove("--book"),
+            unchecked,
+        ) {
+            (Some(rpc), Some(c), Some(b), false) => {
+                rpc_url(&rpc)?;
+                let c = c
+                    .parse::<u64>()
+                    .map_err(|_| UsageError(format!("--chain-id: not a number: {c}")))?;
+                Some((rpc, c, address(&b)?))
+            }
+            (None, None, None, true) => None,
+            _ => {
+                return Err(UsageError(format!(
+                    "--bulk needs your own chain node (--rpc, --chain-id, --book) or --unchecked\n{USAGE}"
+                )))
+            }
+        };
+        if let Some(k) = v.keys().next() {
+            return Err(UsageError(format!(
+                "{k} is not an option of --bulk\n{USAGE}"
+            )));
+        }
+        return Ok(Mode::Bulk {
+            answer,
+            asked: onyx_check::BulkAsked {
+                publisher,
+                dataset,
+                min_version,
+                from,
+                to,
+            },
+            node,
+        });
     }
     if let Some(offer) = v.remove("--offer") {
         let manifest = v
@@ -234,6 +310,21 @@ fn run() -> Result<(Value, i32), UsageError> {
                 }
             };
             Ok((outcome.report(), outcome.code()))
+        }
+        Mode::Bulk {
+            answer,
+            asked,
+            node,
+        } => {
+            let answer = json_arg(&answer, "answer", false)?;
+            let o = match node {
+                None => runtime()?.block_on(check_bulk(&answer, &asked, None)),
+                Some((url, chain, book)) => {
+                    let rpc = HttpJsonRpc::new(url, HyperPost::for_rpc(RPC_TIMEOUT));
+                    runtime()?.block_on(check_bulk(&answer, &asked, Some((&rpc, chain, book))))
+                }
+            };
+            Ok((o.report(), o.code()))
         }
         Mode::Offer {
             offer,

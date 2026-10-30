@@ -28,6 +28,9 @@ round = ["dep:onyx-coordinator", "dep:onyx-api", "dep:onyx-level2", "dep:onyx-in
 [dev-dependencies]
 # Tests and the example always build with the round runner.
 onyx-source-fiscaldata = { path = ".", features = ["round"] }
+# CL3 (ADR-0053): the generic fetcher read against this adapter's series and recordings.
+onyx-json.workspace = true
+onyx-level2 = { path = "../../crates/onyx-level2" }
 
 [lints]
 workspace = true

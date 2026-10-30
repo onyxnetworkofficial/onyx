@@ -11,6 +11,8 @@ Written:
 - [redeploy-new-ledger.md](redeploy-new-ledger.md) (L15 c, G5 playbook): redeploy, move the node to the new ledger id, keep old roots checkable, announce.
 - [deploy-signed-book.md](deploy-signed-book.md) (C10, lead only): deploy OnyxSignedBook next to the running ledger with a reviewer that is not the deployer, pin it in the manifest, restart the node; rehearsed by `scripts/level3-book.sh local|fork`.
 - [release-source-terms.md](release-source-terms.md) (L15 d): before a release, re-read every served source's terms (`scripts/check-source-terms.py`).
+- [deploy-credits.md](deploy-credits.md) (CL6, lead only): deploy OnyxRevenueV2 and OnyxPrepaidV2 with a relayer key of its own, move the node to them (credits routes, `ONYX_RELAY_KEY_FILE`), keep the old prepaid journal for its last redemptions; rehearsed only on anvil by `scripts/credits-anvil.sh`.
+- [corrections-base-sepolia.md](corrections-base-sepolia.md) (CL7, not run yet): deploy OnyxCorrections next to the registry and tONYX, register and pair a `.recheck` metric, open a market; rehearsed locally by `scripts/corrections-anvil.sh`.
 
 The L15 runbooks were rehearsed once each on a local anvil fork of Base Sepolia
 ([report](../../audit/2026-10-16-runbook-rehearsal.md)).

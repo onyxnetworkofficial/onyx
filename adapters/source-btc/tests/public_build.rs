@@ -163,6 +163,9 @@ const EXACT: &[&str] = &[
     // Meeting polish MP2: whether the Add data page sends to the hosted node (one boolean, no data;
     // apps/web/src/lib/submit-api.svelte.ts).
     "intake.json",
+    // CL5 (docs/ops/bulk-publish.md): the keys document of the synthetic demo publisher the signed
+    // book registered for this domain (one test address, no data).
+    ".well-known/onyx-source-keys.json",
     "app/version.json",
     "history/pools-week.json",
     // Reserve history (ADR-0034): entity totals and reserve rows only; the

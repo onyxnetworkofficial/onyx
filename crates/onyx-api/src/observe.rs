@@ -171,7 +171,12 @@ impl ObserveState {
         }
         let mut inner = Inner::default();
         // Holds that ended answer their tickets after a restart too.
+        // Relay holds (ADR-0056, `crate::credits`) share the journal but are no rounds.
+        let round = |h: &Held| h.metric != prepaid_gate::RELAY_HOLD_METRIC;
         for (h, end) in prepaid.ended_holds() {
+            if !round(&h) {
+                continue;
+            }
             let state = match end {
                 HoldEnd::Charged => TicketState::Observed,
                 HoldEnd::Released => TicketState::Released,
@@ -191,7 +196,7 @@ impl ObserveState {
                 },
             );
         }
-        for h in prepaid.holds() {
+        for h in prepaid.holds().into_iter().filter(round) {
             inner
                 .active
                 .insert((h.metric.clone(), h.subject.clone()), h.ticket);

@@ -93,6 +93,14 @@ The node serves these routes (OpenAPI 3.1: [docs/api/openapi.json](docs/api/open
 | `GET` | `/v1/track/{source}/{metric}/history` | A page of a record's history | free |
 | `GET` | `/v1/wants` | Wanted data categories | free |
 | `POST` | `/v1/wants` | Post a wanted category | free |
+| `GET` | `/v1/bulk` | Bulk datasets this node holds | free |
+| `GET` | `/v1/bulk/{publisher}/{dataset}` | A bulk dataset's latest manifest, anchor, versions and shards | free |
+| `GET` | `/v1/bulk/{publisher}/{dataset}/rows` | Rows in a key range, each with its proofs | free |
+| `POST` | `/v1/bulk/manifests` | Hand a node an anchored manifest | free |
+| `GET` | `/v1/credits/schedule` | The credits asset and the relay's fixed fees | free |
+| `GET` | `/v1/credits/{account}` | An account's credits | free |
+| `GET` | `/v1/credits/{account}/lines` | An account's own credit lines | free |
+| `POST` | `/v1/relay` | Send a self-signed action, its gas paid from credits | free |
 <!-- /generated:routes -->
 
 ## Quickstart
@@ -139,15 +147,19 @@ cargo test -p onyx-source-btc --test golden_pools                 # the same for
 |---|---|
 | **Core (sector-agnostic; never imports an adapter)** | |
 | `crates/onyx-api` | Query API with per-row proofs, x402 v2 payments, settlement endpoint and time-decay pricing (M7, ADR-0023) |
+| `crates/onyx-bulk` | Large publisher datasets (contributor loop CL5, ADR-0059): schema, rows, bounded shards with per-row Merkle proofs, a signed and anchored manifest, and the client check of a served row |
 | `crates/onyx-check` | Command-line check of an Onyx API answer for agents and scripts (NS8, ADR-0047): the network's own client check, with the root read on the caller's own chain node |
 | `crates/onyx-coordinator` | Rounds, commit-reveal, sampling and canaries, disputes, level-2 observer rounds, level-3 intake and track-record publication; reward and slash ledger |
 | `crates/onyx-core` | Sector-agnostic domain types for Onyx: claims, lanes, verification methods, data rights, label sets, commitments |
+| `crates/onyx-fetch` | The SSRF-safe HTTPS GET every Onyx pull uses (ADR-0053 item 7, CL3): one resolution, public addresses only, connect by address, https on 443, no redirects, no cookies, no proxy, size caps on the wire and after gzip, one deadline |
 | `crates/onyx-intake` | Data submission intake (ROADMAP S1, ADR-0038): onboarding answers, the proof-level route, submission checks, the rights-cleared fetch policy and a preview of a pulled body |
+| `crates/onyx-json` | Strict JSON reader and the generic level-2 JSON fetcher (ADR-0053, CL3): duplicate keys, exponents, byte-order marks and deep nesting refused; numbers read from their exact text, never through a float |
 | `crates/onyx-labels` | Label sets (entities only): versions, dated memberships, salted rows, first-party attestations, issuer rosters and calibration scoring |
 | `crates/onyx-level2` | Level-2 round runner for any dated feed (NS3): the draw, commits, reveals, receipts, settlement and results store, with each source supplying its template, fetcher and registry |
 | `crates/onyx-merkle` | Positional Keccak-256 Merkle commitments and per-row proofs (ADR-0003) |
 | `crates/onyx-miner` | Miner: fetch a shard's pinned inputs from the CAS, run the recipe, commit, reveal (ADR-0018) |
 | `crates/onyx-node` | The onyx-api service binary (docs/ops/deployment.md): config from env, catalog and rows from disk, roots from the chain, x402 self-settle or facilitator, reporter loop, graceful shutdown |
+| `crates/onyx-publish` | Publisher tool for large datasets (contributor loop CL5, ADR-0059): CSV or JSON Lines in, checked shards and a manifest out, signed with a test key, anchored in OnyxSignedBook, uploaded to a node |
 | `crates/onyx-recipe-host` | Deterministic WASM recipe runner: the canonical wasmi engine (fuel, heap stacks, float and import rejection) and an advisory wasmtime fast path (ADR-0004, ADR-0014) |
 | `crates/onyx-recipe-sdk` | What recipe authors import: input decoding, output encoding, the host ABI (no floats, no clock, no randomness) |
 | `crates/onyx-tlock` | drand/tlock time-lock encryption (Boneh-Franklin IBE with Fujisaki-Okamoto) for drand quicknet, on blst (ROADMAP C50) |
@@ -170,6 +182,7 @@ cargo test -p onyx-source-btc --test golden_pools                 # the same for
 | `adapters/source-usgs` | Level-2 source: the number of magnitude 5+ earthquakes the USGS catalog lists worldwide on one day (U.S. public domain, no account), read by a pinned fetcher (NS3) |
 | **Apps** | |
 | `apps/agent` | The agent toolkit: an API client and an MCP server built from the OpenAPI file; answers are checked by onyx-check |
+| `apps/contrib` | The contributor client (onyx-contrib): keep API keys in the system keychain and contribute their data over MCP; keys never leave the machine |
 | `apps/demo` | The first demo site: one page that walks the pipeline and reruns the real recipe in the browser |
 | `apps/web` | The website (SvelteKit): every page runs the network's own Rust checks, compiled to WebAssembly |
 | `apps/web/verify` | Browser verifier for the website (ADR-0020): wasm-bindgen exports over the network's own checks |
@@ -193,6 +206,7 @@ cargo test -p onyx-source-btc --test golden_pools                 # the same for
 | `fixtures/` | Pinned inputs, goldens and shared test vectors (Rust, Solidity and the browser read the same files) |
 | `fuzz/` | cargo-fuzz targets over decoders, stores and proofs (opt-in, nightly) |
 | `scripts/` | Checks, builds, rehearsals, recounts and data refreshes (scripts/README.md) |
+| `sources/` | Reviewed source manifests: a public JSON API reaches level 2 as data, with its terms and one recording (ADR-0053) |
 
 Contracts (`contracts/src`, Base Sepolia and local Anvil only):
 
@@ -200,6 +214,7 @@ Contracts (`contracts/src`, Base Sepolia and local Anvil only):
 |---|---|
 | [`IStakeToken`](contracts/src/IOnyxMarkets.sol) | The ERC-20 subset the stake and market contracts use (ADR-0042) |
 | [`OnyxCommit`](contracts/src/OnyxCommit.sol) | Commitment binding hash and commit hash (ADR-0011) |
+| [`OnyxCorrections`](contracts/src/OnyxCorrections.sol) | Correction markets (docs/contributor-loop.md CL7, ADR-0057): one Yes ("accurate") / No market per published numeric level-2 value |
 | [`OnyxDisputes`](contracts/src/OnyxDisputes.sol) | The on-chain dispute game of one Onyx ledger (ADR-0024; rules from ADR-0021) |
 | [`OnyxFutures`](contracts/src/OnyxFutures.sol) | Parimutuel markets on a future value of an Onyx fact (ROADMAP S6, ADR-0042 items 11-14) |
 | [`OnyxLedger`](contracts/src/OnyxLedger.sol) | State, types and shared rules of the settlement ledger (ADR-0022, ADR-0024) |
@@ -209,9 +224,11 @@ Contracts (`contracts/src`, Base Sepolia and local Anvil only):
 | [`OnyxParametric`](contracts/src/OnyxParametric.sol) | Parametric insurance on a future value of an Onyx fact (north-star loop NL18, docs/spec/parametric-insurance.md, ADR-0042 amendment 3): a policy pays a fixed amount when the fact's value crosses a line, with no claim and no loss assessment |
 | [`OnyxPayout`](contracts/src/OnyxPayout.sol) | The integer payout math shared by `OnyxStakes` (S3) and `OnyxFutures` (S6), mirrored by the website's `markets.ts` (no Rust client yet, ADR-0042); shared vectors in fixtures/markets/vectors.json (ADR-0042) |
 | [`OnyxPrepaid`](contracts/src/OnyxPrepaid.sol) | Prepaid buyer balances with batched settlement (partner tracker T7, a partner's questions 7 and 8; docs/spec/prepaid.md) |
+| [`OnyxPrepaidV2`](contracts/src/OnyxPrepaidV2.sol) | The credits ledger (ADR-0056, contributor loop CL6): one spendable balance per account (an EVM address), the prepaid balance of `OnyxPrepaid` (ADR-0046) with three additions |
 | [`OnyxRegistry`](contracts/src/OnyxRegistry.sol) | The on-chain registry of what each metric may be computed from, and the level a consumer may rely on (ADR-0030) |
 | [`OnyxReobserve`](contracts/src/OnyxReobserve.sol) | Re-observation of an accepted auto-pull submission (ROADMAP S4, ADR-0042 item 5): a minimal faithful on-chain port of the level-2 round rules of ADR-0027 for exact values |
 | [`OnyxRevenue`](contracts/src/OnyxRevenue.sol) | Usage revenue of finalized shards, split by role (ADR-0025, docs/spec/revenue.md) |
+| [`OnyxRevenueV2`](contracts/src/OnyxRevenueV2.sol) | The revenue contract of the credits ledger (ADR-0056, contributor loop CL6): earned shares move into credits, and the treasury keeps a floor |
 | [`OnyxRound`](contracts/src/OnyxRound.sol) | Round-level hashes and texts |
 | [`OnyxSettlement`](contracts/src/OnyxSettlement.sol) | The canonical ledger of an Onyx network (ADR-0022) |
 | [`OnyxSettlementExt`](contracts/src/OnyxSettlementExt.sol) | The part of the settlement ledger reached by `delegatecall` from `OnyxSettlement`'s fallback (ADR-0024 item 1): readers for the dispute game and the hooks only `OnyxDisputes` may call |

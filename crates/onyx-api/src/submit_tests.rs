@@ -581,21 +581,32 @@ async fn the_https_transport_refuses_non_public_addresses() {
     ] {
         assert!(https::public_only("h", bad.clone()).is_err(), "{bad:?}");
     }
+    // CL3: the transport is onyx_fetch's; an IP literal, a single-label name
+    // or another port is refused before any lookup or connection (the
+    // address rules themselves: onyx-fetch's `fetch_refuses_private_rebinding_and_redirects`).
     let f = HttpsFetch::new();
     for url in [
+        "https://localhost/x",
+        "https://127.0.0.1/x",
+        "https://[::1]/x",
         "https://localhost:9/x",
         "https://127.0.0.1:9/x",
         "https://[::1]:9/x",
     ] {
         match f.get(url, "localhost").await {
-            Err(FetchError::Refused(why)) => assert!(why.contains("not a public address"), "{why}"),
+            Err(FetchError::Refused(why)) => assert!(
+                why.contains("not an IP address")
+                    || why.contains("port")
+                    || why.contains("IP address"),
+                "{why}"
+            ),
             other => panic!("{url}: {other:?}"),
         }
     }
-    // https only: a plain http URL is refused by the connector.
+    // https only: a plain http URL is refused before any connection.
     assert!(matches!(
         f.get("http://example.org/", "example.org").await,
-        Err(FetchError::Unreachable(_))
+        Err(FetchError::Refused(_))
     ));
 }
 

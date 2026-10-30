@@ -178,7 +178,18 @@ impl PrepaidBook {
         }
     }
 
-    fn check(&self, v: &Voucher, price: u128, domain: &[u8; 32]) -> Result<(), PrepaidError> {
+    fn check(
+        &self,
+        v: &Voucher,
+        price: u128,
+        domain: &[u8; 32],
+        incoming: u128,
+    ) -> Result<(), PrepaidError> {
+        // Review CL6-R1-5: the signature first, so an unsigned voucher learns nothing about the
+        // buyer's total, hold or exit.
+        if !v.signed(domain) {
+            return Err(PrepaidError::NotSigned);
+        }
         if self.account.exiting {
             return Err(PrepaidError::Exiting);
         }
@@ -189,11 +200,8 @@ impl PrepaidBook {
         if last.checked_add(price) != Some(v.cumulative) {
             return Err(PrepaidError::WrongTotal { last, price });
         }
-        if v.cumulative > self.account.deposited {
+        if v.cumulative > self.account.deposited.saturating_add(incoming) {
             return Err(PrepaidError::OverDeposit);
-        }
-        if !v.signed(domain) {
-            return Err(PrepaidError::NotSigned);
         }
         Ok(())
     }
@@ -207,7 +215,7 @@ impl PrepaidBook {
         price: u128,
         domain: &[u8; 32],
     ) -> Result<(), PrepaidError> {
-        self.check(&v, price, domain)?;
+        self.check(&v, price, domain, 0)?;
         self.latest = Some(v);
         Ok(())
     }
@@ -215,7 +223,20 @@ impl PrepaidBook {
     /// Hold `v` for a round priced `price` (ADR-0049): the same checks as [`Self::charge`], and
     /// at most one hold per buyer, so one deposit never backs two holds (R-OBS-7).
     pub fn hold(&mut self, v: Voucher, price: u128, domain: &[u8; 32]) -> Result<(), PrepaidError> {
-        self.check(&v, price, domain)?;
+        self.hold_incoming(v, price, domain, 0)
+    }
+
+    /// [`Self::hold`] for a relayed deposit (ADR-0056 item 4): the voucher may reach the deposit
+    /// plus `incoming`, the amount the relayed transaction pays in. The hold is charged only
+    /// once that transaction is mined, so the total never exceeds what then sits on chain.
+    pub fn hold_incoming(
+        &mut self,
+        v: Voucher,
+        price: u128,
+        domain: &[u8; 32],
+        incoming: u128,
+    ) -> Result<(), PrepaidError> {
+        self.check(&v, price, domain, incoming)?;
         self.held = Some(v);
         Ok(())
     }

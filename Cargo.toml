@@ -16,6 +16,10 @@ members = [
     "crates/onyx-intake",
     "crates/onyx-check",
     "crates/onyx-level2",
+    "crates/onyx-bulk",
+    "crates/onyx-publish",
+    "crates/onyx-json",
+    "crates/onyx-fetch",
     "apps/web/verify",
     "adapters/source-btc",
     "adapters/btc-schema",
@@ -58,6 +62,9 @@ onyx-merkle = { path = "crates/onyx-merkle" }
 onyx-labels = { path = "crates/onyx-labels" }
 onyx-track = { path = "crates/onyx-track" }
 onyx-intake = { path = "crates/onyx-intake" }
+onyx-bulk = { path = "crates/onyx-bulk" }
+onyx-json = { path = "crates/onyx-json" }
+onyx-fetch = { path = "crates/onyx-fetch" }
 onyx-recipe-host = { path = "crates/onyx-recipe-host" }
 onyx-recipe-sdk = { path = "crates/onyx-recipe-sdk" }
 onyx-btc-schema = { path = "adapters/btc-schema" }

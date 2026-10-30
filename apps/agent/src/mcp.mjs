@@ -212,8 +212,9 @@ export async function handle(state, msg) {
 			return reply({
 				protocolVersion: v,
 				capabilities: { tools: { listChanged: false } },
-				serverInfo: { name: 'onyx', title: 'Onyx data', version: '0.1.0' },
-				instructions: state.write ? INSTRUCTIONS : INSTRUCTIONS_READ_ONLY,
+				// Another server built on this plumbing (apps/contrib) names itself and its tools.
+				serverInfo: state.serverInfo ?? { name: 'onyx', title: 'Onyx data', version: '0.1.0' },
+				instructions: state.instructions ?? (state.write ? INSTRUCTIONS : INSTRUCTIONS_READ_ONLY),
 			});
 		}
 		case 'ping':
@@ -221,7 +222,7 @@ export async function handle(state, msg) {
 		case 'tools/list':
 			return reply({ tools: [...state.tools.values()].map((t) => t.def) });
 		case 'tools/call': {
-			const run = () => runTool(state, params?.name, params?.arguments ?? {});
+			const run = () => (state.runTool ?? runTool)(state, params?.name, params?.arguments ?? {});
 			return reply(await (state.limit ? state.limit(run) : run()));
 		}
 		default:

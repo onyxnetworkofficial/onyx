@@ -36,9 +36,11 @@
 | [`agents.md`](agents.md) | Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21) |
 | [`api/`](api/) | The API description (OpenAPI 3.1), checked against the code |
 | [`audit/`](audit/) | Dated audit and review reports |
+| [`contributor-loop.md`](contributor-loop.md) | The contributor loop (CL1-CL8): easy data contribution, one system for users |
 | [`join.md`](join.md) | Join a round as an independent observer: the join kit, from key to sealed reveal (NL16) |
 | [`north-star-loop.md`](north-star-loop.md) | The north star work loop (NL0-NL5): items, results, log |
 | [`ops/`](ops/) | Running Onyx: configuration, deployment, rehearsals, runbooks, launch checklist |
+| [`partners/`](partners/) | Partner call notes, the partner tracker (T1-T14) and design proposals |
 | [`pre-public-loop.md`](pre-public-loop.md) | The pre-public work loop (PP1-PP7): items, results, log |
 | [`research/`](research/) | Research notes behind a decision |
 | [`sectors/`](sectors/) | How each sector (crypto, equities, macro, commodities, prediction markets) maps onto Onyx |

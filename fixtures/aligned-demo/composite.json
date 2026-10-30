@@ -1,0 +1,19 @@
+{
+  "v": 1,
+  "id": "demo.aligned.aaa_usd.1h",
+  "metric": "demo.aligned.aaa_usd.1h",
+  "name": "Synthetic aligned feed (local fixture): AAA-USD hourly close across six loopback venues",
+  "unit": "USD",
+  "scale": 2,
+  "bucket_secs": 3600,
+  "min_venues": 3,
+  "disagree_ppm": 5000,
+  "venues": [
+    "demo.venue_a.aaa_usd.1h",
+    "demo.venue_b.aaa_usd.1h",
+    "demo.venue_c.aaa_usd.1h",
+    "demo.venue_d.aaa_usd.1h",
+    "demo.venue_e.aaa_usd.1h",
+    "demo.venue_f.aaa_usd.1h"
+  ]
+}

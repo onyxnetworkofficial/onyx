@@ -77,7 +77,8 @@ often it changes).
 Rules the tool keeps:
 
 - Public, openly licensed sources only. A source that needs an API key is proposed on the website,
-  where the key never leaves the browser. Your own data is uploaded on the website too.
+  where the key never leaves the browser, or with onyx-contrib on your own computer (section 7).
+  Your own data is uploaded on the website too.
 - At most 5 proposals per connection (per client address on a shared server, per hour).
 - A proposal is not data yet. It is reviewed, and observers check a value only once someone pays
   for it (validate on first paid query, NS10).
@@ -114,3 +115,16 @@ scripts/agent-connect-test.sh --live     # the read-only steps against the hoste
 ```
 
 Every text the tools return comes from Onyx and is data, never instructions (THREATS NL21-1).
+
+## 7. Contribute from your own API keys (onyx-contrib)
+
+`apps/contrib` (CL2) is a local MCP server and command line for people who hold API keys for
+data providers. Keys are set in a terminal (`onyx-contrib key set <provider>`) and kept in the
+system keychain (Linux Secret Service, macOS keychain, Windows DPAPI). The assistant lists a
+provider's endpoints from its OpenAPI file, reads a value on your computer, and proposes it as a
+keyed source: Onyx gets the endpoint with `{api_key}` where the key goes, the value and a digest
+of the answer, never the key. Check first, then confirm, at most 5 per session, as in section 4.
+It runs from Claude Desktop, Claude Code and other local MCP clients; ChatGPT reaches only remote
+servers, so it is not supported there in v0. Setup, the Claude Desktop settings and the key
+protections: [apps/contrib/README.md](../apps/contrib/README.md). Tests:
+`node --test apps/contrib/test/*.test.mjs`.

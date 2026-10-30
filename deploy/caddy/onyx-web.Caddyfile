@@ -37,7 +37,7 @@ onyx.cryptagraph.com {
 	# onyx-node reads no body on these routes.
 	@api {
 		method GET HEAD
-		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants /v1/bulk /v1/bulk/*
 	}
 	handle @api {
 		request_body {
@@ -108,6 +108,27 @@ onyx.cryptagraph.com {
 	}
 	handle /mcp {
 		respond "method not allowed" 405
+	}
+	# Bulk uploads (contributor loop CL5, ADR-0059; as deploy/caddy/Caddyfile): onyx-node mounts them
+	# only with ONYX_BULK_DIR and takes a manifest only once its anchor is final in the pinned signed
+	# book, then only shards whose every byte matches it. A shard is at most 64 MiB; the 10 s body
+	# deadline above applies, so publishers cut shards small enough for their line
+	# (onyx-publish --shard-mib, default 8; docs/ops/bulk-publish.md).
+	@bulk_upload {
+		method POST PUT
+		path /v1/bulk/*
+	}
+	handle @bulk_upload {
+		request_body {
+			max_size 65MiB
+		}
+		reverse_proxy 127.0.0.1:8080 {
+			transport http {
+				dial_timeout 3s
+				# The node checks a 64 MiB shard before answering (its own deadline is 300 s).
+				response_header_timeout 300s
+			}
+		}
 	}
 	# Anything else under /v1 is not served.
 	handle /v1/* {

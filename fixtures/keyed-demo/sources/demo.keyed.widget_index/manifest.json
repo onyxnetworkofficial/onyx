@@ -1,0 +1,71 @@
+{
+  "descriptor": {
+    "access": {
+      "keyed": {
+        "name": "api_key",
+        "place": "query",
+        "scheme": "raw"
+      }
+    },
+    "asserts": [
+      {
+        "expect": {
+          "array_len": 1
+        },
+        "pointer": "/data"
+      },
+      {
+        "expect": "subject_date",
+        "pointer": "/data/0/date"
+      }
+    ],
+    "max_bytes": 4096,
+    "pointer": "/data/0/index",
+    "unit": "index points",
+    "value": "decimal_string",
+    "version": 1
+  },
+  "earliest_public_offset_secs": 0,
+  "fetcher_id": "0x6a9d62380b9a6fee575546f513c29f3077f3fc7bac33305a77cadd50c8b1e029",
+  "id": "demo.keyed.widget_index",
+  "limits": {
+    "max_rounds_per_day": 4,
+    "min_fetch_gap_secs": 1,
+    "origin_budget": 16
+  },
+  "metric": "demo.keyed.widget_index",
+  "name": "Synthetic keyed provider (local fixture): the widget index",
+  "note": "CL4 keyed demo (ADR-0054): a synthetic keyed provider on loopback; FIXTURE, never a real source",
+  "recording": "recording/2026-10-27.json",
+  "template": {
+    "kind": {
+      "numeric": {
+        "scale": 1,
+        "tolerance": "0"
+      }
+    },
+    "min_observers": 7,
+    "rights": {
+      "attribution": null,
+      "license": "CC0-1.0",
+      "redistribution": "allowed",
+      "source": "demo.keyed.provider",
+      "terms": ""
+    },
+    "selector": "/data/0/index",
+    "subject": {
+      "daily": {
+        "max_days": 30,
+        "min_days": 1,
+        "prefix": "demo.keyed.widget_index"
+      }
+    },
+    "url_template": "https://keyed.example.org/v1/widget-index?date={date}&api_key={api_key}",
+    "window_secs": 120
+  },
+  "template_id": "0xc8defd2f7a58ffe3469fb70c30d836b1ecfaf60a5ae88781ede816f2ec70a0e0",
+  "terms_quote": "Synthetic demo data, CC0: anyone may copy and redistribute it; each holder's key only meters access.",
+  "terms_row": "S90",
+  "terms_url": "https://keyed.example.org/terms",
+  "v": 1
+}

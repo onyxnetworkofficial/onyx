@@ -4,7 +4,8 @@
 # onyx-node speaks plain HTTP and refuses a listen address that is not
 # loopback unless ONYX_ALLOW_PLAIN_HTTP_PUBLIC=1. Caddy terminates TLS with a
 # certificate it obtains and renews itself over ACME (Let's Encrypt, ZeroSSL),
-# redirects plain HTTP to HTTPS, and proxies the API's GET/HEAD routes and the two bounded intake POST routes.
+# redirects plain HTTP to HTTPS, and proxies the API's GET/HEAD routes, the two bounded intake POST routes
+# and the bulk upload routes (CL5).
 #
 # Settings (environment, read when Caddy loads this file):
 #   ONYX_CADDY_DOMAIN     the API's public name, e.g. api.example.org (required).
@@ -86,7 +87,7 @@ https://{$ONYX_CADDY_DOMAIN} {
 	# Read routes: base, track, signed facts and submission receipt status.
 	@api {
 		method GET HEAD
-		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants /v1/bulk /v1/bulk/* /v1/credits/*
 	}
 	handle @api {
 		# These GET/HEAD routes need no request body (a
@@ -110,10 +111,12 @@ https://{$ONYX_CADDY_DOMAIN} {
 			}
 		}
 	}
-	# Intake is disabled in the node unless ONYX_SUBMISSIONS is configured.
+	# Intake is disabled in the node unless ONYX_SUBMISSIONS is configured. `/v1/relay` (CL6,
+	# ADR-0056) is mounted only with ONYX_RELAY_KEY_FILE; the node refuses a relay body over
+	# 8 KiB and answers within its 12 s request deadline.
 	@submit {
 		method POST
-		path /v1/submit /v1/submit/check /v1/wants
+		path /v1/submit /v1/submit/check /v1/wants /v1/relay
 	}
 	handle @submit {
 		request_body {
@@ -124,6 +127,26 @@ https://{$ONYX_CADDY_DOMAIN} {
 			transport http {
 				dial_timeout 3s
 				response_header_timeout 15s
+			}
+		}
+	}
+	# Bulk uploads (CL5, ADR-0059): mounted only with ONYX_BULK_DIR. A shard is at most
+	# 64 MiB; the node checks every byte against an anchored manifest. Caddy's 10 s body
+	# deadline (above) applies: publishers cut shards small enough for their line
+	# (onyx-publish --shard-mib, default 8; docs/ops/bulk-publish.md).
+	@bulk_upload {
+		method POST PUT
+		path /v1/bulk/*
+	}
+	handle @bulk_upload {
+		request_body {
+			max_size 65MiB
+		}
+		reverse_proxy {$ONYX_CADDY_UPSTREAM:127.0.0.1:8080} {
+			transport http {
+				dial_timeout 3s
+				# The node checks a 64 MiB shard before answering (its own deadline is 300 s).
+				response_header_timeout 300s
 			}
 		}
 	}

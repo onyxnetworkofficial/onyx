@@ -142,6 +142,15 @@ after a passing check-all, then re-test the live site; no change after 19:00 UTC
 
 ## Log (newest first)
 
+- 2026-10-29 Release `20261029T205321Z-4ffc135` (check-all passed on `4ffc135`): MP2, MP14 and MP16 live.
+  The release's `intake.json` is `{"submit": true}`: on the live site the Add data form shows the
+  receipt field, and its "Check with the API" step posted only to `/v1/submit/check` and previewed
+  the Treasury example's value (nothing was sent for review). Live audit at 390 and 1280 px: all 10
+  pages clean. The public repository github.com/onyxnetworkofficial/onyx (owner's request, 2026-10-29)
+  was made from `scripts/public-snapshot.sh` (no names, secrets or label data; one neutral author,
+  no AI co-author) and passed check-all on its own (1,797 Rust tests, 650 contract tests, every
+  chain rehearsal); the snapshot fixes are merged here from the `public-release` branch.
+
 - 2026-10-29 Release `20261029T172915Z-21b77fb`: MP14 second-review fixes and MP15 (connect the Onyx connector from ChatGPT, Claude, Claude Code, Cursor, VS Code, Gemini CLI or any MCP client). Live re-audit at 390, 768 and 1280 px: all 10 pages clean; on screen the picker shows each client's setup with the hosted address.
 
 - 2026-10-29 Meeting polish (MP0-MPZ, owner: "fully professional ... styling perfect ... playwright tests opening the actual site"): a live audit and a visual review of every page, then fixes on all ten pages, the Add data AI/API panel and proposals in the hosted connector; release `20261029T161657Z-2f19303`, re-audited live (clean). MP2 (the form sending to the live API) parked until after the meeting.

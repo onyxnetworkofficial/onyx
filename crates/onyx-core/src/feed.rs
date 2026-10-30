@@ -23,7 +23,12 @@
 //! ([`SubjectRule::Daily`], NS3) is a source that publishes every calendar
 //! day: its URL holds `{date}` once or more (a day's start and end), every
 //! one filled with the same date, and the day is observable between
-//! `min_days` and `max_days` calendar days after it.
+//! `min_days` and `max_days` calendar days after it. A bucketed subject
+//! ([`SubjectRule::Bucketed`], ADR-0058, contributor loop CL8) names one closed
+//! bucket `[start, start + bucket_secs)` of a UTC grid, `prefix:<start, Unix
+//! seconds>`: market data from one venue, read only from an endpoint that
+//! returns that finished bucket, observable between `min_delay_secs` and
+//! `max_delay_secs` after the bucket's end.
 
 use crate::claim::{MetricId, Subject};
 use crate::{keccak256, DataRights, Hash32, ObservationKind, ObservationSpec};
@@ -194,10 +199,168 @@ pub enum SubjectRule {
         /// Most calendar days from the day to the window's day.
         max_days: u16,
     },
+    /// `Subject::Aggregate(prefix ":" start)` naming one closed bucket
+    /// `[start, start + bucket_secs)` of the UTC grid (ADR-0058 item 2,
+    /// contributor loop CL8): `start` is canonical decimal Unix seconds, a
+    /// multiple of `bucket_secs`. The URL holds [`BUCKET_START_PLACEHOLDER`]
+    /// or [`BUCKET_START_MS_PLACEHOLDER`] 1..=[`MAX_BUCKET_HOLES`] times in
+    /// all (filled with that start) and no `{date}`; the selector holds none.
+    /// Observable only in a window starting `min_delay_secs..=max_delay_secs`
+    /// after the bucket's end (late trades and venue corrections settle by
+    /// `min_delay_secs`; THREATS CL8-5), a range of at most
+    /// [`MAX_BUCKET_RANGE_SECS`] (CL8-6). One fact per bucket, whatever the
+    /// window, like [`SubjectRule::Dated`]. Appended last, so no existing
+    /// template's Borsh, id or on-chain pin changes.
+    Bucketed {
+        /// Dotted aggregate id before `:`.
+        prefix: String,
+        /// The bucket length, one of [`BUCKET_SIZES`].
+        bucket_secs: u32,
+        /// Fewest seconds from the bucket's end to the window's start.
+        min_delay_secs: u32,
+        /// Most seconds from the bucket's end to the window's start.
+        max_delay_secs: u32,
+    },
+    /// The later look at a dated, period or daily rule's facts (CL7,
+    /// ADR-0057 item 2): the same subjects, URL and selector as `of`,
+    /// observable only on the `span_days` UTC days that start `after_days`
+    /// after `of`'s last observable day for the subject
+    /// ([`FeedTemplate::last_observable_day`]). Made by [`recheck_of`] only.
+    /// Appended last, so no existing template id changes.
+    Recheck {
+        /// The original template's rule (dated, period or daily; never a
+        /// recheck: one recheck per value in v1).
+        of: Box<SubjectRule>,
+        /// Days from the original's last observable day to the first recheck day.
+        after_days: u16,
+        /// Recheck days, from the first.
+        span_days: u16,
+    },
+}
+
+/// The suffix [`recheck_of`] appends to a template's metric and feed ids.
+pub const RECHECK_SUFFIX: &str = ".recheck";
+
+/// The paired recheck template of `t` (CL7, ADR-0057 item 2): a pure function,
+/// so anyone recomputes it and compares its id with the one registered for
+/// the `.recheck` metric. Same fetcher, URL template, selector, kind, window
+/// length, observer count and rights; `metric` and `feed` gain
+/// [`RECHECK_SUFFIX`]; the subject rule becomes [`SubjectRule::Recheck`].
+/// Refused: a fixed-window template (no "correct later" for a value of one
+/// window), a byte (`Exact`) template, and a recheck of a recheck.
+pub fn recheck_of(
+    t: &FeedTemplate,
+    after_days: u16,
+    span_days: u16,
+) -> Result<FeedTemplate, TemplateError> {
+    t.validate()?;
+    if matches!(
+        t.subject,
+        SubjectRule::Fixed(_) | SubjectRule::Bucketed { .. } | SubjectRule::Recheck { .. }
+    ) {
+        return Err(TemplateError::BadTemplate(
+            "only a dated, period or daily template has a recheck",
+        ));
+    }
+    if !matches!(t.kind, ObservationKind::Numeric { .. }) {
+        return Err(TemplateError::BadTemplate(
+            "only a numeric template has a recheck",
+        ));
+    }
+    let r = FeedTemplate {
+        feed: format!("{}{RECHECK_SUFFIX}", t.feed),
+        metric: MetricId(format!("{}{RECHECK_SUFFIX}", t.metric.0)),
+        subject: SubjectRule::Recheck {
+            of: Box::new(t.subject.clone()),
+            after_days,
+            span_days,
+        },
+        ..t.clone()
+    };
+    r.validate()?;
+    Ok(r)
 }
 
 /// Most `{date}` placeholders a daily URL template holds.
 pub const MAX_DAILY_HOLES: usize = 4;
+
+/// The placeholder a bucketed URL holds for the bucket's start in Unix seconds.
+pub const BUCKET_START_PLACEHOLDER: &str = "{bucket_start}";
+/// The placeholder a bucketed URL holds for the bucket's start in Unix milliseconds.
+pub const BUCKET_START_MS_PLACEHOLDER: &str = "{bucket_start_ms}";
+/// Most bucket placeholders (of both kinds together) a bucketed URL holds.
+pub const MAX_BUCKET_HOLES: usize = 2;
+/// The bucket lengths v1 serves: an hour and a day (ADR-0058 item 2; finer
+/// buckets wait for batched rounds, its open question 2).
+pub const BUCKET_SIZES: [u32; 2] = [3_600, 86_400];
+/// The least `min_delay_secs`: a bucket is never read in its first minute
+/// after it closes (late prints, THREATS CL8-5).
+pub const MIN_BUCKET_DELAY_SECS: u32 = 60;
+/// The widest `max_delay_secs - min_delay_secs` (THREATS CL8-6: a coordinator
+/// that waits inside the range for a venue's correction has at most six hours).
+pub const MAX_BUCKET_RANGE_SECS: u32 = 21_600;
+/// The largest `max_delay_secs` (seven days).
+pub const MAX_BUCKET_DELAY_SECS: u32 = 604_800;
+
+/// One closed bucket of a bucketed template: `[start, end)` in UTC Unix
+/// seconds, end exclusive (ADR-0058 item 2).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct Bucket {
+    /// First second of the bucket, a multiple of its length.
+    pub start: u64,
+    /// First second after the bucket (`start + bucket_secs`).
+    pub end: u64,
+}
+
+impl Bucket {
+    /// The bucket of length `bucket_secs` starting at `start`, if `start` is
+    /// on that grid and the end fits.
+    pub fn on_grid(start: u64, bucket_secs: u32) -> Option<Bucket> {
+        let len = u64::from(bucket_secs);
+        if len == 0 || !start.is_multiple_of(len) {
+            return None;
+        }
+        Some(Bucket {
+            start,
+            end: start.checked_add(len)?,
+        })
+    }
+}
+
+/// The canonical decimal text of a `u64` (`0` or digits without a leading
+/// zero), parsed; anything else is `None`.
+pub fn canonical_u64(s: &str) -> Option<u64> {
+    let ok = !s.is_empty()
+        && s.bytes().all(|c| c.is_ascii_digit())
+        && (s.len() == 1 || !s.starts_with('0'));
+    ok.then(|| s.parse().ok()).flatten()
+}
+
+/// Whether a bucket ending at `end` may be observed in a window starting at
+/// `window_start`: `min_delay_secs..=max_delay_secs` after the end
+/// ([`SubjectRule::Bucketed`]).
+fn bucket_check(
+    end: u64,
+    min_delay_secs: u32,
+    max_delay_secs: u32,
+    window_start: u64,
+) -> Result<(), TemplateError> {
+    let first = end
+        .checked_add(u64::from(min_delay_secs))
+        .ok_or(TemplateError::DateNotObservable("bucket too late"))?;
+    let last = end
+        .checked_add(u64::from(max_delay_secs))
+        .ok_or(TemplateError::DateNotObservable("bucket too late"))?;
+    if window_start < first {
+        return Err(TemplateError::DateNotObservable(
+            "the bucket is not closed and settled yet",
+        ));
+    }
+    if window_start > last {
+        return Err(TemplateError::DateNotObservable("the bucket is too old"));
+    }
+    Ok(())
+}
 
 /// The one canonical feed of a level-2 metric.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -341,8 +504,61 @@ impl FeedTemplate {
     pub fn is_dated(&self) -> bool {
         matches!(
             self.subject,
-            SubjectRule::Dated { .. } | SubjectRule::Period { .. } | SubjectRule::Daily { .. }
+            SubjectRule::Dated { .. }
+                | SubjectRule::Period { .. }
+                | SubjectRule::Daily { .. }
+                | SubjectRule::Bucketed { .. }
+                | SubjectRule::Recheck { .. }
         )
+    }
+
+    /// The bucket a bucketed subject names (`prefix:<start>`), if this
+    /// template is bucketed and `subject` is one of its subjects: the start is
+    /// canonical decimal and on the template's grid.
+    pub fn bucket_of(&self, subject: &Subject) -> Option<Bucket> {
+        let SubjectRule::Bucketed {
+            prefix,
+            bucket_secs,
+            ..
+        } = &self.subject
+        else {
+            return None;
+        };
+        let Subject::Aggregate(id) = subject else {
+            return None;
+        };
+        let start = canonical_u64(id.strip_prefix(prefix.as_str())?.strip_prefix(':')?)?;
+        Bucket::on_grid(start, *bucket_secs)
+    }
+
+    /// This template with `rule` as its subject rule: the original a
+    /// [`SubjectRule::Recheck`] reads the same subjects, URL and selector as.
+    fn with_rule(&self, rule: &SubjectRule) -> FeedTemplate {
+        FeedTemplate {
+            subject: rule.clone(),
+            ..self.clone()
+        }
+    }
+
+    /// The first and last UTC day (days since 1970-01-01) a recheck window of
+    /// `subject` may start on: `after_days` after the original rule's last
+    /// observable day, for `span_days` days. `None` for a template that is no
+    /// recheck or a subject it does not produce.
+    pub fn recheck_days(&self, subject: &Subject) -> Option<(i64, i64)> {
+        let SubjectRule::Recheck {
+            of,
+            after_days,
+            span_days,
+        } = &self.subject
+        else {
+            return None;
+        };
+        let last = self.with_rule(of).last_observable_day(subject)?;
+        let first = last.checked_add(i64::from(*after_days))?;
+        Some((
+            first,
+            first.checked_add(i64::from(*span_days))?.checked_sub(1)?,
+        ))
     }
 
     /// Reject a malformed template.
@@ -363,9 +579,58 @@ impl FeedTemplate {
             return Err(TemplateError::BadTemplate("window and observers"));
         }
         let holes = self.url_template.matches(DATE_PLACEHOLDER).count();
+        let bucket_holes = self.url_template.matches(BUCKET_START_PLACEHOLDER).count()
+            + self
+                .url_template
+                .matches(BUCKET_START_MS_PLACEHOLDER)
+                .count();
+        let selector_bucket = self.selector.contains(BUCKET_START_PLACEHOLDER)
+            || self.selector.contains(BUCKET_START_MS_PLACEHOLDER);
+        // ADR-0058: only a bucketed template holds a bucket placeholder.
+        if !matches!(self.subject, SubjectRule::Bucketed { .. })
+            && (bucket_holes != 0 || selector_bucket)
+        {
+            return Err(TemplateError::BadTemplate(
+                "only a bucketed feed holds {bucket_start} or {bucket_start_ms}",
+            ));
+        }
         match &self.subject {
             SubjectRule::Fixed(_) if holes != 0 => {
                 Err(TemplateError::BadTemplate("a fixed feed has no {date}"))
+            }
+            SubjectRule::Bucketed {
+                prefix,
+                bucket_secs,
+                min_delay_secs,
+                max_delay_secs,
+            } => {
+                if holes != 0
+                    || self.selector.contains(DATE_PLACEHOLDER)
+                    || selector_bucket
+                    || !(1..=MAX_BUCKET_HOLES).contains(&bucket_holes)
+                {
+                    return Err(TemplateError::BadTemplate(
+                        "a bucketed feed has one or two bucket placeholders in its url, no {date}, and none in its selector",
+                    ));
+                }
+                if !visible(prefix) || prefix.contains(':') {
+                    return Err(TemplateError::BadTemplate("bucketed subject prefix"));
+                }
+                if !BUCKET_SIZES.contains(bucket_secs) {
+                    return Err(TemplateError::BadTemplate(
+                        "a bucket is an hour or a day (3600 or 86400 seconds)",
+                    ));
+                }
+                if *min_delay_secs < MIN_BUCKET_DELAY_SECS
+                    || min_delay_secs > max_delay_secs
+                    || *max_delay_secs > MAX_BUCKET_DELAY_SECS
+                    || max_delay_secs - min_delay_secs > MAX_BUCKET_RANGE_SECS
+                {
+                    return Err(TemplateError::BadTemplate(
+                        "bucket delays: 60 s <= min <= max <= 7 days, max - min <= 6 hours",
+                    ));
+                }
+                Ok(())
             }
             SubjectRule::Dated { prefix, lag } => {
                 if holes != 1 {
@@ -414,6 +679,27 @@ impl FeedTemplate {
                 }
                 Ok(())
             }
+            SubjectRule::Recheck {
+                of,
+                after_days,
+                span_days,
+            } => {
+                if matches!(**of, SubjectRule::Fixed(_) | SubjectRule::Recheck { .. }) {
+                    return Err(TemplateError::BadTemplate(
+                        "a recheck reads a dated, period or daily rule",
+                    ));
+                }
+                if *after_days == 0 || *span_days == 0 {
+                    return Err(TemplateError::BadTemplate("recheck days"));
+                }
+                if !self.metric.0.ends_with(RECHECK_SUFFIX) || !self.feed.ends_with(RECHECK_SUFFIX)
+                {
+                    return Err(TemplateError::BadTemplate(
+                        "a recheck's metric and feed end in .recheck",
+                    ));
+                }
+                self.with_rule(of).validate()
+            }
             SubjectRule::Fixed(_) => Ok(()),
         }
     }
@@ -421,6 +707,9 @@ impl FeedTemplate {
     /// The date a dated subject names (`prefix:YYYY-MM-DD`), if this template
     /// is dated and `subject` is one of its subjects.
     pub fn date_of<'a>(&self, subject: &'a Subject) -> Option<&'a str> {
+        if let SubjectRule::Recheck { of, .. } = &self.subject {
+            return self.with_rule(of).date_of(subject);
+        }
         let (SubjectRule::Dated { prefix, .. }
         | SubjectRule::Period { prefix, .. }
         | SubjectRule::Daily { prefix, .. }) = &self.subject
@@ -493,6 +782,68 @@ impl FeedTemplate {
                     self.selector.clone(),
                 )
             }
+            SubjectRule::Bucketed {
+                min_delay_secs,
+                max_delay_secs,
+                ..
+            } => {
+                let b = self
+                    .bucket_of(subject)
+                    .ok_or(TemplateError::NotThisFeed("bucketed subject"))?;
+                bucket_check(b.end, *min_delay_secs, *max_delay_secs, window_start)?;
+                let ms = b
+                    .start
+                    .checked_mul(1_000)
+                    .ok_or(TemplateError::NotThisFeed("bucketed subject"))?;
+                (
+                    self.url_template
+                        .replace(BUCKET_START_MS_PLACEHOLDER, &ms.to_string())
+                        .replace(BUCKET_START_PLACEHOLDER, &b.start.to_string()),
+                    self.selector.clone(),
+                )
+            }
+            SubjectRule::Recheck { of, .. } => {
+                let (first, last) = self
+                    .recheck_days(subject)
+                    .ok_or(TemplateError::NotThisFeed("recheck subject"))?;
+                let window_day = i64::try_from(window_start / DAY)
+                    .map_err(|_| TemplateError::DateNotObservable("window start too large"))?;
+                if window_day < first {
+                    return Err(TemplateError::DateNotObservable(
+                        "the recheck is not due yet",
+                    ));
+                }
+                if window_day > last {
+                    return Err(TemplateError::DateNotObservable(
+                        "the recheck's days are over",
+                    ));
+                }
+                let date = self
+                    .date_of(subject)
+                    .ok_or(TemplateError::NotThisFeed("recheck subject"))?;
+                // The original rule's URL and selector, filled the same way.
+                match **of {
+                    SubjectRule::Dated { .. } => (
+                        self.url_template.replacen(DATE_PLACEHOLDER, date, 1),
+                        self.selector.clone(),
+                    ),
+                    SubjectRule::Period { .. } => (
+                        self.url_template.clone(),
+                        self.selector.replacen(DATE_PLACEHOLDER, date, 1),
+                    ),
+                    SubjectRule::Daily { .. } => (
+                        self.url_template.replace(DATE_PLACEHOLDER, date),
+                        self.selector.clone(),
+                    ),
+                    SubjectRule::Fixed(_)
+                    | SubjectRule::Bucketed { .. }
+                    | SubjectRule::Recheck { .. } => {
+                        return Err(TemplateError::BadTemplate(
+                            "a recheck reads a dated, period or daily rule",
+                        ))
+                    }
+                }
+            }
         };
         let window_end = window_start
             .checked_add(self.window_secs)
@@ -531,6 +882,16 @@ impl FeedTemplate {
                 let first = u64::try_from(day.checked_add(i64::from(*min_days))?).ok()?;
                 first.checked_mul(DAY)?.checked_add(self.window_secs)
             }
+            // ADR-0058: a bucket ages from the end of its first observable window.
+            SubjectRule::Bucketed { min_delay_secs, .. } => self
+                .bucket_of(subject)?
+                .end
+                .checked_add(u64::from(*min_delay_secs))?
+                .checked_add(self.window_secs),
+            SubjectRule::Recheck { .. } => {
+                let first = u64::try_from(self.recheck_days(subject)?.0).ok()?;
+                first.checked_mul(DAY)?.checked_add(self.window_secs)
+            }
         }
     }
 
@@ -557,6 +918,10 @@ impl FeedTemplate {
             SubjectRule::Period { max_days, .. } | SubjectRule::Daily { max_days, .. } => {
                 day_number(self.date_of(subject)?)?.checked_add(i64::from(*max_days))
             }
+            SubjectRule::Bucketed { .. } => {
+                i64::try_from(self.latest_window_start(subject, 0)? / DAY).ok()
+            }
+            SubjectRule::Recheck { .. } => self.recheck_days(subject).map(|(_, last)| last),
         }
     }
 
@@ -569,11 +934,19 @@ impl FeedTemplate {
     pub fn latest_window_start(&self, subject: &Subject, window_start: u64) -> Option<u64> {
         match &self.subject {
             SubjectRule::Fixed(s) => (s == subject).then_some(window_start),
-            SubjectRule::Dated { .. } | SubjectRule::Period { .. } | SubjectRule::Daily { .. } => {
+            SubjectRule::Dated { .. }
+            | SubjectRule::Period { .. }
+            | SubjectRule::Daily { .. }
+            | SubjectRule::Recheck { .. } => {
                 let next =
                     u64::try_from(self.last_observable_day(subject)?.checked_add(1)?).ok()?;
                 next.checked_mul(DAY)?.checked_sub(1)
             }
+            // ADR-0058: the bucket's end plus `max_delay_secs`, to the second.
+            SubjectRule::Bucketed { max_delay_secs, .. } => self
+                .bucket_of(subject)?
+                .end
+                .checked_add(u64::from(*max_delay_secs)),
         }
     }
 
@@ -1091,5 +1464,129 @@ mod tests {
             max_days: 95,
         };
         assert!(p.validate().is_err());
+    }
+
+    /// CL7 (ADR-0057 item 2, THREATS CL7-8): `recheck_of` changes only the
+    /// metric, the feed and the observable days. A recheck spec reads the
+    /// same URL and selector as the original's spec of the same subject, with
+    /// the same fetcher, kind, observers and rights.
+    #[test]
+    fn recheck_of_changes_only_metric_feed_and_window() {
+        let d = |s: &str| day_number(s).expect("date");
+        for t in [daily_template(), period_template(), dated_template()] {
+            let r = recheck_of(&t, 7, 3).expect("recheck");
+            assert_eq!(r.metric.0, format!("{}.recheck", t.metric.0));
+            assert_eq!(r.feed, format!("{}.recheck", t.feed));
+            assert_ne!(r.id(), t.id());
+            let same = FeedTemplate {
+                metric: t.metric.clone(),
+                feed: t.feed.clone(),
+                subject: t.subject.clone(),
+                ..r.clone()
+            };
+            assert_eq!(same, t, "nothing else differs");
+            // Deterministic: anyone recomputes the same id.
+            assert_eq!(recheck_of(&t, 7, 3).expect("again").id(), r.id());
+            assert_ne!(recheck_of(&t, 8, 3).expect("other").id(), r.id());
+        }
+        let t = daily_template();
+        let r = recheck_of(&t, 7, 3).expect("recheck");
+        let s = Subject::Aggregate("quakes.m5:2026-03-01".into());
+        let last = t.last_observable_day(&s).expect("last");
+        assert_eq!(last, d("2026-03-01") + 400);
+        assert_eq!(r.recheck_days(&s), Some((last + 7, last + 9)));
+        assert_eq!(r.last_observable_day(&s), Some(last + 9));
+        let day = |n: i64| u64::try_from(n).expect("day") * DAY;
+        // The original's spec (any allowed window) and the recheck's agree on what they read.
+        let orig = t.instantiate(&s, day(last)).expect("original");
+        let spec = r.instantiate(&s, day(last + 7)).expect("first recheck day");
+        assert_eq!(
+            (spec.url.as_str(), spec.selector.as_str()),
+            (orig.url.as_str(), orig.selector.as_str())
+        );
+        assert_eq!(
+            (spec.fetcher, spec.kind, spec.min_observers),
+            (orig.fetcher, orig.kind, orig.min_observers)
+        );
+        assert_eq!(spec.rights, orig.rights);
+        assert_eq!(spec.metric.0, "m.recheck");
+        r.matches(&spec).expect("canonical");
+        assert!(
+            r.instantiate(&s, day(last + 9) + 300).is_ok(),
+            "last recheck day"
+        );
+        assert!(matches!(
+            r.instantiate(&s, day(last + 6) + DAY - 1),
+            Err(TemplateError::DateNotObservable(_))
+        ));
+        assert!(matches!(
+            r.instantiate(&s, day(last + 10)),
+            Err(TemplateError::DateNotObservable(_))
+        ));
+        // The original's own window is never a recheck window, and vice versa.
+        assert!(r.instantiate(&s, day(last)).is_err());
+        assert!(t.instantiate(&s, day(last + 7)).is_err());
+        // Ages from its first recheck day; one fact per date like the original.
+        assert_eq!(r.decay_start(&s, 0), Some(day(last + 7) + t.window_secs));
+        assert!(r.is_dated());
+        assert_eq!(
+            r.latest_window_start(&s, day(last + 7)),
+            Some(day(last + 10) - 1)
+        );
+        // Another subject of the rule is the same subject in the recheck; a foreign one is not.
+        assert!(r
+            .recheck_days(&Subject::Aggregate("other:2026-03-01".into()))
+            .is_none());
+    }
+
+    /// CL7: no recheck of a fixed-window or byte template, of a recheck, or with zero days;
+    /// a recheck template's metric and feed must end in `.recheck`.
+    #[test]
+    fn recheck_of_refuses_what_has_no_correct_later() {
+        let mut fixed = period_template();
+        fixed.url_template = "https://example.org/now.json".into();
+        fixed.selector = "price".into();
+        fixed.subject = SubjectRule::Fixed(Subject::Aggregate("price.x".into()));
+        assert!(fixed.validate().is_ok());
+        assert!(recheck_of(&fixed, 1, 1).is_err());
+        let mut bytes = daily_template();
+        bytes.kind = ObservationKind::Exact { max_len: 32 };
+        assert!(recheck_of(&bytes, 1, 1).is_err());
+        let r = recheck_of(&daily_template(), 1, 1).expect("recheck");
+        assert!(recheck_of(&r, 1, 1).is_err(), "no recheck of a recheck");
+        assert!(recheck_of(&daily_template(), 0, 1).is_err());
+        assert!(recheck_of(&daily_template(), 1, 0).is_err());
+        let renamed = FeedTemplate {
+            metric: MetricId("m.other".into()),
+            ..r.clone()
+        };
+        assert!(renamed.validate().is_err());
+        let nested = FeedTemplate {
+            subject: SubjectRule::Recheck {
+                of: Box::new(r.subject.clone()),
+                after_days: 1,
+                span_days: 1,
+            },
+            ..r
+        };
+        assert!(nested.validate().is_err());
+    }
+
+    /// CL7: the variant is appended last, so every existing template keeps its
+    /// Borsh bytes and id (the live pins in the adapters' tests stay green too).
+    #[test]
+    fn the_recheck_variant_is_appended_last() {
+        let r = recheck_of(&daily_template(), 2, 3).expect("recheck");
+        let b = borsh::to_vec(&r.subject).expect("borsh");
+        assert_eq!(
+            b[0], 5,
+            "Fixed 0, Dated 1, Period 2, Daily 3, Bucketed 4, Recheck 5"
+        );
+        assert_eq!(
+            borsh::to_vec(&daily_template().subject).expect("borsh")[0],
+            3
+        );
+        let back: SubjectRule = borsh::from_slice(&b).expect("decode");
+        assert_eq!(back, r.subject);
     }
 }

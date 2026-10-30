@@ -1284,6 +1284,9 @@ const OBSERVATION_KEYS: &[&str] = &[
     "onchain",
     "attempts",
     "limits",
+    // CL7 (ADR-0057 item 6): the paired recheck's note, checked by shape
+    // here and against the recheck's own verified answer by [`verify_recheck`].
+    "recheck",
 ];
 
 /// A served `limits` (ROADMAP B4) must be exactly the stated level-2 limits
@@ -2159,6 +2162,9 @@ pub fn verify_observation(
             &["chainId", "registry", "call", "drawMatches", "drawBudget"],
         )?,
     }
+    if let Some(n) = body.get("recheck") {
+        recheck_shape(n)?;
+    }
     let attempts = match body.get("attempts") {
         None => None,
         Some(arr) => Some(VerifiedAttempts {
@@ -2186,6 +2192,62 @@ pub fn verify_observation(
         ladder,
         attempts,
     })
+}
+
+/// A served `recheck` note's shape: exactly [`observations::RECHECK_KEYS`],
+/// two hashes, a time and a flag. What it states is only a claim until
+/// [`verify_recheck`] recomputes it from the recheck's own answer.
+fn recheck_shape(n: &Value) -> Result<(), VerifyError> {
+    let m = n.as_object().ok_or(VerifyError::Malformed("recheck"))?;
+    if let Some(k) = m
+        .keys()
+        .find(|k| !observations::RECHECK_KEYS.contains(&k.as_str()))
+    {
+        return Err(VerifyError::UnexpectedField(format!("recheck.{k}")));
+    }
+    h32(&n["result"], "recheck.result")?;
+    h32(&n["valueHash"], "recheck.valueHash")?;
+    u64_of(&n["recordedAt"], "recheck.recordedAt")?;
+    if !n["matches"].is_boolean() {
+        return Err(VerifyError::Malformed("recheck.matches"));
+    }
+    Ok(())
+}
+
+/// CL7 (ADR-0057 item 6): the `recheck` note served with `value_body`,
+/// recomputed from the value's verified answer and the paired `.recheck`
+/// metric's verified answer of the same subject (both from
+/// [`verify_observation`], the recheck one under the client's own
+/// `onyx_core::recheck_of` template). Refused when the served note is
+/// missing, differs in any field, or the two answers are of other subjects.
+/// A "No" (`matches: false`) is a note next to the value; the value's level
+/// is unchanged.
+pub fn verify_recheck(
+    value_body: &Value,
+    value: &VerifiedObservation,
+    recheck_template: &FeedTemplate,
+    recheck: &VerifiedObservation,
+) -> Result<onyx_coordinator::corrections::RecheckNote, VerifyError> {
+    let served = value_body
+        .get("recheck")
+        .ok_or(VerifyError::Malformed("recheck: missing"))?;
+    recheck_shape(served)?;
+    let want = observations::recheck_note_of(
+        &value.answer,
+        &value.checked.spec.subject,
+        recheck_template,
+        &recheck.answer,
+        &recheck.checked,
+    )
+    .ok_or_else(|| {
+        VerifyError::Observation("the recheck is no number of the same subject".into())
+    })?;
+    if *served != observations::recheck_json(&want) {
+        return Err(VerifyError::Observation(
+            "recheck: not what the recheck's own answer yields".into(),
+        ));
+    }
+    Ok(want)
 }
 
 // ------------------------------------------------------------- payTo pin

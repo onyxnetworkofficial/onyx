@@ -1,0 +1,22 @@
+{
+	"name": "onyx-contrib",
+	"version": "0.1.0",
+	"description": "Onyx contributor client (CL2): keep third-party API keys in your system keychain and contribute data from those APIs to Onyx through any MCP client, without the keys leaving your computer.",
+	"private": true,
+	"type": "module",
+	"license": "Apache-2.0",
+	"engines": {
+		"node": ">=20"
+	},
+	"bin": {
+		"onyx-contrib": "src/cli.mjs",
+		"onyx-contrib-mcp": "src/mcp.mjs"
+	},
+	"scripts": {
+		"test": "node --test test/*.test.mjs"
+	},
+	"files": [
+		"src",
+		"README.md"
+	]
+}

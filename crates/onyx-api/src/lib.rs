@@ -17,10 +17,12 @@
 //! deadline cannot drop a payment that lands on chain (M7-L39-F1).
 
 pub mod arrival;
+pub mod bulk_serve;
 pub mod cache;
 pub mod catalog;
 pub mod client;
 pub mod contrib;
+pub mod credits;
 pub mod evm_tx;
 pub mod gate;
 pub mod indexer;
@@ -3608,11 +3610,29 @@ async fn observation_reply(
                 } else {
                     Vec::new()
                 };
-                Some((feed, record, attempts))
+                // CL7 (ADR-0057 item 6): the paired `.recheck` metric's round of
+                // the same subject, as a note next to the value; while the
+                // paired feed has none yet, the answer may still gain one.
+                let (recheck, pending) = if metric.ends_with(onyx_core::RECHECK_SUFFIX) {
+                    (None, false)
+                } else {
+                    match c.observations(&format!("{metric}{}", onyx_core::RECHECK_SUFFIX)) {
+                        None => (None, false),
+                        Some(rf) => match rf.record(&q.subject, None, None) {
+                            None => (None, true),
+                            Some(rr) => (
+                                observations::recheck_note(&record, &rf.template, rr)
+                                    .map(|n| (n, rr.checked.registry_fact)),
+                                false,
+                            ),
+                        },
+                    }
+                };
+                Some((feed, record, attempts, recheck, pending))
             }
         }
     };
-    let Some((feed, record, attempts)) = found else {
+    let Some((feed, record, attempts, recheck, pending)) = found else {
         // ADR-0049: a subject no round settled yet may be offered for a paid round.
         if q.window_end.is_none() && q.as_of.is_none() && !all {
             if let Some(r) = observe::reply(state, &metric, &q.subject, headers).await {
@@ -3636,8 +3656,9 @@ async fn observation_reply(
         0
     };
     // A settled result never changes: the URL is content-addressed when it
-    // names one round (a dated subject, or an explicit window end).
-    let immutable = feed.template.is_dated() || q.window_end.is_some();
+    // names one round (a dated subject, or an explicit window end). A value
+    // whose paired recheck has not settled yet may still gain its note (CL7).
+    let immutable = (feed.template.is_dated() || q.window_end.is_some()) && !pending;
     // The ETag names the fact, never the result: a result hash lets anyone
     // who can guess the value confirm it (L2API-R1-F5). One fact has one
     // settled result, so the fact identifies the content.
@@ -3646,7 +3667,9 @@ async fn observation_reply(
         keccak256(
             &[
                 b"onyx-observation-etag-v1".as_slice(),
-                &record.checked.registry_fact.0
+                &record.checked.registry_fact.0,
+                // CL7: the recheck's fact, once its note is served.
+                recheck.as_ref().map_or(&[][..], |(_, f)| &f.0[..]),
             ]
             .concat()
         ),
@@ -3671,11 +3694,14 @@ async fn observation_reply(
         Pass::Row,
     )
     .await?;
-    let body = if all {
+    let mut body = if all {
         feed.body_all(&record, &attempts)
     } else {
         feed.body(&record)
     };
+    if let Some((n, _)) = &recheck {
+        body["recheck"] = observations::recheck_json(n);
+    }
     Ok(finish(
         state,
         gate,

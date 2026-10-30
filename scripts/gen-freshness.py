@@ -44,6 +44,22 @@ def build():
         "sec.crypto-units": (max(c["feed"]["period_end"] for c in sec["companies"]), "newest filing period"),
         "sec.etf-btc": (day(etf["window_start"]), "observed"),
     }
+    # Contributor loop CL1: the hosted node's other level-2 series, dated by the subject of the round the
+    # client check accepted (apps/web/static/level2/ladders-base-sepolia.json).
+    ladder_ids = {
+        "us.treasury.tga_closing_balance": "record date",
+        "noaa.ghcnd.usw00094728.tmax": "day measured",
+        "noaa.ghcnd.usw00094728.prcp": "day measured",
+        "noaa.ghcnd.usw00003017.prcp": "day measured",
+        "usgs.earthquakes.la300km_m2_5_count": "day counted",
+        "us.treasury.tga_total_deposits": "record date",  # CL3, the first manifest source
+    }
+    for v in load("level2/ladders-base-sepolia.json")["values"]:
+        if v["metric"] in ladder_ids:
+            d[v["metric"]] = (v["subject"].rsplit(":", 1)[1], ladder_ids[v["metric"]])
+    missing = sorted(set(ladder_ids) - set(d))
+    if missing:
+        raise SystemExit(f"no ladder for {missing}")
     for k, (date, _) in d.items():
         datetime.date.fromisoformat(date)  # every date is a real calendar date
     return {

@@ -1000,6 +1000,13 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
       `ONYX_L2_SERIES` (docs/ops/demo-testnet.md). Left: measure the revisions of `PRCP` and of
       small regional events (the lags are the TMAX and world-feed ones, THREATS NL17-2), BLS CPI
       (a monthly subject rule), the new values on the website
+- [ ] S14 Aligned market feeds live (contributor loop CL8, ADR-0058): built 2026-10-30 on fixtures
+      and loopback venues only (`SubjectRule::Bucketed`, `onyx_core::aligned`,
+      `onyx_level2::aligned`, `scripts/level2-aligned-anvil.sh`). Left: the per-venue rights
+      review (docs/ops/market-venues.md; none cleared) for at least three venues in one unit;
+      their manifests and a composite; the `GET /v1/aligned/{metric}` route in onyx-node with its
+      OpenAPI entry and the hold for an unobserved venue bucket (ADR-0049); the browser's check;
+      rounds on Base Sepolia; the edge-print and venue-concentration follow-ups (THREATS CL8)
 
 ## Phase W: website (own lane, runs alongside the other phases)
 
@@ -1068,6 +1075,7 @@ on-chain state is public. Entities only, never individuals. No build until the r
 - 2026-10-27 B6 level 2 on Base Sepolia: the coordinator, observer and a client check are shared by every dated source (`onyx_level2::live`; Treasury examples now call it; USGS and NCEI got theirs); live senders sign in process (`TxSigner`, `KeySigner`); the draw lead is 50 blocks off anvil (0.2 s blocks); `scripts/level2-sepolia.sh` ran one USGS day (5 earthquakes, 15 txs) and one NCEI day (28.3 °C, 14 txs) on registry `0x4973…2b`, 5 of 5 agreed, all receipts on chain; `scripts/deploy-api.sh` ships the stores with their pins; THREATS B6-1..8. Hosted serving and the site link wait for the owner's OK to redeploy
 - 2026-10-20 S1 review S1-R1 (fresh reviewer, 0 Critical/High, 2 Medium, 5 Low, 1 Info) fixed on submit-onboarding, each test shown failing first: page key guard trimmed and case-blind, no IPv6 prefix multiplier plus daily quotas, all of stlouisfed.org blocked, one blank/format-character rule and a strict JSON reader shared by Rust and the browser, percent-decoded secret parameter names, honest level-2 and stub texts, wallet field removed, no duplicate-content oracle
 - 2026-10-20 S1 submit data (ADR-0038, branch submit-onboarding, not merged): `onyx-intake` crate (answers -> level route, refusals, holds, caps, no contact fields, secret-in-URL refusal, pull allowlist `api.fiscaldata.treasury.gov`, blocked FRED), `/v1/submit` check/record/status with journal, budgets and an SSRF-safe pull (public addresses only, no redirects, 256 KiB, 10 s), website `#/submit` four-step walk-through with the Treasury example and a keyed FRED walk-through (key stays in the browser, stub proof labelled not real, held), offline JSON download in every shipped build, shared vectors run by Rust and the browser; S2 research note; THREATS SUB-1..12
+- 2026-10-30 deps: RUSTSEC-2026-0422/0423 (wasmtime 49.0.4 -> 49.0.5) fixed by bump, no ignore (found by the CL7 check-all)
 - 2026-10-20 deps: RUSTSEC-2026-0378/0379 (wasmtime 49.0.3 -> 49.0.4), RUSTSEC-2026-0381 (webpki-roots 1.0.9 -> 1.0.10), RUSTSEC-2026-0382 (rustls-webpki 0.103.15 -> 0.103.16) fixed by bump, no ignore; `recipes/out/` byte-identical, golden tests pass unblessed, check-all green (branch advisories-1020)
 - 2026-10-19 P4a Ethereum adapter and on-chain data (ADR-0044, branch eth-adapter): JSON-RPC answers re-encoded and checked against block hash, transaction hashes and both trie roots; recipe `eth-chain-stats` re-checks them and the EIP-1559 base fee; 300 finalized blocks (publicnode, cross-checked on Flashbots), Python recount agrees on every field; Data page "Ethereum on chain" in every build with a browser rerun; P4 split into P4a done, P4b entities, P4c stablecoins; X1 absorbed
 - 2026-10-18 P7 launch walk (branch launch-walk, docs only): 27 gates re-read with evidence, 6 re-run; LC-3 decided by the loop, LC-16 to PARTIAL (L17), LC-7 leftovers to L18, redeploy runbook `ONYX_RIGHTS` fix, ranked Needs the project owner table (checklist section 6); 10 verified, 17 open, 11 blockers; follow-up P7a

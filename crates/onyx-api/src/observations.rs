@@ -50,6 +50,76 @@ pub const STORE_VERSION: u64 = 1;
 /// The proof level every served observation has (re-observed, ADR-0027).
 pub const OBSERVED_LEVEL: u8 = 2;
 
+/// Keys of a value answer's `recheck` note (CL7, ADR-0057 item 6).
+pub const RECHECK_KEYS: &[&str] = &["result", "valueHash", "recordedAt", "matches"];
+
+/// The `recheck` note of a value answer (CL7, ADR-0057 item 6): the paired
+/// `.recheck` metric's settled round of the same subject, its result hash,
+/// the [`onyx_core::ladder::ladder_value_hash`] of its value, its settle time
+/// and whether it is within the recheck template's tolerance of the value.
+/// A recheck that disagrees is a note next to the value ("rechecked later:
+/// the source now says otherwise"), never a fall: the value keeps its level
+/// (ADR-0048). `None` when either answer is no number of its feed (an
+/// unavailable recheck says nothing about the value) or the recheck template
+/// is no numeric recheck.
+pub fn recheck_note(
+    value: &ObservationRecord,
+    recheck_template: &FeedTemplate,
+    recheck: &ObservationRecord,
+) -> Option<onyx_coordinator::corrections::RecheckNote> {
+    recheck_note_of(
+        &value.transcript.answer,
+        &value.transcript.subject,
+        recheck_template,
+        &recheck.transcript.answer,
+        &recheck.checked,
+    )
+}
+
+/// [`recheck_note`] from its parts: the value's answer and subject, and the
+/// recheck round's answer and checked proof (a client passes two verified
+/// answers, `client::verify_recheck`).
+pub fn recheck_note_of(
+    value: &Answer,
+    subject: &Subject,
+    recheck_template: &FeedTemplate,
+    recheck: &Answer,
+    rc: &Checked,
+) -> Option<onyx_coordinator::corrections::RecheckNote> {
+    let ObservationKind::Numeric { tolerance, .. } = recheck_template.kind else {
+        return None;
+    };
+    if !matches!(
+        recheck_template.subject,
+        onyx_core::SubjectRule::Recheck { .. }
+    ) || &rc.spec.subject != subject
+        || rc.spec.metric != recheck_template.metric
+    {
+        return None;
+    }
+    let (Answer::Number(v), Answer::Number(r)) = (value, recheck) else {
+        return None;
+    };
+    let rv = onyx_core::ladder::observed_value(&recheck_template.kind, recheck)?;
+    Some(onyx_coordinator::corrections::RecheckNote {
+        result: rc.result,
+        value_hash: onyx_core::ladder::ladder_value_hash(&rv),
+        recorded_at: rc.settled_unix,
+        matches: onyx_coordinator::corrections::outcome(*v, *r, tolerance)
+            == onyx_coordinator::corrections::Side::Yes,
+    })
+}
+
+/// The JSON of a [`recheck_note`] (keys [`RECHECK_KEYS`]).
+pub fn recheck_json(n: &onyx_coordinator::corrections::RecheckNote) -> Value {
+    json!({
+        "result": n.result.to_string(),
+        "valueHash": n.value_hash.to_string(),
+        "recordedAt": n.recorded_at,
+        "matches": n.matches,
+    })
+}
+
 /// The one-step ladder of a level-2 answer (ADR-0048): the value of the fact
 /// (metric, subject, window end), level 2 on the round's result hash, at the
 /// round's settle time. `None` when the answer is no value of the feed's kind.

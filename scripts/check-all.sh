@@ -16,8 +16,13 @@ cargo clippy --locked -p onyx-coordinator --features unchecked-open -- -D warnin
 cargo test --locked --workspace
 # ROADMAP C50: the time-lock vectors on wasm32 (blst's C built by clang, run in node).
 scripts/check-tlock-wasm.sh
+# CL3 (THREATS CL3-3): the generic JSON fetcher's shared vectors on wasm32, as natively.
+scripts/check-json-wasm.sh
 # NS8 (ADR-0047): the agent toolkit's tests, then an MCP session against two demo servers.
 scripts/agent-smoke.sh
+# CL2: the contributor client (apps/contrib) with a fake provider and a fake intake on loopback:
+# the API key never reaches Onyx, a tool result, a log line or a stored file (THREATS CL2).
+node --test apps/contrib/test/*.test.mjs
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.
 cargo run --locked -q -p onyx-node -- --help >/dev/null
 # The Bitcoin build with the reserve serving check (ADR-0034 Amendment 1).
@@ -29,10 +34,24 @@ scripts/track-intake-anvil.sh
 # its append-only log, against a local anvil: the client recheck and eight attacks (incl. a reorg).
 scripts/track-onchain-anvil.sh
 scripts/prepaid-anvil.sh
+# CL6 (ADR-0056, THREATS CL6): the credits ledger on a local anvil: an observer with no ETH deposits
+# and posts its commit and receipt through the relayer, paid from credits; a miner's earned share
+# moved in; forged, repeated and over-cap relays refused; the fees paid to the relayer.
+scripts/credits-anvil.sh
+# CL7 (ADR-0057): a correction market end to end on anvil (about 30 s once contracts are built):
+# the live manifest and its recheck registered with their real template ids, a value, a market,
+# bets, a recheck that disagrees, settlement and payouts to the wei; a forged value, a market after the
+# recheck, an insider bet and the original round as the recheck all refused.
+scripts/corrections-anvil.sh
 # ROADMAP C10 (ADR-0028 amendment 7): OnyxSignedBook deployed and pinned with the tooling the lead
 # runs live (reviewer == deployer refused), onyx-node refusing broken pins and serving level 3 only
 # against `settleable` at its finalized block, coordinator posts, censorship hold, clock skew.
 scripts/level3-book.sh local
+# CL5 (ADR-0059): a publisher's dataset end to end on anvil (synthetic rows, a fresh test key):
+# build, sign, anchor in OnyxSignedBook, upload, proven range reads checked by onyx-check --bulk,
+# and the attacks (forged row and shard, unanchored swap, unknown key, compromised key and its
+# recovery). Small here; `scripts/bulk-demo.sh local` alone runs the 100 MiB rehearsal.
+BULK_DEMO_MIB=6 BULK_DEMO_SHARD_MIB=1 scripts/bulk-demo.sh local
 scripts/check-boundaries.sh
 scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).

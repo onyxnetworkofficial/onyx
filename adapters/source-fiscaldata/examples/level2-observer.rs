@@ -24,7 +24,8 @@
 //!    round id. Not drawn: says so and exits 0.
 //! 3. At its own fetch slot in the window (`onyx_core::fetch::fetch_time`, by
 //!    its own clock; partner tracker M2) fetches the pinned record itself
-//!    over HTTPS (`curl --proto =https`; `--body FILE` replays a saved
+//!    over HTTPS (`onyx_fetch`, CL3: public addresses only, no redirects,
+//!    size caps, 20 s; `--body FILE` replays a saved
 //!    response instead, for an offline rehearsal), observes, draws a fresh
 //!    salt, signs commit and reveal with its key, and saves them in
 //!    `--state` (0600) BEFORE anything is sent, so a restarted observer
