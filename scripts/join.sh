@@ -15,7 +15,8 @@
 # (no file transfer to the coordinator).
 #
 # Needs: bash, curl, and the binaries in ONYX_JOIN_BIN (default: the folder of this script's
-# `bin/`): `level2-observer-<source>` for the round's source and Foundry's `cast`. Build them from
+# `bin/`): `level2-observer-<source>` for the round's source (or `level2-manifest` with the kit's
+# `sources/` and `docs/ops/data-sources.md` for a manifest source) and Foundry's `cast`. Build them from
 # the Onyx source with `scripts/join-build.sh` (docs/join.md "Get the programs").
 # Env: ONYX_JOIN_HOME (your state, default ~/.onyx-join), ONYX_JOIN_BIN.
 set -euo pipefail
@@ -62,23 +63,33 @@ case "$1" in
     # The announcement names the round's metric; its source picks the program.
     metric=$(sed -n 's/^ *"metric": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | head -1)
     series=$(sed -n 's/^ *"series": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | head -1)
-    case "$metric" in
-      us.treasury.*) src=fiscaldata ;;
-      usgs.*) src=usgs ;;
-      noaa.*) src=ncei ;;
-      *) echo "$ann: unknown metric '$metric'" >&2; exit 1 ;;
-    esac
-    obs=$BIN/level2-observer-$src
+    # A manifest source (contributor loop CL3, ADR-0053) is observed by level2-manifest with the
+    # kit's reviewed manifest and terms table; a dated source by its own observer.
+    kit=$(cd "$(dirname "$0")" && pwd)
+    manifest=$kit/sources/$metric/manifest.json
+    pre=()
+    if [ -n "$metric" ] && [ -f "$manifest" ]; then
+      obs=$BIN/level2-manifest
+      pre=(observer --manifest "$manifest" --repo "$kit")
+    else
+      case "$metric" in
+        us.treasury.*) src=fiscaldata ;;
+        usgs.*) src=usgs ;;
+        noaa.*) src=ncei ;;
+        *) echo "$ann: unknown metric '$metric'" >&2; exit 1 ;;
+      esac
+      obs=$BIN/level2-observer-$src
+    fi
     [ -x "$obs" ] || { echo "$obs: missing (build it: docs/join.md)" >&2; exit 1; }
     cast=$BIN/cast
     [ -x "$cast" ] || cast=$(command -v cast) || { echo "no cast in $BIN or on PATH" >&2; exit 1; }
-    me=$("$obs" --key-file "$key" --address)
+    me=$("$obs" "${pre[@]}" --key-file "$key" --address)
     state=$HOME_DIR/rounds/$(basename "$ann" .json)-$me
     mkdir -p -m 700 "$state"
     args=(--key-file "$key" --announcement "$ann" --state "$state" --cast "$cast")
     [ -z "$rpc" ] || args+=(--rpc "$rpc")
     echo "observer $me: $metric${series:+ ($series)}, state $state"
-    ONYX_L2_SERIES=$series exec "$obs" "${args[@]}"
+    ONYX_L2_SERIES=$series exec "$obs" "${pre[@]}" "${args[@]}"
     ;;
   *) usage ;;
 esac

@@ -139,14 +139,16 @@ def edited(kind_want, n_want, f):
     return e
 
 
-# Every request the client sends to the first endpoint, timed as it leaves (for the rate check).
+# Every request the client sends to the first endpoint, at the time its pacer released it (the
+# caller's `self.last`, for the rate check): the pacer's own clock, so a busy machine's scheduling
+# delays between the pacer and the socket do not count as sends closer together.
 SENDS = []
 _urlopen = refresh.urllib.request.urlopen
 
 
 def timed_urlopen(req, *a, **k):
     if len(SENDS) < 1000 and getattr(req, "full_url", "").startswith(FIRST_URL[0]):
-        SENDS.append(time.monotonic())
+        SENDS.append(sys._getframe(1).f_locals["self"].last)
     return _urlopen(req, *a, **k)
 
 
@@ -163,8 +165,9 @@ check("MANIFEST.json" in files and len(files) == len(WANT_SHA) + 1, f"{len(files
 check(set(node.calls) | set(other.calls) <= {"eth_chainId", "eth_getBlockByNumber", "eth_getBlockReceipts"},
       "only read-only calls are made")
 check(node.agents == {"onyx-dev"} and other.agents == {"onyx-dev"}, "User-Agent onyx-dev and nothing else")
-# The rate is a property of the client's sends (server arrival times jitter under load: one gate
-# run saw 9 arrivals over 1.54 s), so the sends are timed where they leave the client.
+# The rate is a property of the client's pacer (server arrival times jitter under load: one gate
+# run saw 9 arrivals over 1.54 s; timed at urlopen, a busy machine once showed 0.179 s between two
+# sends the pacer had released 0.2 s apart), so the sends are timed on the pacer's clock.
 gaps = [b - a for a, b in zip(SENDS, SENDS[1:])]
 check(len(gaps) > 4 and min(gaps) >= 1 / 5 - 0.001, f"at most 5 requests a second ({len(SENDS)} sends, closest {min(gaps):.3f} s apart)")
 check(m is not None and [c["number"] for c in m["cross_checked"]] == [FIRST - 1, FIRST, LAST],

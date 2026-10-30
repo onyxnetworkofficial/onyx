@@ -31,6 +31,7 @@ Work order: CL1, CL2, CL3, CL4, CL5, CL6, CL7, CL8.
 
 ## Log (newest first)
 
+- 2026-10-30 Downloads: `scripts/release-build.sh` builds the test-network release (observer kit with the manifest observer, contributor app, keyed-round tool, publisher tools, SHA256SUMS) from the public code; the Add data page lists them; `join.sh` routes a manifest source's round to `level2-manifest`.
 - 2026-10-30 CL5 live on Base Sepolia (signed book, bulk routes on the hosted node, a synthetic dataset proven live). CL6 and CL7 merged, their live steps parked with reasons; CL8's live part parked on venue terms. Every CL item is done or parked.
 - 2026-10-30 CL7 merged: correction markets v0 (docs/ops/runbooks/corrections-base-sepolia.md for Base Sepolia).
 - 2026-10-30 CL7 built on its branch: correction markets v0 (ADR-0057 amendment 1, `OnyxCorrections`, THREATS CL7, review CL7-R1), local anvil demo in check-all; not deployed.

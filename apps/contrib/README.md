@@ -13,7 +13,9 @@ holders agree (CL4) or a real prover exists (ROADMAP S2).
 
 ## 1. Install (2 minutes)
 
-You need Node.js 20 or later and two folders of the Onyx repository: `apps/contrib` and
+Download `onyx-contrib-<version>.zip` (or `.tar.gz`) from the latest test-network release (the
+Add data page links it) and unpack it, then run the commands below in the unpacked folder. Or use
+a checkout of the repository. You need Node.js 20 or later and two folders: `apps/contrib` and
 `apps/agent` next to it (onyx-contrib reuses the agent toolkit's Onyx client and MCP plumbing).
 No `npm install`: there are no dependencies.
 
@@ -154,8 +156,9 @@ makes it level 2 ("re-observed by key holders", ADR-0054). Only sources whose te
 cleared for this (`OK keyed` in docs/ops/data-sources.md) take part; today none is cleared, so
 this runs on the local demo only (`scripts/level2-keyed-anvil.sh`, about 6 minutes).
 
-You need the `level2-keyed` tool: `cargo build -p onyx-level2 --example level2-keyed`, then set
-`ONYX_CONTRIB_KEYED_BIN` to `target/debug/examples/level2-keyed`.
+You need the `level2-keyed` tool: on Linux x86-64 it is in the release's
+`onyx-contrib-keyed-linux-x86_64.tar.gz` (`bin/level2-keyed`); elsewhere build it with
+`cargo build -p onyx-level2 --example level2-keyed`. Set `ONYX_CONTRIB_KEYED_BIN` to it.
 
 ```sh
 # 1. Take a seat (shows the provider's terms; --yes accepts them without a terminal prompt).

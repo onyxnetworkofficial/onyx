@@ -21,9 +21,10 @@ for Base Sepolia to make your anchor final). Later versions: about 30 minutes, m
 2. **Ask the Onyx operator for three things:** the node address (`https://...`), the signed book
    address (`0x...`, the `signedBook` of the node's deployment manifest), and who the reviewer
    is. The node must run with `ONYX_BULK_DIR` (docs/ops/config.md).
-3. **Get the tools** (about 15 minutes to build): in the Onyx folder run
-   `cargo build --release -p onyx-publish -p onyx-check`. The two programs are then in
-   `target/release/`.
+3. **Get the tools**: on Linux x86-64, download `onyx-publish-linux-x86_64.tar.gz` from the latest
+   test-network release (the Add data page links it) and unpack it; the programs are in
+   `onyx-publish/bin/`. Elsewhere, build them (about 15 minutes): in the Onyx folder run
+   `cargo build --release -p onyx-publish -p onyx-check`; they are then in `target/release/`.
 4. **Make sure the data is yours to share.** Only data you own or may share, whose terms let
    anyone redistribute it, and that names no individual person. You will sign a statement saying
    so (step 7 below does it for you).

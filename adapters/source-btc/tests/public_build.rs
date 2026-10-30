@@ -509,11 +509,14 @@ const NOT_A_PROFILE: &[&str] = &[
 /// added). The GitHub organisations are the licence sources of the pool list
 /// (fixtures/pools/PROVENANCE.md) and of a bundled font, and the BIPs
 /// repository the BIP-322 test vectors come from (fixtures/bip322/README.md,
-/// linked from the Labels page, W8).
+/// linked from the Labels page, W8), and the project's own organisation (the release
+/// downloads, scripts/release-build.sh).
 const ENTITY_HANDLES: &[&str] = &[
     "github.com/bitcoin",
     "github.com/bitcoin-data",
     "github.com/instrument",
+    // The project's own organisation: the release downloads on the Add data page.
+    "github.com/onyxnetworkofficial",
     "x.com/okx",
 ];
 

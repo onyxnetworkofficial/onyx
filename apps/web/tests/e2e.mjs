@@ -21,6 +21,7 @@ import { ns5 } from './ns5.mjs';
 import { ns11 } from './ns11.mjs';
 import { ns14 } from './ns14.mjs';
 import { ns15 } from './ns15.mjs';
+import { downloads } from './downloads.mjs';
 import { ns16 } from './ns16.mjs';
 import { t10 } from './t10.mjs';
 import { pp1Parser } from './pp1.mjs';
@@ -1905,6 +1906,7 @@ try {
 	await ns11(browser, base, root, expect);
 	await ns14(browser, base, root, expect);
 	await ns15(browser, base, root, expect);
+	await downloads(browser, base, root, expect);
 	await ns16(browser, base, root, expect);
 	await t10(browser, base, expect);
 	// Pre-public loop PP1: a fed receipt's observer evidence (the live view is in submission-live.mjs).

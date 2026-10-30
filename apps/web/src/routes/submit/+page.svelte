@@ -11,6 +11,7 @@
 	import SubmissionReceipt from '#lib/components/SubmissionReceipt.svelte';
 	import WantedData from '#lib/components/WantedData.svelte';
 	import AddWithAgents from '#lib/components/AddWithAgents.svelte';
+	import Downloads from '#lib/components/Downloads.svelte';
 	import Bot from '@lucide/svelte/icons/bot';
 	import { parseReceipt } from '#lib/submission-receipt.ts';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
@@ -620,6 +621,8 @@
 	<SubmissionReceipt received={sent} />
 
 	<WantedData />
+
+	<Downloads />
 
 	<section class="section side" data-testid="submit-levels">
 		<h2>What the levels mean</h2>

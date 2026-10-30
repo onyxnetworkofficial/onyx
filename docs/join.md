@@ -18,6 +18,10 @@ Test networks only: Base Sepolia (chain 84532) or a local test chain. No real mo
 
 ## 1. Get the programs (once)
 
+On Linux x86-64, download `onyx-join-linux-x86_64.tar.gz` from the latest test-network release
+(the Add data page links it; check it against `SHA256SUMS`) and unpack it:
+`tar xzf onyx-join-linux-x86_64.tar.gz` gives `onyx-join/`. Or build it yourself.
+
 On a machine with Rust (the toolchain in `rust-toolchain.toml`) and Foundry installed:
 
 ```sh
@@ -25,8 +29,10 @@ git clone <the Onyx repository> onyx && cd onyx
 scripts/join-build.sh ~/onyx-join
 ```
 
-This builds the observers for every dated source (Treasury, USGS, NCEI) in release mode and puts
-them, `cast` and `join.sh` in `~/onyx-join` (`bin/` holds the programs). Copy that folder to the
+This builds the observers for every dated source (Treasury, USGS, NCEI) and the manifest observer
+(`level2-manifest`, with the reviewed manifests in `sources/` and their terms table) in release mode
+and puts them, `cast` and `join.sh` in `~/onyx-join` (`bin/` holds the programs). `join.sh observe`
+picks the manifest observer when the round's metric has a manifest in the kit. Copy that folder to the
 machine that will observe, if it is another one.
 
 ## 2. Make your key and send your address
