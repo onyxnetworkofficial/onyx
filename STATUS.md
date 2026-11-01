@@ -1,4 +1,4 @@
-Latest: 2026-11-01: storage network live on Base Sepolia; testnet live at https://onyx.cryptagraph.com
+Latest: 2026-11-01: release v0.3.1-testnet with the desktop installers; storage network live on Base Sepolia; testnet live at https://onyx.cryptagraph.com
 - Website: browse checked data, run the checks in your browser, add data (form, API or AI connector)
 - Markets on Base Sepolia: two U.S. debt futures (one settled from observed data, one open)
 - Test insurance: frost and earthquake cover, backed by a 1,000 tONYX pool
@@ -6,10 +6,10 @@ Latest: 2026-11-01: storage network live on Base Sepolia; testnet live at https:
 - New sources from a reviewed manifest, no new code (CL3): Treasury daily deposits is the first, live
 - Large datasets (CL5): 549 daily on-chain datasets from the first bulk publisher, every row provable
 - Storage network (CL9, S15): 5 nodes on Base Sepolia keep 3 copies of 3 datasets; 18 of 18 checks passed
-- Desktop app and onyx-contrib (CL2, CL10): keys stay on your computer; installers come with v0.3.1-testnet
+- Desktop app and onyx-contrib (CL2, CL10): installers for Windows, macOS and Linux in v0.3.1-testnet; keys stay on your computer
 - API: https://onyx.cryptagraph.com/v1 (OpenAPI at /v1/openapi.json); payments not switched on
 - AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
 - Testnet only: tONYX and test USDC have no value; token economics are not final
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
 - Owner: storage nodes need test ETH (a faucet) to run past 2026-11-02 01:30 UTC; deployer has 0.0005 left
-- Next: release v0.3.1-testnet with the installers, outside observers, the recheck runner, a security audit
+- Next: open each installer on a real machine (S20), outside observers, the recheck runner, a security audit

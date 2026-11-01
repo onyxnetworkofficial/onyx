@@ -1008,7 +1008,8 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
       OpenAPI entry and the hold for an unobserved venue bucket (ADR-0049); the browser's check;
       rounds on Base Sepolia; the edge-print and venue-concentration follow-ups (THREATS CL8)
 - [ ] S20 Desktop app follow-ups (contributor loop CL10, ADR-0061): the first run of
-      `.github/workflows/desktop.yml` on a `v*-testnet` tag, each installer opened on a real
+      `.github/workflows/desktop.yml` on a `v*-testnet` tag (done 2026-11-01: v0.3.1-testnet, nine
+      installers and the merged SHA256SUMS), each installer opened on a real
       Windows, macOS and Linux machine (window, key stored, value read, Claude Desktop connected);
       code signing (Windows Authenticode, Apple Developer ID and notarization: paid, the owner's
       decision); updates inside the app; a checksum file signed with a project key

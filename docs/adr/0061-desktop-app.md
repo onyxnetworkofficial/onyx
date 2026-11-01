@@ -5,8 +5,9 @@ Accepted, 2026-10-30 (docs/contributor-loop.md CL10; test network only). Built:
 `onyx-contrib ui` (apps/contrib/src/ui.mjs, the page in apps/contrib/ui), the single-file programs
 (scripts/sea-bundle.mjs, scripts/desktop-build.sh), the Tauri shell (apps/desktop), the installer
 workflow (.github/workflows/desktop.yml) and the website's Download page (apps/web, `#/download`).
-User guide: docs/desktop-app.md. Threats: THREATS.md section CL10. The installers have not been
-built yet: the workflow runs on the first `v*-testnet` tag pushed after this lands.
+User guide: docs/desktop-app.md. Threats: THREATS.md section CL10. The first installers are in
+v0.3.1-testnet (2026-11-01, built by the workflow on the tag; v0.3.0-testnet's macOS and Windows
+builds failed and it has the command-line files only).
 
 ## Context
 Contributing data with onyx-contrib (CL2, CL4) needs a terminal, Node.js 20 and an MCP client's

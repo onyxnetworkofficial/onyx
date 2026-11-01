@@ -391,6 +391,10 @@ SH
   # outside the system and Onyx's two folders can be read. The host refuses to run without Landlock.
   ll="Landlock sandbox"
   if python3 -I -c 'import ctypes as c; l = c.CDLL(None); l.syscall.restype = c.c_long; raise SystemExit(l.syscall(c.c_long(444), None, c.c_long(0), c.c_long(1)) < 1)'; then
+    # The job may write /dev/shm, so a temp folder there would make "outside" files readable.
+    case $(realpath "$t") in /dev/shm/*)
+      echo "remote-check self-test: TMPDIR is under /dev/shm, which the sandbox may write; set TMPDIR elsewhere"; exit 1 ;;
+    esac
     mkdir -p "$base/src/a" "$base/target/a" "$base/tmp/a" "$base/bin" "$t/tools/cargo-home" "$t/tools/bin"
     echo blocks >"$base/fixtures-live/x.raw.hex"
     echo tool >"$t/tools/bin/tool"
