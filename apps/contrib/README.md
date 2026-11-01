@@ -11,7 +11,15 @@ Test network only (Base Sepolia, no real money). A keyed source is held for a re
 provider's terms before anything is published, and stays level 4 (a claim) until several key
 holders agree (CL4) or a real prover exists (ROADMAP S2).
 
+**Easiest: the Onyx desktop app** (Windows, macOS, Linux; no terminal, no Node.js): the
+website's Download page, then docs/desktop-app.md. It is this program with a window. The rest of
+this guide is the command line.
+
 ## 1. Install (2 minutes)
+
+No Node.js? The release also has onyx-contrib as one file per system (`onyx-contrib-linux-x64`,
+`onyx-contrib-macos-arm64`, `onyx-contrib-macos-x64`, `onyx-contrib-windows-x64.exe`, built by
+`scripts/desktop-build.sh`): use it in place of `node apps/contrib/src/cli.mjs` below.
 
 Download `onyx-contrib-<version>.zip` (or `.tar.gz`) from the latest test-network release (the
 Add data page links it) and unpack it, then run the commands below in the unpacked folder. Or use
@@ -76,7 +84,10 @@ Other commands: `provider list`, `provider remove <name>` (removes its key too),
 claude mcp add onyx-contrib -- node /path/to/apps/contrib/src/mcp.mjs
 ```
 
-**Claude Desktop:** Settings, Developer, Edit Config, then in `claude_desktop_config.json`:
+**Claude Desktop, the easy way:** `onyx-contrib ui`, then "Connect to Claude Desktop" (it merges
+the entry below into Claude Desktop's settings file and keeps the old file as a backup).
+
+**Claude Desktop by hand:** Settings, Developer, Edit Config, then in `claude_desktop_config.json`:
 
 ```json
 {
@@ -95,8 +106,9 @@ defaults to `https://onyx.cryptagraph.com`; set it to use another node.
 
 **ChatGPT:** ChatGPT connects only to remote MCP servers over HTTPS (its Developer mode
 connectors); it does not start a program on your computer. So today use onyx-contrib from Claude
-Desktop, Claude Code or another local MCP client. onyx-contrib v0 has no HTTP server on purpose:
-exposing it through a tunnel would let anyone who learns the URL fetch with your keys. (ChatGPT
+Desktop, Claude Code or another local MCP client. onyx-contrib serves no MCP over HTTP on purpose:
+exposing it through a tunnel would let anyone who learns the URL fetch with your keys. (The app of
+section 4a is a web page for you alone, on 127.0.0.1 with a per-launch secret; never tunnel it.) (ChatGPT
 can still find and propose public datasets through Onyx's own hosted connector, docs/agents.md.)
 
 ## 4. Use it
@@ -122,6 +134,22 @@ answer. The intake takes a data file (`dataPayload`) only for your own data, not
 source, so none is sent. All intake byte caps are checked before sending (title 120, description
 2,000, URLs 512, pointer 256, unit 32 bytes).
 
+## 4a. The app: `onyx-contrib ui` (CL10)
+
+```sh
+node apps/contrib/src/cli.mjs ui          # opens the app in your browser; Ctrl+C stops it
+```
+
+The same steps in a page: a health check in plain words (with what to do, for example "Install
+libsecret-tools", or an encrypted file for your keys with a passphrase kept in memory only), add a
+provider, paste its key (stored in the keychain, never shown again), list endpoints, read a value,
+"Check with Onyx" (records nothing), then tick and "Send to Onyx"; past contributions with their
+status; "Connect to Claude Desktop". It listens on 127.0.0.1 only, on a random port, and every
+call needs a secret made for that launch, which the page gets from the URL fragment (`#t=…`);
+other hosts, origins and cross-site requests are refused (THREATS CL10). `ui --no-open` prints the
+link without opening a browser; `ui --desktop` is what the desktop app runs. The desktop app is
+this command in a window (apps/desktop, docs/desktop-app.md).
+
 ## 5. How the key is protected
 
 - Set only in a terminal (hidden prompt or stdin), stored in the system keychain.
@@ -141,6 +169,7 @@ approval switched off) can read your keychain like any program you run. Keep com
 
 ```sh
 node --test apps/contrib/test/*.test.mjs   # no network: a fake provider and a fake Onyx intake on 127.0.0.1
+node scripts/desktop-smoke.mjs "$(command -v node)" apps/contrib/src/cli.mjs   # the app as a user starts it
 ```
 
 The fake intake runs the website's own intake rules when Node can load TypeScript (Node 22.18 or

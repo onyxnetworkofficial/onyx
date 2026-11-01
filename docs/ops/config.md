@@ -53,6 +53,7 @@ any network call. Deployment steps: [deployment.md](deployment.md).
 | `ONYX_BULK_MAX_DATASETS` | 64 | Datasets per publisher |
 | `ONYX_BULK_MAX_GIB` | 256 | Bulk bytes for all publishers together (503 `bulk_node_full`) |
 | `ONYX_BULK_WARM_AFTER_DAYS` | 7 | Quiet days before a hot shard moves to warm (checked hourly) |
+| `ONYX_BULK_FREE_PER_MINUTE` | 60 | Free bulk answers per client per minute, 1-1000000 (reads and the storage network's peer fetches; raise it on a storage node whose peers share an address) |
 | `ONYX_TRACK_PUBLICATIONS` | none | The track-record coordinator's publication file (Borsh `onyx_track::publication::Publication`, written by `onyx_coordinator::track_chain::write_publication`, ROADMAP C20; version 1, or version 2 with chained logs and the registry, C21/C23). Read at start and again whenever it changes (a missing file publishes nothing yet); served at `/v1/track`, `/v1/track/log` (paged for chained logs), `/v1/track/registry` and `/v1/track/{source}/{metric}[/history]` only if it checks and starts with what was served before, else every track route answers 503 `track_store_unreadable` (the node itself still starts and serves everything else). The head it served (step count, latest commitment, row counts and a digest of those bytes) is kept in `ONYX_STATE_DIR/track-served-head.borsh`, so after a restart a file that does not start with those bytes, or no file, is refused too; a file whose check would pass 4,194,304 (`MAX_INSTALL_CHECK`: steps times rows for format-1 logs, rows plus steps for chained logs) is refused unchecked. Unset: nothing published (every record a 404 `no_track_record`), unless the state directory holds a served head: then every track route answers 503 (delete the head to start a new chain on purpose). With a file every ruled metric counts as label-derived under `ONYX_RIGHTS=fallback` (the node has no registry) |
 | `ONYX_CAS_DIR` | required | Row batches |
 | `ONYX_STATE_DIR` | required | Journals (receipts, pending settles, credits in flight). One process per directory, local disk only |
@@ -92,6 +93,27 @@ The operator key is never an environment variable: only a path to a file the ser
 private. Under systemd it is a credential (`LoadCredential=`); in a container, a read-only mount.
 Env files are secrets too when they hold a node URL with an API key: install them 0600
 (`--export-node` writes them 0600), or move the URL to `ONYX_RPC_URL_FILE`.
+
+### Storage network
+
+Storage-node mode (ADR-0060, [storage-node.md](storage-node.md), docs/STORAGE-NETWORK.md). Off
+unless `ONYX_STORAGE_CONTRACT` is set; every other `ONYX_STORAGE_*` variable without it is refused.
+It needs `ONYX_BULK_DIR` (shards are held and served by the bulk store, so raise
+`ONYX_BULK_QUOTA_GIB` and `ONYX_BULK_MAX_GIB` to the disk) and the manifest's `signedBook`.
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `ONYX_STORAGE_CONTRACT` | none | The `OnyxStorage` address; turns the mode on |
+| `ONYX_STORAGE_NODE_ID` | required with the contract | This node's id (`0x` and 64 hex digits), printed by `onyx-storage register` |
+| `ONYX_STORAGE_KEY_FILE` | required with the contract | The node operator's key file (64 hex digits, mode 0600): answers, seeds and settlements are sent from it; it must be the registered operator |
+| `ONYX_STORAGE_FROM_BLOCK` | `0` | The contract's deploy block, where log scans start |
+| `ONYX_STORAGE_EVERY_SECS` | `15` | Seconds between passes, 1-3600 |
+| `ONYX_STORAGE_FETCH` | `on` | `off`: fetch nothing, serve and prove only what is held (maintenance; a held-but-missing shard is then a miss) |
+| `ONYX_STORAGE_KEEPER` | `off` | `on`: also settle other nodes' missed challenges of the last two epochs |
+| `ONYX_STORAGE_FETCHES_PER_TICK` | `8` | Shard fetches started per pass, 1-1000 (repair pace) |
+
+Peers and readers fetch from the node's registered URL; the node fetches only from `https://` URLs
+or loopback `http://`, with User-Agent `onyx-dev`.
 
 ## Open questions
 

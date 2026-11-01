@@ -31,16 +31,17 @@
 | Path | What |
 |---|---|
 | [`NORTH-STAR.md`](NORTH-STAR.md) | The north star: what the partners asked for, what makes Onyx new, and the build list |
+| [`STORAGE-NETWORK.md`](STORAGE-NETWORK.md) | The storage network: how Onyx keeps hundreds of terabytes from many publishers on bonded storage nodes (the roadmap master document, ADR-0060) |
 | [`TRACKER.md`](TRACKER.md) | The vision, every idea, and the decision log |
 | [`adr/`](adr/) | Architecture decision records, one per decision (index: DECISIONS.md) |
 | [`agents.md`](agents.md) | Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21) |
 | [`api/`](api/) | The API description (OpenAPI 3.1), checked against the code |
 | [`audit/`](audit/) | Dated audit and review reports |
-| [`contributor-loop.md`](contributor-loop.md) | The contributor loop (CL1-CL8): easy data contribution, one system for users |
+| [`contributor-loop.md`](contributor-loop.md) | The contributor loop (CL1-CL10): easy data contribution, one system for users |
+| [`desktop-app.md`](desktop-app.md) | The Onyx desktop app: download, install (unsigned-installer steps), use, what stays on your computer (CL10) |
 | [`join.md`](join.md) | Join a round as an independent observer: the join kit, from key to sealed reveal (NL16) |
 | [`north-star-loop.md`](north-star-loop.md) | The north star work loop (NL0-NL5): items, results, log |
 | [`ops/`](ops/) | Running Onyx: configuration, deployment, rehearsals, runbooks, launch checklist |
-| [`partners/`](partners/) | Partner call notes, the partner tracker (T1-T14) and design proposals |
 | [`pre-public-loop.md`](pre-public-loop.md) | The pre-public work loop (PP1-PP7): items, results, log |
 | [`research/`](research/) | Research notes behind a decision |
 | [`sectors/`](sectors/) | How each sector (crypto, equities, macro, commodities, prediction markets) maps onto Onyx |

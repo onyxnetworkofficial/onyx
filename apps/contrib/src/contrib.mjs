@@ -203,6 +203,10 @@ export async function contribute(ctx, a) {
 		session.sent++;
 		c.sent = true;
 		c.receipt = receipt.id;
+		// CL10: the app's list of past contributions (no key: this body passed the guard above).
+		try {
+			ctx.record?.({ id: receipt.id, provider: c.provider, title: c.body.title, endpoint: c.body.endpointTemplate ?? c.body.endpointUrl, pointer: c.body.jsonPointer, status: typeof receipt.status === 'string' ? receipt.status : null });
+		} catch {}
 		return { ok: true, recorded: true, receipt, next: `Follow it with contrib_status {"id":"${receipt.id}"}. It is held for a review of the provider's terms before anything is published.` };
 	}
 	if (a.checkId !== undefined) return { ok: false, error: 'checkId goes with confirm: true only.' };

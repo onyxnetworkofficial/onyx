@@ -23,6 +23,12 @@ scripts/agent-smoke.sh
 # CL2: the contributor client (apps/contrib) with a fake provider and a fake intake on loopback:
 # the API key never reaches Onyx, a tool result, a log line or a stored file (THREATS CL2).
 node --test apps/contrib/test/*.test.mjs
+# CL10 (ADR-0061, THREATS CL10): the contributor app server (token, Host and Origin gates, no key in
+# any answer) and the single-file bundle run in the line above; here the desktop workflow's rules
+# (every action pinned by SHA, only the release job writes) and the Download page's release helper.
+python3 -I scripts/check-workflows.py --self-test
+python3 -I scripts/check-workflows.py
+node --test apps/web/tests/release.test.mjs
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.
 cargo run --locked -q -p onyx-node -- --help >/dev/null
 # The Bitcoin build with the reserve serving check (ADR-0034 Amendment 1).
@@ -52,6 +58,11 @@ scripts/level3-book.sh local
 # and the attacks (forged row and shard, unanchored swap, unknown key, compromised key and its
 # recovery). Small here; `scripts/bulk-demo.sh local` alone runs the 100 MiB rehearsal.
 BULK_DEMO_MIB=6 BULK_DEMO_SHARD_MIB=1 scripts/bulk-demo.sh local
+# ADR-0060 (docs/STORAGE-NETWORK.md): the storage network on anvil (about 2 min once built): five
+# bonded storage nodes, R=3, every node fetches and checks its shards, an epoch of proofs all
+# passed and paid, reads that fail over past a killed node, a node that dropped its shards and a
+# forged row slashed, misses settled by a keeper, repair onto new replicas, conservation on chain.
+scripts/storage-network-anvil.sh
 scripts/check-boundaries.sh
 scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).

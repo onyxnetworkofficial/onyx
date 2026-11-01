@@ -1,0 +1,20 @@
+[package]
+name = "onyx-storage"
+description = "The Onyx storage network (ADR-0060): rendezvous placement of bulk shards over registered storage nodes, storage proofs seeded from chain randomness, repair planning and epoch accounting, mirrored by contracts/src/OnyxStorage.sol. Test network only."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+onyx-core.workspace = true
+onyx-merkle.workspace = true
+onyx-bulk.workspace = true
+borsh.workspace = true
+thiserror.workspace = true
+hex.workspace = true
+serde_json.workspace = true
+
+[lints]
+workspace = true

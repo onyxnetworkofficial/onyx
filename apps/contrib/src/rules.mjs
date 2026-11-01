@@ -138,6 +138,17 @@ export function keyGuard(body, keys) {
 	return null;
 }
 
+/**
+ * Whether a caller's input (any string or object key in it, as is or percent-decoded, or its JSON
+ * text) holds a piece of a key (KEY_WINDOW characters, any form, any letter case). Review CL10-R1-1:
+ * the key filter on answers is an oracle when a caller can make an answer repeat its own guess, so
+ * input that holds a piece of a key is refused before anything runs, and the session stops using keys.
+ */
+export function holdsKey(v, keys) {
+	for (const t of [JSON.stringify(v) ?? '', ...texts(v)]) if (keyRanges(t, keys).length) return true;
+	return false;
+}
+
 /** `text` with every piece of every key (KEY_WINDOW characters or more, any form, any letter case) replaced by "[key removed]". */
 export function redact(text, keys) {
 	const s = String(text);

@@ -45,14 +45,16 @@ cp LICENSE NOTICE "$stage/onyx-publish/"
 # 3. The contributor client: the same relative layout as the repository, so its imports resolve.
 c=$stage/onyx-contrib
 mkdir -p "$c/apps/contrib" "$c/apps/agent"
-cp -r apps/contrib/src apps/contrib/README.md apps/contrib/package.json "$c/apps/contrib/"
+cp -r apps/contrib/src apps/contrib/ui apps/contrib/README.md apps/contrib/package.json "$c/apps/contrib/"
 cp -r apps/agent/src apps/agent/catalog.json apps/agent/openapi.json "$c/apps/agent/"
 cp LICENSE NOTICE "$c/"
 cat >"$c/README.txt" <<EOF
 onyx-contrib $ver (test network only: Base Sepolia, no real money)
 
 Needs Node.js 20 or later; no other install. Start:
+  node apps/contrib/src/cli.mjs ui        (the app in your browser)
   node apps/contrib/src/cli.mjs doctor
+No Node.js? Use the Onyx desktop app or the single-file onyx-contrib programs (docs/desktop-app.md).
 The full guide is apps/contrib/README.md. Your API keys stay in your computer's keychain.
 For keyed rounds, also download onyx-contrib-keyed-linux-x86_64.tar.gz and set
 ONYX_CONTRIB_KEYED_BIN to its bin/level2-keyed.

@@ -81,6 +81,9 @@ lists="$root/docs/ops/public-snapshot-private.txt"
 [ "$mode" != --without-pending ] || lists="$lists $root/docs/ops/public-snapshot-exclude.txt"
 # shellcheck disable=SC2086
 python3 -I "$root/scripts/public-scrub.py" --unlink "$out" $lists
+# Git keeps no empty folders: one left by the removals above would be listed in the maps below
+# here but is gone from a checkout of the published tree (public CI 2026-10-30: docs/partners).
+find "$out" -mindepth 1 -type d -empty -delete
 # The generated maps (README layout, scripts/README.md, docs/README.md) describe this tree, not
 # the private one.
 python3 -I "$out/scripts/check-readme.py" --write >/dev/null && python3 -I "$out/scripts/check-readme.py" \

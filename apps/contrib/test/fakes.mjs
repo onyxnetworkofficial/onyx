@@ -76,6 +76,7 @@ export async function fakeIntake() {
 		seen.push({ method: req.method, url: req.url, headers: { ...req.headers }, body });
 		const url = new URL(req.url, 'http://x');
 		const m = /^\/v1\/submit\/(sub_[0-9a-f]{32})$/.exec(url.pathname);
+		if (req.method === 'GET' && url.pathname === '/v1/health') return json(res, 200, { status: 'ok' });
 		if (req.method === 'GET' && m) return receipts.has(m[1]) ? json(res, 200, { id: m[1], status: receipts.get(m[1]) }) : json(res, 404, { error: { code: 'not_found', message: 'no such receipt' } });
 		if (req.method !== 'POST' || !['/v1/submit', '/v1/submit/check'].includes(url.pathname)) return json(res, 404, { error: { code: 'not_found', message: 'not found' } });
 		if (body.length > 64 * 1024) return json(res, 413, { error: { code: 'body_too_large', message: 'too large' } });

@@ -44,6 +44,7 @@ pub mod roots;
 pub mod self_settle;
 pub mod settle_check;
 pub mod signed_serve;
+pub mod storage;
 pub mod submit;
 pub mod track_serve;
 pub mod wants;

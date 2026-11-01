@@ -101,6 +101,8 @@ The node serves these routes (OpenAPI 3.1: [docs/api/openapi.json](docs/api/open
 | `GET` | `/v1/credits/{account}` | An account's credits | free |
 | `GET` | `/v1/credits/{account}/lines` | An account's own credit lines | free |
 | `POST` | `/v1/relay` | Send a self-signed action, its gas paid from credits | free |
+| `GET` | `/v1/bulk/manifests/{root}` | A held manifest by its root (storage network peers) | free |
+| `GET` | `/v1/bulk/shards/{root}` | A held shard file by its root (storage network peers) | free |
 <!-- /generated:routes -->
 
 ## Quickstart
@@ -162,6 +164,7 @@ cargo test -p onyx-source-btc --test golden_pools                 # the same for
 | `crates/onyx-publish` | Publisher tool for large datasets (contributor loop CL5, ADR-0059): CSV or JSON Lines in, checked shards and a manifest out, signed with a test key, anchored in OnyxSignedBook, uploaded to a node |
 | `crates/onyx-recipe-host` | Deterministic WASM recipe runner: the canonical wasmi engine (fuel, heap stacks, float and import rejection) and an advisory wasmtime fast path (ADR-0004, ADR-0014) |
 | `crates/onyx-recipe-sdk` | What recipe authors import: input decoding, output encoding, the host ABI (no floats, no clock, no randomness) |
+| `crates/onyx-storage` | The Onyx storage network (ADR-0060): rendezvous placement of bulk shards over registered storage nodes, storage proofs seeded from chain randomness, repair planning and epoch accounting, mirrored by contracts/src/OnyxStorage.sol |
 | `crates/onyx-tlock` | drand/tlock time-lock encryption (Boneh-Franklin IBE with Fujisaki-Okamoto) for drand quicknet, on blst (ROADMAP C50) |
 | `crates/onyx-track` | Proof level 5 track records: per-source history of agreement with later stronger answers, computed and committed deterministically (ADR-0036) |
 | `crates/onyx-validator` | Validator: recompute assigned reveals and commit-reveal signed verdicts (ADR-0019) |
@@ -184,6 +187,7 @@ cargo test -p onyx-source-btc --test golden_pools                 # the same for
 | `apps/agent` | The agent toolkit: an API client and an MCP server built from the OpenAPI file; answers are checked by onyx-check |
 | `apps/contrib` | The contributor client (onyx-contrib): keep API keys in the system keychain and contribute their data over MCP; keys never leave the machine |
 | `apps/demo` | The first demo site: one page that walks the pipeline and reruns the real recipe in the browser |
+| `apps/desktop` | The Onyx desktop app (Tauri 2): a window around onyx-contrib's local app, installers built by .github/workflows/desktop.yml (its own workspace) |
 | `apps/web` | The website (SvelteKit): every page runs the network's own Rust checks, compiled to WebAssembly |
 | `apps/web/verify` | Browser verifier for the website (ADR-0020): wasm-bindgen exports over the network's own checks |
 | **Recipes (WebAssembly, outside the workspace)** | |
@@ -235,6 +239,8 @@ Contracts (`contracts/src`, Base Sepolia and local Anvil only):
 | [`OnyxSig`](contracts/src/OnyxSig.sol) | Text formatting and EIP-191 signature recovery that match the Rust side (`Hash32` Display, `eip191_digest`, `eip191_recover` in crates/onyx-labels/src/attest.rs) |
 | [`OnyxSignedBook`](contracts/src/OnyxSignedBook.sol) | The level-3 signed-source book on chain (ADR-0028 amendment 6, docs/spec/proof-ladder.md "Level 3 on chain") |
 | [`OnyxStakes`](contracts/src/OnyxStakes.sol) | Staked data submissions (ROADMAP S3, ADR-0042) |
+| [`OnyxStorage`](contracts/src/OnyxStorage.sol) | The storage network (ADR-0060, docs/spec/storage-network.md, docs/STORAGE-NETWORK.md): storage nodes bond tONYX and declare capacity; a publisher buys storage for an anchored bulk manifest (ADR-0059) with a deposit per GiB per epoch for R replicas; each shard is placed on R nodes by rendezvous hashing over the node list; every epoch a seed from a past block hash picks challenge slots per deal, and the challenged holders answer here with the picked row and its two Merkle paths, checked with Keccak |
+| [`OnyxStorageLib`](contracts/src/OnyxStorageLib.sol) | The hashes and parsers of the storage network (ADR-0060, docs/spec/storage-network.md), byte for byte the twins of `crates/onyx-storage` (`ids.rs`, `deal.rs`, `challenge.rs`); fixtures/storage/vectors.json is checked by both sides |
 | [`OnyxTestToken`](contracts/src/OnyxTestToken.sol) | "tONYX test token": a plain ERC-20 with NO value, for the S3/S6 prototype only (ADR-0042 item 2) |
 | [`OnyxTestnetOwnerOracle`](contracts/src/OnyxTestnetOwnerOracle.sol) | The fallback oracle of the S3 prototype (ADR-0042 item 7): one owner key answers a contested or low-quorum claim as correct, wrong or void |
 <!-- /generated:layout -->

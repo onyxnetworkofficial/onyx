@@ -28,6 +28,7 @@ details).
 | Who pays validators when nothing is disputed | Open: needs the token decision | NS12 |
 | Spam and rate-limited sources | Per-source fetch budget built; validate only after a buyer pays | built, NS10 |
 | Storage tiers | Hot, warm, cold (cold = root on chain, recompute on request) | NS13 |
+| Hundreds of terabytes from many people | A storage network of bonded nodes: fingerprints on chain, R copies placed by rendezvous hashing, proofs each epoch ([STORAGE-NETWORK.md](STORAGE-NETWORK.md)) | built on a local chain, NS19 |
 | Salted rows so a buyer cannot guess other rows | Built and served one row at a time | built |
 | Buyer privacy | Prepaid balances with batched settlement (contract built) | NS9 |
 | First user: API and agents | OpenAPI file and agent toolkit (MCP server, `onyx-check`) built | NS8 |
@@ -88,9 +89,10 @@ Status: `todo`, `doing`, `done`, `parked (why)`. Size is a rough time for the lo
 | NS16 | **Track records served:** source and forecaster scores on the API and the site | 10 | 2 days | doing 2026-10-28: slice 1 (ADR-0036 amendment 7) and slice 2 (amendment 8: the NWS forecast as a labelled testnet forecaster, through the intake on Base Sepolia, live panel on the data page); grades come from December |
 | NS17 | **Hosted API node** next to the site: the live query API on testnet | 3, 8 | 1 day | done 2026-10-27 (live at https://onyx.cryptagraph.com/v1/: `scripts/deploy-api.sh` run with the owner's OK; `/v1/health` 200 on Base Sepolia (chain 84532, settlement 0xe4be…ae8f), 2 servable shards, payments off and no key on the server, Caddy's admin endpoint closed, other `/v1/` paths and POST 404, the site's live daily check 11/11. Label data answers "withheld" until the rights are cleared. Level-2 daily values: ROADMAP B6) |
 | NS18 | **Pooled private data** (encrypted contributions computed in a protected environment) | 7 | research | parked (after paid demand) |
+| NS19 | **Storage network:** hundreds of terabytes from many publishers on many bonded storage nodes; the chain holds only fingerprints; shards placed by rendezvous hashing on R nodes, proven on chain each epoch, paid, slashed and repaired; reads from any copy, every row checked. Master document: [STORAGE-NETWORK.md](STORAGE-NETWORK.md) | 3 | 1 week | doing 2026-10-30: v0 built and run on a local anvil (ADR-0060, contributor loop CL9); Base Sepolia is ROADMAP S15 |
 
 Order: NS7, NS1, NS2, NS8, NS3, NS5, NS9, NS10, NS17, NS11, NS6, NS4, NS13, NS14, NS15, NS16;
-NS12 when the partners decide; NS18 later.
+NS12 when the partners decide; NS19 (the storage network) alongside; NS18 later.
 
 ## 4. Only the project owner can
 
@@ -102,6 +104,9 @@ NS12 when the partners decide; NS18 later.
 
 ## 5. Log (newest first)
 
+- 2026-10-30: NS19 v0 (ADR-0060): the storage network built and run on a local anvil: five bonded
+  nodes, R = 3, proofs on chain, a killed node and a node that dropped its shards slashed, repair,
+  conservation checked. The roadmap and the scaling math live in docs/STORAGE-NETWORK.md.
 - 2026-10-28: NS6 parked (NL11): `tlsn` is still `v0.1.0-alpha.15` (pre-release), `tlsn-js` is
   archived and the browser path is the `tlsn-extension` Chrome extension with a Node verifier
   server; an in-page build is unproven. Next step when picked up: a labelled experiment that

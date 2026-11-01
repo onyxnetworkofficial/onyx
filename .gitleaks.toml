@@ -98,3 +98,12 @@ condition = "AND"
 regexTarget = "secret"
 paths = ['''^apps/web/static/markets/base\-sepolia\.json$''']
 regexes = ['''^0x1cb5f5816812991ac3b52c63c3fcadcc9f544579$''']
+
+[[allowlists]]
+# Safe: rendezvous shard keys keccak256("onyx-storage-shard-v1" || salt || index) in the storage network's generated test vectors (ADR-0060); hashes of public test inputs, no private material.
+description = "fixtures/storage/vectors.json shardKeys key: reviewed 2026-11-01"
+targetRules = ["generic-api-key"]
+condition = "AND"
+regexTarget = "secret"
+paths = ['''^fixtures/storage/vectors\.json$''']
+regexes = ['''^0xdae0c9cd2854f5d67dea5c97d7982ebded99c480f03ac8120fe0906fdaa8cac5$''', '''^0x33374d43812b74d62fd1a1e1ac4a6326eb1d9369617a66b7ae1aae944f70d627$''', '''^0xf9f3b73baf2d2ceb0556df8552fd1631b0b9332243867a87ae42ae2b7d141196$''', '''^0xdf4e34d637c205456eb20a666d4b67dd1362a5957470cd27cc0f6ab1a33d1363$''']

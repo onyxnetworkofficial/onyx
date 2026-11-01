@@ -18,6 +18,11 @@ apps/web/build/
 apps/web/.svelte-kit/
 apps/web/src/lib/pkg/
 apps/web/static/data/
+# CL10: the desktop app's build output, its npm tools and the sidecar the workflow puts in place
+apps/desktop/node_modules/
+apps/desktop/src-tauri/target/
+apps/desktop/src-tauri/binaries/onyx-contrib-*
+apps/desktop/src-tauri/gen/
 
 # Local agent worktrees
 /.claude/worktrees/

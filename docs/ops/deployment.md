@@ -548,6 +548,7 @@ node at `https://onyx.cryptagraph.com/v1/` indexes this set, [site-hosting.md](s
 | OnyxSignedBook (level-3 book and bulk manifests, CL5; `scripts/deploy-signed-book.sh`, 2026-10-30, tx `0x485057a75ea1bba625da407a00a98cf9da2159ad4de0f64c3a653d416a6e6144`; code hash `0x0843e5a59d2ee1d64aefa6f0487c6c1289b32c8c120ddf0550950cbf57f55d20`) | `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` |
 | Signed book reviewer (a test key of its own, `.onyx-testnet/keys/signed-book-reviewer.key`; registers publisher keys with `cargo run -p onyx-level2 --example book-reviewer`) | `0x98afa79b24e067ddac2478468d3e1c81d4810d30` |
 | Bulk demo publisher `synthetic-demo` (synthetic rows only; domain onyx.cryptagraph.com, keys document at `/.well-known/onyx-source-keys.json`) | `0x39c543ec14a6aff3e38c82f132f3ff014f671269` |
+| Bulk publisher `onchain-archive` (on-chain metrics from its own nodes; origin onyx.cryptagraph.com/archive, keys document at `/archive/.well-known/onyx-source-keys.json`; registered 2026-10-30, block 52364676) | `0xedff5b3070a2ecc6fa06ea7781ec90f6318bee5c` |
 
 Markets next to this registry (NORTH-STAR NS11, ADR-0042 amendment 2; `scripts/markets-sepolia.sh
 deploy`, 2026-10-27, block 51006420, 8 transactions, 0.000351 test ETH; the deployer mints tONYX,

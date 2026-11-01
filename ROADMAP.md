@@ -1007,6 +1007,36 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
       their manifests and a composite; the `GET /v1/aligned/{metric}` route in onyx-node with its
       OpenAPI entry and the hold for an unobserved venue bucket (ADR-0049); the browser's check;
       rounds on Base Sepolia; the edge-print and venue-concentration follow-ups (THREATS CL8)
+- [ ] S20 Desktop app follow-ups (contributor loop CL10, ADR-0061): the first run of
+      `.github/workflows/desktop.yml` on a `v*-testnet` tag, each installer opened on a real
+      Windows, macOS and Linux machine (window, key stored, value read, Claude Desktop connected);
+      code signing (Windows Authenticode, Apple Developer ID and notarization: paid, the owner's
+      decision); updates inside the app; a checksum file signed with a project key
+
+### The storage network (ADR-0060; master document [docs/STORAGE-NETWORK.md](docs/STORAGE-NETWORK.md))
+
+Hundreds of terabytes from many publishers on many bonded storage nodes; the chain holds only
+fingerprints. v0 built 2026-10-30 on a local anvil (contributor loop CL9): rendezvous placement,
+on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-network-anvil.sh`).
+
+- [ ] S15 Storage network on Base Sepolia (lead only): deploy `OnyxStorage` next to the signed book
+      (docs/ops/runbooks/deploy-storage.md), five or more real storage nodes, a publisher deal; a
+      deal whose anchor is later withdrawn can be closed early (THREATS STORAGE-15). Done
+      2026-11-01: the chain and placement cache (STORAGE-R1-8, R2-5), `scripts/storage-sepolia.sh`,
+      `deploy/systemd/onyx-storage@.service` and the Caddy routes /storage/n1..n5 (n1 is the keeper)
+- [ ] S16 Sealed replicas and operator diversity (THREATS STORAGE-1, STORAGE-2, STORAGE-4): a
+      node-specific slow encoding of each copy so a node cannot fetch from another replica only when
+      asked; at most one copy of a shard per declared operator; nodes that decline everything stop
+      counting in N and in total capacity (STORAGE-R2-2)
+- [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6): placement weighted by declared
+      capacity, erasure coding (k of n pieces instead of R copies),
+      aggregated proofs (one answer per node per epoch, more samples), per-epoch committees or a
+      proof of rank instead of the whole node list (past 128 nodes)
+- [ ] S18 Cold archive tier on an outside network (the owner picks it) and store on first use
+      (ADR-0055 item 2): Onyx keeps the fingerprints and a fetch path; the publisher keeps the bulk
+      until the first paid read
+- [ ] S19 Read payments (THREATS STORAGE-8): nodes paid per read or with retrieval receipts, so
+      serving is rewarded and refusing to serve is visible
 
 ## Phase W: website (own lane, runs alongside the other phases)
 

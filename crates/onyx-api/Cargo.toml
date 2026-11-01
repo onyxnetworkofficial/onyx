@@ -19,6 +19,7 @@ onyx-track = { workspace = true, features = ["wire"] }
 onyx-intake.workspace = true
 # CL5 (ADR-0059): large publisher datasets (bulk_serve).
 onyx-bulk.workspace = true
+onyx-storage.workspace = true
 borsh.workspace = true
 hex.workspace = true
 serde.workspace = true

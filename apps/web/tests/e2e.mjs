@@ -22,6 +22,7 @@ import { ns11 } from './ns11.mjs';
 import { ns14 } from './ns14.mjs';
 import { ns15 } from './ns15.mjs';
 import { downloads } from './downloads.mjs';
+import { download } from './download.mjs';
 import { ns16 } from './ns16.mjs';
 import { t10 } from './t10.mjs';
 import { pp1Parser } from './pp1.mjs';
@@ -1410,8 +1411,9 @@ try {
 	// right edge, the menu reaches every page, primary controls are 44 x 44 px tap targets,
 	// no text under 12 px, and a skip link comes first.
 	const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/markets','Markets']];
-	const PRIMARY = [['#/data', 'Browse data'], ['#/markets', 'Markets'], ['#/how-it-works', 'How it works'], ['#/submit', 'Add data']];
+	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets']];
+	// CL10: Download (the desktop app) is the fifth primary destination.
+	const PRIMARY = [['#/data', 'Browse data'], ['#/markets', 'Markets'], ['#/how-it-works', 'How it works'], ['#/submit', 'Add data'], ['#/download', 'Download']];
 	// Each page is measured once settled (tests/wait.mjs): drawn, no placeholder or running
 	// check left (the private Explorer decodes the recipe input first), and the DOM still.
 	const layout = (pg) =>
@@ -1472,7 +1474,7 @@ try {
 		const rows = await links.evaluateAll((as) => as.map((a) => ({ t: a.textContent.trim(), h: a.getBoundingClientRect().height, w: a.getBoundingClientRect().width, cur: a.getAttribute('aria-current') })));
 		expect(
 			closed && mb && mb.width >= 44 && mb.height >= 44 && (await menu.getAttribute('aria-expanded')) === 'true' && JSON.stringify(rows.map((r) => r.t)) === JSON.stringify(PRIMARY.map((r) => r[1])) && rows.every((r) => r.h >= 44 && r.w >= 44) && rows.find((r) => r.cur === 'page')?.t === PRIMARY.find((r) => r[0] === route)?.[1],
-			`phone: on /${route} the menu button opens the four primary pages as 44 px rows with correct current state`
+			`phone: on /${route} the menu button opens the ${PRIMARY.length} primary pages as 44 px rows with correct current state`
 		);
 		const [nextRoute, nextName] = PRIMARY[(PRIMARY.findIndex((r) => r[0] === route) + 1) % PRIMARY.length];
 		await links.filter({ hasText: new RegExp(`^${nextName}$`) }).click();
@@ -1491,7 +1493,7 @@ try {
 		const wide = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 		await wide.goto(base + '#/api');
 		await wide.getByTestId('site-nav').getByRole('link').nth(PRIMARY.length - 1).waitFor({ timeout: WAIT_CAP }).catch(() => {});
-		expect((await wide.getByTestId('site-nav').getByRole('link').count()) === PRIMARY.length && (await wide.getByTestId('site-nav').isVisible()) && !(await wide.getByTestId('menu-button').isVisible()), 'desktop: inline nav with four primary destinations, no menu button');
+		expect((await wide.getByTestId('site-nav').getByRole('link').count()) === PRIMARY.length && (await wide.getByTestId('site-nav').isVisible()) && !(await wide.getByTestId('menu-button').isVisible()), `desktop: inline nav with ${PRIMARY.length} primary destinations, no menu button`);
 		await wide.close();
 	}
 	{
@@ -1907,6 +1909,7 @@ try {
 	await ns14(browser, base, root, expect);
 	await ns15(browser, base, root, expect);
 	await downloads(browser, base, root, expect);
+	await download(browser, base, root, expect);
 	await ns16(browser, base, root, expect);
 	await t10(browser, base, expect);
 	// Pre-public loop PP1: a fed receipt's observer evidence (the live view is in submission-live.mjs).

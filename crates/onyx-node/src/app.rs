@@ -1094,7 +1094,8 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 &b.warm,
                 b.limits,
             )
-            .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?;
+            .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?
+            .with_free_per_minute(b.free_per_minute);
             eprintln!(
                 "onyx-node: bulk datasets on (ONYX_BULK_DIR), anchored in signed book {}",
                 hx(&pin.book)
@@ -1116,6 +1117,49 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 }
             }
         });
+    }
+    // ADR-0060: storage-node mode. The shards placed on this node are fetched
+    // from peers or the publisher, checked against the deal's anchored
+    // manifest, stored and served by the bulk store, and proven on chain.
+    if let Some(sc) = &c.storage {
+        let Some(store) = bulk_store.clone() else {
+            return Err("ONYX_STORAGE_CONTRACT needs the bulk store (ONYX_BULK_DIR and the manifest's signedBook)".into());
+        };
+        let k = read_key_file(&sc.key_file)?;
+        let tx = Sender::new(rpc(&c), d.chain_id, k)
+            .map(|s| s.with_fee_limits(c.max_fee_per_gas, c.max_gas))
+            .ok_or_else(|| "ONYX_STORAGE_KEY_FILE is not a valid secp256k1 key".to_string())?;
+        let me = onyx_storage::NodeId(onyx_core::Hash32(sc.node));
+        let operator = tx.address();
+        let chain = onyx_api::storage::StorageChain::new(
+            Arc::new(rpc_logs(&c)),
+            sc.contract,
+            sc.from_block,
+        );
+        let node = Arc::new(onyx_api::storage::StorageNode::new(
+            chain,
+            Arc::new(tx),
+            Arc::new(onyx_api::storage::HyperGet::new(Duration::from_secs(120))),
+            store,
+            onyx_api::storage::StorageNodeConfig {
+                contract: sc.contract,
+                node: me,
+                fetch: sc.fetch,
+                keeper: sc.keeper,
+                fetches_per_tick: sc.fetches_per_tick,
+            },
+        ));
+        eprintln!(
+            "onyx-node: storage node {me} on (OnyxStorage {}, operator {}, fetch {}, keeper {})",
+            hx(&sc.contract),
+            hx(&operator),
+            if sc.fetch { "on" } else { "off" },
+            if sc.keeper { "on" } else { "off" },
+        );
+        tokio::spawn(onyx_api::storage::run(
+            node,
+            Duration::from_secs(sc.every_secs),
+        ));
     }
     // Open before binding the listener; damaged/locked intake must fail startup.
     let intake = crate::submissions::routes(c.submissions.as_deref())
@@ -1271,7 +1315,8 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
     let (extra, bulk_uploads) = match &bulk_store {
         Some(store) => (
             extra.merge(onyx_api::bulk_serve::routes(store.clone())),
-            onyx_api::bulk_serve::upload_routes(store.clone()),
+            onyx_api::bulk_serve::upload_routes(store.clone())
+                .merge(onyx_api::bulk_serve::peer_routes(store.clone())),
         ),
         None => (extra, axum::Router::new()),
     };

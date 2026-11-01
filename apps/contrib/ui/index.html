@@ -1,0 +1,122 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Onyx contributor app</title>
+<link rel="icon" href="/icon.svg" type="image/svg+xml">
+<link rel="stylesheet" href="/app.css">
+<script src="/app.js" defer></script>
+</head>
+<body>
+<header class="top">
+	<img src="/icon.svg" alt="" width="36" height="36">
+	<div>
+		<h1>Onyx contributor app</h1>
+		<p class="muted">Test network (Base Sepolia): no real money. Your API keys stay on this computer.</p>
+	</div>
+</header>
+<main id="main">
+	<p id="nokey" class="banner warn" hidden>This page was opened without its launch link. Open it again from the Onyx app, or run <code>onyx-contrib ui</code> and use the link it prints.</p>
+	<p id="status" class="banner" role="status" aria-live="polite" hidden></p>
+
+	<section aria-labelledby="h-health">
+		<h2 id="h-health">1. Check this computer</h2>
+		<ul id="checks" class="checks"><li class="muted">Checking…</li></ul>
+		<details id="filevault">
+			<summary>Use an encrypted file for your keys instead of the keychain</summary>
+			<form id="f-file" class="grid">
+				<label>Passphrase (12 characters or more; asked again each time the app starts)
+					<input name="passphrase" type="password" autocomplete="off" minlength="12" required></label>
+				<button type="submit">Use the encrypted file</button>
+			</form>
+		</details>
+	</section>
+
+	<section aria-labelledby="h-providers">
+		<h2 id="h-providers">2. Your API providers and keys</h2>
+		<ul id="providers" class="cards"></ul>
+		<details id="addbox">
+			<summary>Add a provider</summary>
+			<form id="f-add" class="grid">
+				<label>Short name (a-z, 0-9, - and _)<input name="name" required pattern="[a-z0-9][a-z0-9_\-]{0,39}" autocomplete="off" placeholder="prices"></label>
+				<label>API base URL (https)<input name="baseUrl" type="url" required placeholder="https://api.example.com/v3" autocomplete="off"></label>
+				<fieldset>
+					<legend>How the provider takes the key</legend>
+					<label class="inline"><input type="radio" name="authIn" value="header" checked> In a header</label>
+					<label class="inline"><input type="radio" name="authIn" value="query"> As a URL parameter</label>
+				</fieldset>
+				<label>Header or parameter name<input name="authName" required placeholder="x-api-key" autocomplete="off"></label>
+				<label class="inline"><input type="checkbox" name="bearer"> The header value starts with "Bearer "</label>
+				<label>OpenAPI file (https URL of its JSON, from the provider's documentation)<input name="openapi" type="url" placeholder="https://api.example.com/openapi.json" autocomplete="off"></label>
+				<label>The provider's terms page (https)<input name="docsUrl" type="url" placeholder="https://www.example.com/api-terms" autocomplete="off"></label>
+				<button type="submit">Add provider</button>
+			</form>
+		</details>
+	</section>
+
+	<section aria-labelledby="h-read">
+		<h2 id="h-read">3. Read a value and contribute it</h2>
+		<p class="muted">Pick a provider above ("Endpoints"). The value is read here, with your key, and shown to you. Nothing goes to Onyx until you press "Send to Onyx".</p>
+		<div id="explore" hidden>
+			<form id="f-search" class="row">
+				<label class="grow"><span>Search the endpoints of <span id="ex-provider"></span></span><input name="search" autocomplete="off" placeholder="price"></label>
+				<button type="submit">Search</button>
+			</form>
+			<ul id="endpoints" class="list"></ul>
+			<form id="f-preview" class="grid" hidden>
+				<h3 id="ep-title"></h3>
+				<div id="ep-params" class="grid"></div>
+				<label>Where the value is in the answer (JSON pointer, optional)<input name="pointer" placeholder="/bitcoin/usd" autocomplete="off"></label>
+				<button type="submit">Read the value (nothing is sent to Onyx)</button>
+			</form>
+			<div id="preview" hidden>
+				<h3>The value, read on this computer</h3>
+				<pre id="pv-value"></pre>
+				<p class="muted" id="pv-note"></p>
+				<div id="pv-pointers" class="chips"></div>
+			</div>
+			<form id="f-check" class="grid" hidden>
+				<h3>Describe it for Onyx</h3>
+				<label>Title<input name="title" required maxlength="120"></label>
+				<label>What the value is, its unit and how often it changes<textarea name="description" required maxlength="1600" rows="3"></textarea></label>
+				<label>What the provider's terms say about sharing this data
+					<select name="rights" required>
+						<option value="not_sure">I am not sure</option>
+						<option value="open_license">Open licence</option>
+						<option value="public_domain">Public domain</option>
+						<option value="terms_forbid">The terms forbid sharing</option>
+					</select></label>
+				<label>Licence id (open licence only, for example CC-BY-4.0)<input name="licenseId" maxlength="64" autocomplete="off"></label>
+				<label>How often it changes
+					<select name="changes"><option value="live">Live</option><option value="daily">Daily</option><option value="once">Once</option></select></label>
+				<label>Unit (optional)<input name="unit" maxlength="32" autocomplete="off"></label>
+				<label class="inline"><input type="checkbox" name="namesPerson"> The data names private people (it will be refused)</label>
+				<button type="submit">Check with Onyx (records nothing)</button>
+			</form>
+			<div id="confirm" hidden>
+				<h3>Exactly what will be sent to Onyx</h3>
+				<p class="muted">Onyx checked it and recorded nothing. Your key is not in it: the endpoint shows <code>{api_key}</code> where the key goes, or names the header.</p>
+				<pre id="willsend"></pre>
+				<label class="inline"><input type="checkbox" id="agree"> I have read what will be sent, and I want to send it</label>
+				<button type="button" id="send" disabled>Send to Onyx</button>
+			</div>
+		</div>
+	</section>
+
+	<section aria-labelledby="h-past">
+		<h2 id="h-past">4. Your contributions</h2>
+		<ul id="history" class="list"></ul>
+	</section>
+
+	<section aria-labelledby="h-claude">
+		<h2 id="h-claude">5. Use Onyx from Claude Desktop (optional)</h2>
+		<p class="muted">Adds Onyx's tools to Claude Desktop's settings. Your other Claude Desktop settings stay as they are, and the old file is kept as a backup.</p>
+		<p id="claude-state" class="muted"></p>
+		<button type="button" id="claude">Connect to Claude Desktop</button>
+	</section>
+</main>
+<footer class="muted"><span id="ver"></span></footer>
+</body>
+</html>

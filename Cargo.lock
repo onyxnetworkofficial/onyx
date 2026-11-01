@@ -1122,6 +1122,7 @@ dependencies = [
  "onyx-labels",
  "onyx-merkle",
  "onyx-recipe-sdk",
+ "onyx-storage",
  "onyx-track",
  "secp256k1",
  "serde",
@@ -1318,6 +1319,7 @@ dependencies = [
  "onyx-coordinator",
  "onyx-core",
  "onyx-labels",
+ "onyx-storage",
  "rustix",
  "serde",
  "serde_json",
@@ -1556,6 +1558,19 @@ dependencies = [
  "serde_json",
  "tokio",
  "tower",
+]
+
+[[package]]
+name = "onyx-storage"
+version = "0.0.1"
+dependencies = [
+ "borsh",
+ "hex",
+ "onyx-bulk",
+ "onyx-core",
+ "onyx-merkle",
+ "serde_json",
+ "thiserror",
 ]
 
 [[package]]

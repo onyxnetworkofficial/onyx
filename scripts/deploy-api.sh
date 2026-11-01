@@ -80,10 +80,10 @@ conn_cap=${ONYX_API_CONN_CAP:-1}
 # Publishers' large datasets (contributor loop CL5, ADR-0059, docs/ops/bulk-publish.md): on when the
 # export's manifest pins a signed book (the node takes only manifests anchored there), off with
 # ONYX_API_BULK=0. The limits fit the host's disk (about 34 GB free on 2026-10-30): 16 GiB for every
-# publisher together, 8 GiB for one.
+# publisher together, 8 GiB for one; up to 1,000 datasets per publisher (one per chain and metric).
 bulk=${ONYX_API_BULK:-1}
 if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
-  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=16 ONYX_BULK_QUOTA_GIB=8 >>"$stage/node.env"
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=16 ONYX_BULK_QUOTA_GIB=8 ONYX_BULK_MAX_DATASETS=1000 >>"$stage/node.env"
 fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
 # pinned by <export>/observations/pins (metric=0x<template id>, one per line); the node checks

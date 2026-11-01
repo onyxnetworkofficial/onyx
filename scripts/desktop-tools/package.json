@@ -1,0 +1,9 @@
+{
+  "name": "onyx-desktop-tools",
+  "private": true,
+  "description": "Build-time tool for scripts/desktop-build.sh (CL10): postject writes the onyx-contrib bundle into Node's official binary (Node single executable application). Never shipped.",
+  "license": "Apache-2.0",
+  "devDependencies": {
+    "postject": "1.0.0-alpha.6"
+  }
+}

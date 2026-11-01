@@ -1965,3 +1965,28 @@ Result: NL11 is parked. The Onyx S2b experiment (experiments/tlsn-fiscaldata) pr
 an in-page alpha.15 WASM build is not proven, and the extension route asks each contributor to
 install an extension.
 
+
+## Storage network (ADR-0060, contributor loop CL9, 2026-10-30)
+
+Prior art read for the design; each line says only what the linked source describes, and how
+Onyx's v0 differs.
+
+- Rendezvous (highest-random-weight) hashing, introduced by Thaler and Ravishankar (the papers
+  are listed in [Wikipedia: Rendezvous hashing](https://en.wikipedia.org/wiki/Rendezvous_hashing)).
+  Each node scores each object and the top scores win; a join or leave moves only the objects
+  whose winners change. Onyx uses it with a Keccak score so the contract can recompute it.
+- Filecoin: proofs of replication (sealing) and proofs of spacetime,
+  [Filecoin spec](https://spec.filecoin.io/). Sealing is what stops a provider from fetching a
+  copy only when challenged; Onyx v0 has no sealing (THREATS STORAGE-2, ROADMAP S16).
+- Sia: renters and hosts with contracts and storage proofs over a Merkle tree of the file,
+  [Sia docs](https://docs.sia.tech/). Onyx's row proofs follow the same idea over the ADR-0003
+  row tree that buyers already use.
+- Storj v3: erasure coding and audits of storage nodes,
+  [Storj whitepaper v3](https://www.storj.io/storjv3.pdf). Onyx v0 keeps full replicas; erasure
+  coding is ROADMAP S17.
+- Arweave: permanent storage with proofs of access to random past data,
+  [Arweave yellow paper](https://www.arweave.org/yellow-paper.pdf). A candidate for the cold
+  archive tier (ROADMAP S18), the owner's choice.
+- `blockhash` reaches only the 256 most recent blocks
+  ([Solidity docs](https://docs.soliditylang.org/en/latest/units-and-global-variables.html#block-and-transaction-properties)):
+  hence the seed and activation windows of 256 blocks.

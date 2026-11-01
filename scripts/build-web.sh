@@ -222,7 +222,8 @@ python3 -I - apps/web/build <<'PY'
 import decimal, json, pathlib, sys
 saved = 0
 for p in sorted(pathlib.Path(sys.argv[1]).rglob("*.json")):
-    if p.relative_to(sys.argv[1]).parts[:1] in (("app",), (".well-known",)):
+    parts = p.relative_to(sys.argv[1]).parts
+    if parts[:1] == ("app",) or ".well-known" in parts:
         # Vite's own files; and .well-known documents, whose Keccak a signed book records
         # (CL5 keys document): they ship byte for byte.
         continue

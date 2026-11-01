@@ -1,0 +1,75 @@
+# One storage node of the Onyx storage network (ADR-0060, ROADMAP S15) as a hardened systemd
+# service: onyx-node in storage mode only (bulk store, no catalog rows). %i is the node's short
+# name (n1, n2, ...). `scripts/storage-sepolia.sh install` installs every file below; by hand:
+#
+#   sudo install -m 0755 onyx-node /usr/local/bin/onyx-node            # the same binary as the API
+#   sudo install -d -m 0700 /etc/onyx/storage
+#   sudo install -m 0600 n1.env /etc/onyx/storage/n1.env               # ONYX_* below
+#   sudo install -m 0600 n1.key /etc/onyx/storage/n1.key               # the node operator's key
+#   sudo install -m 0644 catalog.json /etc/onyx/storage-catalog.json   # {"version": 1, "shards": []}
+#   sudo install -m 0644 deploy/systemd/onyx-storage@.service /etc/systemd/system/
+#   sudo systemctl daemon-reload && sudo systemctl enable --now onyx-storage@n1
+#
+# /etc/onyx/storage/<name>.env (0600) sets ONYX_ENV, ONYX_LISTEN (a loopback port of its own),
+# ONYX_PUBLIC_URL, ONYX_RPC_URL, ONYX_DEPLOYMENT, ONYX_CATALOG, ONYX_BULK_* and ONYX_STORAGE_*
+# except the key file. It must NOT set ONYX_STATE_DIR, ONYX_CAS_DIR, ONYX_BULK_DIR or
+# ONYX_STORAGE_KEY_FILE: this unit sets them. The key is a systemd credential (L7-SD-1), readable
+# only by this service at $CREDENTIALS_DIRECTORY/storage-key.
+
+[Unit]
+Description=Onyx storage node %i (onyx-node storage mode, testnet)
+Documentation=file:///opt/onyx/docs/ops/storage-node.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=exec
+ExecStartPre=/usr/local/bin/onyx-node --check-config
+ExecStart=/usr/local/bin/onyx-node
+EnvironmentFile=/etc/onyx/storage/%i.env
+LoadCredential=storage-key:/etc/onyx/storage/%i.key
+Environment=ONYX_STORAGE_KEY_FILE=%d/storage-key
+Environment=ONYX_STATE_DIR=/var/lib/onyx-storage/%i/state
+Environment=ONYX_CAS_DIR=/var/lib/onyx-storage/%i/cas
+Environment=ONYX_BULK_DIR=/var/lib/onyx-storage/%i/bulk
+StateDirectory=onyx-storage/%i onyx-storage/%i/state onyx-storage/%i/cas onyx-storage/%i/bulk
+StateDirectoryMode=0700
+# One dynamic user per node: no node reads another's key or shards (review STORAGE-R3-7).
+User=onyx-storage-%i
+DynamicUser=yes
+Restart=on-failure
+RestartSec=5s
+KillSignal=SIGTERM
+TimeoutStopSec=75s
+
+# Hardening (as deploy/systemd/onyx-node.service).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+ProcSubset=pid
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+IPAddressDeny=169.254.0.0/16 fe80::/10
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+CapabilityBoundingSet=
+AmbientCapabilities=
+UMask=0077
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

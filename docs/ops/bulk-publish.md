@@ -18,6 +18,9 @@ for Base Sepolia to make your anchor final). Later versions: about 30 minutes, m
    `onchain-metrics.pub`, and a domain you control that is equally neutral (for example a new
    domain or a subdomain used only for this). You need to be able to put one file on that domain
    over HTTPS.
+   The book records the domain as your *origin*, and one origin belongs to one publisher. An
+   origin may also be a domain and a path (`example.org/archive`): the keys document is then at
+   `https://<origin>/.well-known/onyx-source-keys.json`.
 2. **Ask the Onyx operator for three things:** the node address (`https://...`), the signed book
    address (`0x...`, the `signedBook` of the node's deployment manifest), and who the reviewer
    is. The node must run with `ONYX_BULK_DIR` (docs/ops/config.md).

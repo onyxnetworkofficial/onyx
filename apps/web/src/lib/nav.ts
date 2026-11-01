@@ -1,5 +1,5 @@
 // All destinations remain discoverable in the footer and command palette.
-// The header focuses on the four tasks a new visitor needs.
+// The header focuses on the tasks a new visitor needs: four pages and the app's download.
 import { resolve } from '$app/paths';
 
 export const NAV = [
@@ -11,11 +11,13 @@ export const NAV = [
 	{ href: resolve('/labels'), path: '/labels', label: 'Labels' },
 	{ href: resolve('/api'), path: '/api', label: 'API' },
 	{ href: resolve('/submit'), path: '/submit', label: 'Add data' },
+	{ href: resolve('/download'), path: '/download', label: 'Download' },
 	{ href: resolve('/markets'), path: '/markets', label: 'Markets' },
 	{ href: resolve('/'), path: '/', label: 'Home' }
 ];
 
-// MP13: Markets, tonight's demo, is a primary destination too.
-export const PRIMARY_NAV = ['/data', '/markets', '/how-it-works', '/submit'].map((path) => NAV.find((n) => n.path === path)!);
+// MP13: Markets, tonight's demo, is a primary destination too. CL10: Download (the desktop app, as
+// bitcoin.org's menu links its download) ends the header row.
+export const PRIMARY_NAV = ['/data', '/markets', '/how-it-works', '/submit', '/download'].map((path) => NAV.find((n) => n.path === path)!);
 
-export const FOOTER_NAV = ['/', '/submit', '/data', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);
+export const FOOTER_NAV = ['/', '/submit', '/download', '/data', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);

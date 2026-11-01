@@ -20,6 +20,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FOLDERS = {
     "apps/agent": "The agent toolkit: an API client and an MCP server built from the OpenAPI file; answers are checked by onyx-check",
     "apps/contrib": "The contributor client (onyx-contrib): keep API keys in the system keychain and contribute their data over MCP; keys never leave the machine",
+    "apps/desktop": "The Onyx desktop app (Tauri 2): a window around onyx-contrib's local app, installers built by .github/workflows/desktop.yml (its own workspace)",
     "apps/demo": "The first demo site: one page that walks the pipeline and reruns the real recipe in the browser",
     "apps/web": "The website (SvelteKit): every page runs the network's own Rust checks, compiled to WebAssembly",
     "recipes/out": "The built recipe WASM files and their Keccak-256 ids (reproducible, committed)",
@@ -39,11 +40,13 @@ IN_GIT = os.path.isdir(os.path.join(ROOT, ".git")) or os.path.isfile(os.path.joi
 DOCS = {
     "NORTH-STAR.md": "The north star: what the partners asked for, what makes Onyx new, and the build list",
     "TRACKER.md": "The vision, every idea, and the decision log",
-    "contributor-loop.md": "The contributor loop (CL1-CL8): easy data contribution, one system for users",
+    "contributor-loop.md": "The contributor loop (CL1-CL10): easy data contribution, one system for users",
     "north-star-loop.md": "The north star work loop (NL0-NL5): items, results, log",
+    "desktop-app.md": "The Onyx desktop app: download, install (unsigned-installer steps), use, what stays on your computer (CL10)",
     "agents.md": "Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21)",
     "join.md": "Join a round as an independent observer: the join kit, from key to sealed reveal (NL16)",
     "pre-public-loop.md": "The pre-public work loop (PP1-PP7): items, results, log",
+    "STORAGE-NETWORK.md": "The storage network: how Onyx keeps hundreds of terabytes from many publishers on bonded storage nodes (the roadmap master document, ADR-0060)",
     "website-plan.md": "The website plan and its W-numbered rounds",
     "adr": "Architecture decision records, one per decision (index: DECISIONS.md)",
     "api": "The API description (OpenAPI 3.1), checked against the code",

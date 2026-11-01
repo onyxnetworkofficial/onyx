@@ -87,6 +87,9 @@ pub struct NodeConfig {
     /// tiers file, hot shards) and the `/v1/bulk` routes. Needs the
     /// manifest's `signedBook` (manifests are anchored there).
     pub bulk: Option<BulkConfig>,
+    /// `ONYX_STORAGE_*` (ADR-0060): storage-node mode. Needs `ONYX_BULK_DIR`
+    /// (the shards are held and served by the bulk store).
+    pub storage: Option<StorageConfig>,
     /// `ONYX_TRACK_PUBLICATIONS`: the track-record coordinator's publication
     /// file (ROADMAP C20, a Borsh `Publication`), re-read when it changes; `/v1/track` serves it. Unset: nothing
     /// published (every record a 404 `no_track_record`).
@@ -628,6 +631,7 @@ impl NodeConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             bulk: BulkConfig::from_env(&get)?,
+            storage: StorageConfig::from_env(&get)?,
             track_publications: get("ONYX_TRACK_PUBLICATIONS")
                 .map(|p| p.trim().to_string())
                 .filter(|p| !p.is_empty())
@@ -842,6 +846,108 @@ pub fn read_key_file(path: &std::path::Path) -> Result<[u8; 32], String> {
     Ok(k)
 }
 
+/// `ONYX_STORAGE_*` (ADR-0060, docs/ops/config.md "Storage network").
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StorageConfig {
+    /// `ONYX_STORAGE_CONTRACT`: the `OnyxStorage` address (turns the mode on).
+    pub contract: [u8; 20],
+    /// `ONYX_STORAGE_NODE_ID`: this node's id (from `onyx-storage register`).
+    pub node: [u8; 32],
+    /// `ONYX_STORAGE_KEY_FILE`: the node operator's key (0600 file of 64 hex
+    /// digits): answers, seeds and settlements are sent from it.
+    pub key_file: PathBuf,
+    /// `ONYX_STORAGE_FROM_BLOCK` (default 0): the contract's deploy block,
+    /// where log scans start.
+    pub from_block: u64,
+    /// `ONYX_STORAGE_EVERY_SECS` (default 15): seconds between passes.
+    pub every_secs: u64,
+    /// `ONYX_STORAGE_FETCH` (`on` default, `off`): fetch placed shards.
+    pub fetch: bool,
+    /// `ONYX_STORAGE_KEEPER` (`off` default, `on`): settle other nodes'
+    /// missed answers.
+    pub keeper: bool,
+    /// `ONYX_STORAGE_FETCHES_PER_TICK` (default 8): repair pace.
+    pub fetches_per_tick: usize,
+}
+
+impl StorageConfig {
+    fn from_env(get: &impl Fn(&str) -> Option<String>) -> Result<Option<StorageConfig>, String> {
+        let keys = [
+            "ONYX_STORAGE_NODE_ID",
+            "ONYX_STORAGE_KEY_FILE",
+            "ONYX_STORAGE_FROM_BLOCK",
+            "ONYX_STORAGE_EVERY_SECS",
+            "ONYX_STORAGE_FETCH",
+            "ONYX_STORAGE_KEEPER",
+            "ONYX_STORAGE_FETCHES_PER_TICK",
+        ];
+        let Some(contract) = get("ONYX_STORAGE_CONTRACT")
+            .map(|v| v.trim().to_string())
+            .filter(|v| !v.is_empty())
+        else {
+            if let Some(k) = keys.iter().find(|k| get(k).is_some()) {
+                return Err(format!("{k} is set but ONYX_STORAGE_CONTRACT is not"));
+            }
+            return Ok(None);
+        };
+        if get("ONYX_BULK_DIR").is_none_or(|v| v.trim().is_empty()) {
+            return Err("ONYX_STORAGE_CONTRACT needs ONYX_BULK_DIR: a storage node holds and serves its shards in the bulk store".into());
+        }
+        let hexn = |k: &str, v: &str, n: usize| -> Result<Vec<u8>, String> {
+            v.trim()
+                .strip_prefix("0x")
+                .and_then(|h| hex::decode(h).ok())
+                .filter(|b| b.len() == n)
+                .ok_or_else(|| format!("{k} must be 0x and {} hex digits", 2 * n))
+        };
+        let contract: [u8; 20] = hexn("ONYX_STORAGE_CONTRACT", &contract, 20)?
+            .try_into()
+            .map_err(|_| "ONYX_STORAGE_CONTRACT")?;
+        let node: [u8; 32] = hexn(
+            "ONYX_STORAGE_NODE_ID",
+            &get("ONYX_STORAGE_NODE_ID")
+                .ok_or("ONYX_STORAGE_CONTRACT needs ONYX_STORAGE_NODE_ID")?,
+            32,
+        )?
+        .try_into()
+        .map_err(|_| "ONYX_STORAGE_NODE_ID")?;
+        let key_file = get("ONYX_STORAGE_KEY_FILE")
+            .map(|p| p.trim().to_string())
+            .filter(|p| !p.is_empty())
+            .map(PathBuf::from)
+            .ok_or("ONYX_STORAGE_CONTRACT needs ONYX_STORAGE_KEY_FILE (the node operator's key)")?;
+        let num = |k: &str, default: u64, min: u64, max: u64| -> Result<u64, String> {
+            match get(k) {
+                None => Ok(default),
+                Some(v) => v
+                    .trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (min..=max).contains(n))
+                    .ok_or_else(|| format!("{k} must be {min}..={max}")),
+            }
+        };
+        let switch = |k: &str, default: bool| -> Result<bool, String> {
+            match get(k).as_deref().map(str::trim) {
+                None => Ok(default),
+                Some("on") => Ok(true),
+                Some("off") => Ok(false),
+                Some(v) => Err(format!("{k} must be on or off, not {v:?}")),
+            }
+        };
+        Ok(Some(StorageConfig {
+            contract,
+            node,
+            key_file,
+            from_block: num("ONYX_STORAGE_FROM_BLOCK", 0, 0, u64::MAX >> 1)?,
+            every_secs: num("ONYX_STORAGE_EVERY_SECS", 15, 1, 3_600)?,
+            fetch: switch("ONYX_STORAGE_FETCH", true)?,
+            keeper: switch("ONYX_STORAGE_KEEPER", false)?,
+            fetches_per_tick: num("ONYX_STORAGE_FETCHES_PER_TICK", 8, 1, 1_000)? as usize,
+        }))
+    }
+}
+
 /// `ONYX_BULK_*` (CL5, ADR-0059).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BulkConfig {
@@ -852,6 +958,9 @@ pub struct BulkConfig {
     /// `ONYX_BULK_QUOTA_GIB` (default 16), `ONYX_BULK_MAX_DATASETS` (64),
     /// `ONYX_BULK_MAX_GIB` (256), `ONYX_BULK_WARM_AFTER_DAYS` (7).
     pub limits: onyx_api::bulk_serve::BulkLimits,
+    /// `ONYX_BULK_FREE_PER_MINUTE` (default 60): free bulk answers per
+    /// client per minute (reads, and storage-network peer fetches, ADR-0060).
+    pub free_per_minute: u32,
 }
 
 impl BulkConfig {
@@ -862,6 +971,7 @@ impl BulkConfig {
             "ONYX_BULK_MAX_DATASETS",
             "ONYX_BULK_MAX_GIB",
             "ONYX_BULK_WARM_AFTER_DAYS",
+            "ONYX_BULK_FREE_PER_MINUTE",
         ];
         let Some(dir) = get("ONYX_BULK_DIR")
             .map(|p| p.trim().to_string())
@@ -899,7 +1009,17 @@ impl BulkConfig {
             .map(|p| p.trim().to_string())
             .filter(|p| !p.is_empty())
             .map_or_else(|| dir.join("warm"), PathBuf::from);
-        Ok(Some(BulkConfig { dir, warm, limits }))
+        let free_per_minute = num(
+            "ONYX_BULK_FREE_PER_MINUTE",
+            u64::from(onyx_api::bulk_serve::FREE_PER_MINUTE),
+            1_000_000,
+        )? as u32;
+        Ok(Some(BulkConfig {
+            dir,
+            warm,
+            limits,
+            free_per_minute,
+        }))
     }
 }
 
@@ -934,6 +1054,57 @@ mod tests {
         assert!(!c.allow_test_labels && !c.allow_mainnet);
         assert_eq!(c.listen, "127.0.0.1:8080".parse().expect("addr"));
         assert!(c.facilitator_url.is_none());
+        assert!(c.storage.is_none());
+    }
+
+    /// ADR-0060: the storage-node mode is off unless `ONYX_STORAGE_CONTRACT`
+    /// is set, needs the bulk store, a node id and a key file, and its
+    /// settings are bounded and refused when it is off.
+    #[test]
+    fn storage_mode_settings() {
+        let mut m = base();
+        m.insert("ONYX_STORAGE_KEEPER", "on");
+        assert!(load(&m)
+            .expect_err("off")
+            .contains("ONYX_STORAGE_KEEPER is set but ONYX_STORAGE_CONTRACT is not"));
+        m.remove("ONYX_STORAGE_KEEPER");
+        m.insert(
+            "ONYX_STORAGE_CONTRACT",
+            "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+        );
+        assert!(load(&m)
+            .expect_err("no bulk")
+            .contains("needs ONYX_BULK_DIR"));
+        m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk");
+        assert!(load(&m)
+            .expect_err("no id")
+            .contains("ONYX_STORAGE_NODE_ID"));
+        m.insert(
+            "ONYX_STORAGE_NODE_ID",
+            "0x0101010101010101010101010101010101010101010101010101010101010101",
+        );
+        assert!(load(&m)
+            .expect_err("no key")
+            .contains("ONYX_STORAGE_KEY_FILE"));
+        m.insert("ONYX_STORAGE_KEY_FILE", "/run/credentials/onyx/storage-key");
+        let s = load(&m).expect("on").storage.expect("storage");
+        assert_eq!(s.contract, [0x5e; 20]);
+        assert_eq!(s.node, [1; 32]);
+        assert!(s.fetch && !s.keeper);
+        assert_eq!((s.every_secs, s.fetches_per_tick, s.from_block), (15, 8, 0));
+        m.insert("ONYX_STORAGE_FETCH", "off");
+        m.insert("ONYX_STORAGE_KEEPER", "on");
+        m.insert("ONYX_STORAGE_EVERY_SECS", "2");
+        let s = load(&m).expect("on").storage.expect("storage");
+        assert!(!s.fetch && s.keeper && s.every_secs == 2);
+        m.insert("ONYX_STORAGE_EVERY_SECS", "0");
+        assert!(load(&m).is_err());
+        m.insert("ONYX_STORAGE_EVERY_SECS", "2");
+        m.insert("ONYX_STORAGE_FETCH", "yes");
+        assert!(load(&m).is_err());
+        m.insert("ONYX_STORAGE_FETCH", "on");
+        m.insert("ONYX_STORAGE_NODE_ID", "0x01");
+        assert!(load(&m).is_err());
     }
 
     /// IDX-R6-3: `ONYX_INDEX_MAX_JUMP` past `ONYX_INDEX_OVERLAP` is refused,

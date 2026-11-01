@@ -134,6 +134,95 @@ onyx.cryptagraph.com {
 	handle /v1/* {
 		respond "not found" 404
 	}
+	# Storage nodes n1..n5 (ADR-0060, ROADMAP S15; deploy/systemd/onyx-storage@.service, ports
+	# 8201..8205): each node's registered URL is https://<domain>/storage/<name>/. Read routes only:
+	# peers fetch manifests and shards, readers read rows. Nested in one block, so their order never
+	# depends on how Caddy sorts top-level routes (review STORAGE-R3-8); anything else is 404.
+	handle /storage/* {
+		@n1 {
+			method GET HEAD
+			path /storage/n1/v1/health /storage/n1/v1/bulk /storage/n1/v1/bulk/*
+		}
+		handle @n1 {
+			uri strip_prefix /storage/n1
+			request_body {
+				max_size 1KiB
+			}
+			reverse_proxy 127.0.0.1:8201 {
+				transport http {
+					dial_timeout 3s
+					response_header_timeout 300s
+				}
+			}
+		}
+		@n2 {
+			method GET HEAD
+			path /storage/n2/v1/health /storage/n2/v1/bulk /storage/n2/v1/bulk/*
+		}
+		handle @n2 {
+			uri strip_prefix /storage/n2
+			request_body {
+				max_size 1KiB
+			}
+			reverse_proxy 127.0.0.1:8202 {
+				transport http {
+					dial_timeout 3s
+					response_header_timeout 300s
+				}
+			}
+		}
+		@n3 {
+			method GET HEAD
+			path /storage/n3/v1/health /storage/n3/v1/bulk /storage/n3/v1/bulk/*
+		}
+		handle @n3 {
+			uri strip_prefix /storage/n3
+			request_body {
+				max_size 1KiB
+			}
+			reverse_proxy 127.0.0.1:8203 {
+				transport http {
+					dial_timeout 3s
+					response_header_timeout 300s
+				}
+			}
+		}
+		@n4 {
+			method GET HEAD
+			path /storage/n4/v1/health /storage/n4/v1/bulk /storage/n4/v1/bulk/*
+		}
+		handle @n4 {
+			uri strip_prefix /storage/n4
+			request_body {
+				max_size 1KiB
+			}
+			reverse_proxy 127.0.0.1:8204 {
+				transport http {
+					dial_timeout 3s
+					response_header_timeout 300s
+				}
+			}
+		}
+		@n5 {
+			method GET HEAD
+			path /storage/n5/v1/health /storage/n5/v1/bulk /storage/n5/v1/bulk/*
+		}
+		handle @n5 {
+			uri strip_prefix /storage/n5
+			request_body {
+				max_size 1KiB
+			}
+			reverse_proxy 127.0.0.1:8205 {
+				transport http {
+					dial_timeout 3s
+					response_header_timeout 300s
+				}
+			}
+		}
+		handle {
+			respond "not found" 404
+		}
+	}
 
 	handle {
 		# Compression for the site only: the API's answers keep their own ETags (304s).

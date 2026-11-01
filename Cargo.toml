@@ -17,6 +17,7 @@ members = [
     "crates/onyx-check",
     "crates/onyx-level2",
     "crates/onyx-bulk",
+    "crates/onyx-storage",
     "crates/onyx-publish",
     "crates/onyx-json",
     "crates/onyx-fetch",
@@ -47,7 +48,9 @@ members = [
 ]
 # ROADMAP S2b: the TLSNotary experiment is its own workspace (heavy pre-release tlsn crates);
 # check-all never builds it. See experiments/tlsn-fiscaldata/README.md.
-exclude = ["experiments/tlsn-fiscaldata"]
+# CL10 (ADR-0061): the desktop app (Tauri) is its own workspace too: it needs the system web view
+# libraries (webkit2gtk on Linux), so it is built by .github/workflows/desktop.yml, never by check-all.
+exclude = ["experiments/tlsn-fiscaldata", "apps/desktop/src-tauri"]
 
 [workspace.package]
 version = "0.0.1"
@@ -63,6 +66,7 @@ onyx-labels = { path = "crates/onyx-labels" }
 onyx-track = { path = "crates/onyx-track" }
 onyx-intake = { path = "crates/onyx-intake" }
 onyx-bulk = { path = "crates/onyx-bulk" }
+onyx-storage = { path = "crates/onyx-storage" }
 onyx-json = { path = "crates/onyx-json" }
 onyx-fetch = { path = "crates/onyx-fetch" }
 onyx-recipe-host = { path = "crates/onyx-recipe-host" }

@@ -912,6 +912,52 @@ impl BulkStore {
         self.tiers.tier(root)
     }
 
+    /// The held manifest with this root and its signed report, whatever its
+    /// dataset or version (the storage network's peers fetch it, ADR-0060;
+    /// they check its root and anchor themselves).
+    pub fn manifest_record(&self, root: &Hash32) -> Option<(Manifest, SignedReport)> {
+        let ds = self.datasets.read().ok()?;
+        ds.values()
+            .flat_map(|d| d.versions.iter())
+            .find(|h| h.manifest.header.root() == *root)
+            .map(|h| (h.manifest.clone(), h.report.clone()))
+    }
+
+    /// Whether a shard with this root is held (hot or warm).
+    pub fn holds_shard(&self, root: &Hash32) -> bool {
+        self.tiers.tier(root).is_some()
+    }
+
+    /// A held shard file, read back through the CAS (which rechecks its
+    /// root); `None` when not held or damaged on disk.
+    pub async fn shard_file(&self, root: &Hash32) -> Option<Vec<u8>> {
+        self.tiers.tier(root)?;
+        let (tiers, r) = (self.tiers.clone(), *root);
+        tokio::task::spawn_blocking(move || tiers.get(Kind::Shard, &r))
+            .await
+            .ok()
+            .flatten()
+    }
+
+    /// Store a shard file fetched from a peer: exactly the checks of a
+    /// publisher's upload (`accept_shard`).
+    pub async fn put_shard(
+        &self,
+        publisher: &str,
+        dataset: &str,
+        root: &Hash32,
+        file: Vec<u8>,
+    ) -> Result<(StatusCode, Value), ApiError> {
+        self.accept_shard(
+            publisher,
+            dataset,
+            root,
+            &HeaderMap::new(),
+            Body::from(file),
+        )
+        .await
+    }
+
     async fn load(
         &self,
         entry: &ShardEntry,
@@ -1408,6 +1454,16 @@ pub fn routes(store: Arc<BulkStore>) -> Router {
         .with_state(store)
 }
 
+/// The storage network's peer reads (ADR-0060), merged OUTSIDE the server
+/// guard like the uploads: a held manifest by root and a held shard file by
+/// root (up to 64 MiB, so outside the 12 s deadline).
+pub fn peer_routes(store: Arc<BulkStore>) -> Router {
+    Router::new()
+        .route("/v1/bulk/manifests/{root}", get(get_manifest))
+        .route("/v1/bulk/shards/{root}", get(get_shard))
+        .with_state(store)
+}
+
 /// The upload routes, merged OUTSIDE the server guard (own limits).
 pub fn upload_routes(store: Arc<BulkStore>) -> Router {
     Router::new()
@@ -1577,6 +1633,75 @@ async fn put_shard(
     .await
 }
 
+fn root_of(p: Result<Path<String>, PathRejection>) -> Result<Hash32, ApiError> {
+    let Path(root) = p.map_err(|e| bad_request(e.body_text()))?;
+    let (root, canonical) = crate::parse_hash(&root, "root")?;
+    if !canonical {
+        return Err(bad_request("root must be 0x and 64 lowercase hex digits"));
+    }
+    Ok(root)
+}
+
+/// `GET /v1/bulk/manifests/{root}`: `{root, manifest, report}` (Borsh hex),
+/// the body `POST /v1/bulk/manifests` takes.
+async fn get_manifest(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let r = (|| -> Result<Value, ApiError> {
+        limited(&store, client)?;
+        let root = root_of(path)?;
+        let (m, rep) = store.manifest_record(&root).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "bulk_unknown_manifest",
+                "this node holds no manifest with this root",
+            )
+        })?;
+        Ok(json!({
+            "root": root.to_string(),
+            "manifest": hex0x(&m.to_bytes()),
+            "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
+        }))
+    })();
+    match r {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// `GET /v1/bulk/shards/{root}`: the shard file's bytes. The reader checks
+/// them against its own manifest entry (a node never trusts a peer's bytes).
+async fn get_shard(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<String>, PathRejection>,
+) -> Response {
+    let r = async {
+        limited(&store, client)?;
+        let root = root_of(path)?;
+        let _permit = store.loads.acquire().await.map_err(|_| internal("loads"))?;
+        store.shard_file(&root).await.ok_or_else(|| {
+            shard_missing("this node does not hold this shard (or it did not read back)")
+        })
+    }
+    .await;
+    match r {
+        Ok(bytes) => {
+            let mut resp = (StatusCode::OK, bytes).into_response();
+            let h = resp.headers_mut();
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            resp
+        }
+        Err(e) => e.into_response(),
+    }
+}
+
 #[cfg(test)]
 #[path = "bulk_serve_tests.rs"]
-mod tests;
+pub(crate) mod tests;

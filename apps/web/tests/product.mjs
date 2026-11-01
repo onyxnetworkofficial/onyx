@@ -78,7 +78,7 @@ export async function product(browser, base, root, expect) {
 		await pg.locator('header a.mark').click();
 		await settled(pg);
 		const footer = await pg.getByTestId('footer-nav').getByRole('link').evaluateAll((as) => as.map((a) => a.hash));
-		expect(['#/','#/data','#/how-it-works','#/submit','#/run','#/reserves','#/explorer','#/labels','#/api','#/markets'].every((h) => footer.includes(h)), `U1 ${width}: all ten destinations remain discoverable`);
+		expect(['#/','#/data','#/how-it-works','#/submit','#/download','#/run','#/reserves','#/explorer','#/labels','#/api','#/markets'].every((h) => footer.includes(h)), `U1 ${width}: all eleven destinations remain discoverable`);
 		expect(errors.length === 0, `U1 ${width}: no browser errors (${errors.join('; ')})`);
 		await ctx.close();
 	}

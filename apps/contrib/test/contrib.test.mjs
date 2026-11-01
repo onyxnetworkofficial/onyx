@@ -9,7 +9,7 @@ import { PassThrough } from 'node:stream';
 import { MAX_PROPOSALS } from '../../agent/src/connect.mjs';
 import { buildProposal, endpointUrl, MAX_ANSWER } from '../src/contrib.mjs';
 import { keccak256 } from '../src/keccak.mjs';
-import { createState, runTool, serve, toolDefs } from '../src/mcp.mjs';
+import { createState, LOCKED, runTool, serve, toolDefs } from '../src/mcp.mjs';
 import { checkProvider, listEndpoints, registry } from '../src/providers.mjs';
 import * as rules from '../src/rules.mjs';
 import { memoryVault } from '../src/vault.mjs';
@@ -254,12 +254,15 @@ test('contribute: refused before any request when the key appears in the outgoin
 	const echoed = await call(state, 'contrib_contribute', { ...ARGS, path: '/account', params: {}, pointer: '/api_key_used' });
 	assert.equal(echoed.body.ok, false);
 	assert.equal(echoed.body.code, 'key_in_submission');
-	// The user's own text holds the key, in another letter case.
+	// The user's own text holds the key, in another letter case: since review CL10-R1-1 such input is
+	// refused before anything runs, and the session stops using keys (LOCKED).
 	const typed = await call(state, 'contrib_contribute', { ...ARGS, description: `My key is ${KEY.toLowerCase()} for this.` });
-	assert.equal(typed.body.code, 'key_in_submission');
-	// The key URL-encoded in a parameter value.
-	const enc = await call(state, 'contrib_contribute', { ...ARGS, params: { ids: 'bitcoin', vs: encodeURIComponent(KEY) } });
-	assert.equal(enc.body.code, 'key_in_submission');
+	assert.equal(typed.body.error, LOCKED);
+	// The key URL-encoded in a parameter value, in a fresh session.
+	const { state: s2 } = await setup();
+	await s2.keyFor('prices');
+	const enc = await call(s2, 'contrib_contribute', { ...ARGS, params: { ids: 'bitcoin', vs: encodeURIComponent(KEY) } });
+	assert.equal(enc.body.error, LOCKED);
 	assert.equal(intake.seen.length, before, 'nothing reached Onyx');
 	for (const t of [echoed.text, typed.text, enc.text, logs.join('\n')]) noKeyIn(t, 'a tool result or log');
 	assert.equal(rules.keyGuard({ a: 'short' }, ['tooshort']).code, 'key_too_short');
@@ -409,7 +412,9 @@ test("review: a guard checks every key read in the session, not only the current
 	await vault.set('other', 'https://api.example.org', OTHER);
 	await state.keyFor('other');
 	const { body } = await call(state, 'contrib_contribute', { ...ARGS, description: `Notes ${OTHER}` });
-	assert.equal(body.code, 'key_in_submission');
+	assert.equal(body.error, LOCKED, 'refused before anything runs (CL10-R1-1)');
+	// The guard itself still checks every key given to it.
+	assert.equal(rules.keyGuard({ d: `Notes ${OTHER}` }, [KEY, OTHER]).code, 'key_in_submission');
 });
 
 test('review: a path that resolves above the base URL is refused (%2e%2e)', async () => {

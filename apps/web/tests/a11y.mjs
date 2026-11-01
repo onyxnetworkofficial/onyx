@@ -14,7 +14,7 @@ const [buildDir, outFile] = process.argv.slice(2);
 if (!buildDir) throw new Error('usage: node tests/a11y.mjs <build dir> [out.json]');
 const axeSrc = await readFile(process.env.AXE_JS ?? createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 export const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
-const PAGES = ['', 'how-it-works', 'data', 'reserves', 'run', 'explorer', 'labels', 'api', 'submit'];
+const PAGES = ['', 'how-it-works', 'data', 'reserves', 'run', 'explorer', 'labels', 'api', 'submit', 'download'];
 const VIEWS = [
 	['desktop', { width: 1280, height: 800 }],
 	['phone', { width: 390, height: 844 }]

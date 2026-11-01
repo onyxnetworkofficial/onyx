@@ -11,7 +11,7 @@ import { join } from 'node:path';
 import { capWaits, routeDrawn, settled, WAIT_CAP } from './wait.mjs';
 import { inventory, tokens } from './styles.mjs';
 
-const PAGES = ['', 'how-it-works', 'data', 'reserves', 'run', 'explorer', 'labels', 'api', 'submit'];
+const PAGES = ['', 'how-it-works', 'data', 'reserves', 'run', 'explorer', 'labels', 'api', 'submit', 'download'];
 
 /** Style of an element, its parent and its children: what a hover or press may change. */
 function look(e) {

@@ -6,15 +6,23 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
+# Two binaries since the storage network (onyx-storage): `cargo run -p onyx-node` runs the node.
+default-run = "onyx-node"
 
 [[bin]]
 name = "onyx-node"
 path = "src/main.rs"
 
+[[bin]]
+name = "onyx-storage"
+path = "src/bin/onyx-storage.rs"
+
 [dependencies]
 onyx-core.workspace = true
 onyx-api = { path = "../onyx-api", features = ["http-client"] }
 onyx-coordinator = { path = "../onyx-coordinator" }
+onyx-storage.workspace = true
+onyx-bulk.workspace = true
 borsh.workspace = true
 hex.workspace = true
 sha2 = "0.10"

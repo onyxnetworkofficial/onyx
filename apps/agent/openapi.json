@@ -2167,6 +2167,89 @@
           }
         }
       }
+    },
+    "/v1/bulk/manifests/{root}": {
+      "get": {
+        "operationId": "getBulkManifest",
+        "summary": "A held manifest by its root (storage network peers)",
+        "description": "The manifest and the publisher's signed report this node holds under `root`, as the body `POST /v1/bulk/manifests` takes. Storage nodes and readers fetch it from each other (ADR-0060) and check its root and signature themselves; the deal on chain names the root. Free; rate-limited like the other bulk reads.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkRoot"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The manifest and its signed report",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkManifestRecord"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/shards/{root}": {
+      "get": {
+        "operationId": "getBulkShard",
+        "summary": "A held shard file by its root (storage network peers)",
+        "description": "The shard file's bytes as the publisher built it (`application/octet-stream`, at most 64 MiB). Storage nodes fetch the shards placed on them from each other or the publisher (ADR-0060) and check every byte against their own manifest entry; nothing here is trusted. Outside the 12 s request deadline.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkRoot"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The shard file",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5030,6 +5113,28 @@
             "$ref": "#/components/schemas/Amount"
           }
         }
+      },
+      "BulkManifestRecord": {
+        "type": "object",
+        "required": [
+          "root",
+          "manifest",
+          "report"
+        ],
+        "properties": {
+          "root": {
+            "type": "string",
+            "description": "The manifest root asked for."
+          },
+          "manifest": {
+            "type": "string",
+            "description": "0x hex of the Borsh Manifest."
+          },
+          "report": {
+            "type": "string",
+            "description": "0x hex of the Borsh SignedReport whose value is the manifest root."
+          }
+        }
       }
     },
     "parameters": {
@@ -5586,6 +5691,10 @@
     "bulk_unknown_dataset": {
       "status": 404,
       "description": "No such bulk dataset on this node."
+    },
+    "bulk_unknown_manifest": {
+      "status": 404,
+      "description": "This node holds no manifest with this root (storage network peers, ADR-0060)."
     },
     "bulk_unknown_shard": {
       "status": 404,

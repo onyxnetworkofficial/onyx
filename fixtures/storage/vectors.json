@@ -1,0 +1,243 @@
+{
+  "amounts": [
+    {
+      "bytes": 1,
+      "deposit": "1000000000000000",
+      "epochs": 1,
+      "r": 1,
+      "slotPay": "500000000000000"
+    },
+    {
+      "bytes": 3221225472,
+      "deposit": "90000000000000000",
+      "epochs": 10,
+      "r": 3,
+      "slotPay": "1500000000000000"
+    },
+    {
+      "bytes": 5368709121,
+      "deposit": "84000000000000000",
+      "epochs": 7,
+      "r": 2,
+      "slotPay": "3000000000000000"
+    }
+  ],
+  "comment": "Shared Rust/Solidity vectors of the storage network (ADR-0060). Regenerate only with an ADR change: ONYX_BLESS=1 cargo test -p onyx-storage vectors.",
+  "dealSalt": {
+    "dealId": 7,
+    "prevHash": "0x484bf06f3118ce360605f902ef526c45207bc469c2b056352f14b8408f9f6f9a",
+    "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7"
+  },
+  "holders": {
+    "cases": [
+      {
+        "holders": [
+          "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+          "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f",
+          "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3"
+        ],
+        "index": 0
+      },
+      {
+        "holders": [
+          "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+          "0xb9daaaafe36a2472ea4159250aff74335b8f572101e48bbecf6383cbf79242d2",
+          "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab"
+        ],
+        "index": 1
+      },
+      {
+        "holders": [
+          "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+          "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f",
+          "0xe880c2d1261d57544f95ce5a4c5cd9478d9e7fbe21d43f1bb2b06541658aba2f"
+        ],
+        "index": 2
+      },
+      {
+        "holders": [
+          "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+          "0x3356568d63e52695979a6b6dc23fc630fa1449114543516a3fff746f6e346838",
+          "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3"
+        ],
+        "index": 3
+      },
+      {
+        "holders": [
+          "0xe880c2d1261d57544f95ce5a4c5cd9478d9e7fbe21d43f1bb2b06541658aba2f",
+          "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3",
+          "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e"
+        ],
+        "index": 4
+      },
+      {
+        "holders": [
+          "0xe880c2d1261d57544f95ce5a4c5cd9478d9e7fbe21d43f1bb2b06541658aba2f",
+          "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f",
+          "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab"
+        ],
+        "index": 5
+      }
+    ],
+    "dealId": 7,
+    "declined": {
+      "after": [
+        "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3",
+        "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+        "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f"
+      ],
+      "from": 10,
+      "index": 4,
+      "node": "0xe880c2d1261d57544f95ce5a4c5cd9478d9e7fbe21d43f1bb2b06541658aba2f"
+    },
+    "excluded": {
+      "after": [
+        "0x3356568d63e52695979a6b6dc23fc630fa1449114543516a3fff746f6e346838",
+        "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3",
+        "0xc4beae628171bede72a7d6ae78e408eb99a323e123c549a6b192d813be84a021"
+      ],
+      "from": 10,
+      "index": 3,
+      "node": "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e"
+    },
+    "r": 3,
+    "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7"
+  },
+  "manifest": {
+    "byteCount": 1825,
+    "digest": "0xbc75f91b0b16cee582ed1ee331ceefc0bb217c433b716201d91981313d036aad",
+    "header": "0x011600000073796e7468657469632e73746f726167652d746573741300000073796e7468657469632e7075626c697368657201000000000000000000000000000000000000000000000000000000000000000000000000f15365000000000200000001000000740000010000007602000000070000004343302d312e30001300000073796e7468657469632e7075626c69736865720000000000960000006f6e79782d62756c6b2d7269676874732d76313a20746865207075626c6973686572206f776e7320746869732064617461206f7220686f6c64732074686520726967687420746f2073686172652069743b20697473207465726d73206c657420616e796f6e65207265646973747269627574652069743b206974206e616d6573206e6f20696e646976696475616c20706572736f6e2e05000000370000000000000021070000000000000000000000000000000000000000000036000000000000000000000000000000049df86df567b17d36523f0a68ebd33fd239825a753f243cc4a99f82c8b8727a",
+    "payload": "0x1300000073796e7468657469632e7075626c697368657217d738d1fcf2308bc6a5c9abe5c202156dce301da5fd13698ac9d59f7843cb0d0d00000062756c6b2e6d616e6966657374031600000073796e7468657469632e73746f726167652d746573740420000000b83f93f5905c8c2c3d006e28279b30ce06f0fb7997b56f89d06ab55a23f532d100f1536500000000226f74c4b08fb9ab",
+    "root": "0xb83f93f5905c8c2c3d006e28279b30ce06f0fb7997b56f89d06ab55a23f532d1",
+    "rowCount": 55,
+    "shardCount": 5,
+    "shardsRoot": "0x049df86df567b17d36523f0a68ebd33fd239825a753f243cc4a99f82c8b8727a"
+  },
+  "nodeIds": [
+    {
+      "blockHash": "0xbc36789e7a1e281436464229828f817d6612f7b477d66591ff96a9e064bcc98a",
+      "id": "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+      "index": 0,
+      "operator": "0x1111111111111111111111111111111111111111"
+    },
+    {
+      "blockHash": "0x5fe7f977e71dba2ea1a68e21057beebb9be2ac30c6410aa38d4f3fbe41dcffd2",
+      "id": "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab",
+      "index": 1,
+      "operator": "0x1111111111111111111111111111111111111111"
+    },
+    {
+      "blockHash": "0xf2ee15ea639b73fa3db9b34a245bdfa015c260c598b211bf05a1ecc4b3e3b4f2",
+      "id": "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+      "index": 2,
+      "operator": "0x1111111111111111111111111111111111111111"
+    }
+  ],
+  "nodes": [
+    "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+    "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab",
+    "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+    "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f",
+    "0xe880c2d1261d57544f95ce5a4c5cd9478d9e7fbe21d43f1bb2b06541658aba2f",
+    "0x3356568d63e52695979a6b6dc23fc630fa1449114543516a3fff746f6e346838",
+    "0x2af83ea52d8f7a45acec777d412c9e5ff3af4fda5d476ad79dc20ecc9f5fe86c",
+    "0xb9daaaafe36a2472ea4159250aff74335b8f572101e48bbecf6383cbf79242d2",
+    "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3",
+    "0xc4beae628171bede72a7d6ae78e408eb99a323e123c549a6b192d813be84a021"
+  ],
+  "params": {
+    "bondPerGiB": "1000000000000000",
+    "challengesPerDeal": 2,
+    "maxMisses": 3,
+    "minBond": "1000000000000000000",
+    "pricePerGiBEpoch": "1000000000000000",
+    "slashPpm": 100000
+  },
+  "proof": {
+    "dealId": 7,
+    "entry": "0x0300000055043cd9e07d3c8dbda17aab1ce38be65af26f7de3f2984bfc70a0e280b3b1960b000000000000006f01000000000000210000000000000000000000000000002b000000000000000000000000000000",
+    "entrySiblings": [
+      "0xc203920a6183389258d73ae7d8e1fdf22bb65ae1ea4700497c72f9a3b216c5d3",
+      "0x864a0324afe3f01f599c7b17d6ad1859eade06304a1333d5aad325857d599bd1",
+      "0xe213a11f5401bfd64ec543602ac4d40e652553c4df88dc41bd8edb33f7af3f04"
+    ],
+    "row": "0x0200000001230000000000000000000000000000000303000000763335",
+    "rowSiblings": [
+      "0x62191c28dd12060a31d1fafc07ca4ff8d7db0e06d1f2b42d419f28c3232e0763",
+      "0x70d084a002dedba01ded7c8ca9a90eb7c27bacd2a478f299c883ca09b67f4822",
+      "0x88c4996e4f523ce002fc43a879c2b8c19b320b2a75d5e747147675043a4093f5",
+      "0x40767231a243c1feef13cd437d01bf55420acfe1f5f0d869c30e7c5416c70548"
+    ],
+    "seed": "0xd7fbea72bb1fc16f0f44ab722b736313c4ae3f24d80937b48369ac360379ec85",
+    "shard": 3,
+    "shardCount": 5,
+    "shardsRoot": "0x049df86df567b17d36523f0a68ebd33fd239825a753f243cc4a99f82c8b8727a",
+    "slot": 1
+  },
+  "seeds": [
+    {
+      "blockHash": "0xad7c5bef027816a800da1736444fb58a807ef4c9603b7848673f7e3a68eb14a5",
+      "dealId": 7,
+      "epoch": 2,
+      "row": 36897,
+      "rows": 77777,
+      "seed": "0x18fca3f7be7bf7c2ff9877872dc80917ccb04452091ecb674a2920d2de0edc26",
+      "shard": 770,
+      "shardCount": 1000,
+      "slot": 0
+    },
+    {
+      "blockHash": "0x2a80e1ef1d7842f27f2e6be0972bb708b9a135c38860dbe73c27c3486c34f4de",
+      "dealId": 7,
+      "epoch": 3,
+      "row": 6488,
+      "rows": 77778,
+      "seed": "0xbe5b4b0c756f763c0dad5e80f7c98ba708a6c813221441822c963ea830b1f1e4",
+      "shard": 84,
+      "shardCount": 1001,
+      "slot": 1
+    },
+    {
+      "blockHash": "0x13600b294191fc92924bb3ce4b969c1e7e2bab8f4c93c3fc6d0a51733df3c060",
+      "dealId": 7,
+      "epoch": 4,
+      "row": 8531,
+      "rows": 77779,
+      "seed": "0x11e2905f38c0043d920e4562fbf710d9ca3d5f9def6b8b5505e1cd9157c8bcbd",
+      "shard": 691,
+      "shardCount": 1002,
+      "slot": 2
+    }
+  ],
+  "setHash": "0x49e5b295bc5bb9f0f4d85ea0d1b21635e99f855d33fb81acd68a0aed61d9b22f",
+  "shardKeys": [
+    {
+      "index": 0,
+      "key": "0xdae0c9cd2854f5d67dea5c97d7982ebded99c480f03ac8120fe0906fdaa8cac5",
+      "node": "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+      "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7",
+      "weight": "0xe08711c123f3ddcef0970a0534075cb260eead56a8fbab5979a8a28d81c0bead"
+    },
+    {
+      "index": 1,
+      "key": "0x33374d43812b74d62fd1a1e1ac4a6326eb1d9369617a66b7ae1aae944f70d627",
+      "node": "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab",
+      "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7",
+      "weight": "0x9eda3086097d4bb95d53400215e96f1c8bef2cb96063aec2002450e6cadcf624"
+    },
+    {
+      "index": 2,
+      "key": "0xf9f3b73baf2d2ceb0556df8552fd1631b0b9332243867a87ae42ae2b7d141196",
+      "node": "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+      "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7",
+      "weight": "0x1ca28146cf0a99762dd9a713a3a0a4dd2ad0303f0b41239d57da89eb4067b2d5"
+    },
+    {
+      "index": 3,
+      "key": "0xdf4e34d637c205456eb20a666d4b67dd1362a5957470cd27cc0f6ab1a33d1363",
+      "node": "0x8a06aedb8b83b90a60fa2c0fbd742a60990dec160d3fca247d0253d547dd597f",
+      "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7",
+      "weight": "0x10bf39effc2e15944005dc62b156e7fbbd7ba5e3fa09d1bff94864d858c040f5"
+    }
+  ]
+}

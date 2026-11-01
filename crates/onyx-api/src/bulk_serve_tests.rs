@@ -39,7 +39,7 @@ struct Book {
     reads: u64,
 }
 
-struct Node(Mutex<Book>);
+pub(crate) struct Node(Mutex<Book>);
 
 fn w(b: &[u8]) -> Vec<u8> {
     let mut x = vec![0u8; 32 - b.len()];
@@ -121,7 +121,7 @@ impl Node {
     }
 
     /// Record and accept `r` in the book (a posted, final report).
-    fn anchor(&self, r: &SignedReport) {
+    pub(crate) fn anchor(&self, r: &SignedReport) {
         let mut c = self.0.lock().expect("ok");
         let fact = keccak256(&r.payload.digest().0);
         c.reports
@@ -147,7 +147,7 @@ fn rights() -> DataRights {
 }
 
 /// Shard files of `per` rows each over keys `keys`.
-fn shard_files(keys: std::ops::Range<i128>, per: usize) -> Vec<Vec<u8>> {
+pub(crate) fn shard_files(keys: std::ops::Range<i128>, per: usize) -> Vec<Vec<u8>> {
     let rows: Vec<Vec<u8>> = keys
         .map(|t| {
             encode_row(&schema(), &[Cell::Int(t), Cell::Decimal(format!("{t}.50"))]).expect("ok")
@@ -156,7 +156,7 @@ fn shard_files(keys: std::ops::Range<i128>, per: usize) -> Vec<Vec<u8>> {
     rows.chunks(per).map(encode_shard).collect()
 }
 
-fn manifest(files: &[Vec<u8>], prev: Option<&Manifest>, created: u64) -> Manifest {
+pub(crate) fn manifest(files: &[Vec<u8>], prev: Option<&Manifest>, created: u64) -> Manifest {
     let mut entries: Vec<ShardEntry> = prev.map(|p| p.shards.clone()).unwrap_or_default();
     let base = entries.len();
     for (i, f) in files.iter().enumerate() {
@@ -177,15 +177,15 @@ fn manifest(files: &[Vec<u8>], prev: Option<&Manifest>, created: u64) -> Manifes
     .expect("ok")
 }
 
-fn sign(m: &Manifest) -> SignedReport {
+pub(crate) fn sign(m: &Manifest) -> SignedReport {
     onyx_bulk::anchor::sign(&SECRET, &m.header).expect("ok")
 }
 
-struct World {
-    node: Arc<Node>,
-    store: Arc<BulkStore>,
+pub(crate) struct World {
+    pub(crate) node: Arc<Node>,
+    pub(crate) store: Arc<BulkStore>,
     clock: Arc<AtomicU64>,
-    dir: PathBuf,
+    pub(crate) dir: PathBuf,
 }
 
 static N: AtomicU64 = AtomicU64::new(0);
@@ -218,7 +218,7 @@ fn world_with(limits: BulkLimits) -> World {
     }
 }
 
-fn world() -> World {
+pub(crate) fn world() -> World {
     world_with(BulkLimits::default())
 }
 
@@ -257,7 +257,7 @@ fn code(e: ApiError) -> &'static str {
 }
 
 /// Publish 3 shards (keys 0..30, 10 rows each) and upload them all.
-async fn published(w: &World) -> (Manifest, Vec<Vec<u8>>) {
+pub(crate) async fn published(w: &World) -> (Manifest, Vec<Vec<u8>>) {
     let files = shard_files(0..30, 10);
     let m = manifest(&files, None, T0);
     let r = sign(&m);
@@ -367,6 +367,68 @@ async fn routes_answer_through_the_router() {
         .await
         .expect("ok");
     assert_eq!(r.status(), StatusCode::OK);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// ADR-0060: the storage network's peer routes give a held manifest and a
+/// held shard file by root, and refuse an unknown or malformed root.
+#[tokio::test]
+async fn peer_routes_give_manifests_and_shard_files_by_root() {
+    let w = world();
+    let (m, files) = published(&w).await;
+    let app = routes(w.store.clone())
+        .merge(upload_routes(w.store.clone()))
+        .merge(peer_routes(w.store.clone()));
+    let get = |uri: String| Request::get(uri).body(Body::empty()).expect("ok");
+    let root = m.header.root();
+    let r = app
+        .clone()
+        .oneshot(get(format!("/v1/bulk/manifests/{root}")))
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value =
+        serde_json::from_slice(&r.into_body().collect().await.expect("ok").to_bytes()).expect("ok");
+    crate::openapi_check::check("GET", &format!("/v1/bulk/manifests/{root}"), 200, &v);
+    assert_eq!(v["manifest"], json!(hex0x(&m.to_bytes())));
+    let rep = onyx_bulk::wire::hex_field(&v["report"], "report").expect("hex");
+    assert_eq!(rep, borsh::to_vec(&sign(&m)).expect("ok"));
+    let e = m.shards[1];
+    let r = app
+        .clone()
+        .oneshot(get(format!("/v1/bulk/shards/{}", e.root)))
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(
+        r.headers().get(header::CONTENT_TYPE).expect("type"),
+        "application/octet-stream"
+    );
+    let body = r.into_body().collect().await.expect("ok").to_bytes();
+    assert_eq!(body.to_vec(), files[1]);
+    // An unknown manifest root, an unknown shard root, a malformed root.
+    let other = Hash32([0xab; 32]);
+    for (uri, status, code) in [
+        (
+            format!("/v1/bulk/manifests/{other}"),
+            404,
+            "bulk_unknown_manifest",
+        ),
+        (
+            format!("/v1/bulk/shards/{other}"),
+            409,
+            "bulk_shard_missing",
+        ),
+        ("/v1/bulk/shards/0xAB".to_string(), 400, "bad_request"),
+    ] {
+        let r = app.clone().oneshot(get(uri.clone())).await.expect("ok");
+        assert_eq!(r.status().as_u16(), status, "{uri}");
+        let v: Value =
+            serde_json::from_slice(&r.into_body().collect().await.expect("ok").to_bytes())
+                .expect("ok");
+        crate::openapi_check::check("GET", &uri, status, &v);
+        assert_eq!(v["error"]["code"], json!(code), "{uri}: {v}");
+    }
     let _ = std::fs::remove_dir_all(&w.dir);
 }
 

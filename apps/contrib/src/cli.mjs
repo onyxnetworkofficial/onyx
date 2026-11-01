@@ -13,14 +13,20 @@
 //   onyx-contrib keyed observe <name> --manifest FILE [--repo DIR] -- <level2-keyed observer flags>
 //   onyx-contrib keyed seats         keyed seats this computer holds (CL4; README section 7)
 //   onyx-contrib mcp                 the MCP server on stdio (what Claude Desktop or Claude Code start)
-//   onyx-contrib doctor              which vault this machine uses, and whether it works
+//   onyx-contrib version             the version
+//   onyx-contrib doctor              which vault this machine uses, and whether it works, in plain words
+//   onyx-contrib ui [--no-open] [--port N]   the contributor app in your browser (127.0.0.1 only)
+//   onyx-contrib ui --desktop        for the desktop app: prints ONYX_UI_URL=<url> and stops when stdin closes
+import { spawn } from 'node:child_process';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { callProvider, previewOf } from './contrib.mjs';
 import { checkProviderFits, joinPreview, joinSeat, keyedBin, listSeats, observe, readKeyedManifest } from './keyed.mjs';
-import { serve } from './mcp.mjs';
+import { serve, VERSION } from './mcp.mjs';
 import { configDir, listEndpoints, loadOpenApi, registry, shown } from './providers.mjs';
 import { redact } from './rules.mjs';
+import { doctor } from './doctor.mjs';
+import { startUi } from './ui.mjs';
 import { checkKey, vaultFromEnv } from './vault.mjs';
 
 /** Read a line from the terminal without echoing it. */
@@ -70,7 +76,7 @@ function flags(args) {
 			continue;
 		}
 		const k = a.slice(2);
-		if (k === 'replace' || k === 'yes') out[k] = true;
+		if (k === 'replace' || k === 'yes' || k === 'desktop' || k === 'no-open') out[k] = true;
 		else if (i + 1 >= args.length) throw new Error(`${a} needs a value`);
 		else if (k === 'param') out.param.push(args[++i]);
 		else out[k] = args[++i];
@@ -88,16 +94,27 @@ async function confirm(question, { input = process.stdin, output = process.stder
 }
 
 /** Run the CLI with `argv` (no node and script name). Returns the exit code. */
-export async function main(argv, { env = process.env, stdin = process.stdin, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), vault, fetch = globalThis.fetch } = {}) {
+export async function main(argv, { env = process.env, stdin: stdinOpt, out = (s) => process.stdout.write(s + '\n'), err = (s) => process.stderr.write(s + '\n'), vault, fetch = globalThis.fetch, uiStarted } = {}) {
+	// process.stdin is opened only when a command reads it: opening it fails where a program has
+	// no usable standard input (CL10: a desktop launcher, some Windows consoles).
+	const io = {
+		get stdin() {
+			return stdinOpt ?? process.stdin;
+		},
+	};
 	const dir = configDir(env);
 	const reg = registry(dir);
 	const v = () => vault ?? vaultFromEnv(env, { dir });
 	const [cmd, sub, ...rest] = argv;
 	const usage = () => {
-		err('usage: onyx-contrib provider add|list|remove, key set|remove <name>, endpoints <name>, preview <name> <path>, keyed join|observe|seats, mcp, doctor (README)');
+		err('usage: onyx-contrib provider add|list|remove, key set|remove <name>, endpoints <name>, preview <name> <path>, keyed join|observe|seats, mcp, doctor, ui, version (README)');
 		return 2;
 	};
 	try {
+		if (cmd === 'version' || cmd === '--version') {
+			out(`onyx-contrib ${VERSION} (test network)`);
+			return 0;
+		}
 		if (cmd === 'mcp') {
 			serve({ env, fetch });
 			return null;
@@ -113,7 +130,28 @@ export async function main(argv, { env = process.env, stdin = process.stdin, out
 				out(`vault check: FAILED: ${e.message}`);
 			}
 			out(`Onyx API: ${env.ONYX_API_URL || 'https://onyx.cryptagraph.com'}`);
+			// CL10: the same checks as the app, in plain words, each with what to do.
+			const d = await doctor({ vault: vv, env, dir });
+			for (const c of d.checks) out(`${c.ok ? 'OK  ' : 'FIX '} ${c.say}${c.fix ? `\n     What to do: ${c.fix}` : ''}`);
 			return 0;
+		}
+		if (cmd === 'ui') {
+			const f = flags([sub, ...rest].filter((x) => x !== undefined));
+			const port = f.port === undefined ? 0 : Number(f.port);
+			if (!Number.isInteger(port) || port < 0 || port > 65535) return usage();
+			const app = await startUi({ env, fetch, vault, sea: await isSea(), cliPath: self, port, log: err });
+			uiStarted?.(app);
+			if (f.desktop) {
+				// The desktop app reads this line from a pipe; when it quits, the pipe closes and so do we.
+				out(`ONYX_UI_URL=${app.url}`);
+				io.stdin.on('end', () => process.exit(0));
+				io.stdin.on('error', () => process.exit(0));
+				io.stdin.resume();
+			} else {
+				out(`The Onyx contributor app is running (test network, no real money). Open it here:\n  ${app.url}\nYour browser opens it now; if it shows an error instead, open the link above yourself.\nKeep this window open while you use it; press Ctrl+C to stop.`);
+				if (!f['no-open']) openBrowser(app.launchFile());
+			}
+			return null;
 		}
 		if (cmd === 'provider' && sub === 'add') {
 			const f = flags(rest);
@@ -156,6 +194,7 @@ export async function main(argv, { env = process.env, stdin = process.stdin, out
 				out(`Removed the key for ${p.name}.`);
 				return 0;
 			}
+			const stdin = io.stdin;
 			const tty = !!stdin.isTTY;
 			err(`The key for ${p.name} will be sent only to ${origin}, ${p.auth.in === 'header' ? `in the ${p.auth.name} header` : `as the ${p.auth.name} query parameter`}.`);
 			if (p.addedBy === 'assistant') err('This provider was added by an AI assistant. Check that host is really the API your key belongs to.');
@@ -195,7 +234,7 @@ export async function main(argv, { env = process.env, stdin = process.stdin, out
 			}
 			return 0;
 		}
-		if (cmd === 'keyed') return await keyedCmd({ sub, rest, reg, v, dir, env, stdin, out, err, usage });
+		if (cmd === 'keyed') return await keyedCmd({ sub, rest, reg, v, dir, env, io, out, err, usage });
 		return usage();
 	} catch (e) {
 		err(`onyx-contrib: ${e.message}`);
@@ -208,7 +247,7 @@ export async function main(argv, { env = process.env, stdin = process.stdin, out
  * `keyed observe` runs one keyed observer with the key from the vault (on its stdin only);
  * `keyed seats` lists the seats this computer holds.
  */
-async function keyedCmd({ sub, rest, reg, v, dir, env, stdin, out, err, usage }) {
+async function keyedCmd({ sub, rest, reg, v, dir, env, io, out, err, usage }) {
 	const cut = rest.indexOf('--');
 	const own = cut < 0 ? rest : rest.slice(0, cut);
 	const pass = cut < 0 ? [] : rest.slice(cut + 1);
@@ -229,6 +268,7 @@ async function keyedCmd({ sub, rest, reg, v, dir, env, stdin, out, err, usage })
 		if (!key) throw new Error(`no key stored for ${p.name}: onyx-contrib key set ${p.name} (a seat without a key could never observe)`);
 		const preview = joinPreview(p, m, { operator: f.operator });
 		err(redact(JSON.stringify(preview, null, 1), [key]));
+		const stdin = io.stdin;
 		const tty = !!stdin.isTTY;
 		if (!f.yes) {
 			if (!tty) throw new Error('read the terms above, then run again with --yes to accept them and take the seat');
@@ -245,6 +285,25 @@ async function keyedCmd({ sub, rest, reg, v, dir, env, stdin, out, err, usage })
 		return await observe({ p, m, key, repo, bin: keyedBin(env), args: pass, env, out, err });
 	}
 	return usage();
+}
+
+/** Whether this is the single-file program (Node's single executable application). */
+async function isSea() {
+	try {
+		return (await import('node:sea')).isSea();
+	} catch {
+		return false;
+	}
+}
+
+/** Open `target` in the default browser: a private launch file, never the token itself (review CL10-R1-2: other users can read command lines). */
+function openBrowser(url, platform = process.platform) {
+	const [cmd, args] = platform === 'darwin' ? ['open', [url]] : platform === 'win32' ? ['explorer.exe', [url]] : ['xdg-open', [url]];
+	try {
+		const c = spawn(cmd, args, { stdio: 'ignore', detached: true, shell: false, windowsHide: true });
+		c.on('error', () => {});
+		c.unref();
+	} catch {}
 }
 
 const self = fileURLToPath(import.meta.url);
