@@ -722,6 +722,53 @@ contract OnyxCorrectionsTest is CorrectionsBase {
         assertEq(cor.held(), 0);
         _solvent();
     }
+
+    /// The recheck runner's input (THREATS CL7-3): every bettor once, in first-bet order, paged;
+    /// a second bet by the same address adds nobody, and the count is `Market.bettors`.
+    function test_BettorsOfListsEachBettorOnceInPages() public {
+        uint256 id = _open();
+        _bet(id, yes1, cor.YES(), 10);
+        _bet(id, no1, cor.NO(), 10);
+        _bet(id, yes1, cor.NO(), 5);
+        _bet(id, yes2, cor.YES(), 10);
+        (address[] memory all, uint256 total) = cor.bettorsOf(id, 0, 10);
+        assertEq(total, 3);
+        assertEq(total, cor.market(id).bettors);
+        assertEq(all.length, 3);
+        assertEq(all[0], yes1);
+        assertEq(all[1], no1);
+        assertEq(all[2], yes2);
+        (address[] memory page, uint256 t) = cor.bettorsOf(id, 1, 1);
+        assertEq(t, 3);
+        assertEq(page.length, 1);
+        assertEq(page[0], no1);
+        (page,) = cor.bettorsOf(id, 3, 10);
+        assertEq(page.length, 0);
+        (page,) = cor.bettorsOf(id, type(uint256).max, type(uint256).max);
+        assertEq(page.length, 0);
+        (page, t) = cor.bettorsOf(id + 1, 0, 10);
+        assertEq(page.length + t, 0);
+    }
+
+    /// Every market a recheck fact settles, in open order and paged: the recheck pool leaves out
+    /// the bettors of all of them, not only of the latest (THREATS CL7-3, review CL7-R1-1).
+    function test_MarketsOfRecheckListsEveryMarketOfTheValue() public {
+        uint256 a = _open();
+        vm.roll(vm.getBlockNumber() + 5);
+        uint256 b = _open();
+        bytes32 rfact = reg.factKey(RMETRIC, SUBJECT, WINDOW);
+        assertEq(cor.market(a).recheckFact, rfact);
+        (uint256[] memory ids, uint256 total) = cor.marketsOfRecheck(rfact, 0, 10);
+        assertEq(total, 2);
+        assertEq(ids.length, 2);
+        assertEq(ids[0], a);
+        assertEq(ids[1], b);
+        (ids,) = cor.marketsOfRecheck(rfact, 1, 5);
+        assertEq(ids.length, 1);
+        assertEq(ids[0], b);
+        (ids, total) = cor.marketsOfRecheck(reg.factKey(OTHER, SUBJECT, WINDOW), 0, 10);
+        assertEq(ids.length + total, 0);
+    }
 }
 
 /// A token whose transfer calls back into `withdraw`, as a hostile token or a hook would.

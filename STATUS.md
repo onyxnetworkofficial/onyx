@@ -12,4 +12,4 @@ Latest: 2026-11-01: release v0.3.1-testnet with the desktop installers; storage 
 - Testnet only: tONYX and test USDC have no value; token economics are not final
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
 - Owner: test ETH from a faucet before new storage deals (nodes topped up to 0.00012 on 2026-11-01, past the deals' end; deployer has 0.00011 left)
-- Next: open each installer on a real machine (S20), outside observers, the recheck runner, a security audit
+- Next: open each installer on a real machine (S20), outside observers, correction markets on Base Sepolia (the recheck runner passes end to end locally), a security audit

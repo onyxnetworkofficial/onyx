@@ -577,6 +577,18 @@ there (`ONYX_MARKETS_FILE=<export>/insurance.json scripts/markets-sepolia.sh mar
 | OnyxFutures (guarded: no insider bets, close by `closeBy`) | `0x07e89ae47579f9297c28ccab782acf9443354a65` |
 | OnyxParametric (test policies) | `0xfc585f41e5e615b774a24404fd5a857042f63639` |
 
+Correction markets next to this registry (contributor loop CL7, ADR-0057;
+`scripts/corrections-sepolia.sh deploy --yes`, 2026-11-01, block 53265121, tx
+`0xbba7d74b39a312cd04318e7f26ec964c8b05c86df2d8de1f0fbf6dff94c214e6`, 2,650,074 gas, 0.0000133 test
+ETH; a dry run on the live chain's state first). The deployer owns it (it pairs metrics) and is its
+treasury; bets are in the tONYX above; the block placeholders are for 0.2 s blocks
+(`DeployCorrections.defaults()`). Steps and the recheck runner:
+[runbooks/corrections-base-sepolia.md](runbooks/corrections-base-sepolia.md).
+
+| Corrections contract | Address |
+|---|---|
+| OnyxCorrections | `0x3765dab41115fc2b849b13f81c75fce96a771133` |
+
 Market 2 on the page (north-star loop NL23) is market 1 of the guarded futures: U.S. total public
 debt for record date 2026-11-02, buckets under $40.60 T, $40.60-40.70 T and above $40.70 T,
 trading closes 2026-11-01 23:00 UTC, observable from 2026-11-04 00:00 UTC, refunds if no value by

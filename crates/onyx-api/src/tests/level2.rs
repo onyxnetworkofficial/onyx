@@ -1210,7 +1210,7 @@ mod cl7_recheck {
     //! value, never a fall; the client recomputes the note from the
     //! recheck's own verified answer.
     use super::*;
-    use crate::client::verify_recheck;
+    use crate::client::{verify_recheck, verify_recheck_pool};
     use onyx_core::recheck_of;
 
     const DAY: u64 = 86_400;
@@ -1252,6 +1252,11 @@ mod cl7_recheck {
 
     /// One honest round of `t` from `start` where every observer answers `v`.
     fn round(t: &FeedTemplate, start: u64, v: i128) -> Transcript {
+        round_by(t, start, v, 1)
+    }
+
+    /// The same with observers `first..first + 3` (the test keys, ordered by first byte).
+    fn round_by(t: &FeedTemplate, start: u64, v: i128, first: u8) -> Transcript {
         let spec = t.instantiate(&subj(), start).expect("allowed window");
         let cfg = ObserveConfig {
             commit_close: spec.window_end + 60,
@@ -1260,7 +1265,7 @@ mod cl7_recheck {
             outlier_slash: 100,
             miss_slash: 20,
         };
-        let observers: Vec<Observer> = (1..=3u8)
+        let observers: Vec<Observer> = (first..first + 3)
             .map(|i| Observer {
                 address: obs_addr(i),
                 bond: 1_000,
@@ -1340,6 +1345,39 @@ mod cl7_recheck {
             },
         )
         .expect("verifies")
+    }
+
+    /// THREATS CL7-3: a client checks the recheck round's pool against the bettors (read from
+    /// the contract's lists) and the original round's observers. The shared fixture's recheck
+    /// reuses the original's observers, which the check refuses.
+    #[tokio::test]
+    async fn a_recheck_pool_with_a_bettor_or_an_original_observer_is_refused() {
+        // An independent recheck: observers 4..=6; the original's are 1..=3.
+        let f = build(Setup::default());
+        {
+            let mut c = f.state.catalog.write().expect("lock");
+            c.add_observations(store(&daily(), &[round(&daily(), START, 4_200)]))
+                .expect("adds");
+            c.add_observations(store(&recheck(), &[round_by(&recheck(), RSTART, 4_200, 4)]))
+                .expect("adds the recheck");
+        }
+        let (_, _, b) = get(&f, &uri("test.daily"), &[]).await;
+        let (_, _, rb) = get(&f, &uri("test.daily.recheck"), &[]).await;
+        let value = verify(&daily(), &b);
+        let rv = verify(&recheck(), &rb);
+        verify_recheck_pool(&rv, &value, &[obs_addr(9)]).expect("an independent recheck");
+        let e = verify_recheck_pool(&rv, &value, &[obs_addr(9), obs_addr(5)])
+            .expect_err("a bettor in the pool");
+        assert!(e.to_string().contains("recheck pool"), "{e}");
+        // The original round in the recheck's place: its own observers are in its pool.
+        assert!(verify_recheck_pool(&value, &value, &[]).is_err());
+        let f = fixture(Some(Some(4_206)));
+        let (_, _, b) = get(&f, &uri("test.daily"), &[]).await;
+        let (_, _, rb) = get(&f, &uri("test.daily.recheck"), &[]).await;
+        assert!(
+            verify_recheck_pool(&verify(&recheck(), &rb), &verify(&daily(), &b), &[]).is_err(),
+            "a recheck by the original observers"
+        );
     }
 
     #[tokio::test]

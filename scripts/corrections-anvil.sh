@@ -137,6 +137,15 @@ sendu "$token" 'mint(address,uint256)' "${A[coord]}" 1000000000000000000
 sendk coord "$token" 'approve(address,uint256)' "$corrections" 1000000000000000000
 refused 'NotAllowed()' coord "$corrections" 'bet(uint256,uint8,uint128)' 1 2 1000000000000000000
 echo "market 1 open until block $close: Yes 40 tONYX (2 bettors), No 20 tONYX (2 bettors); insider refused"
+# The recheck runner's plan (onyx_level2::corrections) while trading is open: the value's markets
+# and every bettor read from the contract's lists (no log scan), the pair and the registered
+# recheck template checked; it waits for the close.
+plan=$(cargo run --locked -q -p onyx-level2 --example level2-manifest -- recheck-plan \
+  --manifest "$manifest" --recheck 7:7 --record-date 2026-10-28 --rpc "$RPC" \
+  --corrections "$corrections" --margin-blocks 5) || fail "recheck-plan"
+python3 -I -c 'import json,sys; p=json.loads(sys.argv[1]); assert (p["state"], p["markets"], p["served"], p["left"], p["bettors"], p["afterBlock"]) == ("wait", [1], [1], [], 4, int(sys.argv[2])), p' "$plan" "$close" \
+  || fail "recheck-plan before the close: $plan"
+echo "recheck plan: wait for block $close (1 market, 4 bettors read from the contract)"
 # 5. After the close: the recheck round disagrees.
 now=$(c block-number); [ "$now" -lt "$close" ] && c rpc anvil_mine "$(printf '0x%x' $(( close - now + 1 )))" >/dev/null
 round "$rmetric" "$rround" 18470

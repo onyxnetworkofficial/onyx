@@ -610,6 +610,16 @@ impl ManifestSource {
         &self.m
     }
 
+    /// This source's paired recheck (CL7, ADR-0057 item 2): the same manifest, fetcher and
+    /// limits under [`onyx_core::recheck_of`]'s template (the `.recheck` metric, the original's
+    /// subjects, observable only on the recheck days). The registry must hold exactly this
+    /// template for the `.recheck` metric ([`ManifestSource::check_registered`], THREATS CL7-8).
+    pub fn recheck(mut self, after_days: u16, span_days: u16) -> Result<Self, ManifestError> {
+        self.m.template = onyx_core::recheck_of(&self.m.template, after_days, span_days)
+            .map_err(|e| field(format!("recheck: {e}")))?;
+        Ok(self)
+    }
+
     /// The hash of the terms a key holder is shown and accepts before taking a keyed seat
     /// (ADR-0054 item 5): `keccak256` of the manifest's `terms_quote`.
     pub fn terms_hash(&self) -> Hash32 {
@@ -657,7 +667,12 @@ impl ManifestSource {
     /// The subject of `key`: a date (`YYYY-MM-DD`) for a dated or daily manifest, a bucket's
     /// start (canonical decimal Unix seconds) for a bucketed one (ADR-0058).
     fn subject(&self, key: &str) -> Result<Subject, String> {
-        let prefix = match &self.m.template.subject {
+        // A recheck names its original's subjects (ADR-0057 item 2).
+        let rule = match &self.m.template.subject {
+            SubjectRule::Recheck { of, .. } => of.as_ref(),
+            rule => rule,
+        };
+        let prefix = match rule {
             SubjectRule::Dated { prefix, .. }
             | SubjectRule::Daily { prefix, .. }
             | SubjectRule::Bucketed { prefix, .. } => prefix,

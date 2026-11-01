@@ -232,6 +232,12 @@ pub struct Checked {
     /// The round's sealed posts and dismissals, checked (ROADMAP C11), and
     /// its `revealLogComplete` query.
     pub reveal_log: SealedChecked,
+    /// The pool snapshot the draw used (its hash is `draw.pool`): a recheck
+    /// round's client checks it holds no bettor and no original observer
+    /// (`client::verify_recheck_pool`, THREATS CL7-3).
+    pub pool: Vec<Observer>,
+    /// The assigned observers (part of the round id), ascending by address.
+    pub observers: Vec<Observer>,
 }
 
 /// Where the level-2 limits are explained (ROADMAP B4).
@@ -1178,6 +1184,8 @@ pub fn check(
         onchain,
         draw: t.draw,
         log,
+        pool: t.pool.clone(),
+        observers: t.observers.clone(),
     })
 }
 

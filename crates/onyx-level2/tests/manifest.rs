@@ -320,3 +320,42 @@ fn a_manifest_is_strict() {
         );
     }
 }
+
+/// CL7 (ADR-0057 item 2): a manifest's paired recheck is `recheck_of`'s template under the
+/// `.recheck` metric, names the same subject and URL, and observes a date only on its recheck
+/// days: the first window the runner may use after a close is one of them (THREATS CL7-8,
+/// CL7-13). A recheck of a recheck is refused.
+#[test]
+fn the_recheck_of_a_manifest_observes_the_same_subject_only_on_its_recheck_days() {
+    let src = ManifestSource::from_file(&manifest_path(), &repo()).unwrap();
+    let original = src.template();
+    let spec = src.spec("2026-10-27", START).unwrap();
+    let rc = ManifestSource::from_file(&manifest_path(), &repo())
+        .unwrap()
+        .recheck(7, 7)
+        .unwrap();
+    let t = rc.template();
+    assert_eq!(t.id(), onyx_core::recheck_of(&original, 7, 7).unwrap().id());
+    assert_eq!(t.metric.0, format!("{}.recheck", original.metric.0));
+    assert!(
+        rc.spec("2026-10-27", START).is_err(),
+        "not in the original's window"
+    );
+    let w = onyx_coordinator::corrections::recheck_window_start(&t, &spec.subject, START)
+        .unwrap()
+        .unwrap();
+    let rspec = rc.spec("2026-10-27", w).unwrap();
+    assert_eq!(rspec.subject, spec.subject);
+    assert_eq!(rspec.url, spec.url);
+    let (_, last) = t.recheck_days(&spec.subject).unwrap();
+    let after = (u64::try_from(last).unwrap() + 1) * 86_400;
+    assert!(
+        rc.spec("2026-10-27", after).is_err(),
+        "after the recheck days"
+    );
+    assert_eq!(
+        onyx_coordinator::corrections::recheck_window_start(&t, &spec.subject, after).unwrap(),
+        None
+    );
+    assert!(rc.recheck(7, 7).is_err(), "a recheck of a recheck");
+}

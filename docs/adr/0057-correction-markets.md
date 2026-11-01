@@ -152,7 +152,14 @@ Built: `OnyxCorrections` (contracts/src), `onyx_core::recheck_of` and `SubjectRu
    note from the recheck's own verified answer (`client::verify_recheck`).
 7. **Not built in v0:** the recheck runner (the ADR-0049 worker that runs the `.recheck` template
    in the first allowed window after the close, from `recheck_pool`) and the client's bettor-list
-   check in `verify_observation` (TODO S9); the ladder's contradiction kind `Recheck` and the
+   check in `verify_observation` (TODO S9). Amendment 2026-11-01: the runner's plan and resolve
+   steps are built (`onyx_level2::corrections`, `level2-manifest recheck-plan|recheck-resolve`,
+   `ManifestSource::recheck`; the round itself is the coordinator's, run with the plan's pool and
+   window), and the contract keeps every market of a value and every bettor of a market in
+   paged lists (`marketsOfRecheck`, `bettorsOf`): a public endpoint serves 200 blocks per log
+   call, so a pool built from logs could miss a bettor (THREATS CL7-20). One round serves the
+   open markets that close at least a margin before the earliest deadline (`corrections::serve`,
+   CL7-R1-1). The client checks a recheck round's pool with `client::verify_recheck_pool`; scripts/recheck-anvil.sh runs it all end to end on a local anvil (a real recheck round from the plan's pool, then resolve). Left: the Base Sepolia deployment and an operator running the runner; the ladder's contradiction kind `Recheck` and the
    site's note and market list (TODO S6); `resolveSigned` (phase 2, item 4); the Base Sepolia
    deployment (docs/ops/runbooks/corrections-base-sepolia.md). The placeholders: 7 days after the
    original's last observable day for 7 days (`after_days`, `span_days`), and

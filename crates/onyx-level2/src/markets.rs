@@ -230,12 +230,12 @@ pub fn settled_value(
     Ok((r.checked.round_id, value))
 }
 
-fn ax(a: &[u8; 20]) -> String {
+pub(crate) fn ax(a: &[u8; 20]) -> String {
     format!("0x{}", hex(a))
 }
 
 /// ABI calldata of `sig(args)` (`cast calldata`).
-fn calldata(chain: &CastChain, sig: &str, args: &[String]) -> Result<Vec<u8>, String> {
+pub(crate) fn calldata(chain: &CastChain, sig: &str, args: &[String]) -> Result<Vec<u8>, String> {
     let mut a = vec!["calldata".to_string(), sig.into()];
     a.extend(args.iter().cloned());
     let s = chain.run(&a)?;
@@ -244,7 +244,7 @@ fn calldata(chain: &CastChain, sig: &str, args: &[String]) -> Result<Vec<u8>, St
     Ok(out)
 }
 
-fn send(
+pub(crate) fn send(
     chain: &CastChain,
     who: &KeySigner,
     to: &[u8; 20],
@@ -257,7 +257,12 @@ fn send(
 
 /// A read-only call, decoded by `cast call --json` (one JSON string per
 /// return value).
-fn call(chain: &CastChain, to: &[u8; 20], sig: &str, args: &[String]) -> Result<Vec<Json>, String> {
+pub(crate) fn call(
+    chain: &CastChain,
+    to: &[u8; 20],
+    sig: &str,
+    args: &[String],
+) -> Result<Vec<Json>, String> {
     let mut a = vec!["call".to_string(), "--json".into(), ax(to), sig.into()];
     a.extend(args.iter().cloned());
     let out = chain.run(&a)?;
@@ -267,7 +272,7 @@ fn call(chain: &CastChain, to: &[u8; 20], sig: &str, args: &[String]) -> Result<
     }
 }
 
-fn num(v: &Json, what: &str) -> Result<u128, String> {
+pub(crate) fn num(v: &Json, what: &str) -> Result<u128, String> {
     let s = v
         .as_str()
         .map(str::to_owned)
@@ -288,7 +293,7 @@ fn eth_balance(chain: &CastChain, who: &[u8; 20]) -> Result<u128, String> {
     )
 }
 
-fn block_now(chain: &CastChain) -> Result<(u64, u64), String> {
+pub(crate) fn block_now(chain: &CastChain) -> Result<(u64, u64), String> {
     let n = num(
         &Json::String(chain.run(&["block-number".into()])?),
         "block number",
@@ -297,7 +302,7 @@ fn block_now(chain: &CastChain) -> Result<(u64, u64), String> {
     Ok((n, block_time(chain, n)?))
 }
 
-fn block_time(chain: &CastChain, n: u64) -> Result<u64, String> {
+pub(crate) fn block_time(chain: &CastChain, n: u64) -> Result<u64, String> {
     let t = chain.run(&[
         "block".into(),
         n.to_string(),
@@ -307,7 +312,7 @@ fn block_time(chain: &CastChain, n: u64) -> Result<u64, String> {
     u64::try_from(num(&Json::String(t), "timestamp")?).map_err(|e| e.to_string())
 }
 
-fn admin(chain: &CastChain) -> Result<KeySigner, String> {
+pub(crate) fn admin(chain: &CastChain) -> Result<KeySigner, String> {
     let key = std::env::var(ADMIN_KEY_ENV)
         .map_err(|_| format!("{ADMIN_KEY_ENV} is required: the markets admin's key"))?;
     let mut secret = [0u8; 32];
@@ -316,7 +321,7 @@ fn admin(chain: &CastChain) -> Result<KeySigner, String> {
     KeySigner::new(chain, secret)
 }
 
-fn signer_of(chain: &CastChain, path: &str) -> Result<KeySigner, String> {
+pub(crate) fn signer_of(chain: &CastChain, path: &str) -> Result<KeySigner, String> {
     KeySigner::new(chain, read_key_file(Path::new(path))?)
 }
 

@@ -20,6 +20,16 @@
 //!   `level2-round`: `--book`, `--store`, `--new-store`, `--out`, and `--rpc --registry
 //!   --coordinator --owner` for a local anvil). `--record-date` defaults to the recording's
 //!   date, `--window-start` to the start of the first day its lag allows.
+//!   `--pool FILE` draws the simulated observers from that snapshot of rehearsal keys (a recheck
+//!   plan's pool) instead of the default nine.
+//! - `rehearsal-pool --size N`: the first N rehearsal observers (public test keys) as a pool file.
+//! - `recheck-plan`, `recheck-resolve`: the recheck runner of correction markets
+//!   (`onyx_level2::corrections`, CL7): plan a value's recheck round from `OnyxCorrections`,
+//!   then resolve its markets from the recheck's results store.
+//!
+//! `--recheck AFTER_DAYS:SPAN_DAYS` runs every other mode on the manifest's paired recheck
+//! (`ManifestSource::recheck`, ADR-0057 item 2): the coordinator, observers and client of a
+//! recheck round use it with the plan's `--pool` and `--window-start`.
 
 use onyx_core::feed::day_number;
 use onyx_fetch::fixture::{FixtureServer, Reply};
@@ -51,6 +61,19 @@ fn run(args: &[String]) -> Result<i32, String> {
     let path = PathBuf::from(flag(args, "--manifest").ok_or("--manifest FILE is required")?);
     let repo = PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into()));
     let src = ManifestSource::from_file(&path, &repo).map_err(|e| e.to_string())?;
+    // CL7: the runner's commands take the value's own source and read `--recheck` themselves.
+    if matches!(mode.as_str(), "recheck-plan" | "recheck-resolve") {
+        return onyx_level2::corrections::run(&src, args).map(|()| 0);
+    }
+    let src = match flag(args, "--recheck") {
+        Some(v) => {
+            let (a, s) = v.split_once(':').ok_or("--recheck AFTER_DAYS:SPAN_DAYS")?;
+            let after = a.parse().map_err(|_| "--recheck: AFTER_DAYS is a number")?;
+            let span = s.parse().map_err(|_| "--recheck: SPAN_DAYS is a number")?;
+            src.recheck(after, span).map_err(|e| e.to_string())?
+        }
+        None => src,
+    };
     match mode.as_str() {
         "coordinator" => {
             check_pin(&src, args)?;
@@ -59,12 +82,24 @@ fn run(args: &[String]) -> Result<i32, String> {
         "observer" => Ok(onyx_level2::live::observer(&src, args)),
         "check" => onyx_level2::live::client_check(&src, args).map(|()| 0),
         "demo" => demo(&src, &path, args).map(|()| 0),
+        // CL7 rehearsals: the first `--size N` rehearsal observers (public test keys, local only)
+        // as a pool file, the snapshot a recheck plan filters.
+        "rehearsal-pool" => {
+            let n: u8 = flag(args, "--size")
+                .unwrap_or_else(|| onyx_level2::POOL_SIZE.to_string())
+                .parse()
+                .map_err(|_| "--size N (at most 32)")?;
+            let pool =
+                onyx_level2::corrections::pool_json(&onyx_level2::rehearsal_pool_of(&src, n))?;
+            println!("{}", serde_json::to_string_pretty(&pool).map_err(|e| e.to_string())?);
+            Ok(0)
+        }
         "--pin" | "pin" => {
             let t = src.template();
             println!("{}={}", t.metric.0, t.id());
             Ok(0)
         }
-        _ => Err("usage: level2-manifest <coordinator|observer|check|demo|pin> --manifest FILE [--repo DIR] ...".into()),
+        _ => Err("usage: level2-manifest <coordinator|observer|check|demo|pin|rehearsal-pool|recheck-plan|recheck-resolve> --manifest FILE [--repo DIR] [--recheck A:S] ...".into()),
     }
 }
 

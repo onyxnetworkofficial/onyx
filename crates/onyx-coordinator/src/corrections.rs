@@ -13,6 +13,9 @@
 //! - [`recheck_window_start`]: the first window the recheck rule allows at or
 //!   after the market's close; `None` when the recheck's days are over (a
 //!   stale value: the market can only void, THREATS CL7-13).
+//! - [`serve`]: which of a value's open markets one recheck round settles: the
+//!   draw comes after the latest close it serves, and a market that closes too
+//!   late for the others' deadlines is left to void (THREATS CL7-R1-1).
 
 use crate::observe::{check_pool, Observer};
 use onyx_core::{FeedTemplate, Hash32, MinerAddress, Subject, SubjectRule};
@@ -123,6 +126,53 @@ pub fn recheck_window_start(
     Ok((start < end).then_some(start))
 }
 
+/// One open market of a value, as `OnyxCorrections.market(id)` holds it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct OpenMarket {
+    /// The market id.
+    pub id: u64,
+    /// Bets stop at this block; the recheck draw must come after it.
+    pub close_block: u64,
+    /// The recheck must be recorded by this block, or the market voids.
+    pub resolve_block: u64,
+}
+
+/// The open markets one recheck round settles ([`serve`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Served {
+    /// The markets served, in id order.
+    pub markets: Vec<u64>,
+    /// The latest close among them: the draw is announced after this block.
+    pub after_block: u64,
+    /// The earliest deadline among them: the round must be recorded by this block.
+    pub deadline_block: u64,
+    /// Open markets left to void (their close is too late for the served markets' deadlines).
+    pub left: Vec<u64>,
+}
+
+/// Which of a value's open markets one recheck round settles (THREATS CL7-R1-1): every market
+/// that closes at least `margin_blocks` (the blocks a round needs from its draw to its record)
+/// before the earliest deadline of all of them. The draw comes after the latest close it
+/// serves, so a market that is still trading then (a squat with a far close, or one opened too
+/// late) can only void, with its open fee refunded; it never delays the others past their
+/// deadlines. `None` with no open market, or when none closes early enough.
+pub fn serve(markets: &[OpenMarket], margin_blocks: u64) -> Option<Served> {
+    let deadline = markets.iter().map(|m| m.resolve_block).min()?;
+    let (mut served, mut left): (Vec<OpenMarket>, Vec<OpenMarket>) = markets
+        .iter()
+        .partition(|m| m.close_block.saturating_add(margin_blocks) <= deadline);
+    let after_block = served.iter().map(|m| m.close_block).max()?;
+    let deadline_block = served.iter().map(|m| m.resolve_block).min()?;
+    served.sort_unstable_by_key(|m| m.id);
+    left.sort_unstable_by_key(|m| m.id);
+    Some(Served {
+        markets: served.iter().map(|m| m.id).collect(),
+        after_block,
+        deadline_block,
+        left: left.iter().map(|m| m.id).collect(),
+    })
+}
+
 /// The recheck note a value answer carries (ADR-0057 item 6): the recheck's
 /// recorded result, its value hash, when it settled, and whether it matches
 /// the value within the tolerance. A "No" is a note next to the value, never
@@ -225,6 +275,45 @@ mod tests {
                 max_days: 30,
             },
         }
+    }
+
+    /// THREATS CL7-R1-1: one round serves every market that closes early enough for the
+    /// earliest deadline; a squat with a far close is left to void and delays nobody.
+    #[test]
+    fn one_recheck_serves_every_market_that_closes_before_the_earliest_deadline() {
+        let m = |id, close_block, resolve_block| OpenMarket {
+            id,
+            close_block,
+            resolve_block,
+        };
+        assert_eq!(serve(&[], 10), None);
+        let one = serve(&[m(4, 100, 300)], 50).expect("served");
+        assert_eq!(
+            one,
+            Served {
+                markets: vec![4],
+                after_block: 100,
+                deadline_block: 300,
+                left: vec![]
+            }
+        );
+        // Two honest markets and a squat that closes after both deadlines.
+        let got = serve(&[m(9, 5_000, 9_000), m(2, 100, 300), m(3, 150, 400)], 50).expect("served");
+        assert_eq!(got.markets, vec![2, 3]);
+        assert_eq!(got.after_block, 150);
+        assert_eq!(got.deadline_block, 300);
+        assert_eq!(got.left, vec![9]);
+        // A market closing inside the margin of the earliest deadline is left out.
+        let got = serve(&[m(1, 100, 300), m(2, 260, 600)], 50).expect("served");
+        assert_eq!((got.markets, got.left), (vec![1], vec![2]));
+        // Exactly the margin is enough.
+        let got = serve(&[m(1, 100, 300), m(2, 250, 600)], 50).expect("served");
+        assert_eq!(got.markets, vec![1, 2]);
+        // No market closes early enough: nothing to run.
+        assert_eq!(serve(&[m(1, 290, 300)], 50), None);
+        // No overflow at the extremes.
+        let got = serve(&[m(1, u64::MAX, u64::MAX)], u64::MAX);
+        assert_eq!(got.map(|s| s.markets), Some(vec![1]));
     }
 
     /// The runner's schedule: the first grid window at or after the close and

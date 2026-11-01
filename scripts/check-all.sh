@@ -60,6 +60,10 @@ scripts/credits-anvil.sh
 # bets, a recheck that disagrees, settlement and payouts to the wei; a forged value, a market after the
 # recheck, an insider bet and the original round as the recheck all refused.
 scripts/corrections-anvil.sh
+# CL7 (ADR-0057 item 7): the recheck runner end to end on a local anvil: a real original round, a
+# market and bets (one by a pool member), the plan (wait, then run), a real recheck round from the
+# plan's pool without the original observers and the bettor, resolve and the payout.
+scripts/recheck-anvil.sh
 # ROADMAP C10 (ADR-0028 amendment 7): OnyxSignedBook deployed and pinned with the tooling the lead
 # runs live (reviewer == deployer refused), onyx-node refusing broken pins and serving level 3 only
 # against `settleable` at its finalized block, coordinator posts, censorship hold, clock skew.

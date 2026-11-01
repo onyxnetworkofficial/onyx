@@ -29,6 +29,7 @@ use onyx_core::{
 use onyx_core::{FeedTemplate, Fetcher, StaticRegistry};
 
 pub mod aligned;
+pub mod corrections;
 pub mod keyed;
 pub mod live;
 pub mod manifest;
@@ -160,6 +161,11 @@ pub enum Observers<'a> {
     /// rehearsal pool's public test keys ([`rehearsal_pool`]): recorded
     /// rehearsals and tests.
     Simulated(&'a [Page]),
+    /// Simulated as [`Observers::Simulated`], drawn from this pool snapshot of
+    /// rehearsal observers (each one of `1..=`[`KEY_RANGE`]): a recheck
+    /// rehearsal's pool without the bettors and the original observers (CL7,
+    /// [`corrections`]).
+    SimulatedFrom(&'a [Page], &'a [Observer]),
     /// Independent processes with their own keys, drawn from this bonded
     /// pool snapshot (examples/level2-observer.rs): each reads the draw from
     /// the registry itself, fetches the source itself, posts its own signed
@@ -505,7 +511,7 @@ pub fn observer_address(src: &dyn Source, i: u8) -> [u8; 20] {
 
 /// The rehearsal key of pool member `a`.
 fn key_of(src: &dyn Source, a: &[u8; 20]) -> Option<[u8; 32]> {
-    (1..=POOL_SIZE)
+    (1..=KEY_RANGE)
         .find(|i| observer_address(src, *i) == *a)
         .map(|i| observer_key(src, i))
 }
@@ -513,9 +519,20 @@ fn key_of(src: &dyn Source, a: &[u8; 20]) -> Option<[u8; 32]> {
 /// Size of the simulated bonded observer pool the rehearsal draws from
 /// (larger than the draw, L2-F2).
 pub const POOL_SIZE: u8 = 9;
+/// Rehearsal keys exist for observers `1..=KEY_RANGE`; the default pool is
+/// the first [`POOL_SIZE`]. A rehearsal may draw from a larger pool of them
+/// ([`Observers::SimulatedFrom`]): a recheck round's pool leaves out the
+/// original observers and the bettors, so it needs more than nine (CL7).
+pub const KEY_RANGE: u8 = 32;
 /// The simulated pool: [`POOL_SIZE`] bonded observers, ascending by address.
 pub fn rehearsal_pool(src: &dyn Source) -> Vec<Observer> {
-    let mut pool: Vec<Observer> = (1..=POOL_SIZE)
+    rehearsal_pool_of(src, POOL_SIZE)
+}
+
+/// The first `n` rehearsal observers (at most [`KEY_RANGE`]), bonded,
+/// ascending by address.
+pub fn rehearsal_pool_of(src: &dyn Source, n: u8) -> Vec<Observer> {
+    let mut pool: Vec<Observer> = (1..=n.min(KEY_RANGE))
         .map(|i| Observer {
             address: observer_address(src, i),
             bond: 1_000,
@@ -849,7 +866,7 @@ fn run_with(
     let cfg = src.observe_config(&spec);
     let pool = match observers {
         Observers::Simulated(_) => rehearsal_pool(src),
-        Observers::Independent(p) => p.to_vec(),
+        Observers::SimulatedFrom(_, p) | Observers::Independent(p) => p.to_vec(),
     };
     // The observers are drawn (L2-F2, L2RND-R1): the draw is announced on
     // chain before its beacon height, the book saved, the beacon fixed from
@@ -860,7 +877,7 @@ fn run_with(
     // that fails still returns its opened round: published as an attempt
     // when it failed before any reveal, otherwise unfinished.
     let committed = match observers {
-        Observers::Simulated(pages) => commit_phase(
+        Observers::Simulated(pages) | Observers::SimulatedFrom(pages, _) => commit_phase(
             src,
             pages,
             store,

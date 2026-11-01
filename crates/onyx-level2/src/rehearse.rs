@@ -67,7 +67,20 @@ pub fn main_for(src: &dyn Source, rec: Recorded, args: &[String]) -> Result<(), 
         }
     }
     // ROADMAP B3: the receipt key is checked before anything is sent.
-    let pool: Vec<[u8; 20]> = rehearsal_pool(src).iter().map(|o| o.address).collect();
+    // CL7: `--pool FILE` draws the simulated observers from that snapshot of rehearsal keys (a
+    // recheck round's plan pool) instead of the default nine.
+    let drawn_from = match flag("--pool")? {
+        Some(p) => Some(crate::parse_pool(
+            &std::fs::read_to_string(&p).map_err(|e| format!("--pool {p}: {e}"))?,
+        )?),
+        None => None,
+    };
+    let pool: Vec<[u8; 20]> = drawn_from
+        .clone()
+        .unwrap_or_else(|| rehearsal_pool(src))
+        .iter()
+        .map(|o| o.address)
+        .collect();
     let receipt_key = receipt_key_from_args(args, cast.as_mut(), &pool)?;
     if let (Some(c), Some(owner)) = (&cast, flag("--owner")?) {
         c.register_metric(&parse_addr(&owner)?, &src.template())?;
@@ -147,7 +160,10 @@ pub fn main_for(src: &dyn Source, rec: Recorded, args: &[String]) -> Result<(), 
         src,
         &rec.day,
         rec.window_start,
-        Observers::Simulated(&pages),
+        match &drawn_from {
+            Some(p) => Observers::SimulatedFrom(&pages, p),
+            None => Observers::Simulated(&pages),
+        },
         &mut store,
         chain,
         std::path::Path::new(&book),

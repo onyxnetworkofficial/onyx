@@ -1010,7 +1010,9 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
 - [ ] S20 Desktop app follow-ups (contributor loop CL10, ADR-0061): the first run of
       `.github/workflows/desktop.yml` on a `v*-testnet` tag (done 2026-11-01: v0.3.1-testnet, nine
       installers and the merged SHA256SUMS), each installer opened on a real
-      Windows, macOS and Linux machine (window, key stored, value read, Claude Desktop connected);
+      Windows, macOS and Linux machine (window, key stored, value read, Claude Desktop connected;
+      Linux in part, 2026-11-01: the AppImage opened on Ubuntu with its window, the computer check
+      and Onyx answering, and offered the encrypted file where secret-tool was missing);
       code signing (Windows Authenticode, Apple Developer ID and notarization: paid, the owner's
       decision); updates inside the app; a checksum file signed with a project key
 

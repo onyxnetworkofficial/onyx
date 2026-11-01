@@ -159,6 +159,12 @@ contract OnyxCorrections {
     mapping(uint256 => Market) internal _markets;
     /// Original fact -> its latest market (a void market without a recheck frees the value).
     mapping(bytes32 => uint256) public marketOf;
+    /// Recheck fact -> every market it settles, in open order. The recheck round's pool leaves
+    /// out the bettors of all of them (THREATS CL7-3); read with `marketsOfRecheck`, so neither
+    /// the runner nor a client scans logs (a public endpoint serves 200 blocks per log call).
+    mapping(bytes32 => uint256[]) internal _recheckMarkets;
+    /// Market -> every address that bet in it, in first-bet order (`bettorsOf`).
+    mapping(uint256 => address[]) internal _bettorList;
     mapping(uint256 => mapping(address => uint128[2])) internal _bets;
     mapping(uint256 => mapping(address => uint128)) public betTotal;
     mapping(uint256 => mapping(address => bool)) public paid;
@@ -269,6 +275,7 @@ contract OnyxCorrections {
         }
         id = ++marketCount;
         marketOf[fact] = id;
+        _recheckMarkets[rfact].push(id);
         Market storage m = _markets[id];
         (m.metric, m.subjectKey, m.fact, m.recheckFact) = (metric, subjectKey, fact, rfact);
         (m.opener, m.windowEnd, m.closeBlock, m.resolveBlock) =
@@ -292,7 +299,10 @@ contract OnyxCorrections {
         // risk (review CL7-R1-3).
         if (uint256(m.pools[side - 1]) + amount > maxPoolPerMarket / 2) revert CapReached();
         uint128[2] storage b = _bets[marketId][msg.sender];
-        if (mine == 0) m.bettors += 1;
+        if (mine == 0) {
+            m.bettors += 1;
+            _bettorList[marketId].push(msg.sender);
+        }
         if (b[side - 1] == 0) m.counts[side - 1] += 1;
         b[side - 1] += amount;
         betTotal[marketId][msg.sender] = mine + amount;
@@ -455,6 +465,41 @@ contract OnyxCorrections {
 
     function market(uint256 marketId) external view returns (Market memory) {
         return _markets[marketId];
+    }
+
+    /// @notice Up to `max` of the markets `recheckFact` settles, from index `start` in open
+    /// order, and how many there are in all. Pages keep each call small however many markets a
+    /// value has.
+    function marketsOfRecheck(bytes32 recheckFact, uint256 start, uint256 max)
+        external
+        view
+        returns (uint256[] memory ids, uint256 total)
+    {
+        uint256[] storage all = _recheckMarkets[recheckFact];
+        total = all.length;
+        uint256 n = start >= total ? 0 : total - start;
+        if (n > max) n = max;
+        ids = new uint256[](n);
+        for (uint256 i; i < n; ++i) {
+            ids[i] = all[start + i];
+        }
+    }
+
+    /// @notice Up to `max` of the addresses that bet in `marketId`, from index `start` in
+    /// first-bet order, and how many there are in all (`Market.bettors`).
+    function bettorsOf(uint256 marketId, uint256 start, uint256 max)
+        external
+        view
+        returns (address[] memory who, uint256 total)
+    {
+        address[] storage all = _bettorList[marketId];
+        total = all.length;
+        uint256 n = start >= total ? 0 : total - start;
+        if (n > max) n = max;
+        who = new address[](n);
+        for (uint256 i; i < n; ++i) {
+            who[i] = all[start + i];
+        }
     }
 
     /// @notice Every token the contract owes: unpaid bets and dust, open fees in escrow, the

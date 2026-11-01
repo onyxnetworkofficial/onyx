@@ -2214,6 +2214,33 @@ fn recheck_shape(n: &Value) -> Result<(), VerifyError> {
     Ok(())
 }
 
+/// THREATS CL7-3: the recheck round's pool snapshot holds no bettor of the value's markets and
+/// no assigned observer of the original round, so the recheck is an independent look. `recheck`
+/// and `original` are both from [`verify_observation`] (the recheck under the client's own
+/// `onyx_core::recheck_of` template); `bettors` is every address that bet in any market the
+/// recheck settles, read from `OnyxCorrections` (`marketsOfRecheck`, then `bettorsOf` of each),
+/// never from a server. Refused when the two answers are of other subjects, or the pool holds
+/// any of them.
+pub fn verify_recheck_pool(
+    recheck: &VerifiedObservation,
+    original: &VerifiedObservation,
+    bettors: &[onyx_core::MinerAddress],
+) -> Result<(), VerifyError> {
+    if recheck.checked.spec.subject != original.checked.spec.subject {
+        return Err(VerifyError::Observation(
+            "the recheck and the value are of other subjects".into(),
+        ));
+    }
+    let originals: Vec<onyx_core::MinerAddress> = original
+        .checked
+        .observers
+        .iter()
+        .map(|o| o.address)
+        .collect();
+    onyx_coordinator::corrections::check_recheck_pool(&recheck.checked.pool, bettors, &originals)
+        .map_err(|e| VerifyError::Observation(format!("recheck pool: {e}")))
+}
+
 /// CL7 (ADR-0057 item 6): the `recheck` note served with `value_body`,
 /// recomputed from the value's verified answer and the paired `.recheck`
 /// metric's verified answer of the same subject (both from

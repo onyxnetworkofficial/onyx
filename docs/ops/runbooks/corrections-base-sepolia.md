@@ -16,21 +16,22 @@ rounding dust).
 15: legal review before anything of value is traded).
 
 **Who:** the owner, with the deployer key in `.env` (never printed, never on a command line).
-The same key owns the registry (it registers the recheck metric). **Time:** about 20 minutes for
+The registry's owner is another test key (`.onyx-testnet/keys/registry-owner.key`; never the
+coordinator, REG-R1-F3): it registers the recheck metric, the deployer pairs it. **Time:** about 20 minutes for
 steps 1-6. **Cost:** one contract creation and three owner transactions; a dry run prints forge's
 estimate first. Test ETH only.
 
-**Rehearsed:** locally only, by `scripts/corrections-anvil.sh` (in check-all): the same
-contracts, the live manifest's real template ids, a market, a recheck that disagrees, payouts to
-the wei. Not yet on an anvil fork of Base Sepolia and not on Base Sepolia (nothing in this
-runbook has been run against Base Sepolia).
+**Rehearsed:** locally by `scripts/corrections-anvil.sh` and `scripts/recheck-anvil.sh` (both in
+check-all): the same contracts, the live manifest's real template ids, a market, rechecks that
+disagree and agree, payouts to the wei. **Deployed** on Base Sepolia 2026-11-01 (step 2:
+`0x3765dab41115fc2b849b13f81c75fce96a771133`, docs/ops/deployment.md).
 
 ## Preconditions
 
 1. A checkout of the commit to deploy (its `scripts/check-all.sh` passed), `forge` and `cast` in
    `~/.foundry/bin`, `cargo`.
-2. `.env` holds `BASE_SEPOLIA_PRIVATE_KEY` (the deployer: the registry's owner and the markets'
-   tONYX minter) and, optionally, `BASE_SEPOLIA_RPC_URL`. Load it into the shell without echoing
+2. `.env` holds `BASE_SEPOLIA_PRIVATE_KEY` (the deployer: the coordinator and the markets'
+   tONYX minter; `.onyx-testnet/keys/registry-owner.key` is the registry's owner) and, optionally, `BASE_SEPOLIA_RPC_URL`. Load it into the shell without echoing
    it: `set -a; . ./.env; set +a`. `forge script` reads the key from the environment inside the
    script; every `cast send` below uses `--interactive` (a hidden prompt), so the key is never on
    a command line or in the shell history.
@@ -47,6 +48,15 @@ runbook has been run against Base Sepolia).
    recorded 2026-10-30).
 
 ## Steps
+
+**The script (2026-11-01):** `scripts/corrections-sepolia.sh` runs steps 1 to 5 with the deployer
+key from `.env` passed to forge in the environment (never on a command line, never printed):
+`plan` (a dry run of the deploy, simulated on the live chain's state; nothing sent), `deploy --yes`
+(step 2; the address and block go to `.onyx-testnet/corrections-sepolia.json`), `pair MANIFEST
+DATE` (steps 3 to 5 simulated) and `pair MANIFEST DATE --yes` (sent: the recheck metric registered
+unless the registry holds it, then paired; `DeployCorrections.pair` refuses another template or
+tolerance and sends nothing for what is done), and `status`. The manual steps below stay as the
+reference.
 
 1. **Rehearse on a fork first** (about 5 minutes, no transaction on Base Sepolia):
 
@@ -110,9 +120,10 @@ runbook has been run against Base Sepolia).
    Check: `cast call $ONYX_CORRECTIONS 'pairs(bytes32)(bytes32,uint128)' <original_metric_key>`.
 
 6. **Open the first market** (anyone; here a test key, never the deployer if it wants to bet;
-   approve 5 tONYX first). Blocks are 2 s on Base Sepolia: the close must be at least 1,800
-   blocks ahead, the deadline at least 43,200 blocks after the close and at most 1,296,000 blocks
-   from now; the deadline must fall after the last recheck day (`recheck_days`):
+   approve 5 tONYX first). Blocks are 0.2 s on Base Sepolia (measured 2026-11-01): the close
+   must be at least 18,000 blocks (an hour) ahead, the deadline at least 432,000 blocks (a day)
+   after the close and at most 12,960,000 blocks (30 days) from now; the deadline must fall after
+   the last recheck day (`recheck_days`):
 
    ```sh
    cast send "$ONYX_TONYX" 'approve(address,uint256)' "$ONYX_CORRECTIONS" 5000000000000000000 \
@@ -125,17 +136,33 @@ runbook has been run against Base Sepolia).
    `roundId` and `windowEnd` are the original round's (its `/v1/observations` answer:
    `roundId`, `windowEnd`). A wrong value or round is refused (`WrongValue`).
 
-## Left before a market can settle on Base Sepolia (not built in v0)
+## Left before a market can settle on Base Sepolia
 
-7. **The recheck round** (TODO S9, THREATS CL7-3): the runner that observes the `.recheck`
-   template in the first allowed window after the close
-   (`onyx_coordinator::corrections::recheck_window_start`), from a pool without the market's
-   bettors and the original observers (`recheck_pool`), drawn after the close of the markets it
-   serves (one closing later voids with its fee refunded). `scripts/level2-sepolia.sh manifest` runs original templates only; until the runner
-   exists the market voids after its deadline and every bet is refunded (and the open fee, since no
-   recheck round was tried).
-8. **Resolve** (anyone, after the recheck is recorded): `resolve(marketId, recheckRoundId,
-   recheckValue)`; then each winner `withdraw(marketId)`; anyone `payTreasury()`.
+7. **The recheck round** (THREATS CL7-3, CL7-20): plan it with the runner (built 2026-11-01,
+   `onyx_level2::corrections`; the values below are the deployment's own):
+
+   ```
+   cargo run -p onyx-level2 --example level2-manifest -- recheck-plan \
+     --manifest sources/<id>/manifest.json --recheck 7:7 --record-date D \
+     --rpc https://sepolia.base.org --corrections <OnyxCorrections> \
+     --pool <the observer pool file> --original-store <the original's results store> \
+     --out-pool recheck-pool.json [--margin-blocks N]
+   ```
+
+   It reads every market and bettor of the value from the contract's lists and prints
+   `"state"`: `none`, `wait` (trading open), `void-only` (no recheck day left, CL7-13) or `run`
+   with `windowStart`, the markets it serves (a later close is left to void, CL7-R1-1) and the
+   pool without bettors and original observers, written to `--out-pool`. Then run the round with
+   the coordinator and observers as for any manifest round, each with `--recheck 7:7`, the
+   coordinator with `--pool recheck-pool.json --window-start <windowStart>`. Rehearsed end to
+   end on a local anvil (`scripts/recheck-anvil.sh`), not yet on Base Sepolia: until a recheck
+   round is recorded the market voids after its deadline and every bet is refunded (and the open
+   fee, since no recheck round was tried).
+8. **Resolve** (anyone, after the recheck is recorded): `level2-manifest recheck-resolve
+   --manifest ... --recheck 7:7 --record-date D --rpc ... --corrections ... --store <the
+   recheck's results store> --key-file F` sends `resolve(marketId, recheckRoundId,
+   recheckValue)` for every open market of the value; then each winner `withdraw(marketId)`;
+   anyone `payTreasury()`.
 9. **The site**: add the contract to `apps/web/static/markets/base-sepolia.json` and the reader
    (`markets_view.rs`) once a market exists (TODO S6, THREATS CL7-19), with the note that the
    source is public, so a market mostly pays whoever checks it (ADR-0057 consequences).
