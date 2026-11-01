@@ -20,7 +20,8 @@
 # from the same commit first.
 # Env: ONYX_STORAGE_BIN_DIR (onyx-storage and onyx-publish, default target/release),
 # ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com), STORAGE_NODES (5),
-# STORAGE_EPOCH_BLOCKS (7200: four hours at 2 s), STORAGE_DEAL_EPOCHS (42: a week),
+# STORAGE_EPOCH_BLOCKS (7200: 24 minutes at Base Sepolia's 0.2 s blocks, THREATS STORAGE-S15-5),
+# STORAGE_DEAL_EPOCHS (42: about 17 hours at 7,200-block epochs),
 # STORAGE_CAPACITY_GIB (6 per node: five nodes fit the host's disk).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -65,7 +66,8 @@ rpc=$(env_value BASE_SEPOLIA_RPC_URL)
 rpc=${rpc:-$public_rpc}
 # forge and cast read the endpoint from the environment, so it is on no command line (it can carry
 # an API key; review STORAGE-R3-6), and their output is scrubbed of it.
-export ETH_RPC_URL=$rpc
+# forge script reads only FOUNDRY_ETH_RPC_URL (foundry 1.8: no ETH_RPC_URL fallback for --rpc-url).
+export ETH_RPC_URL=$rpc FOUNDRY_ETH_RPC_URL=$rpc
 scrub() { RPC_URL=$rpc python3 -I -c 'import os,sys; u=os.environ["RPC_URL"]; [sys.stdout.write(l.replace(u, "<rpc>")) for l in sys.stdin]'; }
 cast_() { "$FOUNDRY_BIN/cast" "$@" 2>&1 | scrub; return "${PIPESTATUS[0]}"; }
 [ "$(cast_ chain-id)" = "$chain_id" ] || { echo "the RPC is not Base Sepolia" >&2; exit 1; }
@@ -124,8 +126,32 @@ code_block() {
   while [ "$(cast_ code "$1" --block "$b")" = 0x ]; do b=$((b + 1)); done
   echo "$b"
 }
-# Logs of the contract for an event, filtered by topics, as JSON.
-logs_for() { cast_ logs --json --from-block "$(get block)" --address "$(get contract)" "$@"; }
+# Logs of the contract for an event, filtered by topics, as one JSON list: 200 blocks per call
+# (sepolia.base.org answers HTTP 413 above that; THREATS STORAGE-S15-1). A failed call stops the
+# script with its reason (it never reads as "no logs").
+logs_for() {
+  local from to end o
+  from=$(get block)
+  to=$(cast_ block-number)
+  while [ "$from" -le "$to" ]; do
+    end=$((from + 199))
+    [ "$end" -le "$to" ] || end=$to
+    o=$(cast_ logs --json --from-block "$from" --to-block "$end" --address "$(get contract)" "$@") \
+      || { printf '%s\n' "$o" | tail -c 400 >&2; echo "eth_getLogs failed for blocks $from..$end" >&2; exit 1; }
+    printf '%s\n' "$o"
+    from=$((end + 1))
+  done | python3 -I -c '
+import json, sys
+text, at, out, d = sys.stdin.read(), 0, [], json.JSONDecoder()
+while True:
+    while at < len(text) and text[at].isspace():
+        at += 1
+    if at == len(text):
+        break
+    part, at = d.raw_decode(text, at)
+    out.extend(part)
+print(json.dumps(out))'
+}
 
 cmd=${1:-}
 shift || true
@@ -219,6 +245,9 @@ install)
     [ -n "$id" ] || { echo "$n is not registered" >&2; exit 1; }
     keeper=off
     [ "$n" = n1 ] && keeper=on
+    # One pass a minute, not every 15 s: the five nodes share this host's address on the public
+    # endpoint, which answers HTTP 429 past its rate limit (THREATS STORAGE-S15-4). An epoch is
+    # 24 minutes (7,200 blocks of 0.2 s), so answers still go out in the epoch's first minutes.
     cat >"$stage/$n.env" <<EOF
 ONYX_ENV=testnet
 ONYX_RIGHTS=fallback
@@ -236,6 +265,7 @@ ONYX_STORAGE_CONTRACT=$(get contract)
 ONYX_STORAGE_NODE_ID=$id
 ONYX_STORAGE_FROM_BLOCK=$(get block)
 ONYX_STORAGE_KEEPER=$keeper
+ONYX_STORAGE_EVERY_SECS=60
 EOF
     install -m 0600 "$keys/storage-$n.key" "$stage/$n.key"
   done

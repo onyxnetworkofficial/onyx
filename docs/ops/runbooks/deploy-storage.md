@@ -1,8 +1,12 @@
 # Runbook: deploy the storage network on Base Sepolia (ADR-0060, lead only)
 
-**Trigger:** the lead decides to put the storage network live (ROADMAP S15). Nothing of it is on
-Base Sepolia yet; everything below was rehearsed only on a local anvil
-(`scripts/storage-network-anvil.sh`). Plain-English overview: docs/STORAGE-NETWORK.md.
+**Trigger:** the lead decides to put the storage network live (ROADMAP S15). Deployed on Base Sepolia
+2026-11-01: `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889), with
+`scripts/storage-sepolia.sh` (it runs the steps below; state in `.onyx-testnet/storage-sepolia.json`).
+The public endpoint answers `eth_getLogs` for at most 200 blocks per call (THREATS STORAGE-S15-1)
+and HTTP 429 past its rate limit: the five nodes share one address, so each runs one pass a minute
+and keeps what it read across failed passes (STORAGE-S15-4). Many nodes: use your own endpoint.
+Rehearsal: `scripts/storage-network-anvil.sh`. Plain-English overview: docs/STORAGE-NETWORK.md.
 
 **What it is:** one new contract, `OnyxStorage` (no proxy, no owner, every parameter immutable),
 next to the deployed `OnyxSignedBook` (`0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5`, CL5) and a

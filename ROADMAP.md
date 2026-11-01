@@ -1019,11 +1019,16 @@ Hundreds of terabytes from many publishers on many bonded storage nodes; the cha
 fingerprints. v0 built 2026-10-30 on a local anvil (contributor loop CL9): rendezvous placement,
 on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-network-anvil.sh`).
 
-- [ ] S15 Storage network on Base Sepolia (lead only): deploy `OnyxStorage` next to the signed book
+- [x] S15 Storage network on Base Sepolia (lead only): deploy `OnyxStorage` next to the signed book
       (docs/ops/runbooks/deploy-storage.md), five or more real storage nodes, a publisher deal; a
       deal whose anchor is later withdrawn can be closed early (THREATS STORAGE-15). Done
       2026-11-01: the chain and placement cache (STORAGE-R1-8, R2-5), `scripts/storage-sepolia.sh`,
-      `deploy/systemd/onyx-storage@.service` and the Caddy routes /storage/n1..n5 (n1 is the keeper)
+      `deploy/systemd/onyx-storage@.service` and the Caddy routes /storage/n1..n5 (n1 is the keeper);
+      `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` deployed (block 52986889) and five node keys funded; chain
+      reads fixed for the public endpoint's 200-block log limit (THREATS STORAGE-S15-1); five nodes
+      live, three deals (btc.price, eth.price, btc.mvrv), epoch 13: 18 of 18 challenges passed, 0.036
+      tONYX paid, nothing slashed; nodes keep their chain reads through HTTP 429 (STORAGE-S15-4);
+      24-minute epochs on 0.2 s blocks, deals end 2026-11-02 about 01:30 UTC (STORAGE-S15-5)
 - [ ] S16 Sealed replicas and operator diversity (THREATS STORAGE-1, STORAGE-2, STORAGE-4): a
       node-specific slow encoding of each copy so a node cannot fetch from another replica only when
       asked; at most one copy of a shard per declared operator; nodes that decline everything stop

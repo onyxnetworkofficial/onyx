@@ -31,8 +31,20 @@ use std::time::Duration;
 pub const DEFAULT_FETCHES_PER_TICK: usize = 8;
 /// Largest manifest answer a peer may send (hex doubles the 8 MiB manifest).
 pub const MAX_MANIFEST_ANSWER: usize = crate::bulk_serve::MAX_MANIFEST_BODY;
-/// Blocks per `eth_getLogs` call.
-pub const LOG_RANGE: u64 = 9_000;
+/// Blocks per `eth_getLogs` call: sepolia.base.org answers HTTP 413 above
+/// 200 (the indexer's default span; ROADMAP S15, found on the first live
+/// deploy 2026-11-01).
+pub const LOG_RANGE: u64 = crate::indexer::DEFAULT_SPAN;
+/// The events a snapshot reads: one `eth_getLogs` call per range asks for
+/// all of them (topic 0 is any of these), not one call per event.
+const SNAPSHOT_EVENTS: [&str; 6] = [
+    events::NODE_SET,
+    events::REGISTERED,
+    events::ACTIVATED,
+    events::SLASHED,
+    events::DECLINED,
+    events::DEAL_CREATED,
+];
 /// Snapshots are rebuilt from scratch at most this many times when the chain's
 /// counts disagree with the logs read (review STORAGE-R3-1).
 const SNAPSHOT_TRIES: usize = 2;
@@ -124,15 +136,21 @@ pub struct StorageChain {
     from_block: u64,
     /// What a pass need not read again (review STORAGE-R1-8).
     cache: Mutex<ChainCache>,
+    /// JSON-RPC calls that got no answer (HTTP 429, a timeout): a pass that
+    /// failed only for that keeps its logs (THREATS STORAGE-S15-4).
+    rpc_errors: AtomicUsize,
 }
 
-/// Logs of finalized blocks, read once (review STORAGE-R1-8): per event, the
-/// first block not kept yet and the logs before it; the finalized block the
-/// kept logs end at, with its hash (a different hash there later drops them,
-/// review STORAGE-R3-1); deals seen closed (they never reopen).
+/// Logs of safe blocks, read once (review STORAGE-R1-8): the snapshot
+/// events' first block not kept yet and the logs before it; the safe block
+/// the kept logs end at, with its hash (a different hash there later drops
+/// them, review STORAGE-R3-1); deals seen closed (they never reopen). Safe,
+/// not finalized: on Base Sepolia finalized lags the head by about 4,600
+/// blocks and safe by about 400, so a pass reads 2 ranges of new blocks, not
+/// 23 (THREATS STORAGE-S15-1).
 #[derive(Default)]
 struct ChainCache {
-    logs: BTreeMap<String, (u64, Vec<Log>)>,
+    logs: Option<(u64, Vec<Log>)>,
     anchor: Option<(u64, Hash32)>,
     closed: BTreeSet<u64>,
 }
@@ -149,7 +167,17 @@ impl StorageChain {
             contract,
             from_block,
             cache: Mutex::new(ChainCache::default()),
+            rpc_errors: AtomicUsize::new(0),
         }
+    }
+
+    /// One JSON-RPC call, counted in `rpc_errors` when it fails.
+    async fn rpc_call(&self, method: &str, params: Value) -> Result<Value, String> {
+        let r = self.rpc.call(method, params).await;
+        if r.is_err() {
+            self.rpc_errors.fetch_add(1, Ordering::Relaxed);
+        }
+        r
     }
 
     /// The contract address.
@@ -160,8 +188,7 @@ impl StorageChain {
     /// `eth_call` at `latest`.
     pub async fn call(&self, data: &[u8]) -> Result<Vec<u8>, String> {
         let r = self
-            .rpc
-            .call(
+            .rpc_call(
                 "eth_call",
                 json!([{"to": hex0x(&self.contract), "data": hex0x(data)}, "latest"]),
             )
@@ -172,8 +199,7 @@ impl StorageChain {
     /// `eth_call` to another contract (the token) at `latest`.
     pub async fn call_to(&self, to: &[u8; 20], data: &[u8]) -> Result<Vec<u8>, String> {
         let r = self
-            .rpc
-            .call(
+            .rpc_call(
                 "eth_call",
                 json!([{"to": hex0x(to), "data": hex0x(data)}, "latest"]),
             )
@@ -183,7 +209,7 @@ impl StorageChain {
 
     /// The head block number.
     pub async fn block_number(&self) -> Result<u64, String> {
-        qty(&self.rpc.call("eth_blockNumber", json!([])).await?)
+        qty(&self.rpc_call("eth_blockNumber", json!([])).await?)
     }
 
     /// `currentEpoch()`.
@@ -274,37 +300,47 @@ impl StorageChain {
 
     /// Every log of `event` from the deploy block to `to`.
     pub async fn logs(&self, event: &str, to: u64) -> Result<Vec<Log>, String> {
-        self.logs_range(event, self.from_block, to).await
+        self.logs_range(&[event], self.from_block, to).await
     }
 
-    /// [`StorageChain::logs`], with the blocks up to `fin` (finalized) read
-    /// once and kept; only the newer blocks are read on the next call.
-    async fn cached_logs(&self, event: &str, to: u64, fin: u64) -> Result<Vec<Log>, String> {
+    /// Every log of `event` from block `from` (never before the deploy
+    /// block) to `to`.
+    pub async fn logs_from(&self, event: &str, from: u64, to: u64) -> Result<Vec<Log>, String> {
+        self.logs_range(&[event], from.max(self.from_block), to)
+            .await
+    }
+
+    /// The logs of [`SNAPSHOT_EVENTS`] from the deploy block to `to`, in chain
+    /// order, with the blocks up to `safe` read once and kept; only the newer
+    /// blocks are read on the next call. They are kept range by range: a
+    /// first read cut off by the node (HTTP 429 from a public endpoint after
+    /// a few hundred calls) goes on where it stopped (THREATS STORAGE-S15-4).
+    async fn cached_logs(&self, to: u64, safe: u64) -> Result<Vec<Log>, String> {
         let (mut next, mut out) = self
             .cache
             .lock()
             .ok()
-            .and_then(|c| c.logs.get(event).cloned())
+            .and_then(|c| c.logs.clone())
             .unwrap_or((self.from_block, Vec::new()));
-        let fin = fin.min(to);
-        if fin >= next {
-            out.extend(self.logs_range(event, next, fin).await?);
-            next = fin + 1;
+        let safe = safe.min(to);
+        while next <= safe {
+            let end = next.saturating_add(LOG_RANGE - 1).min(safe);
+            out.extend(self.logs_range(&SNAPSHOT_EVENTS, next, end).await?);
+            next = end + 1;
             if let Ok(mut c) = self.cache.lock() {
-                c.logs.insert(event.to_string(), (next, out.clone()));
+                c.logs = Some((next, out.clone()));
             }
         }
         if next <= to {
-            out.extend(self.logs_range(event, next, to).await?);
+            out.extend(self.logs_range(&SNAPSHOT_EVENTS, next, to).await?);
         }
         Ok(out)
     }
 
-    /// The number and hash of block `tag` (`"finalized"` or a `0x` number).
+    /// The number and hash of block `tag` (`"safe"` or a `0x` number).
     async fn block_id(&self, tag: &str) -> Result<(u64, Hash32), String> {
         let b = self
-            .rpc
-            .call("eth_getBlockByNumber", json!([tag, false]))
+            .rpc_call("eth_getBlockByNumber", json!([tag, false]))
             .await?;
         Ok((qty(&b["number"])?, h32(&b["hash"])?))
     }
@@ -313,22 +349,28 @@ impl StorageChain {
     /// with the contract's own counts).
     fn forget_logs(&self) {
         if let Ok(mut c) = self.cache.lock() {
-            c.logs.clear();
+            c.logs = None;
             c.anchor = None;
         }
     }
 
-    /// The logs of `event` in blocks `from..=to`.
-    async fn logs_range(&self, event: &str, mut from: u64, to: u64) -> Result<Vec<Log>, String> {
-        let topic = abi::topic(event);
+    /// The logs of any of `events` in blocks `from..=to`, one call per
+    /// [`LOG_RANGE`] blocks.
+    async fn logs_range(
+        &self,
+        events: &[&str],
+        mut from: u64,
+        to: u64,
+    ) -> Result<Vec<Log>, String> {
+        let wanted: Vec<Hash32> = events.iter().map(|e| abi::topic(e)).collect();
+        let any: Vec<String> = wanted.iter().map(|t| t.to_string()).collect();
         let mut out = Vec::new();
         while from <= to {
             let end = (from + LOG_RANGE - 1).min(to);
             let r = self
-                .rpc
-                .call(
+                .rpc_call(
                     "eth_getLogs",
-                    json!([{"address": hex0x(&self.contract), "topics": [topic.to_string()],
+                    json!([{"address": hex0x(&self.contract), "topics": [any],
                             "fromBlock": format!("0x{from:x}"), "toBlock": format!("0x{end:x}")}]),
                 )
                 .await?;
@@ -350,6 +392,11 @@ impl StorageChain {
                     .iter()
                     .map(h32)
                     .collect::<Result<Vec<_>, _>>()?;
+                // Only the asked events (an RPC that ignores the topics never
+                // passes another event's log off as one of them).
+                if !topics.first().is_some_and(|t| wanted.contains(t)) {
+                    continue;
+                }
                 out.push(Log {
                     topics,
                     data: hexb(&l["data"])?,
@@ -370,13 +417,19 @@ impl StorageChain {
     pub async fn snapshot(&self) -> Result<Snapshot, String> {
         let mut why = String::new();
         for _ in 0..SNAPSHOT_TRIES {
-            // A failed read (a log naming a deal the contract does not have, a
-            // transient RPC error) also drops the kept logs before the retry.
+            let failed = self.rpc_errors.load(Ordering::Relaxed);
+            // A failed read (a log naming a deal the contract does not have)
+            // also drops the kept logs before the retry. A call the node did
+            // not answer (HTTP 429, a timeout) says nothing about them: they
+            // stay, and the next pass goes on from them (THREATS STORAGE-S15-4).
             let w = match self.snapshot_once().await {
                 Ok(s) => match self.agrees(&s).await? {
                     None => return Ok(s),
                     Some(w) => w,
                 },
+                Err(e) if self.rpc_errors.load(Ordering::Relaxed) != failed => {
+                    return Err(format!("chain read failed: {e}"))
+                }
                 Err(e) => e,
             };
             why = w;
@@ -415,7 +468,7 @@ impl StorageChain {
     }
 
     async fn snapshot_once(&self) -> Result<Snapshot, String> {
-        // The kept logs end at a finalized block: if that block's hash changed,
+        // The kept logs end at a safe block: if that block's hash changed,
         // they are dropped (review STORAGE-R3-1).
         let anchor = self.cache.lock().ok().and_then(|c| c.anchor);
         if let Some((n, h)) = anchor {
@@ -423,14 +476,19 @@ impl StorageChain {
                 self.forget_logs();
             }
         }
-        let (fin, fin_hash) = self.block_id("finalized").await?;
+        let (fin, fin_hash) = self.block_id("safe").await?;
         let head = self.block_number().await?;
         let epoch = self.current_epoch().await?;
         let params = self.params().await?;
         let err = |e: abi::AbiError| e.to_string();
+        let all = self.cached_logs(head, fin).await?;
+        let of = |e: &str| {
+            let t = abi::topic(e);
+            all.iter().filter(move |l| l.topics.first() == Some(&t))
+        };
         // Node lists by first epoch (the last event of an epoch wins).
         let mut lists: Vec<(u64, Vec<NodeId>)> = Vec::new();
-        for l in self.cached_logs(events::NODE_SET, head, fin).await? {
+        for l in of(events::NODE_SET) {
             let from = u64::from_be_bytes(
                 l.topics.get(1).ok_or("NodeSet topic")?.0[24..]
                     .try_into()
@@ -449,7 +507,7 @@ impl StorageChain {
         // URLs: Registered(index -> url), Activated(node -> index).
         let mut url_of_index = BTreeMap::new();
         let mut registrations = 0u64;
-        for l in self.cached_logs(events::REGISTERED, head, fin).await? {
+        for l in of(events::REGISTERED) {
             registrations += 1;
             let idx = l.topics.get(1).ok_or("Registered topic")?;
             let i = u64::from_be_bytes(idx.0[24..].try_into().map_err(|_| "topic")?);
@@ -461,7 +519,7 @@ impl StorageChain {
         }
         let mut nodes = BTreeMap::new();
         let mut jailed = Jailed::new();
-        for l in self.cached_logs(events::ACTIVATED, head, fin).await? {
+        for l in of(events::ACTIVATED) {
             let id = NodeId(*l.topics.get(1).ok_or("Activated topic")?);
             let i = u64::from_be_bytes(
                 l.topics.get(2).ok_or("Activated topic")?.0[24..]
@@ -476,7 +534,7 @@ impl StorageChain {
             nodes.insert(id, NodeEntry { info, url });
         }
         let mut excl = Exclusions::new();
-        for l in self.cached_logs(events::SLASHED, head, fin).await? {
+        for l in of(events::SLASHED) {
             let node = NodeId(*l.topics.get(1).ok_or("Slashed topic")?);
             let deal = u64::from_be_bytes(
                 l.topics.get(2).ok_or("Slashed topic")?.0[24..]
@@ -487,7 +545,7 @@ impl StorageChain {
             let from = abi::word_u64(&l.data, 4).map_err(err)?;
             excl.insert(deal, index, node, from);
         }
-        for l in self.cached_logs(events::DECLINED, head, fin).await? {
+        for l in of(events::DECLINED) {
             let node = NodeId(*l.topics.get(1).ok_or("Declined topic")?);
             let deal = u64::from_be_bytes(
                 l.topics.get(2).ok_or("Declined topic")?.0[24..]
@@ -501,7 +559,7 @@ impl StorageChain {
         }
         let mut deals = Vec::new();
         let mut deal_logs = 0u64;
-        for l in self.cached_logs(events::DEAL_CREATED, head, fin).await? {
+        for l in of(events::DEAL_CREATED) {
             deal_logs += 1;
             let id = u64::from_be_bytes(
                 l.topics.get(1).ok_or("DealCreated topic")?.0[24..]
@@ -1536,7 +1594,10 @@ pub async fn epoch_report(chain: &StorageChain, s: &Snapshot, e: u64) -> Result<
     );
     let mut acc = EpochAccounts::new(&asks);
     let mut paid: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();
-    for l in chain.logs(events::ANSWERED, s.block).await? {
+    // Answers and slashes of epoch e are sent from its first block on: the
+    // report reads from there, not from the deploy block (THREATS STORAGE-S15-1).
+    let start = s.params.genesis + e * s.params.epoch_blocks;
+    for l in chain.logs_from(events::ANSWERED, start, s.block).await? {
         let epoch = l
             .topics
             .get(2)
@@ -1553,7 +1614,7 @@ pub async fn epoch_report(chain: &StorageChain, s: &Snapshot, e: u64) -> Result<
         paid.insert((deal, slot, node), amount);
     }
     let mut slashed: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();
-    for l in chain.logs(events::SLASHED, s.block).await? {
+    for l in chain.logs_from(events::SLASHED, start, s.block).await? {
         if abi::word_u64(&l.data, 0).map_err(|x| x.to_string())? != e {
             continue;
         }

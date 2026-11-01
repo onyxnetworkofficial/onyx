@@ -5,7 +5,7 @@
 import { randomBytes } from 'node:crypto';
 import { chmodSync, copyFileSync, existsSync, mkdirSync, readFileSync, realpathSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
-import { dirname, join } from 'node:path';
+import { dirname, join, posix, win32 } from 'node:path';
 
 /** The server's name in Claude Desktop's `mcpServers`. */
 export const SERVER_NAME = 'onyx-contrib';
@@ -13,9 +13,11 @@ export const SERVER_NAME = 'onyx-contrib';
 /** Claude Desktop's settings file for this system (ONYX_CLAUDE_CONFIG overrides it, for tests and odd installs). */
 export function claudeConfigPath(env = process.env, platform = process.platform, home = homedir()) {
 	if (env.ONYX_CLAUDE_CONFIG) return env.ONYX_CLAUDE_CONFIG;
-	if (platform === 'darwin') return join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
-	if (platform === 'win32') return join(env.APPDATA || join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
-	return join(env.XDG_CONFIG_HOME || join(home, '.config'), 'Claude', 'claude_desktop_config.json');
+	// The asked system's separators, whatever system this runs on.
+	const p = platform === 'win32' ? win32 : posix;
+	if (platform === 'darwin') return p.join(home, 'Library', 'Application Support', 'Claude', 'claude_desktop_config.json');
+	if (platform === 'win32') return p.join(env.APPDATA || p.join(home, 'AppData', 'Roaming'), 'Claude', 'claude_desktop_config.json');
+	return p.join(env.XDG_CONFIG_HOME || p.join(home, '.config'), 'Claude', 'claude_desktop_config.json');
 }
 
 /**

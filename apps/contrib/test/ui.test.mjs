@@ -15,7 +15,7 @@ import { registry } from '../src/providers.mjs';
 import * as rules from '../src/rules.mjs';
 import { startUi } from '../src/ui.mjs';
 import { memoryVault } from '../src/vault.mjs';
-import { fakeIntake, fakeProvider, KEY, OTHER_KEY, PROVIDER_ORIGIN, routedFetch } from './fakes.mjs';
+import { fakeIntake, fakeProvider, KEY, OTHER_KEY, POSIX, PROVIDER_ORIGIN, routedFetch } from './fakes.mjs';
 
 const PASSPHRASE = 'FAKE-ui-vault-pw-7Qx29';
 let provider, intake;
@@ -165,8 +165,8 @@ test('ui: a browser started from a terminal gets a private launch file, never th
 	const { a } = await app();
 	const f = a.launchFile();
 	assert.ok(!f.includes(a.token), 'the path holds no token');
-	assert.equal((statSync(f).mode & 0o777).toString(8), '600');
-	assert.equal((statSync(dirname(f)).mode & 0o777).toString(8), '700');
+	if (POSIX) assert.equal((statSync(f).mode & 0o777).toString(8), '600');
+	if (POSIX) assert.equal((statSync(dirname(f)).mode & 0o777).toString(8), '700');
 	assert.ok(readFileSync(f, 'utf8').includes(`url=${a.url}`), 'it forwards to the tokened URL');
 	await a.close();
 	assert.ok(!existsSync(f), 'deleted when the server stops');
@@ -260,7 +260,7 @@ test('ui: every route works end to end: provider, key, endpoints, preview, check
 	assert.equal(hist.json.contributions.length, 1);
 	assert.equal(hist.json.contributions[0].id, conf.json.receipt.id);
 	assert.equal(hist.json.contributions[0].provider, 'prices');
-	assert.equal((statSync(join(dir, 'contributions.json')).mode & 0o777).toString(8), '600');
+	if (POSIX) assert.equal((statSync(join(dir, 'contributions.json')).mode & 0o777).toString(8), '600');
 	const stat = await http(a, { path: `/api/contributions/status?id=${conf.json.receipt.id}` });
 	assert.equal(stat.status, 200, stat.text);
 	assert.equal(stat.json.status.id, conf.json.receipt.id);
@@ -356,21 +356,23 @@ test('claude: connect merges, never overwrites: other servers and settings kept,
 	const old = process.umask(0o002);
 	try {
 		const r = connectClaude({ path: claude, entry: { command: 'y', args: ['mcp'] } });
-		assert.equal((statSync(claude).mode & 0o777).toString(8), '600');
-		assert.equal((statSync(r.backup).mode & 0o777).toString(8), '600');
+		if (POSIX) assert.equal((statSync(claude).mode & 0o777).toString(8), '600');
+		if (POSIX) assert.equal((statSync(r.backup).mode & 0o777).toString(8), '600');
 	} finally {
 		process.umask(old);
 	}
-	const target = join(dirname(claude), 'real-config.json');
-	writeFileSync(target, '{}');
-	const link = join(dirname(claude), 'linked.json');
-	symlinkSync(target, link);
-	connectClaude({ path: link, entry: { command: 'y', args: ['mcp'] } });
-	assert.ok(lstatSync(link).isSymbolicLink(), 'the link stays a link');
-	assert.equal(JSON.parse(readFileSync(target, 'utf8')).mcpServers[SERVER_NAME].command, 'y');
+	if (POSIX) {
+		const target = join(dirname(claude), 'real-config.json');
+		writeFileSync(target, '{}');
+		const link = join(dirname(claude), 'linked.json');
+		symlinkSync(target, link);
+		connectClaude({ path: link, entry: { command: 'y', args: ['mcp'] } });
+		assert.ok(lstatSync(link).isSymbolicLink(), 'the link stays a link');
+		assert.equal(JSON.parse(readFileSync(target, 'utf8')).mcpServers[SERVER_NAME].command, 'y');
+	}
 	const fresh = join(tmp('onyx-claude-'), 'new', 'claude_desktop_config.json');
 	connectClaude({ path: fresh, entry: { command: 'y', args: ['mcp'] } });
-	assert.equal((statSync(fresh).mode & 0o777).toString(8), '600', 'a new file is 0600');
+	if (POSIX) assert.equal((statSync(fresh).mode & 0o777).toString(8), '600', 'a new file is 0600');
 	writeFileSync(claude, '{"mcpServers": []}');
 	assert.throws(() => connectClaude({ path: claude, entry: { command: 'x', args: [] } }), /not an object/);
 });

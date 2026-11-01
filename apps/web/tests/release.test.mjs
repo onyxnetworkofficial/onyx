@@ -32,7 +32,9 @@ test('hasDesktop: DESKTOP_SINCE and later releases carry the installers; earlier
 	assert.equal(R.hasDesktop(R.DESKTOP_SINCE), true);
 	assert.equal(R.hasDesktop('v0.2.0-testnet'), false);
 	assert.equal(R.hasDesktop('v0.2.9-testnet'), false);
+	assert.equal(R.hasDesktop('v0.3.0-testnet'), false, 'its desktop run failed: no installers');
 	assert.equal(R.hasDesktop('v0.3.1-testnet'), true);
+	assert.equal(R.hasDesktop('v0.3.2-testnet'), true);
 	assert.equal(R.hasDesktop('v0.10.0-testnet'), true);
 	assert.equal(R.hasDesktop('v1.0.0-testnet'), true);
 	for (const bad of ['v0.3.0', '0.3.0-testnet', 'v0.3.0-mainnet', '', 'latest']) assert.equal(R.hasDesktop(bad), false, bad);

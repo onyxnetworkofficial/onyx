@@ -77,7 +77,10 @@ jobs:
           mkdir -p apps/desktop/src-tauri/binaries
           case "$RUNNER_OS" in
             Linux) cp sea/onyx-contrib-linux-x64 apps/desktop/src-tauri/binaries/onyx-contrib-x86_64-unknown-linux-gnu ;;
-            macOS) cp sea/onyx-contrib-macos-universal apps/desktop/src-tauri/binaries/onyx-contrib-universal-apple-darwin ;;
+            macOS) # A universal build compiles each architecture and looks for its own sidecar.
+              cp sea/onyx-contrib-macos-arm64 apps/desktop/src-tauri/binaries/onyx-contrib-aarch64-apple-darwin
+              cp sea/onyx-contrib-macos-x64 apps/desktop/src-tauri/binaries/onyx-contrib-x86_64-apple-darwin
+              cp sea/onyx-contrib-macos-universal apps/desktop/src-tauri/binaries/onyx-contrib-universal-apple-darwin ;;
             Windows) cp sea/onyx-contrib-windows-x64.exe apps/desktop/src-tauri/binaries/onyx-contrib-x86_64-pc-windows-msvc.exe ;;
           esac
       - name: Tauri command line (pinned in apps/desktop/package-lock.json)

@@ -7,7 +7,7 @@ import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'nod
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { checkKey, fileVault, macVault, runTool, secretToolVault, vaultFromEnv } from '../src/vault.mjs';
-import { KEY } from './fakes.mjs';
+import { KEY, NEEDS_POSIX } from './fakes.mjs';
 
 const ORIGIN = 'https://api.example.com';
 
@@ -38,7 +38,7 @@ else if (argv[0] === 'delete-generic-password') { delete store['mac|' + argv[arg
 	return path;
 }
 
-test('secret-tool: the key goes on stdin, never in argv; bound to name and origin', async () => {
+test('secret-tool: the key goes on stdin, never in argv; bound to name and origin', { skip: NEEDS_POSIX }, async () => {
 	const d = mkdtempSync(join(tmpdir(), 'onyx-contrib-vault-'));
 	try {
 		const v = secretToolVault({ cmd: fakeTool(d) });
@@ -56,7 +56,7 @@ test('secret-tool: the key goes on stdin, never in argv; bound to name and origi
 	}
 });
 
-test('macOS security: the add command (with the key) is read from stdin, so argv holds no key', async () => {
+test('macOS security: the add command (with the key) is read from stdin, so argv holds no key', { skip: NEEDS_POSIX }, async () => {
 	const d = mkdtempSync(join(tmpdir(), 'onyx-contrib-vault-'));
 	try {
 		const v = macVault({ cmd: fakeTool(d) });

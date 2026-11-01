@@ -393,12 +393,18 @@ for i in 2 3 4; do
   status_of "$i" >"$work/final$i.json"
 done
 python3 -I - "$work" <<'PY'
-import json, sys
+import glob, json, sys
 w = sys.argv[1]
-for i in (2, 3, 4):
-    n = json.load(open(f"{w}/final{i}.json"))["node"]
-    assert int(n["earned"]) > 0 and n["status"] == 1, n
-print("  ok: nodes 2, 3, 4 earned " + ", ".join(json.load(open(f"{w}/final{i}.json"))["node"]["earned"] for i in (2, 3, 4)))
+# Pay is per passed answer (R-STOR-8): an honest node the random slots never asked earns nothing
+# yet (a public check run hit this: one node with 3 of 8 shards, 6 slots drawn). Every node with a
+# passed answer earned, none of them was jailed, and the honest nodes earned something together.
+passed = {a["node"] for f in glob.glob(f"{w}/epoch*.json") for a in json.load(open(f))["asks"] if a["status"] == "passed"}
+nodes = [json.load(open(f"{w}/final{i}.json"))["node"] for i in (2, 3, 4)]
+for n in nodes:
+    assert n["status"] == 1, n
+    assert n["id"] not in passed or int(n["earned"]) > 0, n
+assert sum(int(n["earned"]) for n in nodes) > 0, nodes
+print("  ok: nodes 2, 3, 4 earned " + ", ".join(n["earned"] for n in nodes))
 PY
 bA=$(status_of "$A" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')
 bB=$(status_of "$B" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')

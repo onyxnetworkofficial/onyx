@@ -5,6 +5,14 @@
 import { createServer } from 'node:http';
 import { createHash } from 'node:crypto';
 
+/**
+ * Unix file modes exist only off Windows (there a user's files are guarded by the profile's access
+ * lists, and a mode reads 666), and so do the `#!` stand-in programs some tests run.
+ */
+export const POSIX = process.platform !== 'win32';
+/** Skip reason for a test that runs `#!` stand-ins for Linux and macOS tools (desktop CI on Windows). */
+export const NEEDS_POSIX = !POSIX && 'runs #! stand-ins for Linux and macOS tools';
+
 /** Obviously fake keys: never real ones. */
 export const KEY = 'FAKE-test-key-0123456789abcdef';
 export const OTHER_KEY = 'FAKE-other-key-9876543210fedcba';

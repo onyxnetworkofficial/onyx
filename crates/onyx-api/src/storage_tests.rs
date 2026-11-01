@@ -89,10 +89,13 @@ struct Quirks {
     ignore_range: bool,
     /// Changes every block hash (a reorg).
     fork: u8,
+    /// Only this many more `eth_getLogs` calls are answered; the rest fail
+    /// with HTTP 429 (a public endpoint's rate limit, THREATS STORAGE-S15-4).
+    answer_logs: Option<usize>,
 }
 
-/// The finalized block of the fake chain: 64 below the head.
-fn finalized(head: u64) -> u64 {
+/// The safe block of the fake chain: 64 below the head.
+fn safe(head: u64) -> u64 {
     head.saturating_sub(64)
 }
 
@@ -124,8 +127,8 @@ impl JsonRpc for FakeChain {
                 "eth_blockNumber" => json!(format!("0x{:x}", f.block)),
                 "eth_getBlockByNumber" => {
                     let tag = p[0].as_str().unwrap_or_default();
-                    let n = if tag == "finalized" {
-                        finalized(f.block)
+                    let n = if tag == "safe" {
+                        safe(f.block)
                     } else {
                         qty(&p[0])?
                     };
@@ -138,6 +141,11 @@ impl JsonRpc for FakeChain {
                     let to = qty(&p[0]["toBlock"])?;
                     let lie = {
                         let mut g = self.0.lock().map_err(|_| "lock")?;
+                        match g.quirks.answer_logs.as_mut() {
+                            Some(0) => return Err("eth_getLogs: node answered HTTP 429".into()),
+                            Some(n) => *n -= 1,
+                            None => {}
+                        }
                         if g.quirks.empty_logs > 0 {
                             g.quirks.empty_logs -= 1;
                             true
@@ -151,73 +159,82 @@ impl JsonRpc for FakeChain {
                     if lie || (!f.quirks.ignore_range && !(from..=to).contains(&LOG_BLOCK)) {
                         return Ok(json!([]));
                     }
-                    let topic = p[0]["topics"][0].as_str().unwrap_or_default().to_string();
+                    // One call asks for any of several events (topic 0 is a list).
+                    let asked: Vec<String> = match &p[0]["topics"][0] {
+                        Value::Array(a) => a
+                            .iter()
+                            .map(|t| t.as_str().unwrap_or_default().to_string())
+                            .collect(),
+                        t => vec![t.as_str().unwrap_or_default().to_string()],
+                    };
                     let ids: Vec<NodeId> = f.nodes.iter().map(|n| n.0).collect();
                     let mut out = Vec::new();
-                    if topic == abi::topic(events::NODE_SET).to_string() {
-                        out.push(log(
-                            events::NODE_SET,
-                            vec![topic_u64(1)],
-                            encode(&[
-                                word_tok(&set_hash(&ids)),
-                                Tok::Words(ids.iter().map(|n| n.0 .0).collect()),
-                            ]),
-                        ));
-                    } else if topic == abi::topic(events::REGISTERED).to_string() {
-                        for (i, (_, url)) in f.nodes.iter().enumerate() {
-                            let bytes = match (&f.junk_url, i) {
-                                (Some(j), 0) => j.clone(),
-                                _ => url.as_bytes().to_vec(),
-                            };
+                    for topic in &asked {
+                        if *topic == abi::topic(events::NODE_SET).to_string() {
                             out.push(log(
-                                events::REGISTERED,
-                                vec![topic_u64(i as u64), topic_u64(0)],
-                                encode(&[uint(100), uint(1), Tok::Bytes(bytes)]),
-                            ));
-                        }
-                    } else if topic == abi::topic(events::ACTIVATED).to_string() {
-                        for (i, (id, _)) in f.nodes.iter().enumerate() {
-                            out.push(log(
-                                events::ACTIVATED,
-                                vec![id.0, topic_u64(i as u64), topic_u64(0)],
-                                vec![],
-                            ));
-                        }
-                    } else if topic == abi::topic(events::SLASHED).to_string() {
-                        for (n, d, idx, from) in &f.slashed {
-                            out.push(log(
-                                events::SLASHED,
-                                vec![n.0, topic_u64(*d)],
+                                events::NODE_SET,
+                                vec![topic_u64(1)],
                                 encode(&[
-                                    uint(3),
-                                    uint(0),
-                                    uint((*idx).into()),
-                                    uint(5),
-                                    uint((*from).into()),
-                                    uint(2),
+                                    word_tok(&set_hash(&ids)),
+                                    Tok::Words(ids.iter().map(|n| n.0 .0).collect()),
+                                ]),
+                            ));
+                        } else if *topic == abi::topic(events::REGISTERED).to_string() {
+                            for (i, (_, url)) in f.nodes.iter().enumerate() {
+                                let bytes = match (&f.junk_url, i) {
+                                    (Some(j), 0) => j.clone(),
+                                    _ => url.as_bytes().to_vec(),
+                                };
+                                out.push(log(
+                                    events::REGISTERED,
+                                    vec![topic_u64(i as u64), topic_u64(0)],
+                                    encode(&[uint(100), uint(1), Tok::Bytes(bytes)]),
+                                ));
+                            }
+                        } else if *topic == abi::topic(events::ACTIVATED).to_string() {
+                            for (i, (id, _)) in f.nodes.iter().enumerate() {
+                                out.push(log(
+                                    events::ACTIVATED,
+                                    vec![id.0, topic_u64(i as u64), topic_u64(0)],
+                                    vec![],
+                                ));
+                            }
+                        } else if *topic == abi::topic(events::SLASHED).to_string() {
+                            for (n, d, idx, from) in &f.slashed {
+                                out.push(log(
+                                    events::SLASHED,
+                                    vec![n.0, topic_u64(*d)],
+                                    encode(&[
+                                        uint(3),
+                                        uint(0),
+                                        uint((*idx).into()),
+                                        uint(5),
+                                        uint((*from).into()),
+                                        uint(2),
+                                    ]),
+                                ));
+                            }
+                        } else if *topic == abi::topic(events::DEAL_CREATED).to_string() {
+                            let d = &f.deal;
+                            out.push(log(
+                                events::DEAL_CREATED,
+                                vec![topic_u64(0), topic_u64(1)],
+                                encode(&[
+                                    word_tok(&d.manifest_root),
+                                    word_tok(&d.shards_root),
+                                    uint(d.shard_count.into()),
+                                    uint(d.byte_count.into()),
+                                    uint(d.r.into()),
+                                    uint(d.start_epoch.into()),
+                                    uint(d.end_epoch.into()),
+                                    word_tok(&d.salt),
+                                    uint(d.deposit),
+                                    Tok::Bytes(b"example.publisher".to_vec()),
+                                    Tok::Bytes(b"synthetic.metrics".to_vec()),
+                                    Tok::Bytes(b"http://publisher".to_vec()),
                                 ]),
                             ));
                         }
-                    } else if topic == abi::topic(events::DEAL_CREATED).to_string() {
-                        let d = &f.deal;
-                        out.push(log(
-                            events::DEAL_CREATED,
-                            vec![topic_u64(0), topic_u64(1)],
-                            encode(&[
-                                word_tok(&d.manifest_root),
-                                word_tok(&d.shards_root),
-                                uint(d.shard_count.into()),
-                                uint(d.byte_count.into()),
-                                uint(d.r.into()),
-                                uint(d.start_epoch.into()),
-                                uint(d.end_epoch.into()),
-                                word_tok(&d.salt),
-                                uint(d.deposit),
-                                Tok::Bytes(b"example.publisher".to_vec()),
-                                Tok::Bytes(b"synthetic.metrics".to_vec()),
-                                Tok::Bytes(b"http://publisher".to_vec()),
-                            ]),
-                        ));
                     }
                     json!(out)
                 }
@@ -1123,7 +1140,7 @@ async fn a_slow_network_cannot_stretch_a_pass() {
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }
 
-/// Review STORAGE-R1-8: logs of finalized blocks are read once and kept; a
+/// Review STORAGE-R1-8: logs of safe blocks are read once and kept; a
 /// later pass asks only for the newer blocks, and a closed deal is not asked
 /// about again.
 #[tokio::test]
@@ -1142,7 +1159,7 @@ async fn a_pass_reads_only_new_logs_and_skips_closed_deals() {
     let ranges = s.chain.1.lock().expect("lock").log_ranges.clone();
     assert!(!ranges.is_empty());
     assert!(
-        ranges.iter().all(|(f, _)| *f > finalized(20_000)),
+        ranges.iter().all(|(f, _)| *f > safe(20_000)),
         "only the newer blocks: {ranges:?}"
     );
     // A closed deal is dropped and never asked about again.
@@ -1161,6 +1178,10 @@ async fn a_pass_reads_only_new_logs_and_skips_closed_deals() {
 #[tokio::test]
 async fn a_lagging_rpc_answer_is_caught_by_the_counts() {
     let s = setup(5).await;
+    // The calls one clean read makes.
+    s.chain.0.lock().expect("lock").block = 20_000;
+    reader(&s).snapshot().await.expect("snapshot");
+    let per_read = std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges).len();
     {
         let mut f = s.chain.0.lock().expect("lock");
         f.block = 20_000;
@@ -1169,7 +1190,8 @@ async fn a_lagging_rpc_answer_is_caught_by_the_counts() {
     // Every call lies: the counts never match, so no wrong snapshot is returned.
     let r = reader(&s);
     assert!(r.snapshot().await.is_err());
-    s.chain.0.lock().expect("lock").quirks.empty_logs = 24;
+    // Exactly the first read lies: the retry is right.
+    s.chain.0.lock().expect("lock").quirks.empty_logs = per_read;
     let snap = r.snapshot().await.expect("the second read is right");
     assert_eq!(snap.deals.len(), 1);
     assert_eq!(snap.nodes.len(), 5);
@@ -1178,7 +1200,7 @@ async fn a_lagging_rpc_answer_is_caught_by_the_counts() {
 }
 
 /// Review STORAGE-R3-1: an RPC that ignores the asked range never fills the
-/// kept logs twice, and a reorg under the kept logs (the finalized block's
+/// kept logs twice, and a reorg under the kept logs (the safe block's
 /// hash changed) drops them.
 #[tokio::test]
 async fn ranges_are_enforced_and_a_reorg_drops_the_kept_logs() {
@@ -1195,14 +1217,13 @@ async fn ranges_are_enforced_and_a_reorg_drops_the_kept_logs() {
         assert_eq!(snap.deals.len(), 1);
         assert_eq!(snap.registrations, 5);
     }
-    let kept: usize = r
+    let kept = r
         .cache
         .lock()
         .expect("lock")
         .logs
-        .values()
-        .map(|(_, l)| l.len())
-        .sum();
+        .as_ref()
+        .map_or(0, |(_, l)| l.len());
     assert_eq!(
         kept,
         1 + 5 + 5 + 1,
@@ -1216,6 +1237,78 @@ async fn ranges_are_enforced_and_a_reorg_drops_the_kept_logs() {
         ranges.iter().any(|(f, _)| *f == 0),
         "read again from the deploy block: {ranges:?}"
     );
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-S15-1: sepolia.base.org refuses more than 200 blocks per
+/// `eth_getLogs`. A snapshot asks for all its events in one call per range of
+/// at most 200 blocks (every block once, not once per event), and the next
+/// pass reads only the blocks above the kept safe block: two calls.
+#[tokio::test]
+async fn one_call_per_range_of_at_most_200_blocks_for_every_event() {
+    let s = setup(5).await;
+    s.chain.0.lock().expect("lock").block = 20_000;
+    let r = reader(&s);
+    let snap = r.snapshot().await.expect("snapshot");
+    assert_eq!((snap.deals.len(), snap.nodes.len()), (1, 5));
+    let ranges = std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges);
+    assert!(
+        ranges.iter().all(|(f, t)| t >= f && t - f < LOG_RANGE),
+        "{ranges:?}"
+    );
+    let blocks: u64 = ranges.iter().map(|(f, t)| t - f + 1).sum();
+    assert_eq!(blocks, 20_001, "blocks 0..=20000, each asked once");
+    s.chain.0.lock().expect("lock").block = 20_010;
+    r.snapshot().await.expect("snapshot");
+    let again = std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges);
+    assert_eq!(
+        again,
+        vec![(safe(20_000) + 1, safe(20_010)), (safe(20_010) + 1, 20_010)]
+    );
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-S15-4: five nodes on one host reading 70,000 blocks from
+/// the public endpoint got HTTP 429 part way; every failed pass dropped the
+/// logs kept so far and began again at the deploy block, so most nodes never
+/// finished a first read. A read cut off by the node keeps every range it got
+/// and the next pass goes on from there: each block is answered once.
+#[tokio::test]
+async fn a_rate_limited_first_read_goes_on_where_it_stopped() {
+    let s = setup(5).await;
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.block = 20_000;
+        f.quirks.answer_logs = Some(40);
+    }
+    let r = reader(&s);
+    let e = r.snapshot().await.expect_err("cut off");
+    assert!(e.contains("HTTP 429"), "{e}");
+    let kept = |r: &StorageChain| r.cache.lock().expect("lock").logs.as_ref().map(|l| l.0);
+    assert_eq!(
+        kept(&r),
+        Some(40 * LOG_RANGE),
+        "the 40 answered ranges are kept"
+    );
+    s.chain.0.lock().expect("lock").quirks.answer_logs = Some(30);
+    r.snapshot().await.expect_err("cut off again");
+    assert_eq!(kept(&r), Some(70 * LOG_RANGE));
+    s.chain.0.lock().expect("lock").quirks.answer_logs = None;
+    let snap = r.snapshot().await.expect("the third pass finishes");
+    assert_eq!((snap.deals.len(), snap.nodes.len()), (1, 5));
+    assert_eq!(snap.list_at(snap.epoch).len(), 5);
+    let ranges = std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges);
+    let blocks: u64 = ranges.iter().map(|(f, t)| t - f + 1).sum();
+    assert_eq!(blocks, 20_001, "blocks 0..=20000, each answered once");
+    // A 429 after the first read leaves the kept logs as they were.
+    let before = kept(&r);
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.block = 20_400;
+        f.quirks.answer_logs = Some(0);
+    }
+    r.snapshot().await.expect_err("no answer");
+    assert_eq!(kept(&r), before);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }
 

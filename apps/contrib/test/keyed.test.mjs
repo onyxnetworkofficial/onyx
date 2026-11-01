@@ -14,6 +14,7 @@ import { checkProviderFits, observe, readKeyedManifest } from '../src/keyed.mjs'
 import { createState, runTool } from '../src/mcp.mjs';
 import { registry } from '../src/providers.mjs';
 import { memoryVault } from '../src/vault.mjs';
+import { NEEDS_POSIX } from './fakes.mjs';
 
 const here = fileURLToPath(new URL('.', import.meta.url));
 const REPO = resolve(here, '../../..');
@@ -85,7 +86,7 @@ test('keyed: a provider for another host or another key place never gets the key
 	}
 });
 
-test('keyed: join shows the terms, needs --yes without a terminal, and the seat holds nothing about the key (CL4-6, CL4-9)', async () => {
+test('keyed: join shows the terms, needs --yes without a terminal, and the seat holds nothing about the key (CL4-6, CL4-9)', { skip: NEEDS_POSIX }, async () => {
 	const s = setup();
 	await s.vault.set('widgets', ORIGIN, KEY);
 	const args = ['keyed', 'join', 'widgets', '--manifest', MANIFEST, '--repo', DEMO, '--observer-key', join(s.dir, 'obs.key'), '--operator', 'acme.data'];
@@ -112,7 +113,7 @@ test('keyed: join shows the terms, needs --yes without a terminal, and the seat 
 	assert.match(none.err, /no key stored/);
 });
 
-test('keyed: observe hands the key on stdin only and filters every line the observer prints (CL4-1)', async () => {
+test('keyed: observe hands the key on stdin only and filters every line the observer prints (CL4-1)', { skip: NEEDS_POSIX }, async () => {
 	const s = setup();
 	await s.vault.set('widgets', ORIGIN, KEY);
 	const r = await cli(['keyed', 'observe', 'widgets', '--manifest', MANIFEST, '--repo', DEMO, '--', '--key-file', 'obs.key', '--state', join(s.dir, 'st')], s);
@@ -133,7 +134,7 @@ test('keyed: observe hands the key on stdin only and filters every line the obse
 	assert.throws(() => observe({ p: registry(s.dir).get('widgets'), m: readKeyedManifest(MANIFEST), key: KEY, repo: DEMO, bin: s.bin, args: ['--api-key-stdin'] }), /from your vault only/);
 });
 
-test('keyed MCP: join checks first, signs only on confirm; observe runs in the background; no result holds the key', async () => {
+test('keyed MCP: join checks first, signs only on confirm; observe runs in the background; no result holds the key', { skip: NEEDS_POSIX }, async () => {
 	const s = setup();
 	await s.vault.set('widgets', ORIGIN, KEY);
 	const state = createState({ env: s.env, vault: s.vault, dir: s.dir, log: () => {} });
