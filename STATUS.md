@@ -11,5 +11,5 @@ Latest: 2026-11-01: release v0.3.1-testnet with the desktop installers; storage 
 - AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
 - Testnet only: tONYX and test USDC have no value; token economics are not final
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
-- Owner: storage nodes need test ETH (a faucet) to run past 2026-11-02 01:30 UTC; deployer has 0.0005 left
+- Owner: test ETH from a faucet before new storage deals (nodes topped up to 0.00012 on 2026-11-01, past the deals' end; deployer has 0.00011 left)
 - Next: open each installer on a real machine (S20), outside observers, the recheck runner, a security audit

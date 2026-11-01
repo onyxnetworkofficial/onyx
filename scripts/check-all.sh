@@ -1,8 +1,19 @@
 #!/usr/bin/env bash
 # Local mirror of CI. Run before every commit.
+# Much faster with TMPDIR on a RAM disk (tmpfs), because the tests sync files to disk often: the
+# onyx-api unit tests took 188 s with TMPDIR on disk and 26 s on tmpfs (2026-11-01). Not /dev/shm:
+# the remote-check self-test needs TMPDIR outside what its sandbox may write.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PATH:$HOME/.foundry/bin"
+# The gas regression check (see below, where its result is read) rebuilds every contract, about
+# five minutes on one core: it starts now and runs beside the Rust stages. The gas profile has its
+# own out-gas and cache-gas folders, so the default-profile builds in between never touch it.
+gas_log=$(mktemp)
+(cd contracts && exec env FOUNDRY_PROFILE=gas forge snapshot --check --force --no-match-test 'testFuzz_|invariant_' --no-match-contract 'Fork') >"$gas_log" 2>&1 &
+gas_pid=$!
+# On an early exit: stop it and its solc (by PID, so a rerun's --force never meets a leftover build).
+trap '[ -z "$gas_pid" ] || { pkill -P "$gas_pid"; kill "$gas_pid"; } 2>/dev/null || true; rm -f "$gas_log"' EXIT
 scripts/build-recipes.sh >/dev/null
 # Rebuilt bytes must equal what is staged or committed, and nothing may be untracked (R-REPRO-2).
 if [ -n "$(git ls-files --others --exclude-standard -- recipes/out)" ] || ! git diff --quiet -- recipes/out; then
@@ -140,8 +151,12 @@ fi
 # intended change, rerun the same command without --check and commit the new snapshot. Fuzz,
 # invariant and fork tests are left out (their gas varies with inputs).
 # --force rebuilds every contract first: an incremental build cache from before a merge gave
-# stale gas that was committed twice (C2-R2, then C4; lead fix 2026-10-17).
-(cd contracts && FOUNDRY_PROFILE=gas forge snapshot --check --force --no-match-test 'testFuzz_|invariant_' --no-match-contract 'Fork')
+# stale gas that was committed twice (C2-R2, then C4; lead fix 2026-10-17). Started at the top.
+if ! wait "$gas_pid"; then
+  gas_pid=; cat "$gas_log"; echo "gas regression: contracts/.gas-snapshot does not match (or the build failed)"; exit 1
+fi
+gas_pid=
+cat "$gas_log"
 # Website gate (AUD-1-F6): needs pnpm, wasm-bindgen-cli and the demo export with the live blocks
 # (apps/web/README.md), so it is opt-in here and absent from CI: ONYX_WEB=1 scripts/check-all.sh.
 # ROADMAP E10: the public builds' guards (no label row, no level-2 value; with fallback rights no
