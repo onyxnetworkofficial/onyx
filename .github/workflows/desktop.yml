@@ -37,7 +37,8 @@ jobs:
           - system: linux
             os: ubuntu-22.04
           - system: macos
-            os: macos-14
+            # GitHub retires the macos-14 image on 2026-11-02 (its brownouts cancel jobs before that).
+            os: macos-15
           - system: windows
             os: windows-2022
     runs-on: ${{ matrix.os }}
