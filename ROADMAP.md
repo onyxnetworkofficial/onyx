@@ -1071,8 +1071,11 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       RESEARCH.md; ADR-0063 (coded pieces) proposed, reviewed (THREATS STORAGE-S17-R1: 3 High,
       e.g. one operator needs n - k + 1 pieces, not k + 1, and coding does not make fetching on
       demand dearer); second draft reviewed (STORAGE-S17-R2: lazy repair reopened the hole and
-      could not be checked on chain; placement gas 1.1 to 7.5 million); third draft written. Next:
-      measure an assembly placement, choose the contract split, a third review, then code. Coded
+      could not be checked on chain; placement gas 1.1 to 7.5 million); third draft reviewed
+      (STORAGE-S17-R3: core sound; copy instead of rebuild, a repair lag, gas capped at 1.65
+      million); fourth draft written; contract split measured as stubs: a coded-only contract
+      with one linked library, 22,918 bytes (1,658 under the limit), v1 untouched. Next: numbers
+      for the repair lag, the join ramp and the minimum term, a fourth review, then code. Coded
       deals need `N >= 2n - k` nodes (36 for 12-of-24), so the live five nodes stay on copies
 - [ ] S18 Cold archive tier on an outside network (the owner picks it) and store on first use
       (ADR-0055 item 2): Onyx keeps the fingerprints and a fetch path; the publisher keeps the bulk

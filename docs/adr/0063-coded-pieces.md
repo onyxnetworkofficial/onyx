@@ -1,12 +1,13 @@
 # ADR-0063: Erasure-coded pieces instead of full copies (ROADMAP S17, first slice)
 
 ## Status
-Proposed, 2026-11-02 (test network only); nothing is built. Reviewed twice the same day by fresh
-adversarial reviewers, both "build with changes": the first draft (THREATS STORAGE-S17-R1: 3 High,
-4 Medium) and the second (STORAGE-S17-R2: 2 High, 5 Medium; its lazy repair could not be checked
-on chain and reopened the loss threshold). This is the third draft, with every change of both.
-Before code: the assembly placement's gas measured, which decides how the contract is split
-(decision 4). It answers the S17 item "erasure coding (k of n pieces instead of R
+Proposed, 2026-11-02 (test network only); nothing is built. Reviewed three times the same day by
+fresh adversarial reviewers, each "build with changes": the first draft (THREATS STORAGE-S17-R1:
+3 High, 4 Medium), the second (STORAGE-S17-R2: 2 High, 5 Medium; its lazy repair could not be
+checked on chain and reopened the loss threshold) and the third (STORAGE-S17-R3: 1 High, 4 Medium;
+the core held, it asked for copies instead of rebuilds where the old holder lives, a repair lag,
+a capped placement gas and four rule fixes). This is the fourth draft, with every change. Before
+code: see "Before code" (split (b) measured and proposed; numbers for the lag and the ramp). It answers the S17 item "erasure coding (k of n pieces instead of R
 copies)". Capacity-weighted placement, aggregated proofs and committees past 128 nodes are later
 slices. Research: RESEARCH.md "Storage network" (Storj v3, Walrus, the Reed-Solomon crates).
 Plain-English master document: docs/STORAGE-NETWORK.md.
@@ -45,14 +46,21 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
    12-of-24 to 16-of-32 at 2x, wider at more. While a stripe is whole and `N >= 2n - k`, every
    allowed code is at least as safe as three copies against one operator with up to a third of the
    nodes (table below); the margin is thin (the crossover is at f = 0.35 for 12-of-24 and 0.38 for
-   16-of-32). Coded deals need `N >= 2n - k` active nodes when made and every shard at least `k ×
-   2 KiB` (smaller shards give padding-only pieces a holder passes without storing; a public salt
-   would not help, it can be recomputed); other deals use v1 copies (R), which this deployment
-   keeps (`k = 1, n = R`). If active nodes later fall below `2n - k`, the payer may close the deal
-   at once with the unpaid deposit back (the code's safety needs that many nodes, Consequences).
-   Billable size: the larger of `byteCount × n / k` and `shardCount × n × MIN_PIECE_BYTES` (a floor
-   per piece, so many tiny pieces are not cheaper than their work), rounded up to whole GiB; the
-   deposit is `price × billable GiB × epochs`. A new deployment (`RULES_VERSION` 4), never an
+   16-of-32). Coded deals need `N >= 2n - k` active nodes when made; other deals use v1 copies (R),
+   which this deployment keeps (`k = 1, n = R`). Shards under `k × 2 KiB` give padding-only pieces
+   a holder passes without storing (a public salt would not help, it can be recomputed); the header
+   carries only the shard and byte counts, so the chain checks the average shard size and nodes
+   decline any smaller shard under decision 6 (review STORAGE-S17-R3 L1). Early close: when a
+   stripe has fewer than `2n - k` eligible nodes in the list in force (exclusions are permanent, so
+   eligibility per stripe, not N, is what the safety needs), the payer may close the deal from the
+   epoch after next, after a minimum of `MIN_CODED_EPOCHS` paid epochs; the holders keep the pay
+   of every epoch until then (a payer that exits its own node to trigger a close at once would
+   otherwise get back what holders spent fetching, STORAGE-S17-R3 M4).
+   Billable size: the larger of `byteCount × n / k` and `shardCount × n × MIN_PIECE_BYTES`, rounded
+   up to whole GiB, with `MIN_PIECE_BYTES` = 8 MiB, v1's floor per copy (`MIN_BILLED_SHARD_BYTES`):
+   each piece is one holder's placement, fetch and checks, as a copy is, so many tiny pieces are
+   not cheaper than their work (a 16-of-32 deal of small shards pays for 32 holders per shard,
+   v1 for 3). The deposit is `price × billable GiB × epochs`. A new deployment (`RULES_VERSION` 4), never an
    upgrade.
 2. **Encoding, pinned.** Each shard's bytes (the ADR-0059 shard file, L bytes) are cut into k data
    pieces of `P = 64 × ceil(L / (64 × k))` bytes (the last zero-padded) and n - k parity pieces by
@@ -71,17 +79,23 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
 4. **Placement: distinct holders by skipping.** Piece j of shard i has the key
    `keccak256("onyx-storage-piece-v1" ‖ shardKey(i) ‖ j)`. Pieces are placed in order 0..n-1;
    piece j goes to the eligible node with the fewest pieces of this stripe so far, then the highest
-   weight for its key. Eligible: in the list, not jailed, not excluded from the stripe. Exclusion
+   weight for its key. Eligible for epoch e, as ADR-0060 decision 5 splits it: in the list of e - 1,
+   not jailed and not excluded from the stripe by e - 1; a node jailed or excluded by e keeps its
+   place and its count for e but is not asked (so its pieces move for e + 1, never into a holder
+   asked in the same epoch; review STORAGE-S17-R3 M3; shared vectors pin this split, fewer than n
+   eligible nodes and chain moves). Exclusion
    (slash, decline, notice) is per (deal, shard, node), as in v1, not per piece: a node out of one
    piece is out of the stripe (per-piece exclusion let it win another piece 10 to 43% of the time
    and cost 3x the gas, STORAGE-S17-R2). While at least n nodes are eligible every piece has its
    own holder; with fewer (any N, after declines) the same rule spreads pieces evenly. A leave moves
-   the leaver's pieces and, rarely, a short chain (0.08 to 0.38 extra moves per forced move). Gas
-   of placing pieces 0..31 at 128 nodes in a challenge (review STORAGE-S17-R2, forge harness):
-   7.48 million with today's heap ported, 2.66 million as a plain loop, 1.09 million as the
-   inline-assembly floor, against 0.23 million for v1's top 3; `OnyxStorage` is already 22,057 of
-   24,576 bytes. So coded deals need an assembly placement and their own contract (or a library),
-   decided by the assembly port's measured gas before code. Nodes keep placement incrementally.
+   the leaver's pieces and, rarely, a short chain (0.08 to 0.38 extra moves per forced move above
+   the minimum N, 0.57 to 0.65 at `N = 2n - k`). Gas: weights hashed in inline assembly; on the
+   first excluded winner the contract reads every node's exclusion once and masks them, so declines
+   cannot force rescans (review STORAGE-S17-R3 M2: any operator can decline a whole deal for free,
+   which pushed the lazy reads to 4.37 million gas; read once, 1.10 million with no declines and
+   1.65 million at worst for the last of 32 pieces at 128 nodes, holders unchanged in all 14 test
+   cases; v1's top 3: 0.23 million). Nodes keep placement incrementally. The contract split is in
+   "Before code".
 5. **Challenges.** Each deal gets `challengesPerDeal × 3` one-piece slots per epoch (the answers
    per deal of a v1 R = 3 deal, so each node is asked as often as before and jail comes as fast).
    Slot s picks shard i as today, piece `j = keccak("onyx-storage-pslot-v1" ‖ seed ‖ deal ‖ s) mod
@@ -94,7 +108,10 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
    which breaks amendment 2's first rule. `answer` carries the cell and three Merkle paths (about
    35,000 to 40,000 gas more than v1, to be measured). A passed answer earns the deposit's per-epoch
    rate divided by the slots. Failure, miss, slash, jail and pay work per (deal, shard, piece,
-   node); exclusion per (deal, shard, node) (decision 4).
+   node); exclusion per (deal, shard, node) (decision 4). The notice's last pass is kept with the
+   piece index it was for (it fits in the `Excl` slot) and applies only to that piece: a node moved
+   to another piece of the stripe by a chain is not under notice for a piece it never held (about
+   78% of chain moves on one-shard deals would misfire otherwise, STORAGE-S17-R3 L2).
 6. **Wrong encodings: per shard.** A new holder of piece j fetches the shard (from the publisher,
    else the k data pieces, else any k pieces), checks it against the anchored manifest, computes all
    n pieces and keeps piece j only if the shard's piece roots give the deal's pieces root at index
@@ -102,9 +119,17 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
    publisher its good ones, review M3), with no slash. No honest node is slashed by a wrong
    encoding beyond STORAGE-16's existing window. A wrong encoding harms the publisher's data, the
    network's bandwidth and readers, not holders' bonds.
-7. **Repair, eager, as in v1.** A piece moves when its holder is excluded, jails or leaves, or a
-   join takes it (decision 4 names the new holder in every case); the new holder rebuilds it during
-   the next epoch and is challenged from the epoch after (ADR-0060 decision 5's one-epoch rule).
+7. **Repair, eager, and a copy where it can be.** A piece moves when its holder is excluded, jails
+   or leaves, or a join or a chain takes it (decision 4 names the new holder in every case). When
+   the old holder is still serving (a join, a chain move, an exit, a noticed decline) the new holder
+   copies the piece from it, P bytes checked against `piecesRoot`; only jails, slashes and crashes
+   need a rebuild from k pieces. The new holder is challenged from `G` epochs after the move, `G`
+   set from a stated bandwidth per node (one full rebuild of a node's share per `G` epochs; `G =
+   1` is v1's rule): a rebuild of a joiner's whole share is k-fold (a 128-node 16-of-32 network
+   holding 500 TB asks about 124 TB of a joiner, 11.5 Gbit/s over a one-day epoch and far more over
+   the 24-minute test epochs), and a holder late with it would be slashed, excluded and moved again,
+   a cascade (STORAGE-S17-R3 H1). Joins are also ramped: a new node takes pieces of at most a set
+   number of stripes per epoch.
    Lazy repair (second draft) was dropped: a stripe left at its repair threshold T needs only T - k
    + 1 pieces from one operator (7 for 12-of-24; at f = 1/3, 36 to 92% of stripes against 3.2 to
    3.4% for three copies), and the contract could not tell a moved, unbuilt piece from a held one
@@ -160,7 +185,32 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
   from one operator, and the chain cannot see unbuilt pieces (decision 7).
 
 ## Before code
-1. Port the placement of decision 4 to inline assembly in a forge harness and measure it at 128
-   nodes and n = 32 (the review's floor: 1.09 million gas); then choose the contract split.
-2. Fix `MIN_PIECE_BYTES` and the shard floor with the gas and bandwidth numbers.
-3. A third review of the decisions that changed (4, 5, 7) together with the measured gas.
+1. **Placement gas, measured (done 2026-11-02).** The second review's forge harness, rerun: the
+   holder of the last piece (j = 31) at 128 nodes, weights in inline assembly, exclusion read only
+   for a winner, costs 1,086,402 gas with no declines, 2,231,624 with 64 of 128 nodes declined and
+   3,360,893 with 96; the third review found that lazy reads reach 4.37 million when declines leave
+   fewer than n eligible, and that reading every exclusion once caps it at 1.65 million (decision
+   4). v1's top 3 cost 234,086.
+1b. **The contract split, measured (2026-11-02, stubs that compile, solc 0.8.30 via-IR as
+   `contracts/foundry.toml`).** The reviewer's one-contract stub was 27,867 bytes, 3,291 over
+   EIP-170. Two options were built:
+
+   | Option | Main runtime | Margin | Linked libraries | v1 gas |
+   |---|---|---|---|---|
+   | (a) one contract, v1's heap placement and the anchor checks also in libraries | 23,843 | 733 | three (4.6, 4.6, 2.9 KB) | `answer` +6.4k to +6.8k (N 5 to 128), `createDeal` +4.7k |
+   | (b) a coded-only `OnyxStorageCoded`, placement and the three-path check in one library | 22,918 | 1,658 | one (4,606 B) | unchanged |
+
+   Chosen, proposed: **(b)**. Twice the margin of (a) for the join ramp and later fixes, v1's gas
+   and code untouched (the live contract at `0x9244…ee43` keeps running with no re-review), one
+   library instead of three. Its costs: a node serving both contracts bonds and pays the
+   registration fee twice under two ids, may promise one disk to both (capacity is counted per
+   contract), and a jail or slash in one does not carry to the other; nodes track two seeds and two
+   node lists; `N >= 2n - k` counts only the coded contract's nodes; the registry code is copied.
+   Packing `k` and `n` with the payer keeps `createDeal` from paying for a new storage slot (+20,000
+   gas otherwise). The deploy script checks the library's code against the build (it runs by
+   DELEGATECALL on the contract's storage and tokens). Stubs: the session's scratch folder
+   `split/` (not in the repository).
+2. **Floors (done 2026-11-02).** `MIN_PIECE_BYTES` = 8 MiB (v1's floor per copy) and coded shards
+   of at least `k × 2 KiB` (decision 1).
+3. Reviews done: STORAGE-S17-R1, -R2, -R3 (this fourth draft takes R3's changes). A fourth review
+   once `G`, the join ramp and `MIN_CODED_EPOCHS` have numbers, together with split (b).

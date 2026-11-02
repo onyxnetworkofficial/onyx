@@ -3,6 +3,16 @@ import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { settled, WAIT_CAP } from './wait.mjs';
 
+// Click a link that changes the route, wait for that route, then for the page to settle. On a
+// loaded machine (other work on the box, the suites in lanes) the old page could count as settled
+// before the click had changed the route; two gated checks failed so on 2026-11-02.
+async function go(pg, link, hashes) {
+	await link.click();
+	await pg.waitForURL((u) => hashes.includes(new URL(u).hash), { timeout: WAIT_CAP }).catch(() => {});
+	await settled(pg);
+}
+const HOME = ['#/', ''];
+
 export async function product(browser, base, root, expect) {
 	const axeSrc = await readFile(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 	for (const width of [1280, 390]) {
@@ -26,8 +36,7 @@ export async function product(browser, base, root, expect) {
 		const violations = await pg.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21aa','wcag22aa','best-practice'] } })).violations.filter((v) => ['serious','critical'].includes(v.impact)).map((v) => v.id));
 		expect(violations.length === 0, `U1 ${width}: no serious/critical accessibility violations (${violations.join(', ')})`);
 		await pg.screenshot({ path: `/tmp/onyx-product-home-${width}.png`, fullPage: true });
-		await cta.click();
-		await settled(pg);
+		await go(pg, cta, ['#/submit']);
 		expect((await pg.locator('h1').innerText()).trim() === 'Add data' && (await pg.getByTestId('next').count()) === 1, `U1 ${width}: Add your data opens the real editable submission form`);
 		// Meeting polish MP1: a clear second way in, the steps for an AI assistant (MCP) and for the API.
 		const before = requests.length;
@@ -60,26 +69,16 @@ export async function product(browser, base, root, expect) {
 			const hoverIssues = await pg.evaluate(async () => (await window.axe.run({ include: ['header'] }, { runOnly: { type: 'tag', values: ['wcag2aa'] } })).violations.filter((v) => ['serious','critical'].includes(v.impact)).map((v) => v.id));
 			expect(hoverIssues.length === 0, `U1 ${width}: active Add data navigation remains accessible on hover (${hoverIssues.join(', ')})`);
 		}
-		await pg.locator('header a.mark').click();
-		await settled(pg);
-		await pg.getByTestId('home-secondary').click();
-		// The navigation, not only a quiet page: on a loaded machine the old page could count as
-		// settled before the click had changed the route (a gated check failed so, 2026-11-02).
-		await pg.waitForURL((u) => new URL(u).hash === '#/data', { timeout: WAIT_CAP }).catch(() => {});
-		await settled(pg);
+		await go(pg, pg.locator('header a.mark'), HOME);
+		await go(pg, pg.getByTestId('home-secondary'), ['#/data']);
 		expect(new URL(pg.url()).hash === '#/data', `U1 ${width}: browse opens the existing data page`);
-		await pg.locator('header a.mark').click();
-		await settled(pg);
-		await pg.getByTestId('home-technical').click();
-		await settled(pg);
+		await go(pg, pg.locator('header a.mark'), HOME);
+		await go(pg, pg.getByTestId('home-technical'), ['#/how-it-works']);
 		expect((await pg.locator('h1').innerText()).trim() === 'How Onyx checks data' && (await pg.locator('.console').count()) === 1, `U1 ${width}: How it works contains the actual verification console`);
-		await pg.locator('header a.mark').click();
-		await settled(pg);
-		await pg.getByTestId('home-markets').click();
-		await settled(pg);
+		await go(pg, pg.locator('header a.mark'), HOME);
+		await go(pg, pg.getByTestId('home-markets'), ['#/markets']);
 		expect((await pg.locator('h1').innerText()).trim() === 'Call the next number.', `U1 ${width}: the Markets dashboard is one click from home`);
-		await pg.locator('header a.mark').click();
-		await settled(pg);
+		await go(pg, pg.locator('header a.mark'), HOME);
 		const footer = await pg.getByTestId('footer-nav').getByRole('link').evaluateAll((as) => as.map((a) => a.hash));
 		expect(['#/','#/data','#/how-it-works','#/submit','#/download','#/run','#/reserves','#/explorer','#/labels','#/api','#/markets'].every((h) => footer.includes(h)), `U1 ${width}: all eleven destinations remain discoverable`);
 		expect(errors.length === 0, `U1 ${width}: no browser errors (${errors.join('; ')})`);
