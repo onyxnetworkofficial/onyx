@@ -176,6 +176,11 @@ replicas, which would prove separate disk copies, are not planned before S17 (AD
   transaction. Deals take turns for downloads, and one pass never spends more than 5 minutes on
   them, so a publisher who withholds data cannot slow down anyone's proofs. A check already drawn for this epoch still stands; the
   copy moves to the next node from the next epoch. No penalty.
+- **Notice on data you proved (next contract).** If the node passed a check on that shard in the
+  decline's epoch or the 7 before it, the decline starts one epoch later, and the node is still checked in that epoch.
+  So a node that only fetches when asked cannot drop a shard for free the moment its source fails.
+  Keep a shard's file for at least 9 epochs after your last passed check on it (ADR-0060
+  amendment 2).
 
 ## 9. Payment
 
@@ -236,12 +241,12 @@ for deals it may hold; it can use all its cores.
 | Action | Gas | Note |
 |---|---|---|
 | `answer` with 5 nodes | about 180,000 | small rows, short paths |
-| `answer` with 128 nodes | about 448,000 + calldata | execution measured by `test_answerGasAtTheNodeCap` (2026-11-02, after the heap: was 518,726); the list adds 4 KiB of calldata |
-| `answer` with 128 nodes, 125 declined | about 1.63 million + calldata | the worst case, `test_answerGasAtTheNodeCapWithDeclines` (was 5.97 million before the heap, THREATS STORAGE-S16-R1-2); `settleMissed` in the same case 1.59 million (review). With 5 nodes the heap costs about 3,000 more per answer than the scan did |
+| `answer` with 128 nodes | about 471,000 + calldata | execution measured by `test_answerGasAtTheNodeCap` (2026-11-02, the node's first pass on the shard: 448,077 before the decline notice, 518,726 before the heap); the list adds 4 KiB of calldata |
+| `answer` with 128 nodes, 125 declined | about 1.74 million + calldata | the worst case, `test_answerGasAtTheNodeCapWithDeclines` (2026-11-02 with the decline notice; 1.63 million before it, 5.97 million before the heap, THREATS STORAGE-S16-R1-2); `settleMissed` in the same case 1.59 million (review, before the notice). With 5 nodes the heap costs about 3,000 more per answer than the scan did |
 | `createDeal` | about 292,000 | includes the book checks |
 | `register` + `activate` | about 106,000 + 218,000 | median; `activate` checks the joining node's share |
-| `settleMissed` | about 162,000 | median; more when it jails |
-| `decline` | about 52,000 | one shard or a whole deal |
+| `settleMissed` | about 162,000 | median; more when it jails. Worst case at 128 nodes with 125 declined: about 1.71 million, 2.13 million when the slash jails (review STORAGE-S16-R7, 2026-11-02) |
+| `decline` | about 54,500 | one shard or a whole deal (median, 2026-11-02) |
 | `recordSeed` | about 46,000 | once per epoch |
 
 At 500 TB (684 answers per epoch with about 118 nodes) the answers cost roughly 684 × 0.6 million
@@ -280,7 +285,7 @@ Formulas:
 |---|---|---|
 | v0 | Replicas (R = 3), rendezvous placement, on-chain row proofs, pay, slash, repair, reads with fail-over, bonded nodes, conservation on chain | **Built and tested on a local chain** |
 | v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4); **run finished 2026-11-02**: 612 of 612 challenges passed over 34 epochs, nothing slashed, deals closed, books balanced |
-| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1) | Built and tested on a local chain (2026-11-02); not deployed: the Base Sepolia contract keeps v0 (ROADMAP S16) |
+| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1); a decline of a shard the node proved in the last 7 epochs starts one epoch later (amendment 2 item 2) | Built and tested on a local chain (2026-11-02); not deployed: the Base Sepolia contract keeps v0 (ROADMAP S16) |
 | Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch only when asked. Compared and not built: every sound design is too slow, needs seal units v0 does not have, or needs one key holder for every repair (ADR-0062). One copy per operator address was tried and withdrawn (THREATS STORAGE-S16-R1) | Later, after S17 (ROADMAP S21) |
 | Erasure coding | Split each shard into k-of-n pieces (for example 10 of 16) instead of 3 full copies: about half the disk for more safety; each holder keeps a different piece, so one operator saves disk only with more than k pieces of a stripe (the fix for STORAGE-4, ADR-0062 finding 6); aggregated proofs (one answer per node per epoch); placement weighted by declared size | Later (ROADMAP S17) |
 | Cold archive tier | Old, rarely read data kept on an outside storage network, with Onyx keeping only the fingerprints and a fetch path | Later, owner's choice of network (ROADMAP S18) |
@@ -294,8 +299,8 @@ Formulas:
 
 | Part | Status | Evidence |
 |---|---|---|
-| Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 27 Rust tests, shared vectors `fixtures/storage/vectors.json` |
-| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 39 unit and fuzz tests, 4 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 7 vector tests, a heap-order fuzz test, deploy script test; 21,700 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendment 1) |
+| Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 35 Rust tests, shared vectors `fixtures/storage/vectors.json` |
+| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 47 unit and fuzz tests (8 for the decline notice), 5 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 8 vector tests, a heap-order fuzz test, deploy script test; 22,057 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendments 1 and 2) |
 | Storage-node mode in onyx-node (`ONYX_STORAGE_*`) | Done (local) | `onyx_api::storage` tests: fetch only placed shards, refuse forged bytes, answer with proofs the contract accepts |
 | Client read with fail-over | Done (local) | Test: down, missing and forging replicas skipped; demo: one node killed |
 | Operator tool `onyx-storage` | Done | register, status, deal, epoch, settle, withdraw, exit, books, read |

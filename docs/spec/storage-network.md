@@ -5,8 +5,9 @@ Status: **Accepted as ADR-0060 (2026-10-30), built on a local anvil.** Test netw
 `onyx_api::storage`, onyx-node's storage mode, `onyx-storage`. Plain-English overview and roadmap:
 docs/STORAGE-NETWORK.md. Threats: THREATS.md "STORAGE". Operator guide: docs/ops/storage-node.md.
 ADR-0060 amendment 1 (a row for each holder, the registration fee, the reporter's reward, jail by
-a node's own bond) is in the rules below and built, not deployed: the Base Sepolia contract of
-ROADMAP S15 runs v0 (row v1, no fee, no reward, jail below `minBond / 2`).
+a node's own bond) and amendment 2 item 2 (a notice on declines of proven shards) are in the rules
+below and built, not deployed: the Base Sepolia contract of ROADMAP S15 runs v0 (row v1, no fee,
+no reward, jail below `minBond / 2`, no notice).
 
 ## Scope
 
@@ -55,7 +56,9 @@ refunded, bonds out, earnings out, swept, rewarded), `conserved`, `params`. Even
 Immutable parameters: token, book, treasury, `epochBlocks`, `pricePerGiBEpoch`, `bondPerGiB`,
 `minBond`, `slashPpm`, `challengesPerDeal`, `maxMisses`. Constants: `MAX_NODES` 128, `MAX_R` 8,
 `SETTLE_EPOCHS` 2, `SEED_WINDOW` 256 blocks, `MAX_DEAL_EPOCHS` 100,000, `MAX_CAPACITY_GIB` 2^30,
-`REGISTRATION_FEE_PPM` 20,000, `REPORTER_PPM` 100,000.
+`REGISTRATION_FEE_PPM` 20,000, `REPORTER_PPM` 100,000, `NOTICE_EPOCHS` 7, `RULES_VERSION` 3
+(the node refuses any other). `Answered` carries `(slot, shardIndex, passed, paid)`; `Declined`
+and `Slashed` carry the raw epoch of R-STOR-14.
 
 ### Node routes (peers; outside the 12 s request deadline)
 `GET /v1/bulk/manifests/{root}` → `{root, manifest, report}` (Borsh hex, the body
@@ -108,7 +111,8 @@ fails when they differ from `books()` at the same block.
 - **R-STOR-9 (misses and slashes).** `settleMissed` by anyone for an open challenge of an epoch
   that ended at most `SETTLE_EPOCHS` ago: status 3. A failed or missed answer takes
   `bond × slashPpm / 10^6` (rounded down) for the treasury, adds a miss (a pass clears the count),
-  excludes the node from that shard from the next epoch (first exclusion kept), and jails the node
+  excludes the node from that shard from the next epoch (the first slash sets `slashFrom`;
+  R-STOR-14), and jails the node
   (out of the list from the next epoch) after `maxMisses` in a row or a bond below
   `max(startBond, minBond) / 2`. For a miss, `slash × REPORTER_PPM / 10^6` (rounded down) is credited
   to the caller's `earned` and counted in `rewarded` (event `MissReward`), unless the caller is the
@@ -144,8 +148,13 @@ fails when they differ from `books()` at the same block.
   asked keys from it (so no row can be left out); otherwise try the next; none: unavailable, never
   unchecked rows.
 - **R-STOR-14 (decline).** Only a node's operator may `decline(deal, index, node)` one shard or the
-  whole deal (`index = 2^32 − 1`); the node's exclusion starts at the next epoch (the earlier
-  exclusion is kept); no slash; a challenge drawn in the current epoch still stands. The storage
+  whole deal (`index = 2^32 − 1`), once per key and not after a slash on it; no slash; a
+  challenge drawn in the current epoch still stands. Each (deal, index, node) keeps
+  `declineFrom` (the epoch after the decline), `slashFrom` (the epoch after the first slash) and
+  `lastPass` (the last epoch of a passed answer on the shard). `exclusionFrom(deal, i, node)` is
+  the earliest non-zero of `slashFrom`, `noticed(declineFrom)` and, for a shard,
+  `noticed(declineFrom of the whole-deal key)`, both with this shard's `lastPass`;
+  `noticed(f) = f + 1` when `lastPass != 0` and `lastPass + 7 >= f − 1`, else `f`. The storage
   node declines after 3 failed passes in an epoch after a failure in an earlier one; the whole deal
   in one call when its manifest failed, or nothing of it is held and every shard tried failed.
 

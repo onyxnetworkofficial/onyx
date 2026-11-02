@@ -73,6 +73,12 @@ struct Fake {
     deal: DealInfo,
     seeds: BTreeMap<u64, Hash32>,
     slashed: Vec<(NodeId, u64, u32, u64)>,
+    /// `Declined` logs: (node, deal, index, raw from).
+    declined: Vec<(NodeId, u64, u32, u64)>,
+    /// `Answered` logs: (deal, epoch, node, slot, shard, passed).
+    answered: Vec<(u64, u64, NodeId, u32, u32, bool)>,
+    /// What `challengedHolders(deal, epoch, slot, nodes)` returns (none: it reverts).
+    asks: BTreeMap<(u64, u64, u32), (u32, Vec<NodeId>)>,
     status: BTreeMap<(u64, u64, u32, NodeId), u8>,
     /// Node 0 registered these bytes as its URL (review STORAGE-R1-1).
     junk_url: Option<Vec<u8>>,
@@ -92,8 +98,8 @@ struct Quirks {
     /// Only this many more `eth_getLogs` calls are answered; the rest fail
     /// with HTTP 429 (a public endpoint's rate limit, THREATS STORAGE-S15-4).
     answer_logs: Option<usize>,
-    /// The contract is from before ADR-0060 amendment 1 (no
-    /// `REGISTRATION_FEE_PPM()`: the call reverts).
+    /// The contract is from before ADR-0060 amendment 2 (no
+    /// `RULES_VERSION()`: the call reverts).
     v0: bool,
 }
 
@@ -114,6 +120,8 @@ struct Calls {
     log_ranges: Vec<(u64, u64)>,
     /// `dealInfo` calls.
     deal_infos: usize,
+    /// (deal, epoch, slot) of every `challengedHolders` call.
+    holders_asked: Vec<(u64, u64, u32)>,
 }
 
 fn log(event: &str, topics: Vec<Hash32>, data: Vec<u8>) -> Value {
@@ -217,6 +225,27 @@ impl JsonRpc for FakeChain {
                                     ]),
                                 ));
                             }
+                        } else if *topic == abi::topic(events::DECLINED).to_string() {
+                            for (n, d, idx, from) in &f.declined {
+                                out.push(log(
+                                    events::DECLINED,
+                                    vec![n.0, topic_u64(*d)],
+                                    encode(&[uint((*idx).into()), uint((*from).into())]),
+                                ));
+                            }
+                        } else if *topic == abi::topic(events::ANSWERED).to_string() {
+                            for (d, e, n, slot, shard, passed) in &f.answered {
+                                out.push(log(
+                                    events::ANSWERED,
+                                    vec![topic_u64(*d), topic_u64(*e), n.0],
+                                    encode(&[
+                                        uint((*slot).into()),
+                                        uint((*shard).into()),
+                                        uint(u128::from(*passed)),
+                                        uint(if *passed { 7 } else { 0 }),
+                                    ]),
+                                ));
+                            }
                         } else if *topic == abi::topic(events::DEAL_CREATED).to_string() {
                             let d = &f.deal;
                             out.push(log(
@@ -249,11 +278,25 @@ impl JsonRpc for FakeChain {
                     };
                     let u =
                         |i: usize| u64::from_be_bytes(arg(i)[24..].try_into().unwrap_or([0; 8]));
-                    let out = if sel == abi::selector("ROW_VERSION()") {
+                    let out = if sel == abi::selector("RULES_VERSION()") {
                         if f.quirks.v0 {
                             return Err("execution reverted".into());
                         }
-                        encode(&[uint(2)])
+                        encode(&[uint(3)])
+                    } else if sel
+                        == abi::selector("challengedHolders(uint64,uint64,uint32,bytes32[])")
+                    {
+                        let k = (u(0), u(1), u(2) as u32);
+                        if let Ok(mut c) = self.1.lock() {
+                            c.holders_asked.push(k);
+                        }
+                        let Some((i, who)) = f.asks.get(&k) else {
+                            return Err("execution reverted: NoSeed".into());
+                        };
+                        encode(&[
+                            uint((*i).into()),
+                            Tok::Words(who.iter().map(|n| n.0 .0).collect()),
+                        ])
                     } else if sel == abi::selector("currentEpoch()") {
                         encode(&[uint(f.epoch.into())])
                     } else if sel == abi::selector("params()") {
@@ -484,6 +527,9 @@ fn setup_with(n: usize, publisher: World, m: Manifest) -> Setup {
             deal,
             seeds: BTreeMap::new(),
             slashed: Vec::new(),
+            declined: Vec::new(),
+            answered: Vec::new(),
+            asks: BTreeMap::new(),
             status: BTreeMap::new(),
             junk_url: None,
             quirks: Quirks::default(),
@@ -822,8 +868,10 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
 
 #[tokio::test]
 async fn a_node_sends_nothing_to_an_older_contract() {
-    // ADR-0060 amendment 1: an S15 contract draws rows without the node id,
-    // so this node's answers would all fail there. It must send nothing.
+    // ADR-0060 amendment 2 (review STORAGE-S16-R6 H1): an S15 contract draws
+    // rows without the node id and an amendment 1 contract has no decline
+    // notice, so this node's answers would fail there or its view of who is
+    // asked would differ. Neither has `RULES_VERSION()`: it must send nothing.
     let s = setup(5).await;
     s.chain.0.lock().expect("lock").quirks.v0 = true;
     let own = world();
@@ -843,11 +891,11 @@ async fn a_node_sends_nothing_to_an_older_contract() {
     );
     let err = node.tick().await.expect_err("an older contract is refused");
     assert!(
-        err.contains("rows v2") && err.contains("exit its node"),
+        err.contains("rules v3") && err.contains("exit its node"),
         "{err}"
     );
     assert!(tx.0.lock().expect("lock").is_empty(), "nothing sent");
-    // The same node runs once the contract answers as amendment 1 does.
+    // The same node runs once the contract answers as amendment 2 does.
     s.chain.0.lock().expect("lock").quirks.v0 = false;
     node.tick().await.expect("tick");
 }
@@ -1408,7 +1456,7 @@ async fn ranges_are_enforced_and_a_reorg_drops_the_kept_logs() {
         .expect("lock")
         .logs
         .as_ref()
-        .map_or(0, |(_, l)| l.len());
+        .map_or(0, |(_, l, _)| l.len());
     assert_eq!(
         kept,
         1 + 5 + 5 + 1,
@@ -1513,6 +1561,16 @@ async fn the_placement_key_follows_its_inputs() {
         .push((s.nodes[1], 0, 0, 4));
     let c = reader(&s).snapshot().await.expect("snapshot");
     assert_ne!(a.placement_key(), c.placement_key());
+    // A pass alone moves nothing (ADR-0060 amendment 2: passes come every epoch).
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .answered
+        .push((0, 3, s.nodes[2], 0, 1, true));
+    let c2 = reader(&s).snapshot().await.expect("snapshot");
+    assert_ne!(c.excl, c2.excl);
+    assert_eq!(c.placement_key(), c2.placement_key());
     s.chain.0.lock().expect("lock").epoch = 4;
     let d = reader(&s).snapshot().await.expect("snapshot");
     assert_ne!(c.placement_key(), d.placement_key());
@@ -1537,6 +1595,149 @@ async fn the_placement_key_follows_its_inputs() {
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }
 
+/// ADR-0060 amendment 2 item 2: the snapshot reads `Answered` with the
+/// shard index (a passed one is a pass on that shard, a failed one is not)
+/// and `Declined` with the raw epoch, and gives `exclusionFrom` with the
+/// notice.
+#[tokio::test]
+async fn a_snapshot_reads_passes_and_declines_into_the_notice() {
+    let s = setup(5).await;
+    let n = &s.nodes;
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        // Passed shard 1 at epoch 2 (slot 0), declined it at 3 (raw 4): notice, out from 5.
+        f.answered.push((0, 2, n[1], 0, 1, true));
+        f.declined.push((n[1], 0, 1, 4));
+        // A failed answer is no pass: out from 4.
+        f.answered.push((0, 2, n[2], 0, 2, false));
+        f.declined.push((n[2], 0, 2, 4));
+        // A whole-deal decline: notice only on the shard it passed (0, at slot 1).
+        f.answered.push((0, 2, n[3], 1, 0, true));
+        f.declined.push((n[3], 0, WHOLE_DEAL, 4));
+        // A slash after a noticed decline wins.
+        f.answered.push((0, 3, n[4], 1, 2, true));
+        f.declined.push((n[4], 0, 2, 4));
+        f.slashed.push((n[4], 0, 2, 4));
+    }
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    assert_eq!(snap.excl.from(0, 1, &n[1]), Some(5));
+    assert_eq!(snap.excl.from(0, 0, &n[1]), None);
+    assert_eq!(snap.excl.from(0, 2, &n[2]), Some(4));
+    assert_eq!(snap.excl.from(0, 0, &n[3]), Some(5));
+    assert_eq!(snap.excl.from(0, 1, &n[3]), Some(4));
+    assert_eq!(snap.excl.from(0, 2, &n[3]), Some(4));
+    assert_eq!(snap.excl.from(0, 2, &n[4]), Some(4));
+    let r = snap.excl.record(0, 0, &n[3]).expect("record");
+    assert_eq!((r.decline_from, r.slash_from, r.last_pass), (0, 0, 2));
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review STORAGE-S16-R6 H1, defense in depth: the node's view says it is not
+/// asked for a slot (here a slash the contract does not have), but it is in
+/// the shard's top R with no exclusion. It asks the contract
+/// (`challengedHolders`): when the contract lists it, it answers; when not, it
+/// sends nothing and asks once for that slot and epoch.
+#[tokio::test]
+async fn a_node_answers_when_the_contract_asks_although_its_view_does_not() {
+    let s = setup(5).await;
+    let seed = Hash32([0x33; 32]);
+    s.chain.0.lock().expect("lock").seeds.insert(3, seed);
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let (index, who) = snap.challenged(&d, 3, &seed, 0);
+    let me = who[0];
+    // The drift: a decline sent in epoch 2 that the view sees without the pass
+    // the contract saw (an `Answered` log the RPC dropped), so the view puts
+    // the node out from epoch 3 and the contract, with the notice, from 4. A
+    // slash has no notice, so a slash in the view is never asked about.
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .declined
+        .push((me, 0, index, 3));
+    let drifted = reader(&s).snapshot().await.expect("snapshot");
+    assert!(!drifted.challenged(&d, 3, &seed, 0).1.contains(&me));
+    // Slots the drifted view still asks `me` for are answered as usual.
+    let usual = (0..2u32)
+        .filter(|slot| drifted.challenged(&d, 3, &seed, *slot).1.contains(&me))
+        .count();
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    own.store
+        .accept_manifest(
+            &s.manifest.to_bytes(),
+            &borsh::to_vec(&sign(&s.manifest)).expect("report"),
+        )
+        .await
+        .expect("manifest");
+    for e in &s.manifest.shards {
+        let body = s.publisher.store.shard_file(&e.root).await.expect("file");
+        own.store
+            .put_shard("example.publisher", "synthetic.metrics", &e.root, body)
+            .await
+            .expect("shard");
+    }
+    let cfg = StorageNodeConfig {
+        contract: CONTRACT,
+        node: me,
+        fetch: false,
+        keeper: false,
+        fetches_per_tick: 8,
+    };
+    let slot0 = |tx: &Sent| {
+        tx.0.lock()
+            .expect("lock")
+            .iter()
+            .filter(|x| x[..4] == abi::selector("answer(uint64,uint64,uint32,bytes32,bytes32[],bytes,bytes32[],bytes,bytes32[])"))
+            .filter(|x| abi::word_u64(&x[4..], 2).expect("slot") == 0)
+            .count()
+    };
+    let asked0 = |s: &Setup| {
+        s.chain
+            .1
+            .lock()
+            .expect("lock")
+            .holders_asked
+            .iter()
+            .filter(|k| **k == (0, 3, 0))
+            .count()
+    };
+    // The contract does not list it: nothing for slot 0, and it asks once.
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .asks
+        .insert((0, 3, 0), (index, who[1..].to_vec()));
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        net(&s, &[]),
+        own.store.clone(),
+        cfg.clone(),
+    );
+    node.tick().await.expect("tick");
+    node.tick().await.expect("tick");
+    assert_eq!(slot0(&tx), 0);
+    assert_eq!(asked0(&s), 1, "asked once per slot and epoch");
+    // The contract lists it: it answers slot 0 with a proof for its own row.
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .asks
+        .insert((0, 3, 0), (index, who.clone()));
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(reader(&s), tx.clone(), net(&s, &[]), own.store.clone(), cfg);
+    let r = node.tick().await.expect("tick");
+    assert_eq!(slot0(&tx), 1);
+    assert_eq!(r.answered, usual + 1);
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
 /// `books()` of an S15 contract has eight words (no `rewarded`); from
 /// ADR-0060 amendment 1 it has nine. Anything else is refused.
 #[test]
@@ -1552,4 +1753,93 @@ fn books_decode_eight_or_nine_words() {
         [1, 2, 3, 4, 5, 6, 7, 8, 0]
     );
     assert!(decode_books(&words(7)).is_err());
+}
+
+/// Review STORAGE-S16-R7 M1: `Answered` logs are folded into the last pass per
+/// (deal, shard, node) as they are read, never kept; other logs are kept in
+/// chain order.
+#[test]
+fn answered_logs_fold_into_the_last_pass_and_are_not_kept() {
+    let t64 = |v: u64| {
+        let mut w = [0u8; 32];
+        w[24..].copy_from_slice(&v.to_be_bytes());
+        Hash32(w)
+    };
+    let node = NodeId(Hash32([7; 32]));
+    let answered = |deal: u64, epoch: u64, index: u128, passed: u128| Log {
+        topics: vec![abi::topic(events::ANSWERED), t64(deal), t64(epoch), node.0],
+        data: encode(&[uint(1), uint(index), uint(passed), uint(0)]),
+        block: epoch,
+    };
+    let declined = Log {
+        topics: vec![abi::topic(events::DECLINED), node.0, t64(3)],
+        data: encode(&[uint(2), uint(9)]),
+        block: 9,
+    };
+    let logs = vec![
+        answered(3, 5, 2, 1),
+        declined.clone(),
+        answered(3, 8, 2, 1),
+        answered(3, 6, 2, 1),
+        answered(3, 9, 2, 0),
+        answered(4, 7, 0, 1),
+    ];
+    let (mut keep, mut passes) = (Vec::new(), Passes::new());
+    fold_logs(logs, &mut keep, &mut passes).expect("fold");
+    assert_eq!(keep.len(), 1, "only the Declined log is kept");
+    assert_eq!(keep[0].topics[0], abi::topic(events::DECLINED));
+    assert_eq!(passes.len(), 2);
+    assert_eq!(
+        passes[&(3, 2, node)],
+        8,
+        "the latest pass; a failed answer is not a pass"
+    );
+    assert_eq!(passes[&(4, 0, node)], 7);
+}
+
+/// Review STORAGE-S16-R7 L2: a node out of a shard whatever the notice (a
+/// slash) never asks the contract about it.
+#[tokio::test]
+async fn a_slashed_node_does_not_ask_the_contract() {
+    let s = setup(5).await;
+    let seed = Hash32([0x33; 32]);
+    s.chain.0.lock().expect("lock").seeds.insert(3, seed);
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let (index, who) = snap.challenged(&d, 3, &seed, 0);
+    let me = who[0];
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .slashed
+        .push((me, 0, index, 3));
+    let own = world();
+    let node = StorageNode::new(
+        reader(&s),
+        Arc::new(Sent::default()),
+        net(&s, &[]),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: me,
+            fetch: false,
+            keeper: false,
+            fetches_per_tick: 8,
+        },
+    );
+    node.tick().await.expect("tick");
+    node.tick().await.expect("tick");
+    let asked = s
+        .chain
+        .1
+        .lock()
+        .expect("lock")
+        .holders_asked
+        .iter()
+        .filter(|k| k.0 == 0 && k.1 == 3)
+        .count();
+    assert_eq!(asked, 0, "no challengedHolders call for a slashed shard");
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }

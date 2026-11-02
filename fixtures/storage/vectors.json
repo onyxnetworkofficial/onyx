@@ -54,8 +54,8 @@
       "topic": "0x7283525a70e52b77decf98f2dc89fc53722e9303aaa1c94d39e9db7dbca996c4"
     },
     {
-      "signature": "Answered(uint64,uint64,uint32,bytes32,bool,uint256)",
-      "topic": "0xe13364bfb011b7e7e6d8d96ff59cd949fd4b6e34dedbe1700dd0152755688b91"
+      "signature": "Answered(uint64,uint64,uint32,bytes32,uint32,bool,uint256)",
+      "topic": "0x51f64158bf490410a2e2ac57cdb441251de88899a608af0ecf4fb0d88439d25e"
     },
     {
       "signature": "Slashed(bytes32,uint64,uint64,uint32,uint32,uint256,uint64,uint8)",
@@ -213,6 +213,86 @@
     "0x976d305f564d6a8c21cb2227676af8be98a47e33cbef8fc28f489c502c7fdad3",
     "0xc4beae628171bede72a7d6ae78e408eb99a323e123c549a6b192d813be84a021"
   ],
+  "notice": {
+    "declineFrom": [
+      0,
+      11,
+      11,
+      11,
+      11,
+      11,
+      12,
+      0,
+      0,
+      0,
+      9,
+      1,
+      0
+    ],
+    "from": [
+      0,
+      11,
+      12,
+      12,
+      11,
+      11,
+      12,
+      12,
+      11,
+      12,
+      10,
+      1,
+      5
+    ],
+    "index": 3,
+    "lastPass": [
+      0,
+      0,
+      10,
+      3,
+      2,
+      10,
+      10,
+      10,
+      0,
+      10,
+      8,
+      0,
+      4
+    ],
+    "node": "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+    "noticeEpochs": 7,
+    "slashFrom": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      11,
+      12,
+      0,
+      0,
+      14,
+      0,
+      0,
+      5
+    ],
+    "wholeFrom": [
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      0,
+      11,
+      11,
+      11,
+      11,
+      0,
+      0
+    ]
+  },
   "params": {
     "bondPerGiB": "1000000000000000",
     "challengesPerDeal": 2,

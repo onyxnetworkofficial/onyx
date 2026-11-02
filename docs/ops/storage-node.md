@@ -34,10 +34,11 @@ shards per pass, checks every byte against the deal's anchored manifest, records
 when nobody has, answers its challenges, and with `ONYX_STORAGE_KEEPER=on` reports other nodes'
 misses.
 
-**Match the node to the contract.** From ADR-0060 amendment 1 each holder proves its own row (rows
-v2). A node of this release checks the contract first and sends nothing (no seed, answer, settle
-or decline) to an older contract, such as the S15 deployment `0x2423…9419`: its log says "this node
-draws rows v2". Sending nothing does not avoid penalties: the node then misses that contract's
+**Match the node to the contract.** From ADR-0060 amendment 1 each holder proves its own row;
+amendment 2 adds a notice on declines and names the shard in `Answered`. A node of this release
+reads the contract's `RULES_VERSION()` (3) first and sends nothing (no seed, answer, settle or
+decline) to any other contract, such as the S15 deployment `0x2423…9419` or an amendment 1
+deployment: its log says "this node follows rules v3". Sending nothing does not avoid penalties: the node then misses that contract's
 checks and keepers slash and jail it. So exit the node from the old contract first (`exit`, then
 `withdraw-bond` two epochs later), then upgrade and register on the new deployment.
 
@@ -49,6 +50,11 @@ Each takes 10% of the bond (placeholder), moves that shard to the next node, and
 jail the node. A bond below half of the minimum also jails it; with ADR-0060 amendment 1, below
 half of the bond the node started with when that is larger (about 7 slashes, whatever the bond).
 Keep the node online through the epoch after you ask to exit.
+
+**Keep shard files.** With ADR-0060 amendment 2, a decline of a shard your node passed a check on
+in the decline's epoch or the 7 before it starts one epoch later, and the node is still checked on it in that epoch. So
+keep every shard's file for at least 9 epochs (K + 2, K = 7) after the node's last passed check on
+it. The node deletes no shard file today. Never prune shard files by hand.
 
 ## On the Onyx web host (ROADMAP S15)
 

@@ -6,7 +6,7 @@ use crate::challenge::{answer, entry_bytes, tests::dataset};
 use crate::deal::{check_payload, read_header};
 use crate::ids::*;
 use crate::ledger::{self, Params};
-use crate::placement::{holders_at, Exclusions, WHOLE_DEAL};
+use crate::placement::{holders_at, Exclusions, NOTICE_EPOCHS, WHOLE_DEAL};
 use onyx_core::Hash32;
 use serde_json::{json, Value};
 
@@ -67,7 +67,7 @@ fn build() -> Value {
         .collect();
     let mut ex = Exclusions::new();
     let first = holders_at(&salt, 7, 3, &nodes, 3, 9, &ex);
-    ex.insert(7, 3, first[0], 10);
+    ex.slash(7, 3, first[0], 10);
     let holder_cases: Vec<Value> = (0..6u32)
         .map(|i| json!({"index": i, "holders": hs(&holders_at(&salt, 7, i, &nodes, 3, 9, &Exclusions::new()).iter().map(|n| n.0).collect::<Vec<_>>())}))
         .collect();
@@ -78,11 +78,51 @@ fn build() -> Value {
     // A whole-deal decline by the first holder of shard 4, from epoch 10.
     let mut ex2 = Exclusions::new();
     let first4 = holders_at(&salt, 7, 4, &nodes, 3, 9, &ex2)[0];
-    ex2.insert(7, WHOLE_DEAL, first4, 10);
+    ex2.decline(7, WHOLE_DEAL, first4, 10);
     let after4: Vec<Hash32> = holders_at(&salt, 7, 4, &nodes, 3, 10, &ex2)
         .iter()
         .map(|n| n.0)
         .collect();
+
+    // ADR-0060 amendment 2 item 2: `exclusionFrom` of shard 3 for node 0 in
+    // deal k, from that key's raw record and the node's whole-deal decline.
+    // (decline, slash, last pass, whole-deal decline)
+    let notice: [(u64, u64, u64, u64); 13] = [
+        (0, 0, 0, 0),
+        (11, 0, 0, 0),
+        (11, 0, 10, 0),
+        (11, 0, 3, 0),
+        (11, 0, 2, 0),
+        (11, 11, 10, 0),
+        (12, 12, 10, 0),
+        (0, 0, 10, 11),
+        (0, 0, 0, 11),
+        (0, 14, 10, 11),
+        (9, 0, 8, 11),
+        (1, 0, 0, 0),
+        (0, 5, 4, 0),
+    ];
+    let notice_from: Vec<u64> = notice
+        .iter()
+        .enumerate()
+        .map(|(k, (dec, sl, pass, whole))| {
+            let mut e = Exclusions::new();
+            if *dec != 0 {
+                e.decline(k as u64, 3, nodes[0], *dec);
+            }
+            if *sl != 0 {
+                e.slash(k as u64, 3, nodes[0], *sl);
+            }
+            if *pass != 0 {
+                e.pass(k as u64, 3, nodes[0], *pass);
+            }
+            if *whole != 0 {
+                e.decline(k as u64, WHOLE_DEAL, nodes[0], *whole);
+            }
+            e.from(k as u64, 3, &nodes[0]).unwrap_or(0)
+        })
+        .collect();
+    let col = |f: fn(&(u64, u64, u64, u64)) -> u64| notice.iter().map(f).collect::<Vec<u64>>();
 
     let (m, files) = dataset(5, 11);
     let header = borsh::to_vec(&m.header).unwrap_or_default();
@@ -159,6 +199,9 @@ fn build() -> Value {
         "fees": fees,
         "rewards": rewards,
         "events": event_sigs,
+        "notice": {"noticeEpochs": NOTICE_EPOCHS, "index": 3, "node": nodes[0].to_string(),
+                   "declineFrom": col(|c| c.0), "slashFrom": col(|c| c.1), "lastPass": col(|c| c.2),
+                   "wholeFrom": col(|c| c.3), "from": notice_from},
     })
 }
 

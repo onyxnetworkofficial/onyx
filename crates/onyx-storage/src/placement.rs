@@ -14,6 +14,7 @@
 
 use crate::ids::{weight, NodeId};
 use onyx_core::Hash32;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// `nodes` ordered by weight for `shard_key`, highest first (ties, which
 /// need a Keccak collision, by id).
@@ -40,12 +41,52 @@ pub fn holders(
 /// The shard index a node declines a whole deal with (`OnyxStorage.WHOLE_DEAL`).
 pub const WHOLE_DEAL: u32 = u32::MAX;
 
-/// Per-(deal, shard) exclusions: the epoch from which a node no longer holds
-/// a shard it failed or declined, or a whole deal it declined
-/// ([`WHOLE_DEAL`]; `OnyxStorage.exclusionFrom`). Sorted, one entry per
-/// (deal, shard, node).
+/// The window K of ADR-0060 amendment 2 item 2 (`OnyxStorage.NOTICE_EPOCHS`):
+/// a decline of a shard the node passed a check on in the `NOTICE_EPOCHS`
+/// epochs before the decline takes effect one epoch later.
+pub const NOTICE_EPOCHS: u64 = 7;
+
+/// A node's raw record for one shard of a deal (`OnyxStorage.Excl`); the
+/// record of [`WHOLE_DEAL`] uses only `decline_from`. 0 means none.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Excl {
+    /// The epoch after the node's decline, before any notice.
+    pub decline_from: u64,
+    /// The epoch after its first slash on the shard.
+    pub slash_from: u64,
+    /// The last epoch it passed a check on the shard.
+    pub last_pass: u64,
+}
+
+/// A decline effective from `f` (0: none), one epoch later when the last
+/// pass `p` (0: none) is at most [`NOTICE_EPOCHS`] before the decline's
+/// epoch `f - 1` (`OnyxStorage._noticed`).
+fn noticed(f: u64, p: u64) -> u64 {
+    if f == 0 {
+        return 0;
+    }
+    if p != 0 && p.saturating_add(NOTICE_EPOCHS) >= f - 1 {
+        f + 1
+    } else {
+        f
+    }
+}
+
+/// The earlier of two epochs, 0 meaning none.
+fn earlier(a: u64, b: u64) -> u64 {
+    match (a, b) {
+        (0, x) | (x, 0) => x,
+        (x, y) => x.min(y),
+    }
+}
+
+/// The raw records behind `OnyxStorage.exclusionFrom`, per (deal, shard,
+/// node): a decline, the first slash and the last pass, from the
+/// `Declined`, `Slashed` and passed `Answered` events. The order the events
+/// are read in never changes the result: a decline and a slash keep the
+/// earliest epoch, a pass the latest.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
-pub struct Exclusions(Vec<(u64, u32, NodeId, u64)>);
+pub struct Exclusions(BTreeMap<(u64, u32, NodeId), Excl>);
 
 impl Exclusions {
     /// An empty set.
@@ -53,39 +94,90 @@ impl Exclusions {
         Self::default()
     }
 
-    /// Record that `node` is excluded from shard `index` of `deal` from
-    /// epoch `from` on (the first record wins, as on chain).
-    pub fn insert(&mut self, deal: u64, index: u32, node: NodeId, from: u64) {
-        let k = (deal, index, node);
-        match self.0.binary_search_by(|e| (e.0, e.1, e.2).cmp(&k)) {
-            Ok(_) => {}
-            Err(at) => self.0.insert(at, (deal, index, node, from)),
-        }
+    fn at(&mut self, deal: u64, index: u32, node: NodeId) -> &mut Excl {
+        self.0.entry((deal, index, node)).or_default()
     }
 
-    fn exact(&self, deal: u64, index: u32, node: &NodeId) -> Option<u64> {
-        let k = (deal, index, *node);
-        self.0
-            .binary_search_by(|e| (e.0, e.1, e.2).cmp(&k))
-            .ok()
-            .map(|i| self.0[i].3)
+    /// A `Declined` event: `node` gave up shard `index` of `deal` (or the
+    /// whole deal, [`WHOLE_DEAL`]) with the raw epoch `from`.
+    pub fn decline(&mut self, deal: u64, index: u32, node: NodeId, from: u64) {
+        let x = self.at(deal, index, node);
+        x.decline_from = earlier(x.decline_from, from);
     }
 
-    /// The epoch from which `node` is excluded from the shard, if any: the
-    /// earlier of its exclusion from that shard and its decline of the whole
-    /// deal ([`WHOLE_DEAL`]), as `OnyxStorage.exclusionFrom`.
+    /// A `Slashed` event: `node` is out of shard `index` from `from` (raw).
+    pub fn slash(&mut self, deal: u64, index: u32, node: NodeId, from: u64) {
+        let x = self.at(deal, index, node);
+        x.slash_from = earlier(x.slash_from, from);
+    }
+
+    /// A passed `Answered` event: `node` passed a check on shard `index` in
+    /// epoch `epoch`.
+    pub fn pass(&mut self, deal: u64, index: u32, node: NodeId, epoch: u64) {
+        let x = self.at(deal, index, node);
+        x.last_pass = x.last_pass.max(epoch);
+    }
+
+    /// The raw record of (deal, index, node), if any.
+    pub fn record(&self, deal: u64, index: u32, node: &NodeId) -> Option<Excl> {
+        self.0.get(&(deal, index, *node)).copied()
+    }
+
+    /// The epoch from which `node` is excluded from shard `index`, if any,
+    /// exactly as `OnyxStorage.exclusionFrom`: the earliest of its slash on
+    /// the shard, its decline of the shard and its decline of the whole deal,
+    /// each decline one epoch later when the node passed this shard in the
+    /// [`NOTICE_EPOCHS`] epochs before the decline.
     pub fn from(&self, deal: u64, index: u32, node: &NodeId) -> Option<u64> {
-        let a = self.exact(deal, index, node);
-        let b = self.exact(deal, WHOLE_DEAL, node);
-        match (a, b) {
-            (Some(x), Some(y)) => Some(x.min(y)),
-            (x, y) => x.or(y),
+        let x = self.record(deal, index, node).unwrap_or_default();
+        let mut f = earlier(x.slash_from, noticed(x.decline_from, x.last_pass));
+        if index != WHOLE_DEAL {
+            let w = self
+                .record(deal, WHOLE_DEAL, node)
+                .map_or(0, |r| r.decline_from);
+            f = earlier(f, noticed(w, x.last_pass));
         }
+        (f != 0).then_some(f)
     }
 
-    /// Every entry, sorted.
-    pub fn entries(&self) -> &[(u64, u32, NodeId, u64)] {
-        &self.0
+    /// True when `node` is out of shard `index` by epoch `e` even if every
+    /// decline of it took the notice (counted one epoch late): the contract's
+    /// `exclusionFrom` is at most that, so it cannot ask the node in `e`
+    /// whatever passes the view missed. The node asks the contract only when
+    /// this is false (review STORAGE-S16-R7 L2).
+    pub fn out_by_any_notice(&self, deal: u64, index: u32, node: &NodeId, e: u64) -> bool {
+        let late = |f: u64| if f == 0 { 0 } else { f + 1 };
+        let x = self.record(deal, index, node).unwrap_or_default();
+        let mut f = earlier(x.slash_from, late(x.decline_from));
+        if index != WHOLE_DEAL {
+            let w = self
+                .record(deal, WHOLE_DEAL, node)
+                .map_or(0, |r| r.decline_from);
+            f = earlier(f, late(w));
+        }
+        f != 0 && f <= e
+    }
+
+    /// The records that can change a placement: every one with a decline or
+    /// a slash, and the passes of nodes that declined that deal whole. A pass
+    /// alone changes nothing, so a node keeps its placement when only passes
+    /// were added (review STORAGE-R2-5).
+    pub fn placement_view(&self) -> Exclusions {
+        let whole: BTreeSet<(u64, NodeId)> = self
+            .0
+            .iter()
+            .filter(|(k, x)| k.1 == WHOLE_DEAL && x.decline_from != 0)
+            .map(|(k, _)| (k.0, k.2))
+            .collect();
+        Exclusions(
+            self.0
+                .iter()
+                .filter(|(k, x)| {
+                    x.decline_from != 0 || x.slash_from != 0 || whole.contains(&(k.0, k.2))
+                })
+                .map(|(k, x)| (*k, *x))
+                .collect(),
+        )
     }
 }
 
@@ -284,7 +376,7 @@ mod tests {
         let salt = Hash32([5; 32]);
         let mut ex = Exclusions::new();
         let before = holders_at(&salt, 1, 7, &ns, 3, 10, &ex);
-        ex.insert(1, 7, before[0], 11);
+        ex.slash(1, 7, before[0], 11);
         // Not yet in force at epoch 10; in force from 11.
         assert_eq!(holders_at(&salt, 1, 7, &ns, 3, 10, &ex), before);
         let after = holders_at(&salt, 1, 7, &ns, 3, 11, &ex);
@@ -295,9 +387,11 @@ mod tests {
             holders_at(&salt, 1, 8, &ns, 3, 11, &ex),
             holders_at(&salt, 1, 8, &ns, 3, 11, &Exclusions::new())
         );
-        // The first record wins.
-        ex.insert(1, 7, before[0], 99);
+        // The earliest slash wins, whatever order the events are read in.
+        ex.slash(1, 7, before[0], 99);
         assert_eq!(ex.from(1, 7, &before[0]), Some(11));
+        ex.slash(1, 7, before[0], 9);
+        assert_eq!(ex.from(1, 7, &before[0]), Some(9));
     }
 
     /// THREATS STORAGE-16: a node that declines a whole deal leaves every
@@ -308,7 +402,7 @@ mod tests {
         let salt = Hash32([5; 32]);
         let mut ex = Exclusions::new();
         let me = holders_at(&salt, 3, 0, &ns, 3, 1, &ex)[0];
-        ex.insert(3, WHOLE_DEAL, me, 4);
+        ex.decline(3, WHOLE_DEAL, me, 4);
         for i in 0..50 {
             assert!(!holders_at(&salt, 3, i, &ns, 3, 4, &ex).contains(&me));
             assert_eq!(ex.from(3, i, &me), Some(4));
@@ -320,7 +414,7 @@ mod tests {
             me,
             "not before its epoch"
         );
-        ex.insert(3, 7, me, 2);
+        ex.slash(3, 7, me, 2);
         assert_eq!(ex.from(3, 7, &me), Some(2));
     }
 
@@ -334,7 +428,7 @@ mod tests {
         assert_eq!(challenged(&salt, 1, 2, &ns, 3, 5, &ex, &jail), h);
         // Caught in epoch 5 (excluded from 6): not asked in 6, its
         // replacement is fetching; the replacement is asked from 7.
-        ex.insert(1, 2, h[0], 6);
+        ex.slash(1, 2, h[0], 6);
         let at6 = challenged(&salt, 1, 2, &ns, 3, 6, &ex, &jail);
         assert_eq!(at6, h[1..].to_vec());
         let at7 = challenged(&salt, 1, 2, &ns, 3, 7, &ex, &jail);
@@ -344,5 +438,186 @@ mod tests {
         let mut jail = Jailed::new();
         jail.insert(h[1], 5);
         assert!(!challenged(&salt, 1, 2, &ns, 3, 5, &Exclusions::new(), &jail).contains(&h[1]));
+    }
+
+    /// ADR-0060 amendment 2 item 2, as `OnyxStorageNotice.t.sol`: the same
+    /// epochs give the same `exclusionFrom`.
+    #[test]
+    fn a_decline_after_a_recent_pass_is_noticed() {
+        let ns = nodes(5);
+        let salt = Hash32([5; 32]);
+        let jail = Jailed::new();
+        let e = 2;
+        let x = holders_at(&salt, 0, 0, &ns, 3, e, &Exclusions::new())[0];
+        // Passed at e, declined at c = e + 1 (raw c + 1): out from c + 2.
+        let mut ex = Exclusions::new();
+        ex.pass(0, 0, x, e);
+        let c = e + 1;
+        ex.decline(0, 0, x, c + 1);
+        assert_eq!(ex.from(0, 0, &x), Some(c + 2));
+        // Still asked at c + 1; a pass then does not stretch the notice.
+        assert!(challenged(&salt, 0, 0, &ns, 3, c + 1, &ex, &jail).contains(&x));
+        ex.pass(0, 0, x, c + 1);
+        assert_eq!(ex.from(0, 0, &x), Some(c + 2));
+        let at2 = challenged(&salt, 0, 0, &ns, 3, c + 2, &ex, &jail);
+        assert!(!at2.contains(&x));
+        assert_eq!(at2.len(), 2);
+        let at3 = challenged(&salt, 0, 0, &ns, 3, c + 3, &ex, &jail);
+        assert!(!at3.contains(&x));
+        assert_eq!(at3.len(), 3);
+    }
+
+    #[test]
+    fn no_notice_without_a_pass() {
+        let x = nodes(1)[0];
+        let mut ex = Exclusions::new();
+        ex.decline(0, 0, x, 3);
+        assert_eq!(ex.from(0, 0, &x), Some(3));
+        // A pass on another shard or another deal is no pass on this one.
+        ex.pass(0, 1, x, 2);
+        ex.pass(1, 0, x, 2);
+        assert_eq!(ex.from(0, 0, &x), Some(3));
+    }
+
+    #[test]
+    fn no_notice_when_the_last_pass_is_older_than_the_window() {
+        let ns = nodes(2);
+        let (x, y, e, k) = (ns[0], ns[1], 2, NOTICE_EPOCHS);
+        let mut ex = Exclusions::new();
+        ex.pass(0, 0, x, e);
+        ex.pass(0, 0, y, e);
+        // x declines at e + K (in the window), y at e + K + 1 (one epoch too old).
+        ex.decline(0, 0, x, e + k + 1);
+        ex.decline(0, 0, y, e + k + 2);
+        assert_eq!(ex.from(0, 0, &x), Some(e + k + 2));
+        assert_eq!(ex.from(0, 0, &y), Some(e + k + 2));
+    }
+
+    #[test]
+    fn a_whole_deal_decline_delays_only_shards_passed_in_the_window() {
+        let ns = nodes(2);
+        let (x, z, e) = (ns[0], ns[1], 2);
+        let c = e + 1;
+        let mut ex = Exclusions::new();
+        ex.pass(0, 1, x, e);
+        ex.decline(0, WHOLE_DEAL, x, c + 1);
+        assert_eq!(ex.from(0, 1, &x), Some(c + 2), "the passed shard");
+        assert_eq!(ex.from(0, 0, &x), Some(c + 1), "the shard never passed");
+        assert_eq!(ex.from(0, WHOLE_DEAL, &x), Some(c + 1), "the raw record");
+        ex.decline(0, WHOLE_DEAL, z, c + 1);
+        assert_eq!(ex.from(0, 0, &z), Some(c + 1));
+        assert_eq!(ex.from(0, 1, &z), Some(c + 1));
+    }
+
+    #[test]
+    fn a_pass_in_the_decline_epoch_after_the_decline_delays_it() {
+        let (x, e) = (nodes(1)[0], 2);
+        let mut ex = Exclusions::new();
+        ex.decline(0, 0, x, e + 1);
+        assert_eq!(ex.from(0, 0, &x), Some(e + 1));
+        ex.pass(0, 0, x, e);
+        assert_eq!(ex.from(0, 0, &x), Some(e + 2));
+        ex.pass(0, 0, x, e + 1);
+        assert_eq!(ex.from(0, 0, &x), Some(e + 2));
+    }
+
+    /// Review STORAGE-S16-R6 M2: pass at c - 1, miss at c, decline at c + 1
+    /// (noticed: c + 3), the miss settled at c + 1 (slash: c + 2): the slash
+    /// wins, whichever event is read first.
+    #[test]
+    fn a_slash_after_a_noticed_decline_pulls_the_exclusion_in() {
+        let (x, e) = (nodes(1)[0], 2);
+        let c = e + 1;
+        let mut a = Exclusions::new();
+        a.pass(0, 0, x, e);
+        a.decline(0, 0, x, c + 2);
+        assert_eq!(a.from(0, 0, &x), Some(c + 3));
+        a.slash(0, 0, x, c + 2);
+        assert_eq!(a.from(0, 0, &x), Some(c + 2));
+        let mut b = Exclusions::new();
+        b.slash(0, 0, x, c + 2);
+        b.decline(0, 0, x, c + 2);
+        b.pass(0, 0, x, e);
+        assert_eq!(a, b);
+    }
+
+    /// Logs come in any order: the latest pass counts, never the first or
+    /// the last read.
+    #[test]
+    fn the_latest_pass_counts_whatever_the_order() {
+        let x = nodes(1)[0];
+        for order in [[2, 20], [20, 2]] {
+            let mut ex = Exclusions::new();
+            for p in order {
+                ex.pass(0, 0, x, p);
+            }
+            // Declined at 20: the pass at 20 is in the window, the one at 2 is not.
+            ex.decline(0, 0, x, 21);
+            assert_eq!(ex.from(0, 0, &x), Some(22), "{order:?}");
+        }
+    }
+
+    /// Passes alone never change the placement's inputs; a pass of a node
+    /// that declined the deal whole does.
+    #[test]
+    fn the_placement_view_drops_passes_that_change_nothing() {
+        let ns = nodes(2);
+        let mut ex = Exclusions::new();
+        ex.pass(0, 0, ns[0], 4);
+        ex.pass(0, 1, ns[1], 4);
+        assert_eq!(ex.placement_view(), Exclusions::new());
+        ex.decline(0, WHOLE_DEAL, ns[1], 6);
+        let v = ex.placement_view();
+        assert_eq!(v.record(0, 1, &ns[1]).map(|r| r.last_pass), Some(4));
+        assert_eq!(v.record(0, 0, &ns[0]), None);
+        for i in [0, 1] {
+            for n in &ns {
+                assert_eq!(v.from(0, i, n), ex.from(0, i, n));
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod notice_bound_tests {
+    use super::*;
+    use onyx_core::Hash32;
+
+    /// `out_by_any_notice` is never true where `from` would let the contract
+    /// ask, whatever the passes (review STORAGE-S16-R7 L2).
+    #[test]
+    fn out_by_any_notice_bounds_every_reading() {
+        let n = NodeId(Hash32([3; 32]));
+        for pass in [0u64, 1, 4, 9] {
+            for decline in [0u64, 5, 10] {
+                for whole in [0u64, 6] {
+                    for slash in [0u64, 7] {
+                        let mut x = Exclusions::new();
+                        if decline != 0 {
+                            x.decline(1, 2, n, decline);
+                        }
+                        if whole != 0 {
+                            x.decline(1, WHOLE_DEAL, n, whole);
+                        }
+                        if slash != 0 {
+                            x.slash(1, 2, n, slash);
+                        }
+                        if pass != 0 {
+                            x.pass(1, 2, n, pass);
+                        }
+                        for e in 0..14u64 {
+                            if x.out_by_any_notice(1, 2, &n, e) {
+                                let f = x.from(1, 2, &n).expect("excluded");
+                                assert!(f <= e, "pass {pass} decline {decline} whole {whole} slash {slash} e {e}");
+                            }
+                        }
+                        // The bound is at most one epoch later than the real exclusion.
+                        if let Some(f) = x.from(1, 2, &n) {
+                            assert!(x.out_by_any_notice(1, 2, &n, f + 1));
+                        }
+                    }
+                }
+            }
+        }
     }
 }

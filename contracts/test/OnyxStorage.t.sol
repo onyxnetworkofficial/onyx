@@ -850,7 +850,7 @@ contract OnyxStorageTest is StorageFixture {
     }
 
     /// Review STORAGE-S16-R4: tokens sent to the contract outside every flow do not make the
-    /// books read as broken; the start bond and the row rule are readable.
+    /// books read as broken; the start bond and the rules version are readable.
     function test_aDirectTransferLeavesTheBooksBalanced() public {
         assertTrue(st.conserved());
         tok.mint(address(this), 1);
@@ -858,7 +858,7 @@ contract OnyxStorageTest is StorageFixture {
         assertTrue(st.conserved());
         assertEq(st.startBondOf(ids[0]), MIN_BOND - _fee(MIN_BOND));
         assertEq(st.startBondOf(bytes32(uint256(1))), 0);
-        assertEq(st.ROW_VERSION(), 2);
+        assertEq(st.RULES_VERSION(), 3);
     }
 
     /// THREATS STORAGE-S16-R2-3: whoever settles a miss earns 10% of the slash, withdrawn like
@@ -953,7 +953,8 @@ contract OnyxStorageTest is StorageFixture {
         assertTrue(st.answer(d, e, 0, hs[0], list, entry, es, row, rs));
         uint256 used = g - gasleft();
         emit log_named_uint("answer gas with 128 nodes, 125 declined (execution only)", used);
-        // 5,972,284 with the old scan per pick; 1,634,354 with the heap (2026-11-02).
+        // 5,972,284 with the old scan per pick; 1,634,354 with the heap; 1,740,817 with the
+        // decline notice of ADR-0060 amendment 2 (2026-11-02).
         assertLt(used, 2_000_000);
     }
 

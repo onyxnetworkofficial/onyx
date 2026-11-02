@@ -1046,7 +1046,9 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       (ADR-0062, review STORAGE-S16-R2; now S21); one copy per operator address was built and
       withdrawn the same day (STORAGE-S16-R1). Done so far: the `_challenged` scan became a heap
       (STORAGE-S16-R1-2); amendment 1 built and tested locally on 2026-11-02 (a node refuses an
-      older contract), not deployed
+      older contract), not deployed; amendment 2 item 2 (a decline of a shard the node proved in
+      in the decline's epoch or the 7 before it starts one epoch later; `RULES_VERSION` 3) built and tested locally on
+      2026-11-02 after design review STORAGE-S16-R6, not deployed
 - [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6, STORAGE-4): placement weighted by declared
       capacity, erasure coding (k of n pieces instead of R copies; each holder keeps a different
       piece, the fix for STORAGE-4, ADR-0062 finding 6),

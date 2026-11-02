@@ -69,7 +69,9 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
    shards move). Exit is voluntary with the same one-epoch notice; bonds return after the settle
    window. A node may also `decline` one shard or a whole deal it cannot get (a withholding
    publisher or replicas): the same exclusion from the next epoch, without a slash; a challenge
-   already drawn still stands (review STORAGE-R1, THREATS STORAGE-16).
+   already drawn still stands (review STORAGE-R1, THREATS STORAGE-16). (Amendment 2 item 2: from
+   the next deployment, one epoch later on a shard the node passed a check on in the decline's epoch or the 7
+   epochs before it.)
 9. **Money.** tONYX only. No owner, no admin path, every parameter immutable. Tokens leave only as
    earnings to the operator that answered, a bond to its operator after exit, a deal's remainder to
    its payer after the deal ends, or slashes to the immutable treasury. Conservation is a view
@@ -87,7 +89,7 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
 ## Consequences
 - Many people can store data and many nodes can hold it; the chain holds fingerprints and money.
   Scaling math, costs and phases: docs/STORAGE-NETWORK.md.
-- `OnyxStorage` is 21,700 bytes of runtime code (EIP-170 limit 24,576; 2026-11-02, with the heap of THREATS STORAGE-S16-R1-2 and amendment 1). Gas: docs/STORAGE-NETWORK.md
+- `OnyxStorage` is 22,057 bytes of runtime code (EIP-170 limit 24,576; 2026-11-02, with the heap of THREATS STORAGE-S16-R1-2 and amendments 1 and 2). Gas: docs/STORAGE-NETWORK.md
   "Status" and `contracts/.gas-snapshot`.
 - An answer carries the whole node list (32 bytes per node) and recomputes all weights: fine to 128
   nodes, not to thousands (later: per-epoch committee lists or a Merkle proof of the node's rank).
@@ -157,10 +159,12 @@ ADR-0062 finding 7 and THREATS STORAGE-S16-R2-1 to -3. A first draft was reviewe
    cheaper than a decline (STORAGE-S16-R3-3, -4). Any passed check still resets the count of
    misses toward jail; item 4 bounds what that saves.
 
-## Amendment 2 (proposed 2026-11-02): decline accounting (ROADMAP S16)
-Status: proposed; item 3 built in the node. Items 1 and 2 need a design review before code
-(THREATS STORAGE-S16-R5, an independent comparison of seven mechanisms, is the input). Item 2
-changes `OnyxStorage`, so it ships in the same redeployment as amendment 1.
+## Amendment 2 (2026-11-02): decline accounting (ROADMAP S16)
+Status: item 2 built and tested (not deployed), after design review THREATS STORAGE-S16-R6;
+item 3 built in the node; item 1 needs no code. Item 2 is in `OnyxStorage` (`Excl`,
+`exclusionFrom`, `decline`, `answer`, `_slash`, `NOTICE_EPOCHS`, `RULES_VERSION`),
+`onyx_storage::placement::Exclusions` and `onyx_api::storage`; shared vectors written again. It
+ships in the same redeployment as amendment 1. The S15 contract on Base Sepolia keeps v0.
 
 The two problems: a node that declines everything still counts in N and in total capacity, so
 `createDeal` can commit copies that only the other nodes hold (STORAGE-R2-2); and a decline is
@@ -180,22 +184,52 @@ top R decline a withheld shard, the next nodes in the ranking are asked and decl
    commits. Capacity-weighted placement with aggregated proofs (S17) gives the signal. Until then
    the declines are public in the `Declined` events; a report of them per node and per deal is
    TODO S17.
-2. **A one-epoch notice on shards the node itself proved** (STORAGE-S16-R2-3). Each passed answer
-   stores its epoch for (deal, shard, node). A `decline` of one shard takes effect one epoch later
-   than now (from the epoch after next) when the node passed a check on that shard in the last
-   K = 100 epochs; otherwise from the next epoch, as now. For a whole-deal decline the delay is
-   per shard: `exclusionFrom` adds the epoch only for shards the node passed in the window, so a
-   pass on one shard never delays the decline of a withheld one. A slash still excludes from the
-   next epoch (the earlier of the two wins). Why it meets the three rules: under notice a decline is
-   silence for one more epoch and then out, so on every sequence of challenges it costs no more
-   than silence; the mark expires after K epochs, and a node keeps the files of a shard it moved
-   away from, so it still answers when the shard moves back; an honest node answers only from its
-   own copy, so a withholding publisher cannot put it under notice for data it never had. What it
-   buys: on a one-shard deal (every live deal so far) both challenge slots hit that shard, so an
-   outsourcer whose source fails is slashed once; on large deals almost nothing until aggregated
-   proofs (S17). Estimated cost: about 22,000 gas on a node's first pass on a shard and 5,000 on
-   later ones, about 2,100 per whole-deal decliner in `_challenged`, about 400 bytes of code. The
-   `Answered` event names the shard, so the node's `Exclusions` mirror the rule without seeds.
+2. **A one-epoch notice on shards the node itself proved** (STORAGE-S16-R2-3). The rule:
+   - Each (deal, shard, node) has one storage slot, `Excl { declineFrom, slashFrom, lastPass }`
+     (three `uint64`), under the existing key `keccak256(dealId ‖ index ‖ node)`. The
+     `WHOLE_DEAL` key uses only `declineFrom`.
+   - A passed `answer` in epoch `e` sets `lastPass = e` (no write when it is already `e`).
+   - `decline` in epoch `c` refuses a key that has a decline or a slash, and sets
+     `declineFrom = c + 1`. No notice is applied when it is written. `Declined` carries this raw
+     epoch; the epoch in force is `exclusionFrom`.
+   - The first slash on a shard in epoch `c` sets `slashFrom = c + 1`. `Slashed.excludedFrom`
+     carries this raw epoch.
+   - `exclusionFrom(deal, i, node)` is the earliest non-zero of `slashFrom`,
+     `noticed(declineFrom, lastPass)` and, for a shard (not `WHOLE_DEAL`),
+     `noticed(declineFrom of the WHOLE_DEAL key, lastPass of this shard)`; 0 when all are 0.
+     `noticed(f, p)` is 0 when `f` is 0, `f + 1` when `p != 0` and `p + K >= f - 1`, else `f`.
+   - K is `NOTICE_EPOCHS` = 7, a constant. In words: a decline in epoch `c` takes effect from
+     `c + 2` when the node passed a check on that shard in epochs `c - 7` to `c` (a pass in `c`
+     after the decline counts), else from `c + 1`. The window is counted from the stored decline
+     epoch, never from the current one (review STORAGE-S16-R6 M1). An empty `lastPass` is no
+     pass. A slash that takes effect earlier still wins, also after a noticed decline (M2).
+   - `RULES_VERSION` = 3 replaces `ROW_VERSION` (amendment 1's was 2; the S15 contract has
+     neither). A node reads it before it sends anything and refuses any other value (H1).
+   - `Answered` names the shard (`shardIndex`), so the node's `Exclusions` mirror the rule from
+     the `Slashed`, `Declined` and passed `Answered` events, in any order. When its mirror says it
+     is not asked for a slot but it is in the slot's top R with no exclusion at all, the node asks
+     the contract's `challengedHolders` and answers if it is listed (H1).
+
+   Why it meets the three rules. Under notice a decline is silence for one more epoch, then out.
+   On a one-shard deal both challenge slots hit the shard, so a node under notice that cannot
+   answer takes 2 misses in the notice epoch; with `maxMisses` 3 that can jail it. Silence costs
+   the same: a silent node is asked in that epoch too. So a decline never costs more than silence.
+   A node can cap its cost by getting itself jailed on purpose (3 wrong answers in a row): about
+   27% of its bond (1 - 0.9^3 at 10% slashes), a bounded cost. The mark clears: a pass more than K
+   epochs before the decline gives no notice. A withholding publisher cannot put an honest node
+   under notice for data it never had: an honest node passes only from its own copy.
+
+   What a node must do: keep a shard's file for at least K + 2 epochs after its last pass on it. A
+   decline at the end of the window is under notice, so the node is still asked one epoch later.
+   Nothing deletes shard files today; never prune them by hand (docs/ops/storage-node.md).
+
+   K = 7 epochs is about 2.8 hours at the 24-minute test epochs and a week at one-day epochs.
+   What it buys: on a one-shard deal (every live deal so far) an outsourcer whose source fails is
+   slashed in the notice epoch; on large deals almost nothing until aggregated proofs (S17).
+   Measured cost (forge, 2026-11-02): an `answer` that is the node's first pass on a shard costs
+   about 22,800 gas more (448,077 to 470,851 at 128 nodes: the new slot), a pass in a later epoch
+   about 3,200 more; the worst `answer` (128 nodes, 125 declined) went from 1,634,916 to
+   1,740,817; `OnyxStorage` grew by 357 bytes to 22,057.
 3. **The node declines a partly withheld deal whole** (STORAGE-S16-R5-2; built, no contract
    change). The node gave a deal up whole only when it held none of it, so a source that served
    one shard and withheld the rest kept it declining one shard at a time, each after three failed

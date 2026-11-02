@@ -28,6 +28,12 @@ contract StorageHandler is StorageFixture {
     /// Ghost: rewards credited to a slashed node's own operator (must stay 0; an assertion inside
     /// a handler call is swallowed in invariant runs, so it is counted here and checked below).
     uint256 public ownRewarded;
+    /// Every decline made here: (deal, index, node, epoch of the decline). ADR-0060 amendment 2
+    /// item 2: its exclusion is in force by two epochs after (one with no notice).
+    uint64[] internal _decDeal;
+    uint32[] internal _decIndex;
+    bytes32[] internal _decNode;
+    uint64[] internal _decEpoch;
     /// Who may report a miss: two outsiders and the handler itself (the node's operator is the
     /// other choice, which earns no reward).
     address[] internal reporters;
@@ -248,8 +254,27 @@ contract StorageHandler is StorageFixture {
         vm.prank(ops[i]);
         try st.decline(uint64(d % n), idx, ids[i]) {
             declines++;
+            _decDeal.push(uint64(d % n));
+            _decIndex.push(idx);
+            _decNode.push(ids[i]);
+            _decEpoch.push(st.currentEpoch());
         } catch {}
         assertEq(_bal(), b);
+    }
+
+    /// Declines whose exclusion is 0 or later than two epochs after the decline, on the declined
+    /// key and (for a whole-deal decline) on both shards of the deal.
+    function lateDeclines() external view returns (uint256 bad) {
+        for (uint256 k = 0; k < _decDeal.length; k++) {
+            uint64 limit = _decEpoch[k] + 2;
+            uint64 f = st.exclusionFrom(_decDeal[k], _decIndex[k], _decNode[k]);
+            if (f == 0 || f > limit) bad++;
+            if (_decIndex[k] != st.WHOLE_DEAL()) continue;
+            for (uint32 i = 0; i < 2; i++) {
+                f = st.exclusionFrom(_decDeal[k], i, _decNode[k]);
+                if (f == 0 || f > limit) bad++;
+            }
+        }
     }
 
     function exit(uint256 who) external {
@@ -338,6 +363,12 @@ contract StorageInvariants is StdInvariant, Test {
         assertEq(h.ownRewarded(), 0);
     }
 
+    /// ADR-0060 amendment 2 item 2: a decline's notice is one epoch at most, whatever passes,
+    /// slashes and declines come before or after it (review STORAGE-S16-R6 M1, M2).
+    function invariant_aDeclineTakesEffectWithinTwoEpochs() public view {
+        assertEq(h.lateDeclines(), 0);
+    }
+
     /// No deal ever paid out more than its deposit.
     function invariant_dealsNeverOverpay() public view {
         uint256 n = h.st().dealCount();
@@ -398,6 +429,7 @@ contract StorageHandlerCoverage is Test {
         assertGt(h.selfSettles(), 0, "no self-report");
         assertGt(h.closes(), 0, "no close");
         assertEq(h.declines(), 2, "declines");
+        assertEq(h.lateDeclines(), 0, "a decline took effect late");
         assertEq(h.registrations(), 2, "registrations");
         assertEq(h.activations(), 1, "activations");
         assertEq(h.cancels(), 1, "cancels");

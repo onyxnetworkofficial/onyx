@@ -163,7 +163,7 @@ mod tests {
         let mut ex = Exclusions::new();
         let d = deals();
         let h = holders_at(&d[0].salt, 1, 42, &ns, 3, 5, &ex);
-        ex.insert(1, 42, h[1], 6);
+        ex.slash(1, 42, h[1], 6);
         let moves = plan(&d, &ns, 5, &ns, 6, &ex);
         assert_eq!(moves.len(), 1);
         assert_eq!((moves[0].deal, moves[0].index), (1, 42));

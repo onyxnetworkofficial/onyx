@@ -296,7 +296,8 @@ impl Replay {
             add(&mut b.deposits, d)?;
             add(&mut b.balance, d)?;
         } else if is(events::ANSWERED) {
-            add(&mut b.paid, abi::word_uint(data, 2)?)?;
+            // slot, shard index, passed, paid.
+            add(&mut b.paid, abi::word_uint(data, 3)?)?;
         } else if is(events::SLASHED) {
             add(&mut b.slashed, abi::word_uint(data, 3)?)?;
         } else if is(events::MISS_REWARD) {
@@ -573,7 +574,7 @@ mod tests {
             log(
                 events::ANSWERED,
                 &[w(0), w(4), node.0],
-                &[uint(0), uint(1), uint(pay)],
+                &[uint(0), uint(1), uint(1), uint(pay)],
             ),
             log(
                 events::SLASHED,

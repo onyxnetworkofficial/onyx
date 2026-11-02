@@ -52,8 +52,24 @@ contract PlacementHarness is OnyxStorage {
         d.shardCount = shardCount;
     }
 
+    /// An exclusion in force from `from` with no notice: a slash on a shard, or a decline of the
+    /// whole deal (`WHOLE_DEAL`), with no pass recorded.
     function exclude(uint64 dealId, uint32 index, bytes32 node, uint64 from) external {
-        _exclFrom[_exKey(dealId, index, node)] = from;
+        Excl storage x = _excl[_exKey(dealId, index, node)];
+        if (index == WHOLE_DEAL) x.declineFrom = from;
+        else x.slashFrom = from;
+    }
+
+    /// The raw record of (deal, index, node) (ADR-0060 amendment 2 item 2).
+    function setExcl(
+        uint64 dealId,
+        uint32 index,
+        bytes32 node,
+        uint64 declineFrom,
+        uint64 slashFrom,
+        uint64 lastPass
+    ) external {
+        _excl[_exKey(dealId, index, node)] = Excl(declineFrom, slashFrom, lastPass);
     }
 
     function challengedAt(uint64 dealId, uint64 e, uint32 index, bytes32[] calldata nodes)
@@ -271,6 +287,28 @@ contract OnyxStorageVectorsTest is Test {
             ph.challengedAt(d, 11, 4, nodes),
             vm.parseJsonBytes32Array(json, ".holders.declined.after")
         );
+    }
+
+    /// ADR-0060 amendment 2 item 2: `exclusionFrom` from raw records (decline, slash, last pass
+    /// and a whole-deal decline) as Rust's `Exclusions::from` computes it, deal k for case k.
+    function test_declineNotice() public {
+        OnyxTestToken t = new OnyxTestToken(address(this));
+        OnyxSignedBook b = new OnyxSignedBook(address(0xBEEF));
+        PlacementHarness ph = new PlacementHarness(IStorageToken(address(t)), b);
+        assertEq(ph.NOTICE_EPOCHS(), _u(".notice.noticeEpochs"));
+        uint32 index = uint32(_u(".notice.index"));
+        bytes32 node = _b(".notice.node");
+        uint256[] memory dec = vm.parseJsonUintArray(json, ".notice.declineFrom");
+        uint256[] memory sl = vm.parseJsonUintArray(json, ".notice.slashFrom");
+        uint256[] memory pass = vm.parseJsonUintArray(json, ".notice.lastPass");
+        uint256[] memory whole = vm.parseJsonUintArray(json, ".notice.wholeFrom");
+        uint256[] memory want = vm.parseJsonUintArray(json, ".notice.from");
+        assertGt(want.length, 10);
+        for (uint64 k = 0; k < want.length; k++) {
+            ph.setExcl(k, index, node, uint64(dec[k]), uint64(sl[k]), uint64(pass[k]));
+            ph.setExcl(k, ph.WHOLE_DEAL(), node, uint64(whole[k]), 0, 0);
+            assertEq(ph.exclusionFrom(k, index, node), want[k]);
+        }
     }
 
     function _amount(uint256 i, uint256 price, uint256 k) internal view {

@@ -18,8 +18,8 @@ use onyx_bulk::wire::{hex0x, hex_field};
 use onyx_core::{Hash32, SignedReport};
 use onyx_storage::abi::{self, events, DealInfo, NodeInfo};
 use onyx_storage::challenge;
-use onyx_storage::ids::{set_hash, slot_shard, NodeId};
-use onyx_storage::placement::{challenged, holders_at, Exclusions, Jailed, WHOLE_DEAL};
+use onyx_storage::ids::{set_hash, shard_key, slot_shard, NodeId};
+use onyx_storage::placement::{challenged, holders, holders_at, Exclusions, Jailed, WHOLE_DEAL};
 use onyx_storage::repair::DealPlace;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
@@ -36,13 +36,16 @@ pub const MAX_MANIFEST_ANSWER: usize = crate::bulk_serve::MAX_MANIFEST_BODY;
 /// deploy 2026-11-01).
 pub const LOG_RANGE: u64 = crate::indexer::DEFAULT_SPAN;
 /// The events a snapshot reads: one `eth_getLogs` call per range asks for
-/// all of them (topic 0 is any of these), not one call per event.
-const SNAPSHOT_EVENTS: [&str; 6] = [
+/// all of them (topic 0 is any of these), not one call per event. `Answered`
+/// gives the last pass per shard, which the decline notice reads (ADR-0060
+/// amendment 2 item 2).
+const SNAPSHOT_EVENTS: [&str; 7] = [
     events::NODE_SET,
     events::REGISTERED,
     events::ACTIVATED,
     events::SLASHED,
     events::DECLINED,
+    events::ANSWERED,
     events::DEAL_CREATED,
 ];
 /// Snapshots are rebuilt from scratch at most this many times when the chain's
@@ -150,17 +153,66 @@ pub struct StorageChain {
 /// 23 (THREATS STORAGE-S15-1).
 #[derive(Default)]
 struct ChainCache {
-    logs: Option<(u64, Vec<Log>)>,
+    /// The next block to read, the kept logs (every snapshot event but
+    /// `Answered`) and the passes folded from `Answered` logs.
+    logs: Option<(u64, Vec<Log>, Passes)>,
     anchor: Option<(u64, Hash32)>,
     closed: BTreeSet<u64>,
+}
+
+/// The last epoch each node passed a check on each shard: (deal, shard, node)
+/// -> epoch, folded from `Answered` logs as they are read. Raw `Answered` logs
+/// are never kept: there are a few per deal every epoch, and keeping them made
+/// the cache grow without bound and a first sync quadratic (review
+/// STORAGE-S16-R7 M1).
+type Passes = BTreeMap<(u64, u32, NodeId), u64>;
+
+/// Split `logs` into the ones to keep and the passes they hold (`Answered`
+/// with `passed`), in chain order.
+fn fold_logs(logs: Vec<Log>, keep: &mut Vec<Log>, passes: &mut Passes) -> Result<(), String> {
+    let answered = abi::topic(events::ANSWERED);
+    for l in logs {
+        if l.topics.first() != Some(&answered) {
+            keep.push(l);
+            continue;
+        }
+        // Data: slot, shard index, passed, paid.
+        if abi::word_uint(&l.data, 2).map_err(|e| e.to_string())? == 0 {
+            continue;
+        }
+        let deal = topic_u64(&l, 1, "Answered topic")?;
+        let epoch = topic_u64(&l, 2, "Answered topic")?;
+        let node = NodeId(*l.topics.get(3).ok_or("Answered topic")?);
+        let index = word_u32(&l, 1, "Answered index")?;
+        let e = passes.entry((deal, index, node)).or_insert(epoch);
+        *e = (*e).max(epoch);
+    }
+    Ok(())
+}
+
+/// Topic `i` of a log as a `uint64` (the low 8 bytes).
+fn topic_u64(l: &Log, i: usize, what: &'static str) -> Result<u64, String> {
+    Ok(u64::from_be_bytes(
+        l.topics.get(i).ok_or(what)?.0[24..]
+            .try_into()
+            .map_err(|_| "topic")?,
+    ))
+}
+
+/// Data word `i` of a log as a `uint32`.
+fn word_u32(l: &Log, i: usize, what: &'static str) -> Result<u32, String> {
+    u32::try_from(abi::word_u64(&l.data, i).map_err(|e| e.to_string())?)
+        .map_err(|_| what.to_string())
 }
 
 fn ok_word(r: Result<u128, abi::AbiError>) -> Result<u128, String> {
     r.map_err(|e| e.to_string())
 }
 
-/// The challenged-row rule this node draws (`OnyxStorage.ROW_VERSION`).
-pub const ROW_VERSION: u8 = 2;
+/// The rules this node follows (`OnyxStorage.RULES_VERSION`): 3 is ADR-0060
+/// amendment 2 item 2 (the decline notice, `Answered` with the shard) on top
+/// of amendment 1 (a row for each holder, then `ROW_VERSION` 2).
+pub const RULES_VERSION: u8 = 3;
 
 /// `books()`'s nine words. A contract from before ADR-0060 amendment 1 (the
 /// S15 deployment) returns eight: no rewards, so `rewarded` is 0.
@@ -336,30 +388,51 @@ impl StorageChain {
         .map_err(|e| e.to_string())
     }
 
-    /// Refuse a contract whose challenged-row rule is not this node's: an
-    /// S15 contract draws the row without the node id (rows v1) and has no
-    /// `ROW_VERSION()`, so every answer this node builds (rows v2) would fail
-    /// there. A transport error is reported as one (the next tick asks
-    /// again), not as an older contract (review STORAGE-S16-R4).
+    /// Refuse a contract whose rules are not this node's: an S15 contract
+    /// draws the row without the node id, an amendment 1 contract has no
+    /// decline notice and another `Answered` event, and neither has
+    /// `RULES_VERSION()`. Against them this node's answers would fail or its
+    /// view of who is asked would differ (review STORAGE-S16-R6 H1). A
+    /// transport error is reported as one (the next tick asks again), not as
+    /// an older contract (review STORAGE-S16-R4).
     pub async fn check_version(&self) -> Result<(), String> {
-        let d = match self.call(&abi::row_version()).await {
+        let d = match self.call(&abi::rules_version()).await {
             Ok(d) => d,
             Err(e) if e.contains("revert") => {
                 return Err(format!(
-                    "this node draws rows v{ROW_VERSION} (ADR-0060 amendment 1) and the \
-                     contract has no ROW_VERSION(), so it is older: exit its node, then \
+                    "this node follows rules v{RULES_VERSION} (ADR-0060 amendment 2) and the \
+                     contract has no RULES_VERSION(), so it is older: exit its node, then \
                      run the node release that matches it ({e})"
                 ))
             }
-            Err(e) => return Err(format!("could not read the contract's ROW_VERSION(): {e}")),
+            Err(e) => {
+                return Err(format!(
+                    "could not read the contract's RULES_VERSION(): {e}"
+                ))
+            }
         };
         match ok_word(abi::word_uint(&d, 0))? {
-            v if v == u128::from(ROW_VERSION) => Ok(()),
+            v if v == u128::from(RULES_VERSION) => Ok(()),
             v => Err(format!(
-                "the contract checks rows v{v}, this node draws rows v{ROW_VERSION}: run the \
-                 node release that matches it"
+                "the contract checks rules v{v}, this node follows rules v{RULES_VERSION}: run \
+                 the node release that matches it"
             )),
         }
+    }
+
+    /// `challengedHolders(deal, epoch, slot, nodes)`: the slot's shard and
+    /// the holders the contract asks.
+    pub async fn challenged_holders(
+        &self,
+        deal: u64,
+        epoch: u64,
+        slot: u32,
+        nodes: &[NodeId],
+    ) -> Result<(u32, Vec<NodeId>), String> {
+        let d = self
+            .call(&abi::challenged_holders(deal, epoch, slot, nodes))
+            .await?;
+        abi::decode_challenged_holders(&d).map_err(|e| e.to_string())
     }
 
     /// `params()`.
@@ -393,30 +466,34 @@ impl StorageChain {
     }
 
     /// The logs of [`SNAPSHOT_EVENTS`] from the deploy block to `to`, in chain
-    /// order, with the blocks up to `safe` read once and kept; only the newer
-    /// blocks are read on the next call. They are kept range by range: a
-    /// first read cut off by the node (HTTP 429 from a public endpoint after
-    /// a few hundred calls) goes on where it stopped (THREATS STORAGE-S15-4).
-    async fn cached_logs(&self, to: u64, safe: u64) -> Result<Vec<Log>, String> {
-        let (mut next, mut out) = self
+    /// order (`Answered` folded into [`Passes`]), with the blocks up to `safe`
+    /// read once and kept; only the newer blocks are read on the next call.
+    /// They are kept range by range: a first read cut off by the node (HTTP
+    /// 429 from a public endpoint after a few hundred calls) goes on where it
+    /// stopped (THREATS STORAGE-S15-4). What is kept stays small (no raw
+    /// `Answered`), so saving it after each range stays cheap.
+    async fn cached_logs(&self, to: u64, safe: u64) -> Result<(Vec<Log>, Passes), String> {
+        let (mut next, mut out, mut passes) = self
             .cache
             .lock()
             .ok()
             .and_then(|c| c.logs.clone())
-            .unwrap_or((self.from_block, Vec::new()));
+            .unwrap_or((self.from_block, Vec::new(), Passes::new()));
         let safe = safe.min(to);
         while next <= safe {
             let end = next.saturating_add(LOG_RANGE - 1).min(safe);
-            out.extend(self.logs_range(&SNAPSHOT_EVENTS, next, end).await?);
+            let got = self.logs_range(&SNAPSHOT_EVENTS, next, end).await?;
+            fold_logs(got, &mut out, &mut passes)?;
             next = end + 1;
             if let Ok(mut c) = self.cache.lock() {
-                c.logs = Some((next, out.clone()));
+                c.logs = Some((next, out.clone(), passes.clone()));
             }
         }
         if next <= to {
-            out.extend(self.logs_range(&SNAPSHOT_EVENTS, next, to).await?);
+            let got = self.logs_range(&SNAPSHOT_EVENTS, next, to).await?;
+            fold_logs(got, &mut out, &mut passes)?;
         }
-        Ok(out)
+        Ok((out, passes))
     }
 
     /// The number and hash of block `tag` (`"safe"` or a `0x` number).
@@ -563,7 +640,7 @@ impl StorageChain {
         let epoch = self.current_epoch().await?;
         let params = self.params().await?;
         let err = |e: abi::AbiError| e.to_string();
-        let all = self.cached_logs(head, fin).await?;
+        let (all, passes) = self.cached_logs(head, fin).await?;
         let of = |e: &str| {
             let t = abi::topic(e);
             all.iter().filter(move |l| l.topics.first() == Some(&t))
@@ -615,29 +692,25 @@ impl StorageChain {
             let url = url_of_index.get(&i).cloned().unwrap_or_default();
             nodes.insert(id, NodeEntry { info, url });
         }
+        // The raw records behind `exclusionFrom` (ADR-0060 amendment 2 item
+        // 2): slashes, declines and passes, in any order.
         let mut excl = Exclusions::new();
         for l in of(events::SLASHED) {
             let node = NodeId(*l.topics.get(1).ok_or("Slashed topic")?);
-            let deal = u64::from_be_bytes(
-                l.topics.get(2).ok_or("Slashed topic")?.0[24..]
-                    .try_into()
-                    .map_err(|_| "topic")?,
-            );
-            let index = abi::word_u64(&l.data, 2).map_err(err)? as u32;
+            let deal = topic_u64(l, 2, "Slashed topic")?;
+            let index = word_u32(l, 2, "Slashed index")?;
             let from = abi::word_u64(&l.data, 4).map_err(err)?;
-            excl.insert(deal, index, node, from);
+            excl.slash(deal, index, node, from);
         }
         for l in of(events::DECLINED) {
             let node = NodeId(*l.topics.get(1).ok_or("Declined topic")?);
-            let deal = u64::from_be_bytes(
-                l.topics.get(2).ok_or("Declined topic")?.0[24..]
-                    .try_into()
-                    .map_err(|_| "topic")?,
-            );
-            let index = u32::try_from(abi::word_u64(&l.data, 0).map_err(err)?)
-                .map_err(|_| "Declined index")?;
+            let deal = topic_u64(l, 2, "Declined topic")?;
+            let index = word_u32(l, 0, "Declined index")?;
             let from = abi::word_u64(&l.data, 1).map_err(err)?;
-            excl.insert(deal, index, node, from);
+            excl.decline(deal, index, node, from);
+        }
+        for ((deal, index, node), epoch) in &passes {
+            excl.pass(*deal, *index, *node, *epoch);
         }
         let mut deals = Vec::new();
         let mut deal_logs = 0u64;
@@ -756,7 +829,7 @@ pub struct Snapshot {
     pub nodes: BTreeMap<NodeId, NodeEntry>,
     /// Every deal.
     pub deals: Vec<DealEntry>,
-    /// Exclusions from `Slashed` events.
+    /// Exclusions from `Slashed`, `Declined` and passed `Answered` events.
     pub excl: Exclusions,
     /// Jailed nodes.
     pub jailed: Jailed,
@@ -861,7 +934,9 @@ impl Snapshot {
         PlacementKey {
             epoch: self.epoch,
             lists: [self.list_at(self.epoch), self.list_at(self.epoch + 1)],
-            excl: self.excl.clone(),
+            // Passes that change no exclusion are left out: they come every
+            // epoch and would recompute the placement each time.
+            excl: self.excl.placement_view(),
             deals: self
                 .deals
                 .iter()
@@ -1084,6 +1159,9 @@ pub struct StorageNode {
     store: Arc<BulkStore>,
     cfg: StorageNodeConfig,
     done: Mutex<BTreeSet<(u64, u64, u32, NodeId)>>,
+    /// (deal, epoch, slot) the contract said asks this node where the chain
+    /// view did not (`asked_anyway`): asked once, not every pass.
+    confirmed: Mutex<BTreeSet<(u64, u64, u32)>>,
     last: Mutex<TickReport>,
     failures: Mutex<BTreeMap<(u64, u32), Failures>>,
     /// Passes run (rotates the fetch order).
@@ -1110,6 +1188,7 @@ impl StorageNode {
             store,
             cfg,
             done: Mutex::new(BTreeSet::new()),
+            confirmed: Mutex::new(BTreeSet::new()),
             last: Mutex::new(TickReport::default()),
             failures: Mutex::new(BTreeMap::new()),
             passes: AtomicUsize::new(0),
@@ -1482,11 +1561,12 @@ impl StorageNode {
         {
             for slot in 0..k {
                 let (index, who) = s.challenged(d, e, seed, slot);
-                if !who.contains(&me) {
-                    continue;
-                }
                 let key = (d.id, e, slot, me);
                 if self.done.lock().map(|x| x.contains(&key)).unwrap_or(false) {
+                    continue;
+                }
+                if !who.contains(&me) && !self.asked_anyway(&s.excl, d, e, slot, index, prev).await
+                {
                     continue;
                 }
                 if self.chain.slot_status(d.id, e, slot, &me).await? != 0 {
@@ -1560,6 +1640,81 @@ impl StorageNode {
             }
         }
         Ok(sent)
+    }
+
+    /// Whether the contract asks this node for `slot` of `d` in epoch `e`
+    /// although the chain view says it does not (review STORAGE-S16-R6 H1:
+    /// defense in depth against a view that drifts from `exclusionFrom`).
+    /// Asked of the contract (`challengedHolders`) only when the node is in
+    /// the shard's top R with no exclusion at all; the answer is kept for
+    /// the epoch (who is asked in an epoch is fixed when it starts).
+    async fn asked_anyway(
+        &self,
+        excl: &Exclusions,
+        d: &DealEntry,
+        e: u64,
+        slot: u32,
+        index: u32,
+        prev: &[NodeId],
+    ) -> bool {
+        let me = self.cfg.node;
+        if !holders(&shard_key(&d.info.salt, index), prev, d.info.r, |_| false).contains(&me) {
+            return false;
+        }
+        // Out of the shard by e whatever the notice (every decline counted one
+        // epoch late): the contract cannot ask, so no call (review
+        // STORAGE-S16-R7 L2).
+        if excl.out_by_any_notice(d.id, index, &me, e) {
+            return false;
+        }
+        if self
+            .confirmed
+            .lock()
+            .map(|c| c.contains(&(d.id, e, slot)))
+            .unwrap_or(false)
+        {
+            return true;
+        }
+        match self.chain.challenged_holders(d.id, e, slot, prev).await {
+            Ok((i, who)) if i == index && who.contains(&me) => {
+                eprintln!(
+                    "onyx-node: storage: the contract asks deal {} slot {slot} epoch {e} of this \
+                     node where the chain view did not: answering",
+                    d.id
+                );
+                if let Ok(mut c) = self.confirmed.lock() {
+                    // Only this epoch and the last one are ever asked about.
+                    c.retain(|x| x.1 + 1 >= e);
+                    c.insert((d.id, e, slot));
+                }
+                true
+            }
+            Ok((i, _)) if i != index => {
+                eprintln!(
+                    "onyx-node: storage: WARNING: the contract draws shard {i} for deal {} slot \
+                     {slot} epoch {e}, this node's chain view shard {index}: its view is wrong \
+                     (seed or shard count)",
+                    d.id
+                );
+                if let Ok(mut x) = self.done.lock() {
+                    x.insert((d.id, e, slot, me));
+                }
+                false
+            }
+            Ok(_) => {
+                if let Ok(mut x) = self.done.lock() {
+                    x.insert((d.id, e, slot, me));
+                }
+                false
+            }
+            Err(err) => {
+                eprintln!(
+                    "onyx-node: storage: challengedHolders deal {} slot {slot}: {err}",
+                    d.id
+                );
+                false
+            }
+        }
     }
 
     /// Settle the misses of the two epochs before this one (keeper duty).
@@ -1726,8 +1881,9 @@ pub async fn epoch_report(chain: &StorageChain, s: &Snapshot, e: u64) -> Result<
             u64::from_be_bytes(t.0[24..].try_into().unwrap_or([0; 8]))
         });
         let node = NodeId(l.topics.get(3).copied().unwrap_or(Hash32::ZERO));
+        // Data: slot, shard index, passed, paid.
         let slot = abi::word_u64(&l.data, 0).map_err(|x| x.to_string())? as u32;
-        let amount = abi::word_uint(&l.data, 2).map_err(|x| x.to_string())?;
+        let amount = abi::word_uint(&l.data, 3).map_err(|x| x.to_string())?;
         paid.insert((deal, slot, node), amount);
     }
     let mut slashed: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();

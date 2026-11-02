@@ -350,10 +350,31 @@ pub fn books() -> Vec<u8> {
     call("books()", &[])
 }
 
-/// `ROW_VERSION()`: the challenged-row rule (2: the row is drawn with the
-/// answering node's id, ADR-0060 amendment 1). Older contracts have none.
-pub fn row_version() -> Vec<u8> {
-    call("ROW_VERSION()", &[])
+/// `RULES_VERSION()`: the rules the contract checks (3: ADR-0060 amendment
+/// 2 item 2, the decline notice and `Answered` with the shard). Older
+/// contracts have none (amendment 1 had `ROW_VERSION()` = 2).
+pub fn rules_version() -> Vec<u8> {
+    call("RULES_VERSION()", &[])
+}
+
+/// `challengedHolders(uint64 dealId, uint64 epoch, uint32 slot, bytes32[] nodes)`.
+pub fn challenged_holders(deal: u64, epoch: u64, slot: u32, nodes: &[NodeId]) -> Vec<u8> {
+    call(
+        "challengedHolders(uint64,uint64,uint32,bytes32[])",
+        &[
+            uint(deal.into()),
+            uint(epoch.into()),
+            uint(slot.into()),
+            node_words(nodes),
+        ],
+    )
+}
+
+/// Decode `challengedHolders`' return: the slot's shard and its challenged
+/// holders.
+pub fn decode_challenged_holders(d: &[u8]) -> Result<(u32, Vec<NodeId>), AbiError> {
+    let index = u32::try_from(word_u64(d, 0)?).map_err(|_| AbiError("shard index"))?;
+    Ok((index, dyn_words(d, 1)?.into_iter().map(NodeId).collect()))
 }
 
 /// `conserved()`.
@@ -468,8 +489,9 @@ pub mod events {
         "DealCreated(uint64,address,bytes32,bytes32,uint32,uint64,uint8,uint64,uint64,bytes32,uint256,string,string,string)";
     /// An epoch's seed.
     pub const SEED: &str = "SeedRecorded(uint64,bytes32)";
-    /// An answer.
-    pub const ANSWERED: &str = "Answered(uint64,uint64,uint32,bytes32,bool,uint256)";
+    /// An answer (data: slot, shard index, passed, paid; ADR-0060 amendment 2
+    /// added the shard index).
+    pub const ANSWERED: &str = "Answered(uint64,uint64,uint32,bytes32,uint32,bool,uint256)";
     /// A slash.
     pub const SLASHED: &str = "Slashed(bytes32,uint64,uint64,uint32,uint32,uint256,uint64,uint8)";
     /// A node gave up a shard (or a whole deal) without a slash.

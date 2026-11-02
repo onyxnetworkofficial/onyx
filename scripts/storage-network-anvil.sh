@@ -297,7 +297,18 @@ paid = sum(int(l["earned"]) for l in r["lines"])
 print(f"  ok: {len(r['asks'])} challenges, all passed; {paid} base units of tONYX paid to {len(r['lines'])} nodes")
 PY
 
-A=0 B=1
+# The node killed (A) and the node that drops its data (B) are the two with the most shards,
+# never the keeper (node 2): a node holding 1 of 8 shards is asked so rarely that it was not jailed
+# within 8 epochs once (a public check run, 2026-11-02). H: the three honest nodes, keeper included.
+read -r A B <<<"$(python3 -I - "$work" <<'PY'
+import json, sys
+n = {i: len(json.load(open(f"{sys.argv[1]}/initial{i}.json"))["node"]["shards_next_epoch"]) for i in (0, 1, 3, 4)}
+order = sorted(n, key=lambda i: (-n[i], i))
+print(order[0], order[1])
+PY
+)"
+H=()
+for i in 0 1 2 3 4; do [ "$i" = "$A" ] || [ "$i" = "$B" ] || H+=("$i"); done
 echo "10. node $A is killed: reads keep working from the other replicas"
 stop "${node_pids[A]}"; node_pids[A]=""
 read_all >"$work/read2.json" || fail "read with a node down"
@@ -373,54 +384,61 @@ pass "node $A jailed after $a_missed misses; node $B slashed $b_slashed times"
 echo "13. repair: the shards node $A held now have new replicas, fetched and checked"
 t=$(now)
 mine_to "$e"
-wait_placed 2 3 4 || fail "the live nodes did not repair"
+wait_placed "${H[@]}" || fail "the live nodes did not repair"
 repair_secs=$(since "$t")
-python3 -I - "$work" "${ids[A]}" <<'PY' || fail "no repaired replica"
+python3 -I - "$work" "$A" "${H[@]}" <<'PY' || fail "no repaired replica"
 import json, sys
-w, gone = sys.argv[1], sys.argv[2]
+w, a, live = sys.argv[1], int(sys.argv[2]), [int(x) for x in sys.argv[3:]]
 def held(prefix, i):
     return {(a["deal"], a["shard"]) for a in json.load(open(f"{w}/{prefix}{i}.json"))["node"]["shards_next_epoch"]}
-before_a = held("initial", 0)
+before_a = held("initial", a)
 new = 0
-for i in (2, 3, 4):
+for i in live:
     gained = held("st", i) - held("initial", i)
     new += len(gained & before_a)
 assert new > 0, "no shard of the jailed node moved to a live node"
-print(f"  ok: {new} copies of node 0's shards repaired onto nodes 2-4")
+print(f"  ok: {new} copies of node {a}'s shards repaired onto nodes {', '.join(map(str, live))}")
 PY
 read_all >"$work/read3.json" || fail "read after repair"
 pass "reads after repair: $(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["rows"])' "$work/read3.json") rows"
 
 echo "14. money: honest nodes earned, slashes to the treasury, the books balance on chain"
-for i in 2 3 4; do
+for i in "${H[@]}"; do
   status_of "$i" >"$work/final$i.json"
 done
-python3 -I - "$work" <<'PY'
+python3 -I - "$work" "${H[@]}" <<'PY'
 import glob, json, sys
-w = sys.argv[1]
+w, live = sys.argv[1], [int(x) for x in sys.argv[2:]]
 # Pay is per passed answer (R-STOR-8): an honest node the random slots never asked earns nothing
 # yet (a public check run hit this: one node with 3 of 8 shards, 6 slots drawn). Every node with a
 # passed answer earned, none of them was jailed, and the honest nodes earned something together.
 passed = {a["node"] for f in glob.glob(f"{w}/epoch*.json") for a in json.load(open(f))["asks"] if a["status"] == "passed"}
-nodes = [json.load(open(f"{w}/final{i}.json"))["node"] for i in (2, 3, 4)]
+nodes = [json.load(open(f"{w}/final{i}.json"))["node"] for i in live]
 for n in nodes:
     assert n["status"] == 1, n
     assert n["id"] not in passed or int(n["earned"]) > 0, n
 assert sum(int(n["earned"]) for n in nodes) > 0, nodes
-print("  ok: nodes 2, 3, 4 earned " + ", ".join(n["earned"] for n in nodes))
+print(f"  ok: nodes {', '.join(map(str, live))} earned " + ", ".join(n["earned"] for n in nodes))
 PY
 bA=$(status_of "$A" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')
 bB=$(status_of "$B" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')
 # Each node activated with its 1 tONYX bond less the 2% registration fee (ADR-0060 amendment 1).
 python3 -I -c 'import sys; sys.exit(0 if all(int(b) < 98 * 10**16 for b in sys.argv[1:]) else 1)' "$bA" "$bB" \
   || fail "a misbehaving node kept its whole bond"
-before=$(castw call "$token" 'balanceOf(address)(uint256)' "${ops[3]}" | awk '{print $1}')
+# W: the honest node that earned the most withdraws (one the slots never asked has nothing to take).
+W=$(python3 -I - "$work" "${H[@]}" <<'PY'
+import json, sys
+w, live = sys.argv[1], sys.argv[2:]
+print(max(live, key=lambda i: int(json.load(open(f"{w}/final{i}.json"))["node"]["earned"])))
+PY
+)
+before=$(castw call "$token" 'balanceOf(address)(uint256)' "${ops[W]}" | awk '{print $1}')
 # shellcheck disable=SC2046
-"$st_bin" withdraw $(SK "${keys[3]}") >/dev/null
-after=$(castw call "$token" 'balanceOf(address)(uint256)' "${ops[3]}" | awk '{print $1}')
+"$st_bin" withdraw $(SK "${keys[W]}") >/dev/null
+after=$(castw call "$token" 'balanceOf(address)(uint256)' "${ops[W]}" | awk '{print $1}')
 python3 -I -c 'import sys; assert int(sys.argv[2]) > int(sys.argv[1])' "$before" "$after" || fail "withdraw"
 # shellcheck disable=SC2046
-"$st_bin" sweep $(SK "${keys[3]}") >/dev/null
+"$st_bin" sweep $(SK "${keys[W]}") >/dev/null
 tre=$(castw call "$token" 'balanceOf(address)(uint256)' "$treasury" | awk '{print $1}')
 "$st_bin" books "${S[@]}" --replay yes >"$work/books.json" || { cat "$work/books.json"; fail "the books do not balance or do not replay"; }
 python3 -I - "$work/books.json" "$tre" <<'PY'
@@ -440,7 +458,7 @@ PY
 pass "conserved() is true on chain"
 
 gas_of() { python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["gasUsed"], 16))'; }
-answer_tx=$(castw logs --from-block "$genesis" --address "$storage" 'Answered(uint64,uint64,uint32,bytes32,bool,uint256)' --json \
+answer_tx=$(castw logs --from-block "$genesis" --address "$storage" 'Answered(uint64,uint64,uint32,bytes32,uint32,bool,uint256)' --json \
   | python3 -I -c 'import json,sys; print(json.load(sys.stdin)[0]["transactionHash"])')
 answer_gas=$(castw rpc eth_getTransactionReceipt "$answer_tx" | gas_of)
 echo

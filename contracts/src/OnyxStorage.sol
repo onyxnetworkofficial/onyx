@@ -46,10 +46,15 @@ contract OnyxStorage {
     /// Part of a missed answer's slash that goes to whoever reported it with `settleMissed`
     /// (10%; amendment 1 item 3, THREATS STORAGE-S16-R2-3), unless that is the node's operator.
     uint32 public constant REPORTER_PPM = 100_000;
-    /// The challenged-row rule this contract checks: 2 draws the row with the answering node's id
-    /// (`onyx-storage-row-v2`, amendment 1 item 1). A node reads it before it answers, so a node
-    /// built for another rule sends nothing instead of failing every answer (review STORAGE-S16-R4).
-    uint8 public constant ROW_VERSION = 2;
+    /// The rules this contract checks. A node reads it before it sends anything and refuses any
+    /// other value, so a node built for other rules neither fails every answer nor computes other
+    /// holders than the contract (review STORAGE-S16-R6 H1). The S15 contract has no such view;
+    /// ADR-0060 amendment 1 (a row for each holder) had `ROW_VERSION` 2 instead; 3 adds amendment
+    /// 2 item 2 (a decline notice on shards the node passed; `Answered` names the shard).
+    uint8 public constant RULES_VERSION = 3;
+    /// The window K of amendment 2 item 2: a decline of a shard the node passed a check on in the
+    /// `NOTICE_EPOCHS` epochs before the decline takes effect one epoch later.
+    uint64 public constant NOTICE_EPOCHS = 7;
     /// `decline`'s index for every shard of a deal.
     uint32 public constant WHOLE_DEAL = type(uint32).max;
     uint64 internal constant GIB = 1 << 30;
@@ -121,14 +126,19 @@ contract OnyxStorage {
     event DealExtended(uint64 indexed dealId, uint64 endEpoch, uint256 added);
     event DealClosed(uint64 indexed dealId, uint256 refund);
     event SeedRecorded(uint64 indexed epoch, bytes32 seed);
+    /// `shardIndex` is the shard the slot asked for: a node mirrors the decline notice from these
+    /// events (`exclusionFrom` reads the last pass per shard).
     event Answered(
         uint64 indexed dealId,
         uint64 indexed epoch,
         uint32 slot,
         bytes32 indexed nodeId,
+        uint32 shardIndex,
         bool passed,
         uint256 paid
     );
+    /// `excludedFrom` is the raw epoch the slash set (the first slash of that shard): the epoch
+    /// the node is out of the shard is `exclusionFrom`, which may be earlier (a decline).
     event Slashed(
         bytes32 indexed nodeId,
         uint64 indexed dealId,
@@ -142,6 +152,8 @@ contract OnyxStorage {
     event MissReward(bytes32 indexed nodeId, address indexed reporter, uint256 amount);
     event EarningsWithdrawn(address indexed operator, uint256 amount);
     event TreasurySwept(address indexed treasury, uint256 amount);
+    /// `fromEpoch` is the raw decline epoch (the epoch after the decline): with a notice, the node
+    /// is out of the shard one epoch later; `exclusionFrom` gives the epoch in force.
     event Declined(bytes32 indexed nodeId, uint64 indexed dealId, uint32 index, uint64 fromEpoch);
 
     struct Registration {
@@ -166,6 +178,17 @@ contract OnyxStorage {
         uint128 startBond;
         /// Position in `_active` plus one (0: not in the list).
         uint256 pos;
+    }
+
+    /// A node's raw record for one shard of a deal (one storage slot), read through
+    /// `exclusionFrom`. The record of `WHOLE_DEAL` uses only `declineFrom`.
+    struct Excl {
+        /// The epoch after the node's `decline` (0: none), before any notice.
+        uint64 declineFrom;
+        /// The epoch after the node's first slash on the shard (0: none).
+        uint64 slashFrom;
+        /// The last epoch the node passed a check on the shard (0: never).
+        uint64 lastPass;
     }
 
     struct Deal {
@@ -206,8 +229,8 @@ contract OnyxStorage {
 
     Deal[] internal _deals;
     mapping(uint64 => bytes32) public seedOf;
-    /// keccak256(dealId, shard index, node) -> first epoch the node no longer holds the shard.
-    mapping(bytes32 => uint64) internal _exclFrom;
+    /// keccak256(dealId, shard index, node) -> the node's decline, slash and last pass on it.
+    mapping(bytes32 => Excl) internal _excl;
     /// keccak256(dealId, epoch, slot, node) -> PASSED / FAILED / MISSED.
     mapping(bytes32 => uint8) internal _slot;
     mapping(address => uint256) public earned;
@@ -667,29 +690,50 @@ contract OnyxStorage {
         return keccak256(abi.encodePacked(dealId, e, slot, node));
     }
 
-    /// The first epoch `node` no longer holds shard `index` of the deal: the earlier of its
-    /// exclusion from that shard (a slash or a decline) and its decline of the whole deal
-    /// (`WHOLE_DEAL`); 0 when neither.
+    /// The first epoch `node` no longer holds shard `index` of the deal (0: it still does): the
+    /// earliest of its slash on the shard, its decline of the shard and its decline of the whole
+    /// deal (`WHOLE_DEAL`), each decline under notice when the node passed a check on this shard
+    /// in the `NOTICE_EPOCHS` epochs before the decline (ADR-0060 amendment 2 item 2). The window
+    /// is counted from the stored decline epoch, never from now (review STORAGE-S16-R6 M1), and
+    /// a slash still wins when it is earlier (M2).
     function exclusionFrom(uint64 dealId, uint32 index, bytes32 node) public view returns (uint64) {
-        uint64 a = _exclFrom[_exKey(dealId, index, node)];
-        uint64 b = _exclFrom[_exKey(dealId, WHOLE_DEAL, node)];
+        Excl memory x = _excl[_exKey(dealId, index, node)];
+        uint64 f = _earlier(x.slashFrom, _noticed(x.declineFrom, x.lastPass));
+        if (index != WHOLE_DEAL) {
+            uint64 w = _excl[_exKey(dealId, WHOLE_DEAL, node)].declineFrom;
+            f = _earlier(f, _noticed(w, x.lastPass));
+        }
+        return f;
+    }
+
+    /// A decline effective from `f` (0: none), one epoch later when the last pass `p` (0: none)
+    /// is at most `NOTICE_EPOCHS` before the decline's epoch `f - 1`.
+    function _noticed(uint64 f, uint64 p) private pure returns (uint64) {
+        if (f == 0) return 0;
+        return p != 0 && p + NOTICE_EPOCHS >= f - 1 ? f + 1 : f;
+    }
+
+    /// The earlier of two epochs, 0 meaning none.
+    function _earlier(uint64 a, uint64 b) private pure returns (uint64) {
         if (a == 0) return b;
         if (b == 0) return a;
         return a < b ? a : b;
     }
 
-    /// A node gives up one shard of a deal (or the whole deal, `WHOLE_DEAL`) from the next epoch
-    /// on, without a slash: for data it could not get (a publisher or replicas that withhold it,
-    /// THREATS STORAGE-16) or no longer wants to keep. A challenge already drawn in this epoch
-    /// still stands; the copy moves to the next node in the ranking.
+    /// A node gives up one shard of a deal (or the whole deal, `WHOLE_DEAL`) without a slash: for
+    /// data it could not get (a publisher or replicas that withhold it, THREATS STORAGE-16) or no
+    /// longer wants to keep. It is out from the next epoch, or the epoch after when it passed a
+    /// check on that shard recently (`exclusionFrom`; the `Declined` event carries the raw epoch).
+    /// A challenge already drawn in this epoch still stands; the copy moves to the next node in
+    /// the ranking. Refused when the node already declined or was slashed on that key.
     function decline(uint64 dealId, uint32 index, bytes32 node) external {
         if (_nodes[node].operator != msg.sender) revert NotOperator();
         if (dealId >= _deals.length) revert NoDeal();
         if (index != WHOLE_DEAL && index >= _deals[dealId].shardCount) revert BadParams();
-        bytes32 k = _exKey(dealId, index, node);
-        if (_exclFrom[k] != 0) revert AlreadyExcluded();
+        Excl storage x = _excl[_exKey(dealId, index, node)];
+        if (x.declineFrom != 0 || x.slashFrom != 0) revert AlreadyExcluded();
         uint64 from = currentEpoch() + 1;
-        _exclFrom[k] = from;
+        x.declineFrom = from;
         emit Declined(node, dealId, index, from);
     }
 
@@ -860,10 +904,13 @@ contract OnyxStorage {
             Node storage n = _nodes[node];
             n.misses = 0;
             earned[n.operator] += pay;
-            emit Answered(dealId, e, slot, node, true, pay);
+            // The last pass on the shard, for the decline notice (amendment 2 item 2).
+            Excl storage x = _excl[_exKey(dealId, index, node)];
+            if (x.lastPass != e) x.lastPass = e;
+            emit Answered(dealId, e, slot, node, index, true, pay);
         } else {
             _slot[k] = FAILED;
-            emit Answered(dealId, e, slot, node, false, 0);
+            emit Answered(dealId, e, slot, node, index, false, 0);
             _slash(node, dealId, e, slot, index, FAILED);
         }
     }
@@ -897,7 +944,8 @@ contract OnyxStorage {
     }
 
     /// Take `slashPpm` of the bond for the treasury, exclude the node from the shard from the
-    /// next epoch (its copy moves to the next node in the ranking), and jail the node after
+    /// next epoch (its copy moves to the next node in the ranking; no notice, and earlier than a
+    /// noticed decline, review STORAGE-S16-R6 M2), and jail the node after
     /// `maxMisses` in a row or when its bond falls below half of the bond it activated with or of
     /// `minBond`, whichever is larger (so a large bond is jailed after as few slashes as a small
     /// one, about 7 at 10%). Returns the amount taken.
@@ -910,9 +958,9 @@ contract OnyxStorage {
         n.bond -= uint128(amt);
         slashed += amt;
         n.misses += 1;
-        bytes32 xk = _exKey(dealId, index, id);
-        if (_exclFrom[xk] == 0) _exclFrom[xk] = currentEpoch() + 1;
-        emit Slashed(id, dealId, e, slot, index, amt, exclusionFrom(dealId, index, id), cause);
+        Excl storage x = _excl[_exKey(dealId, index, id)];
+        if (x.slashFrom == 0) x.slashFrom = currentEpoch() + 1;
+        emit Slashed(id, dealId, e, slot, index, amt, x.slashFrom, cause);
         uint256 ref = n.startBond > minBond ? n.startBond : minBond;
         if (
             (n.status == ACTIVE || n.status == EXITING)
