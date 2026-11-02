@@ -17,7 +17,7 @@
 //! onyx-storage decline       --node 0x… --deal N [--shard I]   # give up a shard (or the whole deal) from the next epoch, no slash
 //! onyx-storage close         --deal N                       # a deal past its end: the rest back to its payer
 //! onyx-storage sweep                                        # slashes to the treasury
-//! onyx-storage books                                        # every flow, and the conservation check
+//! onyx-storage books         [--replay yes]                 # every flow, and the conservation check (yes: also rebuilt from the events)
 //! onyx-storage epoch         [--epoch E]                    # who was asked for what, passed, failed, missed, paid, slashed
 //! onyx-storage read          --deal N --from K --to K       # rows from any replica, checked; fails over
 //! onyx-storage prove         --deal N --slot S --node 0x… --dir DIR   # answer calldata from the publisher's files (test tool)
@@ -355,9 +355,16 @@ async fn settle(o: &Opts) -> Res<()> {
 }
 
 async fn books(o: &Opts) -> Res<()> {
-    o.only(&[])?;
+    o.only(&["replay"])?;
+    let replay = match o.opt("replay") {
+        None | Some("no") => false,
+        Some("yes") => true,
+        Some(_) => return Err("--replay must be yes or no".into()),
+    };
     let c = chain(o)?;
-    let b = c.books().await?;
+    // One block for the books, the balance and (with --replay) the logs.
+    let at = c.block_number().await?;
+    let b = c.books_at(at).await?;
     let names = [
         "deposits",
         "bonds_in",
@@ -367,28 +374,65 @@ async fn books(o: &Opts) -> Res<()> {
         "bonds_out",
         "earnings_out",
         "swept",
+        "rewarded",
     ];
-    let mut v = json!({});
+    let mut v = json!({"block": at});
     for (n, x) in names.iter().zip(b) {
         v[*n] = json!(x.to_string());
     }
     let t = token(&c).await?;
+    // The balance and `conserved()` at the same block as the books, so a
+    // transaction in between cannot make them disagree (review STORAGE-S16-R4).
     let bal = abi::word_uint(
-        &c.call_to(
+        &c.call_to_at(
             &t,
             &abi::call("balanceOf(address)", &[abi::addr(&c.contract())]),
+            at,
         )
         .await?,
         0,
     )
     .map_err(|e| e.to_string())?;
-    let held = (b[0] - b[2] - b[4]) + (b[1] - b[3] - b[5]) + (b[2] - b[6]) + (b[3] - b[7]);
+    let books = onyx_storage::ledger::Books {
+        deposits: b[0],
+        bonds_in: b[1],
+        paid: b[2],
+        slashed: b[3],
+        refunded: b[4],
+        bonds_out: b[5],
+        earnings_out: b[6],
+        swept: b[7],
+        rewarded: b[8],
+        balance: bal,
+    };
+    let ok = books.conserved();
     v["balance"] = json!(bal.to_string());
-    v["held"] = json!(held.to_string());
-    v["conserved"] = json!(c.conserved().await? && bal == held);
+    v["held"] = json!(if ok {
+        (books.deal_held() + books.bonds_held() + books.earnings_held() + books.treasury_held())
+            .to_string()
+    } else {
+        "?".to_string()
+    });
+    let on_chain = abi::word_uint(
+        &c.call_to_at(&c.contract(), &abi::conserved(), at).await?,
+        0,
+    )
+    .map_err(|e| e.to_string())?
+        == 1;
+    v["conserved"] = json!(on_chain && ok);
+    if replay {
+        // The same totals rebuilt from the money events alone (ledger::replay).
+        let r = c.replay_books(at).await?;
+        // The events cannot see tokens sent outside every flow: those stay a
+        // surplus over the replayed balance.
+        v["replayed"] = json!(r.totals() == b && r.balance <= bal);
+    }
     println!("{v:#}");
     if v["conserved"] != json!(true) {
         return Err("the books do not balance".into());
+    }
+    if replay && v["replayed"] != json!(true) {
+        return Err("the books rebuilt from the events differ from books()".into());
     }
     Ok(())
 }
@@ -429,8 +473,9 @@ async fn prove(o: &Opts) -> Res<()> {
     let root = m.shards.get(index as usize).ok_or("no such shard")?.root;
     let path = dir.join("shards").join(format!("{}.bin", root.to_hex()));
     let file = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let p =
-        onyx_storage::challenge::answer(&m, &file, &seed, d, slot).map_err(|e| e.to_string())?;
+    // The row drawn for this node (each holder is asked for its own row).
+    let p = onyx_storage::challenge::answer(&m, &file, &seed, d, slot, &me)
+        .map_err(|e| e.to_string())?;
     let data = abi::answer(d, e, slot, &me, &s.list_at(e.saturating_sub(1)), &p);
     // Where the row's bytes start in the calldata (word 7 holds the row's offset).
     let off = abi::word_u64(&data[4..], 7).map_err(|e| e.to_string())? as usize;

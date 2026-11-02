@@ -11,6 +11,6 @@ Latest: 2026-11-02: the first storage run on Base Sepolia finished (612 of 612 c
 - AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
 - Testnet only: tONYX and test USDC have no value; token economics are not final
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
-- Owner: test ETH from a faucet before the next storage run (deployer 0.0001 left, nodes 0.00004 to 0.00012)
+- Test ETH: enough for the storage redeploy and a short run (deployer 0.0001, nodes 0.00004 to 0.00012, gas 0.006 gwei on 2026-11-02); a long run needs a faucet, which needs a sign-up
 - Correction markets (CL7): contract live on Base Sepolia and paired with Treasury deposits; the recheck runner passes end to end locally; no market yet
 - Next: close three storage holes found by review (S16: a row per holder, a registration fee, a reward for reporting misses), open each installer on a real machine (S20), outside observers, the first correction market, a security audit

@@ -18,6 +18,11 @@ contract OnyxStorageTest is StorageFixture {
         d = st.createDeal(header, payload, 3, 4, "http://127.0.0.1:2/");
     }
 
+    /// The registration fee of a bond (2%, rounded down).
+    function _fee(uint256 bond) internal pure returns (uint256) {
+        return bond * 20_000 / 1e6;
+    }
+
     // ---------------------------------------------------------------- registration
 
     function test_registerTakesBondAndIdComesFromTheRegistrationBlock() public {
@@ -54,7 +59,8 @@ contract OnyxStorageTest is StorageFixture {
         st.activate(idx);
         uint256 b = tok.balanceOf(op);
         st.cancelRegistration(idx);
-        assertEq(tok.balanceOf(op) - b, MIN_BOND);
+        // The bond less the registration fee (ADR-0060 amendment 1 item 2).
+        assertEq(tok.balanceOf(op) - b, MIN_BOND - _fee(MIN_BOND));
         vm.stopPrank();
         vm.prank(address(0xDEAD));
         vm.expectRevert(OnyxStorage.NotOperator.selector);
@@ -268,7 +274,7 @@ contract OnyxStorageTest is StorageFixture {
         (uint64 d, uint64 e, bytes32[] memory list) = _start();
         (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, 0);
+            _proof(st.seedOf(e), d, 0, hs[0]);
         // Only the node's operator answers.
         vm.expectRevert(OnyxStorage.NotOperator.selector);
         st.answer(d, e, 0, hs[0], list, entry, es, row, rs);
@@ -308,15 +314,18 @@ contract OnyxStorageTest is StorageFixture {
         (uint64 d, uint64 e, bytes32[] memory list) = _start();
         (uint32 idx, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, 0);
+            _proof(st.seedOf(e), d, 0, hs[1]);
         row[0] = bytes1(uint8(row[0]) ^ 1);
         uint256 bond = _bond(hs[1]);
+        uint256 slashedBefore = st.slashed();
         vm.prank(_opOf(hs[1]));
         assertFalse(st.answer(d, e, 0, hs[1], list, entry, es, row, rs));
         assertEq(st.slotStatus(d, e, 0, hs[1]), st.FAILED());
         assertEq(bond - _bond(hs[1]), bond * SLASH_PPM / 1e6);
         assertEq(st.earned(_opOf(hs[1])), 0);
-        assertEq(st.slashed(), bond * SLASH_PPM / 1e6);
+        assertEq(st.slashed() - slashedBefore, bond * SLASH_PPM / 1e6);
+        // A failed answer has no reporter: nothing is rewarded.
+        assertEq(st.rewarded(), 0);
         // Excluded from that shard from the next epoch: not asked again while its replacement
         // fetches, and the replacement holds it from the epoch after.
         assertEq(st.exclusionFrom(d, idx, hs[1]), e + 1);
@@ -326,9 +335,7 @@ contract OnyxStorageTest is StorageFixture {
     function test_wrongShardOrWrongRowFails() public {
         (uint64 d, uint64 e, bytes32[] memory list) = _start();
         (uint32 idx, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
-        uint256 r = uint256(
-            keccak256(abi.encodePacked("onyx-storage-row-v1", st.seedOf(e), d, uint32(0)))
-        ) % 2;
+        uint256 r = _rowOf(st.seedOf(e), d, 0, hs[0]);
         // The other row of the right shard, with its own (valid) path: wrong index.
         bytes memory otherRow = rows[idx][1 - r];
         vm.prank(_opOf(hs[0]));
@@ -492,7 +499,7 @@ contract OnyxStorageTest is StorageFixture {
         uint256 b = tok.balanceOf(op);
         vm.prank(op);
         st.withdrawBond(id);
-        assertEq(tok.balanceOf(op) - b, MIN_BOND);
+        assertEq(tok.balanceOf(op) - b, MIN_BOND - _fee(MIN_BOND));
         vm.prank(op);
         vm.expectRevert(OnyxStorage.NotActive.selector);
         st.withdrawBond(id);
@@ -513,12 +520,15 @@ contract OnyxStorageTest is StorageFixture {
         assertEq(st.committedGiB(), 0);
         vm.expectRevert(OnyxStorage.Closed.selector);
         st.closeDeal(d);
-        // Withdrawals and the sweep empty every account but the bonds.
+        // Withdrawals and the sweep (the five registration fees) empty every account but the
+        // bonds; a second sweep has nothing to send.
         vm.prank(_opOf(hs[0]));
         st.withdrawEarnings();
+        st.sweepTreasury();
+        assertEq(tok.balanceOf(treasury), 5 * _fee(MIN_BOND));
         vm.expectRevert(OnyxStorage.BadAmount.selector);
         st.sweepTreasury();
-        assertEq(tok.balanceOf(address(st)), 5 * uint256(MIN_BOND));
+        assertEq(tok.balanceOf(address(st)), 5 * (uint256(MIN_BOND) - _fee(MIN_BOND)));
         assertTrue(st.conserved());
     }
 
@@ -527,7 +537,9 @@ contract OnyxStorageTest is StorageFixture {
         (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         _toEpoch(e + 1, 0);
         st.settleMissed(d, e, 0, hs[0], list);
-        uint256 amt = st.slashed();
+        // Slashes and registration fees, less this reporter's reward (in its `earned`).
+        uint256 amt = st.slashed() - st.rewarded();
+        assertGt(st.rewarded(), 0);
         vm.prank(address(0x4444)); // anyone triggers it; only the treasury receives
         st.sweepTreasury();
         assertEq(tok.balanceOf(treasury), amt);
@@ -586,6 +598,32 @@ contract OnyxStorageTest is StorageFixture {
             BOND_PER_GIB,
             MIN_BOND,
             1_000_001,
+            K,
+            MAX_MISSES
+        );
+        // A minimum bond whose 2% fee would round to nothing (review STORAGE-S16-R4).
+        vm.expectRevert(OnyxStorage.BadParams.selector);
+        new OnyxStorage(
+            IStorageToken(address(tok)),
+            book,
+            treasury,
+            EPOCH,
+            PRICE,
+            BOND_PER_GIB,
+            49,
+            SLASH_PPM,
+            K,
+            MAX_MISSES
+        );
+        new OnyxStorage(
+            IStorageToken(address(tok)),
+            book,
+            treasury,
+            EPOCH,
+            PRICE,
+            BOND_PER_GIB,
+            50,
+            SLASH_PPM,
             K,
             MAX_MISSES
         );
@@ -698,6 +736,169 @@ contract OnyxStorageTest is StorageFixture {
         big.register(2, "http://x/");
     }
 
+    // ---------------------------------------------------------------- amendment 1 (ROADMAP S16)
+
+    /// THREATS STORAGE-S16-R2-2: every holder of a challenged shard is asked for its own row, so
+    /// one holder's answer (public in calldata) answers for no other holder. With many rows the
+    /// holders' rows differ; in the two-row fixture, a holder that sends another holder's valid
+    /// answer fails and is slashed.
+    function test_eachHolderIsAskedForItsOwnRow() public {
+        (uint64 d, uint64 e, bytes32[] memory list) = _start();
+        bytes32 s = st.seedOf(e);
+        (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
+        assertEq(hs.length, 3);
+        // A shard of 2^32 rows: three different rows.
+        uint64 many = 1 << 32;
+        uint64 r0 = OnyxStorageLib.slotRow(s, d, 0, hs[0], many);
+        uint64 r1 = OnyxStorageLib.slotRow(s, d, 0, hs[1], many);
+        uint64 r2 = OnyxStorageLib.slotRow(s, d, 0, hs[2], many);
+        assertTrue(r0 != r1 && r1 != r2 && r0 != r2, "holders share a row");
+        // Two holders of one slot asked for different rows of the two-row shard.
+        bytes32 a;
+        bytes32 b;
+        uint32 slot;
+        for (slot = 0; slot < K && a == bytes32(0); slot++) {
+            (, hs) = st.challengedHolders(d, e, slot, list);
+            for (uint256 i = 1; i < hs.length && a == bytes32(0); i++) {
+                if (_rowOf(s, d, slot, hs[0]) != _rowOf(s, d, slot, hs[i])) {
+                    (a, b) = (hs[0], hs[i]);
+                }
+            }
+        }
+        assertTrue(a != bytes32(0), "every holder drew the same row");
+        slot--;
+        (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
+            _proof(s, d, slot, a);
+        // `b` copies `a`'s answer (before or after `a` sends it): refused and slashed.
+        uint256 bond = _bond(b);
+        vm.prank(_opOf(b));
+        assertFalse(st.answer(d, e, slot, b, list, entry, es, row, rs));
+        assertEq(st.slotStatus(d, e, slot, b), st.FAILED());
+        assertEq(bond - _bond(b), bond / 10);
+        // The same answer is valid for `a`.
+        vm.prank(_opOf(a));
+        assertTrue(st.answer(d, e, slot, a, list, entry, es, row, rs));
+        assertTrue(st.conserved());
+    }
+
+    /// THREATS STORAGE-S16-R2-1, STORAGE-3: `register` keeps 2% of the bond for the treasury at
+    /// once; `cancelRegistration` returns the rest, so each try at grinding a node id costs a fee.
+    function test_registrationFeeIsKeptAndCancelRefundsTheRest() public {
+        address op = address(0xC0E0);
+        tok.mint(op, 1e22);
+        vm.startPrank(op);
+        tok.approve(address(st), type(uint256).max);
+        uint256 bond = st.bondFor(5000);
+        uint256 fee = _fee(bond);
+        assertEq(fee, bond / 50);
+        uint256 b0 = tok.balanceOf(op);
+        uint256 slashed0 = st.slashed();
+        uint256 in0 = st.bondsIn();
+        vm.expectEmit(address(st));
+        emit OnyxStorage.RegistrationFee(uint64(st.registrationCount()), op, fee);
+        uint64 idx = st.register(5000, "http://127.0.0.1:3/");
+        // The whole bond comes in; the fee is at once the treasury's.
+        assertEq(b0 - tok.balanceOf(op), bond);
+        assertEq(st.bondsIn() - in0, bond);
+        assertEq(st.slashed() - slashed0, fee);
+        assertTrue(st.conserved());
+        vm.roll(vm.getBlockNumber() + 257);
+        st.cancelRegistration(idx);
+        vm.stopPrank();
+        assertEq(b0 - tok.balanceOf(op), fee, "the fee is never returned");
+        assertTrue(st.conserved());
+        // The sweep sends every fee to the treasury (the five nodes' and this one).
+        st.sweepTreasury();
+        assertEq(tok.balanceOf(treasury), 5 * _fee(MIN_BOND) + fee);
+        assertTrue(st.conserved());
+    }
+
+    /// The bond a node activates with, and returns on exit, is the bond less the fee; the books
+    /// balance after each step (register, cancel, activate, exit, withdraw, sweep).
+    function test_conservedThroughRegisterCancelActivateExitWithdraw() public {
+        address op = address(0xC0E1);
+        tok.mint(op, 1e22);
+        vm.startPrank(op);
+        tok.approve(address(st), type(uint256).max);
+        uint64 lapsed = st.register(100, "http://127.0.0.1:4/");
+        assertTrue(st.conserved());
+        vm.roll(vm.getBlockNumber() + 1);
+        uint64 idx = st.register(100, "http://127.0.0.1:4/");
+        assertTrue(st.conserved());
+        vm.roll(vm.getBlockNumber() + 1);
+        bytes32 id = st.activate(idx);
+        assertTrue(st.conserved());
+        assertEq(_bond(id), MIN_BOND - _fee(MIN_BOND));
+        vm.roll(vm.getBlockNumber() + 257);
+        st.cancelRegistration(lapsed);
+        assertTrue(st.conserved());
+        st.requestExit(id);
+        assertTrue(st.conserved());
+        (,,,,, uint64 removedFrom,,) = st.nodeInfo(id);
+        _toEpoch(removedFrom + st.SETTLE_EPOCHS() + 1, 0);
+        uint256 b = tok.balanceOf(op);
+        st.withdrawBond(id);
+        vm.stopPrank();
+        assertEq(tok.balanceOf(op) - b, MIN_BOND - _fee(MIN_BOND));
+        assertTrue(st.conserved());
+        st.sweepTreasury();
+        assertTrue(st.conserved());
+        // Every token left is a bond of the five nodes.
+        assertEq(tok.balanceOf(address(st)), 5 * (uint256(MIN_BOND) - _fee(MIN_BOND)));
+        (,,,,,,,, uint256 rewarded_) = st.books();
+        assertEq(rewarded_, 0);
+    }
+
+    /// Review STORAGE-S16-R4: tokens sent to the contract outside every flow do not make the
+    /// books read as broken; the start bond and the row rule are readable.
+    function test_aDirectTransferLeavesTheBooksBalanced() public {
+        assertTrue(st.conserved());
+        tok.mint(address(this), 1);
+        tok.transfer(address(st), 1);
+        assertTrue(st.conserved());
+        assertEq(st.startBondOf(ids[0]), MIN_BOND - _fee(MIN_BOND));
+        assertEq(st.startBondOf(bytes32(uint256(1))), 0);
+        assertEq(st.ROW_VERSION(), 2);
+    }
+
+    /// THREATS STORAGE-S16-R2-3: whoever settles a miss earns 10% of the slash, withdrawn like
+    /// earnings; the node's own operator earns nothing for its own miss (the treasury keeps it).
+    function test_aReporterEarnsTenPercentOfAMissedSlash() public {
+        (uint64 d, uint64 e, bytes32[] memory list) = _start();
+        (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
+        _toEpoch(e + 1, 0);
+        address reporter = address(0x1234);
+        uint256 slash = _bond(hs[0]) * SLASH_PPM / 1e6;
+        vm.expectEmit(address(st));
+        emit OnyxStorage.MissReward(hs[0], reporter, slash / 10);
+        vm.prank(reporter);
+        st.settleMissed(d, e, 0, hs[0], list);
+        assertEq(st.earned(reporter), slash / 10);
+        assertEq(st.rewarded(), slash / 10);
+        assertTrue(st.conserved());
+        // The node's own operator settles its own miss: slashed, and no reward.
+        address self = _opOf(hs[1]);
+        uint256 selfEarned = st.earned(self);
+        uint256 bond = _bond(hs[1]);
+        vm.prank(self);
+        st.settleMissed(d, e, 0, hs[1], list);
+        assertEq(bond - _bond(hs[1]), bond / 10);
+        assertEq(st.earned(self), selfEarned);
+        assertEq(st.rewarded(), slash / 10);
+        // The reporter withdraws; the sweep sends the rest; the books balance.
+        vm.prank(reporter);
+        st.withdrawEarnings();
+        assertEq(tok.balanceOf(reporter), slash / 10);
+        assertTrue(st.conserved());
+        st.sweepTreasury();
+        assertEq(tok.balanceOf(treasury), st.slashed() - st.rewarded());
+        (,,, uint256 slashed_,,, uint256 earningsOut_, uint256 swept_, uint256 rewarded_) =
+            st.books();
+        assertEq(swept_ + rewarded_, slashed_);
+        assertEq(earningsOut_, rewarded_);
+        assertTrue(st.conserved());
+    }
+
     // ---------------------------------------------------------------- scale
 
     /// The gas of one answer at the node cap (128 nodes in the list, 4 KiB of calldata for it),
@@ -712,7 +913,7 @@ contract OnyxStorageTest is StorageFixture {
         assertEq(list.length, 128);
         (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, 0);
+            _proof(st.seedOf(e), d, 0, hs[0]);
         vm.prank(_opOf(hs[0]));
         uint256 g = gasleft();
         assertTrue(st.answer(d, e, 0, hs[0], list, entry, es, row, rs));
@@ -746,7 +947,7 @@ contract OnyxStorageTest is StorageFixture {
         (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         assertEq(hs.length, 3);
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, 0);
+            _proof(st.seedOf(e), d, 0, hs[0]);
         vm.prank(_opOf(hs[0]));
         uint256 g = gasleft();
         assertTrue(st.answer(d, e, 0, hs[0], list, entry, es, row, rs));
@@ -784,10 +985,84 @@ contract OnyxStorageTest is StorageFixture {
         (uint64 d, uint64 e, bytes32[] memory list) = _start();
         (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, 0);
+            _proof(st.seedOf(e), d, 0, hs[0]);
         at = bound(at, 0, row.length - 1);
         row[at] = bytes1(uint8(row[at]) ^ flip);
         vm.prank(_opOf(hs[0]));
         assertFalse(st.answer(d, e, 0, hs[0], list, entry, es, row, rs));
+    }
+}
+
+/// THREATS STORAGE-S16-R3-10, ADR-0060 amendment 1 item 4: a node is jailed when its bond falls
+/// below half of the bond it activated with (or of `minBond`, whichever is larger), so a node bonded
+/// far above the minimum is jailed after about as many slashes as one at the minimum. `maxMisses`
+/// is raised here so that only the bond rule jails.
+contract OnyxStorageJailTest is StorageFixture {
+    bytes32 internal big;
+
+    function setUp() public {
+        maxMissesParam = 1000;
+        _deploy();
+        for (uint256 i = 0; i < 5; i++) {
+            _addNode(i, 100);
+        }
+        // 100 times the minimum bond (100,000 GiB at 0.001 tONYX per GiB).
+        big = _addNode(5, uint64(100 * uint256(MIN_BOND) / BOND_PER_GIB));
+        vm.startPrank(publisher);
+        for (uint256 i = 0; i < 8; i++) {
+            st.createDeal(header, payload, 3, 10, "");
+        }
+        vm.stopPrank();
+    }
+
+    /// Settle misses of `node` (never answered) epoch after epoch until it is jailed; the number
+    /// of slashes it took.
+    function _slashUntilJailed(bytes32 node) internal returns (uint256 slashes) {
+        (,,,,,,, uint64 e,,,,) = st.dealInfo(0);
+        bytes32[] memory list = _list();
+        uint256 deals = st.dealCount();
+        _seed(e);
+        for (uint64 ek = e; ek < e + 8; ek++) {
+            uint64[] memory ds = new uint64[](deals * K);
+            uint32[] memory slots = new uint32[](deals * K);
+            uint256 n;
+            for (uint64 d = 0; d < deals; d++) {
+                for (uint32 slot = 0; slot < K; slot++) {
+                    (, bytes32[] memory hs) = st.challengedHolders(d, ek, slot, list);
+                    for (uint256 i = 0; i < hs.length; i++) {
+                        if (hs[i] != node) continue;
+                        ds[n] = d;
+                        slots[n] = slot;
+                        n++;
+                    }
+                }
+            }
+            _seed(ek + 1);
+            for (uint256 i = 0; i < n; i++) {
+                st.settleMissed(ds[i], ek, slots[i], node, list);
+                slashes++;
+                (, uint8 status,,,,,,) = st.nodeInfo(node);
+                if (status == st.JAILED()) return slashes;
+            }
+        }
+        revert("never jailed");
+    }
+
+    /// 98 tONYX after the fee; jailed below 49: 98 × 0.9^6 is about 52.1 and 98 × 0.9^7 about
+    /// 46.9, so the 7th slash jails it. Under the old rule (half of `minBond`) it took 51.
+    function test_aLargeBondIsJailedAfterSevenSlashes() public {
+        uint256 start = _bond(big);
+        assertEq(start, 100 * uint256(MIN_BOND) * 98 / 100);
+        assertEq(_slashUntilJailed(big), 7);
+        assertLt(_bond(big), start / 2);
+        assertTrue(st.conserved());
+    }
+
+    /// A node at the minimum (0.98 tONYX after the fee) is still jailed below half of `minBond`:
+    /// 0.98 × 0.9^7 is about 0.469, also the 7th slash.
+    function test_aMinimumBondIsJailedAfterSevenSlashesToo() public {
+        assertEq(_slashUntilJailed(ids[0]), 7);
+        assertLt(_bond(ids[0]), uint256(MIN_BOND) / 2);
+        assertTrue(st.conserved());
     }
 }

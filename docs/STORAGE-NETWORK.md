@@ -110,8 +110,9 @@ know it is the real row. And all of this without trusting one company's server.
   from the hash of the block its registration landed in, which nobody knows when they send it. A
   deal's placement salt comes from the block before the deal. A publisher cannot pick its
   placement. An operator can: it sees its id one block after
-  registering, activates only an id it likes and cancels the rest with the whole bond back
-  (ADR-0062 finding 7). ROADMAP S16 makes each try cost 2% of the bond (ADR-0060 amendment 1).
+  registering, activates only an id it likes and cancels the rest (ADR-0062 finding 7). In v0 it
+  gets the whole bond back. The next contract (ADR-0060 amendment 1, built, not deployed) keeps 2%
+  of every bond at registration, so each try costs money.
 - **One epoch of notice.** Checks in an epoch use the node list of the epoch before, so a node
   always has at least one full epoch to fetch a shard before it can be asked for it.
 
@@ -119,26 +120,34 @@ know it is the real row. And all of this without trusting one company's server.
 
 1. At the start of each epoch, anyone records a seed: the hash of that epoch's first block (it
    cannot be known before).
-2. For each deal, the seed picks 2 slots. Each slot picks one shard and one row in it.
-3. Each of that shard's holders sends the row, the shard's line in the manifest, and the two hash
-   paths (row to shard fingerprint, shard line to manifest fingerprint).
+2. For each deal, the seed picks 2 slots. Each slot picks one shard, and in it one row for each of
+   that shard's holders: the row also depends on the holder's id, so holders are asked for
+   different rows (next contract, ADR-0060 amendment 1; in v0 all holders get the same row).
+3. Each of that shard's holders sends its row, the shard's line in the manifest, and the two hash
+   paths (row to shard fingerprint, shard line to manifest fingerprint). Another holder's answer,
+   public once sent, does not answer for it.
 4. The contract recomputes the hashes. It needs only the fingerprint it already holds.
 5. Right: the node earns its share of the deal's pay for the epoch. Wrong: 10% of its bond goes to
-   the treasury at once. No answer by the epoch's end: anyone can report the miss, same penalty.
+   the treasury at once. No answer by the epoch's end: anyone can report the miss, same penalty;
+   in the next contract the reporter gets 10% of that penalty (not the node's own operator).
 6. A node that fails a shard is taken off that shard from the next epoch; the next node in line
    takes it over (repair). Three failures in a row, or a bond below half the minimum: the node is
-   jailed and all its shards move.
+   jailed and all its shards move. In the next contract, half of the bond the node started with
+   (if that is more than the minimum): about 7 penalties jail any node, whatever its bond.
 
 **What a passed check shows (ADR-0062).** The node's operator sent a correct row in that epoch,
-from any source. It does not show that the node keeps its own copy. Today every holder of the
-shard is asked for the same row, so after the first answer the others can copy it from the chain;
-all R holders may keep nothing while some source serves rows. The data survives while one holder
-or the publisher keeps it and stays reachable until a new holder copies it. A shard costs a
-holder at most one slash (it is then taken off the shard), and giving a shard up (`decline`) is
-free. ROADMAP S16 closes the cheap holes: a different row for each holder, a fee on every
+from any source. It does not show that the node keeps its own copy. In v0 (the contract live on
+Base Sepolia) every holder of the shard is asked for the same row, so after the first answer the
+others can copy it from the chain; all R holders may keep nothing while some source serves rows.
+The data survives while one holder or the publisher keeps it and stays reachable until a new holder
+copies it. A shard costs a holder at most one slash (it is then taken off the shard), and giving a
+shard up (`decline`) is free. ROADMAP S16 closes the cheap holes, built and tested in the next
+contract, not deployed yet (ADR-0060 amendment 1): a different row for each holder, a fee on every
 registration so grinding ids costs money, 10% of each reported slash for the reporter, and jail
-below half of a node's own bond. Sealed replicas, which would
-prove separate disk copies, are not planned before S17 (ADR-0062).
+below half of a node's own bond. What stays: a holder can still fetch its own row from any source
+when asked, and a shard of very few rows gives holders the same row by chance (1 row: always);
+answered rows stay in calldata, so over many epochs a small shard becomes public on chain. Sealed
+replicas, which would prove separate disk copies, are not planned before S17 (ADR-0062).
 
 ## 7. Reads
 
@@ -174,15 +183,18 @@ prove separate disk copies, are not planned before S17 (ADR-0062).
 |---|---|---|---|
 | Deposit | Publisher | Contract | When the deal is made: price × billed GiB × R × epochs (billed GiB: the bytes, or 8 MiB per shard if that is more) |
 | Pay | Contract | Node that answered right | Each passed check: the epoch's pay ÷ (2 slots × R) |
+| Registration fee (next contract) | Node's bond | Treasury | At registration: 2% of the bond, never returned, even when the registration is cancelled |
 | Slash | Node's bond | Treasury | Each wrong or missed answer: 10% of the bond |
+| Reporter's reward (next contract) | A missed answer's slash | Whoever reported the miss | 10% of that slash, withdrawn like earnings; nothing when the node's own operator address reports it (an operator that reports from a second address gets the 10% back, so a miss costs it 9%) |
 | Refund | Contract | Publisher | When the deal ends: what was not paid out (missed checks, rounding) |
-| Bond back | Contract | Node operator | Two epochs after leaving |
+| Bond back | Contract | Node operator | Two epochs after leaving, or when a registration is cancelled (less the fee) |
 
 - Prepaid: a publisher who does not pay gets nothing placed.
-- No owner, no admin key, no way to move funds except the five flows above.
+- No owner, no admin key, no way to move funds except the flows above.
 - **Conservation, checked on chain:** tokens held = deposits not yet paid or refunded + bonds +
-  earnings not withdrawn + slashes not yet sent to the treasury. A test suite runs this after
-  random sequences of every action; the demo checks it at the end.
+  earnings and rewards not withdrawn + slashes and fees not yet sent to the treasury. A test suite
+  runs this after random sequences of every action; the demo checks it at the end and, with
+  `onyx-storage books --replay yes`, rebuilds the same totals from the contract's events.
 - Every division rounds down; the leftover stays in the deal and goes back to the publisher.
 
 ## 10. Scaling: what 100 TB and 500 TB need
@@ -268,7 +280,7 @@ Formulas:
 |---|---|---|
 | v0 | Replicas (R = 3), rendezvous placement, on-chain row proofs, pay, slash, repair, reads with fail-over, bonded nodes, conservation on chain | **Built and tested on a local chain** |
 | v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4); **run finished 2026-11-02**: 612 of 612 challenges passed over 34 epochs, nothing slashed, deals closed, books balanced |
-| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1) | Next (ROADMAP S16) |
+| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1) | Built and tested on a local chain (2026-11-02); not deployed: the Base Sepolia contract keeps v0 (ROADMAP S16) |
 | Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch only when asked. Compared and not built: every sound design is too slow, needs seal units v0 does not have, or needs one key holder for every repair (ADR-0062). One copy per operator address was tried and withdrawn (THREATS STORAGE-S16-R1) | Later, after S17 (ROADMAP S21) |
 | Erasure coding | Split each shard into k-of-n pieces (for example 10 of 16) instead of 3 full copies: about half the disk for more safety; each holder keeps a different piece, so one operator saves disk only with more than k pieces of a stripe (the fix for STORAGE-4, ADR-0062 finding 6); aggregated proofs (one answer per node per epoch); placement weighted by declared size | Later (ROADMAP S17) |
 | Cold archive tier | Old, rarely read data kept on an outside storage network, with Onyx keeping only the fingerprints and a fetch path | Later, owner's choice of network (ROADMAP S18) |
@@ -282,8 +294,8 @@ Formulas:
 
 | Part | Status | Evidence |
 |---|---|---|
-| Placement, proofs, repair, epoch accounting (`crates/onyx-storage`) | Done | 23 Rust tests, shared vectors `fixtures/storage/vectors.json` |
-| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 32 unit and fuzz tests, 3 invariants over 12 actions (decline included), 6 vector tests, a heap-order fuzz test, deploy script test; 21,157 bytes (limit 24,576; 2026-11-02, with the heap) |
+| Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 27 Rust tests, shared vectors `fixtures/storage/vectors.json` |
+| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 39 unit and fuzz tests, 4 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 7 vector tests, a heap-order fuzz test, deploy script test; 21,700 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendment 1) |
 | Storage-node mode in onyx-node (`ONYX_STORAGE_*`) | Done (local) | `onyx_api::storage` tests: fetch only placed shards, refuse forged bytes, answer with proofs the contract accepts |
 | Client read with fail-over | Done (local) | Test: down, missing and forging replicas skipped; demo: one node killed |
 | Operator tool `onyx-storage` | Done | register, status, deal, epoch, settle, withdraw, exit, books, read |

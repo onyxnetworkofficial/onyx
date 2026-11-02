@@ -23,7 +23,7 @@ use onyx_storage::placement::{challenged, holders_at, Exclusions, Jailed, WHOLE_
 use onyx_storage::repair::DealPlace;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -159,6 +159,23 @@ fn ok_word(r: Result<u128, abi::AbiError>) -> Result<u128, String> {
     r.map_err(|e| e.to_string())
 }
 
+/// The challenged-row rule this node draws (`OnyxStorage.ROW_VERSION`).
+pub const ROW_VERSION: u8 = 2;
+
+/// `books()`'s nine words. A contract from before ADR-0060 amendment 1 (the
+/// S15 deployment) returns eight: no rewards, so `rewarded` is 0.
+fn decode_books(d: &[u8]) -> Result<[u128; 9], String> {
+    let n = match d.len() {
+        256 => 8,
+        _ => 9,
+    };
+    let mut out = [0u128; 9];
+    for (i, o) in out.iter_mut().enumerate().take(n) {
+        *o = ok_word(abi::word_uint(d, i))?;
+    }
+    Ok(out)
+}
+
 impl StorageChain {
     /// A reader of `contract`, scanning logs from `from_block` (its deploy block).
     pub fn new(rpc: Arc<dyn JsonRpc>, contract: [u8; 20], from_block: u64) -> Self {
@@ -202,6 +219,23 @@ impl StorageChain {
             .rpc_call(
                 "eth_call",
                 json!([{"to": hex0x(to), "data": hex0x(data)}, "latest"]),
+            )
+            .await?;
+        hexb(&r)
+    }
+
+    /// `eth_call` to `to` (this contract or the token) at block `block`, so
+    /// several reads describe the same state.
+    pub async fn call_to_at(
+        &self,
+        to: &[u8; 20],
+        data: &[u8],
+        block: u64,
+    ) -> Result<Vec<u8>, String> {
+        let r = self
+            .rpc_call(
+                "eth_call",
+                json!([{"to": hex0x(to), "data": hex0x(data)}, format!("0x{block:x}")]),
             )
             .await?;
         hexb(&r)
@@ -269,15 +303,63 @@ impl StorageChain {
         Ok(ok_word(abi::word_uint(&self.call(&abi::conserved()).await?, 0))? == 1)
     }
 
-    /// `books()`: deposits, bonds in, paid, slashed, refunded, bonds out,
-    /// earnings out, swept.
-    pub async fn books(&self) -> Result<[u128; 8], String> {
-        let d = self.call(&abi::books()).await?;
-        let mut out = [0u128; 8];
-        for (i, o) in out.iter_mut().enumerate() {
-            *o = ok_word(abi::word_uint(&d, i))?;
+    /// `books()`: deposits, bonds in, paid, slashed (fees included),
+    /// refunded, bonds out, earnings out, swept, rewarded (ADR-0060
+    /// amendment 1), at `latest`.
+    pub async fn books(&self) -> Result<[u128; 9], String> {
+        decode_books(&self.call(&abi::books()).await?)
+    }
+
+    /// `books()` at block `block` (to compare with the logs up to it).
+    pub async fn books_at(&self, block: u64) -> Result<[u128; 9], String> {
+        let r = self
+            .rpc_call(
+                "eth_call",
+                json!([{"to": hex0x(&self.contract), "data": hex0x(&abi::books())},
+                       format!("0x{block:x}")]),
+            )
+            .await?;
+        decode_books(&hexb(&r)?)
+    }
+
+    /// The books rebuilt from the contract's money events from its deploy
+    /// block to `to` (`onyx_storage::ledger::replay`; one `eth_getLogs` call
+    /// per [`LOG_RANGE`] blocks, so for a local chain or a short history).
+    pub async fn replay_books(&self, to: u64) -> Result<onyx_storage::ledger::Books, String> {
+        let logs = self
+            .logs_range(&abi::events::MONEY, self.from_block, to)
+            .await?;
+        onyx_storage::ledger::replay(
+            logs.iter()
+                .map(|l| (l.topics.as_slice(), l.data.as_slice())),
+        )
+        .map_err(|e| e.to_string())
+    }
+
+    /// Refuse a contract whose challenged-row rule is not this node's: an
+    /// S15 contract draws the row without the node id (rows v1) and has no
+    /// `ROW_VERSION()`, so every answer this node builds (rows v2) would fail
+    /// there. A transport error is reported as one (the next tick asks
+    /// again), not as an older contract (review STORAGE-S16-R4).
+    pub async fn check_version(&self) -> Result<(), String> {
+        let d = match self.call(&abi::row_version()).await {
+            Ok(d) => d,
+            Err(e) if e.contains("revert") => {
+                return Err(format!(
+                    "this node draws rows v{ROW_VERSION} (ADR-0060 amendment 1) and the \
+                     contract has no ROW_VERSION(), so it is older: exit its node, then \
+                     run the node release that matches it ({e})"
+                ))
+            }
+            Err(e) => return Err(format!("could not read the contract's ROW_VERSION(): {e}")),
+        };
+        match ok_word(abi::word_uint(&d, 0))? {
+            v if v == u128::from(ROW_VERSION) => Ok(()),
+            v => Err(format!(
+                "the contract checks rows v{v}, this node draws rows v{ROW_VERSION}: run the \
+                 node release that matches it"
+            )),
         }
-        Ok(out)
     }
 
     /// `params()`.
@@ -1008,6 +1090,8 @@ pub struct StorageNode {
     passes: AtomicUsize,
     /// The last placement computed and its inputs.
     placed: Mutex<Option<Placed>>,
+    /// The contract's version was checked (`StorageChain::check_version`).
+    version_ok: AtomicBool,
 }
 
 impl StorageNode {
@@ -1030,6 +1114,7 @@ impl StorageNode {
             failures: Mutex::new(BTreeMap::new()),
             passes: AtomicUsize::new(0),
             placed: Mutex::new(None),
+            version_ok: AtomicBool::new(false),
         }
     }
 
@@ -1142,6 +1227,12 @@ impl StorageNode {
     /// STORAGE-R1-2), settle others' misses (keeper), then fetch what is
     /// placed here within [`FETCH_BUDGET`].
     pub async fn tick(&self) -> Result<TickReport, String> {
+        // Nothing is sent to a contract of another version (no seed, fetch,
+        // answer, settle or decline): it would read our answers as wrong.
+        if !self.version_ok.load(Ordering::Relaxed) {
+            self.chain.check_version().await?;
+            self.version_ok.store(true, Ordering::Relaxed);
+        }
         let s = self.chain.snapshot().await?;
         let mut rep = TickReport {
             epoch: s.epoch,
@@ -1403,7 +1494,8 @@ impl StorageNode {
                     rep.unanswerable += 1;
                     continue;
                 };
-                let p = match challenge::answer(&m, &file, seed, d.id, slot) {
+                // The row drawn for this node (each holder proves its own row).
+                let p = match challenge::answer(&m, &file, seed, d.id, slot, &me) {
                     Ok(p) => p,
                     Err(err) => {
                         eprintln!(
@@ -1421,6 +1513,7 @@ impl StorageNode {
                     seed,
                     d.id,
                     slot,
+                    &me,
                     &p,
                 )
                 .is_err()

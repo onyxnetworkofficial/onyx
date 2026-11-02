@@ -57,10 +57,12 @@ fn build() -> Value {
     let seeds: Vec<Value> = (0..3u64)
         .map(|e| {
             let s = epoch_seed(&h(50 + e as u8), e + 2);
+            let n = &nodes[e as usize];
             json!({"blockHash": h(50 + e as u8).to_string(), "epoch": e + 2, "seed": s.to_string(),
                    "dealId": 7, "slot": e, "shardCount": 1000 + e,
                    "shard": slot_shard(&s, 7, e as u32, 1000 + e as u32),
-                   "rows": 77_777u64 + e, "row": slot_row(&s, 7, e as u32, 77_777 + e)})
+                   "node": n.to_string(),
+                   "rows": 77_777u64 + e, "row": slot_row(&s, 7, e as u32, n, 77_777 + e)})
         })
         .collect();
     let mut ex = Exclusions::new();
@@ -91,7 +93,16 @@ fn build() -> Value {
     let digest = check_payload(&tail, &payload).expect("ok");
     let seed = epoch_seed(&h(60), 4);
     let idx = slot_shard(&seed, 7, 1, 5);
-    let p = answer(&m, &files[idx as usize], &seed, 7, 1).expect("proves");
+    let me = nodes[0];
+    let p = answer(&m, &files[idx as usize], &seed, 7, 1, &me).expect("proves");
+    let rows = p.entry.rows;
+    let row_index = slot_row(&seed, 7, 1, &me, rows);
+    // Another holder whose row differs: the same answer must fail for it.
+    let other = nodes[1..]
+        .iter()
+        .find(|n| slot_row(&seed, 7, 1, n, rows) != row_index)
+        .copied()
+        .expect("a node with another row");
 
     let pr = vector_params();
     let amounts: Vec<Value> = [(1u64, 1u8, 1u32), (3 << 30, 3, 10), ((5 << 30) + 1, 2, 7)]
@@ -101,6 +112,26 @@ fn build() -> Value {
                    "deposit": ledger::deposit(&pr, *b, *r, *e).to_string(),
                    "slotPay": ledger::slot_pay(&pr, *b, *r).to_string()})
         })
+        .collect();
+    let fees: Vec<Value> = [
+        pr.min_bond,
+        ledger::bond_required(&pr, 5_000),
+        999_999_999_999_999_999,
+    ]
+    .iter()
+    .map(|b| json!({"bond": b.to_string(), "fee": ledger::registration_fee(*b).to_string()}))
+    .collect();
+    let rewards: Vec<Value> = [
+        ledger::slash(&pr, pr.min_bond - ledger::registration_fee(pr.min_bond)),
+        9,
+        123_456_789,
+    ]
+    .iter()
+    .map(|s| json!({"slash": s.to_string(), "reward": ledger::miss_reward(*s).to_string()}))
+    .collect();
+    let event_sigs: Vec<Value> = crate::abi::events::MONEY
+        .iter()
+        .map(|e| json!({"signature": e, "topic": crate::abi::topic(e).to_string()}))
         .collect();
     json!({
         "comment": "Shared Rust/Solidity vectors of the storage network (ADR-0060). Regenerate only with an ADR change: ONYX_BLESS=1 cargo test -p onyx-storage vectors.",
@@ -117,6 +148,7 @@ fn build() -> Value {
                      "shardCount": tail.shard_count, "rowCount": tail.row_count, "byteCount": tail.byte_count,
                      "shardsRoot": tail.shards_root.to_string(), "payload": hx(&payload), "digest": digest.to_string()},
         "proof": {"seed": seed.to_string(), "dealId": 7, "slot": 1, "shard": idx,
+                  "node": me.to_string(), "rows": rows, "rowIndex": row_index, "otherNode": other.to_string(),
                   "entry": hx(&entry_bytes(&p.entry)), "entrySiblings": hs(&p.entry_siblings),
                   "row": hx(&p.row), "rowSiblings": hs(&p.row_siblings),
                   "shardsRoot": m.header.shards_root.to_string(), "shardCount": 5},
@@ -124,6 +156,9 @@ fn build() -> Value {
                    "minBond": pr.min_bond.to_string(), "slashPpm": pr.slash_ppm,
                    "challengesPerDeal": pr.challenges_per_deal, "maxMisses": pr.max_misses},
         "amounts": amounts,
+        "fees": fees,
+        "rewards": rewards,
+        "events": event_sigs,
     })
 }
 

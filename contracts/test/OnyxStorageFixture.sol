@@ -22,6 +22,9 @@ contract StorageFixture is Test {
     uint32 internal constant SLASH_PPM = 100_000;
     uint32 internal constant K = 2;
     uint32 internal constant MAX_MISSES = 3;
+    /// `maxMisses` of the deployment; a test may raise it before `_deploy` to isolate the bond
+    /// rule of jail.
+    uint32 internal maxMissesParam = MAX_MISSES;
     uint64 internal constant BYTES = (3 << 30) + 5; // 4 GiB once rounded up
 
     OnyxTestToken public tok;
@@ -138,7 +141,7 @@ contract StorageFixture is Test {
             MIN_BOND,
             SLASH_PPM,
             K,
-            MAX_MISSES
+            maxMissesParam
         );
         _buildDataset();
         payload = _payloadFor(_manifestRoot(), 42);
@@ -191,15 +194,25 @@ contract StorageFixture is Test {
         a[0] = h;
     }
 
-    /// The honest answer of slot `slot` for deal `d` in an epoch with seed `s`.
-    function _proof(bytes32 s, uint64 d, uint32 slot)
+    /// The row of the challenged shard that holder `node` is asked for (ADR-0060 amendment 1
+    /// item 1: a row for each holder), written out as the spec defines it.
+    function _rowOf(bytes32 s, uint64 d, uint32 slot, bytes32 node)
+        internal
+        pure
+        returns (uint256)
+    {
+        return uint256(keccak256(abi.encodePacked("onyx-storage-row-v2", s, d, slot, node))) % 2;
+    }
+
+    /// The honest answer of holder `node` to slot `slot` for deal `d` in an epoch with seed `s`.
+    function _proof(bytes32 s, uint64 d, uint32 slot, bytes32 node)
         internal
         view
         returns (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs)
     {
         uint256 shard =
             uint256(keccak256(abi.encodePacked("onyx-storage-slot-v1", s, d, slot))) % 2;
-        uint256 r = uint256(keccak256(abi.encodePacked("onyx-storage-row-v1", s, d, slot))) % 2;
+        uint256 r = _rowOf(s, d, slot, node);
         entry = entries[shard];
         es = _one(_leaf(entries[1 - shard]));
         row = rows[shard][r];
@@ -211,7 +224,7 @@ contract StorageFixture is Test {
         returns (bool)
     {
         (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
-            _proof(st.seedOf(e), d, slot);
+            _proof(st.seedOf(e), d, slot, id);
         vm.prank(_opOf(id));
         return st.answer(d, e, slot, id, list, entry, es, row, rs);
     }

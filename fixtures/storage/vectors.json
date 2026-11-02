@@ -28,6 +28,74 @@
     "prevHash": "0x484bf06f3118ce360605f902ef526c45207bc469c2b056352f14b8408f9f6f9a",
     "salt": "0x03b82a118d0e862cb021dd2f4eea4d7be3835a42566b88dffab48c8ddff385a7"
   },
+  "events": [
+    {
+      "signature": "Registered(uint64,address,uint64,uint256,string)",
+      "topic": "0xafbaeb8ef0714ea972fa9d60f5c91cae1cb3543fe0c7432cf5399ec6c67449de"
+    },
+    {
+      "signature": "RegistrationFee(uint64,address,uint256)",
+      "topic": "0x9d697da0cde8ac505370fd14e8f750cf19f3c15af4d5c84a7ff1514931858b42"
+    },
+    {
+      "signature": "Activated(bytes32,uint64,address)",
+      "topic": "0x00569611c6dccc5a17248be74921cf5cbdc5806a6985fc2d357ffed5be578997"
+    },
+    {
+      "signature": "RegistrationCancelled(uint64)",
+      "topic": "0x43357ad2fe48234c8e124ef7eeb620f82cded664e79e56aa1749ebba4d42515e"
+    },
+    {
+      "signature": "DealCreated(uint64,address,bytes32,bytes32,uint32,uint64,uint8,uint64,uint64,bytes32,uint256,string,string,string)",
+      "topic": "0xb262798103a9d134d55c97ec21a5366314585c317f21287af450f9271f5b6fc4"
+    },
+    {
+      "signature": "DealExtended(uint64,uint64,uint256)",
+      "topic": "0x7283525a70e52b77decf98f2dc89fc53722e9303aaa1c94d39e9db7dbca996c4"
+    },
+    {
+      "signature": "Answered(uint64,uint64,uint32,bytes32,bool,uint256)",
+      "topic": "0xe13364bfb011b7e7e6d8d96ff59cd949fd4b6e34dedbe1700dd0152755688b91"
+    },
+    {
+      "signature": "Slashed(bytes32,uint64,uint64,uint32,uint32,uint256,uint64,uint8)",
+      "topic": "0x65f56500d4d04c7cbec855e02962eff300ef7135a4d96a35b07da8f22b55cbe4"
+    },
+    {
+      "signature": "MissReward(bytes32,address,uint256)",
+      "topic": "0xdf311e138f7c3ca1c87fc517eb5b6b182fb3a69fd05fe7c2296851fe06defc08"
+    },
+    {
+      "signature": "DealClosed(uint64,uint256)",
+      "topic": "0x7e48ed48761c760c485db67c3a8c478e3a1d0bddd55925bb9d60db59650f8461"
+    },
+    {
+      "signature": "BondWithdrawn(bytes32,address,uint256)",
+      "topic": "0x25ea4793db0032b8cdaaca90cfb1a94c62132a3aa5194c98958659c26fe2672e"
+    },
+    {
+      "signature": "EarningsWithdrawn(address,uint256)",
+      "topic": "0x48dc35af7b45e2a81fffad55f6e2fafacdb1d3d0d50d24ebdc16324f5ba757f1"
+    },
+    {
+      "signature": "TreasurySwept(address,uint256)",
+      "topic": "0x8c4463e6442c505ca03503f62a65ea4bac86f1dc6322a5e8ce18f0e7943e448f"
+    }
+  ],
+  "fees": [
+    {
+      "bond": "1000000000000000000",
+      "fee": "20000000000000000"
+    },
+    {
+      "bond": "5000000000000000000",
+      "fee": "100000000000000000"
+    },
+    {
+      "bond": "999999999999999999",
+      "fee": "19999999999999999"
+    }
+  ],
   "holders": {
     "cases": [
       {
@@ -161,25 +229,44 @@
       "0x864a0324afe3f01f599c7b17d6ad1859eade06304a1333d5aad325857d599bd1",
       "0xe213a11f5401bfd64ec543602ac4d40e652553c4df88dc41bd8edb33f7af3f04"
     ],
-    "row": "0x0200000001230000000000000000000000000000000303000000763335",
+    "node": "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+    "otherNode": "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab",
+    "row": "0x0200000001280000000000000000000000000000000303000000763430",
+    "rowIndex": 7,
     "rowSiblings": [
-      "0x62191c28dd12060a31d1fafc07ca4ff8d7db0e06d1f2b42d419f28c3232e0763",
-      "0x70d084a002dedba01ded7c8ca9a90eb7c27bacd2a478f299c883ca09b67f4822",
-      "0x88c4996e4f523ce002fc43a879c2b8c19b320b2a75d5e747147675043a4093f5",
+      "0xcb378a3ca2c1191dc7db17f461b12066b329b99d386023807cfcc74e9294ec5e",
+      "0x3e148a8243d8fecb4c3dc7d3d6721c378dc94e9a7ac837eaa0aab4c9e1a5f167",
+      "0x8fa6182d2ecfd2c3561275025262bc5e6e4ad97a3b340a2c92bbcffe731492a4",
       "0x40767231a243c1feef13cd437d01bf55420acfe1f5f0d869c30e7c5416c70548"
     ],
+    "rows": 11,
     "seed": "0xd7fbea72bb1fc16f0f44ab722b736313c4ae3f24d80937b48369ac360379ec85",
     "shard": 3,
     "shardCount": 5,
     "shardsRoot": "0x049df86df567b17d36523f0a68ebd33fd239825a753f243cc4a99f82c8b8727a",
     "slot": 1
   },
+  "rewards": [
+    {
+      "reward": "9800000000000000",
+      "slash": "98000000000000000"
+    },
+    {
+      "reward": "0",
+      "slash": "9"
+    },
+    {
+      "reward": "12345678",
+      "slash": "123456789"
+    }
+  ],
   "seeds": [
     {
       "blockHash": "0xad7c5bef027816a800da1736444fb58a807ef4c9603b7848673f7e3a68eb14a5",
       "dealId": 7,
       "epoch": 2,
-      "row": 36897,
+      "node": "0xf464adb6b97b504f727d5244820a4ae192dee3b6497662c21cc9fc143e25015d",
+      "row": 76006,
       "rows": 77777,
       "seed": "0x18fca3f7be7bf7c2ff9877872dc80917ccb04452091ecb674a2920d2de0edc26",
       "shard": 770,
@@ -190,7 +277,8 @@
       "blockHash": "0x2a80e1ef1d7842f27f2e6be0972bb708b9a135c38860dbe73c27c3486c34f4de",
       "dealId": 7,
       "epoch": 3,
-      "row": 6488,
+      "node": "0xef3a7ca6d8d1ffeeb9be737245e93ad21bea956723d8b7dabef81daf3a5219ab",
+      "row": 16215,
       "rows": 77778,
       "seed": "0xbe5b4b0c756f763c0dad5e80f7c98ba708a6c813221441822c963ea830b1f1e4",
       "shard": 84,
@@ -201,7 +289,8 @@
       "blockHash": "0x13600b294191fc92924bb3ce4b969c1e7e2bab8f4c93c3fc6d0a51733df3c060",
       "dealId": 7,
       "epoch": 4,
-      "row": 8531,
+      "node": "0x719c9010ad01ebde9d9810177734e674ab59fbc07d544f8e6d00e1e39b64c53e",
+      "row": 7667,
       "rows": 77779,
       "seed": "0x11e2905f38c0043d920e4562fbf710d9ca3d5f9def6b8b5505e1cd9157c8bcbd",
       "shard": 691,

@@ -4,6 +4,9 @@ Status: **Accepted as ADR-0060 (2026-10-30), built on a local anvil.** Test netw
 `crates/onyx-storage`, `contracts/src/OnyxStorage.sol` and `OnyxStorageLib.sol`,
 `onyx_api::storage`, onyx-node's storage mode, `onyx-storage`. Plain-English overview and roadmap:
 docs/STORAGE-NETWORK.md. Threats: THREATS.md "STORAGE". Operator guide: docs/ops/storage-node.md.
+ADR-0060 amendment 1 (a row for each holder, the registration fee, the reporter's reward, jail by
+a node's own bond) is in the rules below and built, not deployed: the Base Sepolia contract of
+ROADMAP S15 runs v0 (row v1, no fee, no reward, jail below `minBond / 2`).
 
 ## Scope
 
@@ -25,7 +28,7 @@ payments, mainnet (docs/STORAGE-NETWORK.md "Phases").
 | weight | `uint256(keccak256("onyx-storage-hrw-v1" ‖ shardKey ‖ nodeId))` |
 | seed | `keccak256("onyx-storage-seed-v1" ‖ blockhash(start block of e) ‖ uint64 e)` |
 | slot shard | `uint256(keccak256("onyx-storage-slot-v1" ‖ seed ‖ uint64 dealId ‖ uint32 slot)) mod shardCount` |
-| slot row | `uint256(keccak256("onyx-storage-row-v1" ‖ seed ‖ uint64 dealId ‖ uint32 slot)) mod rows` |
+| slot row (for holder `nodeId`) | `uint256(keccak256("onyx-storage-row-v2" ‖ seed ‖ uint64 dealId ‖ uint32 slot ‖ nodeId)) mod rows` (ADR-0060 amendment 1; v1 had no node id and is what the S15 deployment runs) |
 | set hash | `keccak256(nodeId[0] ‖ nodeId[1] ‖ …)` in the contract's stored order |
 
 Read as defined by ADR-0059: the manifest root `keccak256("onyx-bulk-manifest-v1" ‖ borsh(header))`;
@@ -44,12 +47,15 @@ bytes32[] entrySiblings, bytes row, bytes32[] rowSiblings)`,
 `settleMissed(uint64 dealId, uint64 epoch, uint32 slot, bytes32 nodeId, bytes32[] nodes)`,
 `decline(uint64 dealId, uint32 index, bytes32 nodeId)`, `withdrawEarnings()`, `sweepTreasury()`. Views: `currentEpoch`, `epochStart`, `setHashAt`,
 `activeNodes`, `seedOf`, `dealInfo`, `dealCount`, `nodeInfo`, `exclusionFrom`, `slotStatus`,
-`challengedHolders`, `slotPay`, `bondFor`, `earned`, `books`, `conserved`, `params`. Events:
-`Registered`, `Activated`, `NodeSet`, `Removed`, `DealCreated`, `DealExtended`, `DealClosed`,
-`SeedRecorded`, `Answered`, `Slashed`, `Declined`, `BondWithdrawn`, `EarningsWithdrawn`, `TreasurySwept`.
+`challengedHolders`, `slotPay`, `bondFor`, `earned`, `books` (deposits, bonds in, paid, slashed,
+refunded, bonds out, earnings out, swept, rewarded), `conserved`, `params`. Events:
+`Registered`, `RegistrationFee`, `Activated`, `RegistrationCancelled`, `NodeSet`, `Removed`,
+`DealCreated`, `DealExtended`, `DealClosed`, `SeedRecorded`, `Answered`, `Slashed`, `MissReward`,
+`Declined`, `BondWithdrawn`, `EarningsWithdrawn`, `TreasurySwept`.
 Immutable parameters: token, book, treasury, `epochBlocks`, `pricePerGiBEpoch`, `bondPerGiB`,
 `minBond`, `slashPpm`, `challengesPerDeal`, `maxMisses`. Constants: `MAX_NODES` 128, `MAX_R` 8,
-`SETTLE_EPOCHS` 2, `SEED_WINDOW` 256 blocks, `MAX_DEAL_EPOCHS` 100,000, `MAX_CAPACITY_GIB` 2^30.
+`SETTLE_EPOCHS` 2, `SEED_WINDOW` 256 blocks, `MAX_DEAL_EPOCHS` 100,000, `MAX_CAPACITY_GIB` 2^30,
+`REGISTRATION_FEE_PPM` 20,000, `REPORTER_PPM` 100,000.
 
 ### Node routes (peers; outside the 12 s request deadline)
 `GET /v1/bulk/manifests/{root}` → `{root, manifest, report}` (Borsh hex, the body
@@ -58,14 +64,19 @@ served by the existing `GET /v1/bulk/{publisher}/{dataset}/rows`.
 
 ### Tools
 `onyx-storage register | status | deal | seed | settle | withdraw | exit | withdraw-bond | close |
-sweep | books | epoch | read | prove`; onyx-node `ONYX_STORAGE_*` (docs/ops/config.md).
+sweep | books | epoch | read | prove`; onyx-node `ONYX_STORAGE_*` (docs/ops/config.md). `books
+--replay yes` also rebuilds the totals from the money events (`onyx_storage::ledger::replay`) and
+fails when they differ from `books()` at the same block.
 
 ### Rules
 - **R-STOR-1 (nodes).** `register` takes `bondFor(capacity) = max(minBond, bondPerGiB ×
-  capacity)`, `1 <= capacity <= MAX_CAPACITY_GIB`, a URL of 1..=256 bytes. `activate` only by the
+  capacity)`, `1 <= capacity <= MAX_CAPACITY_GIB`, a URL of 1..=256 bytes, and at once moves the fee
+  `bond × REGISTRATION_FEE_PPM / 10^6` (rounded down) to the treasury's part (`slashed`; event
+  `RegistrationFee`); the registration holds `bond − fee`. `activate` only by the
   registrant, in `(registration block, registration block + 256]`, with a declared capacity of at
   least `ceil(committedGiB / (activeNodes + 1))`, fixes the node id and adds it to the list (at most
-  `MAX_NODES`). A registration not activated in time can be cancelled for its bond.
+  `MAX_NODES`) with the bond `bond − fee`, also kept as its start bond. A registration not
+  activated in time can be cancelled for `bond − fee`.
 - **R-STOR-2 (node list).** Any change to the list in epoch `c` takes effect from `c + 1`: one
   checkpoint `(c + 1, setHash)` per epoch, the last change wins; `setHashAt(e)` is the newest
   checkpoint at or before `e` (`keccak256("")` before any). `NodeSet` carries the full list.
@@ -89,24 +100,31 @@ sweep | books | epoch | read | prove`; onyx-node `ONYX_STORAGE_*` (docs/ops/conf
   jailed from `<= e`. The caller passes that list; its hash must equal `setHashAt(e − 1)`.
 - **R-STOR-7 (answers).** Only the node's operator, only in epoch `e`, once per (deal, epoch, slot,
   node). The entry is 84 bytes, its index is the slot's shard, it proves to `shardsRoot` at that
-  index among `shardCount`; `rows > 0`; the row proves to the entry's root at the slot's row among
-  `rows`. Passed: status 1 and the slot share. Otherwise: status 2 and R-STOR-9.
+  index among `shardCount`; `rows > 0`; the row proves to the entry's root at the slot row drawn for
+  that node among `rows` (each holder of the shard is asked for its own row). Passed: status 1 and
+  the slot share. Otherwise: status 2 and R-STOR-9.
 - **R-STOR-8 (pay).** Slot share = `price × gib × r / (challengesPerDeal × r)`, rounded down,
   never beyond the deal's deposit; credited to the operator's `earned`, withdrawn by it.
 - **R-STOR-9 (misses and slashes).** `settleMissed` by anyone for an open challenge of an epoch
   that ended at most `SETTLE_EPOCHS` ago: status 3. A failed or missed answer takes
   `bond × slashPpm / 10^6` (rounded down) for the treasury, adds a miss (a pass clears the count),
   excludes the node from that shard from the next epoch (first exclusion kept), and jails the node
-  (out of the list from the next epoch) after `maxMisses` in a row or a bond below `minBond / 2`.
+  (out of the list from the next epoch) after `maxMisses` in a row or a bond below
+  `max(startBond, minBond) / 2`. For a miss, `slash × REPORTER_PPM / 10^6` (rounded down) is credited
+  to the caller's `earned` and counted in `rewarded` (event `MissReward`), unless the caller is the
+  node's operator.
   `requestExit` leaves the list from the next epoch. `withdrawBond` after `removedFrom +
   SETTLE_EPOCHS`.
 - **R-STOR-10 (accounting).** For an epoch, the challenges are R-STOR-6 over every running deal;
   each ends passed (paid), failed or missed (slashed) or stays open; `onyx-storage epoch` prints it.
 - **R-STOR-11 (money).** No owner and no admin function. Tokens leave only by R-STOR-3 (refund),
-  R-STOR-8 (earnings), bond withdrawal or cancellation, and the treasury sweep. `conserved()`:
-  `paid + refunded <= deposits`, `slashed + bondsOut <= bondsIn`, `earningsOut <= paid`,
-  `swept <= slashed`, and the token balance equals `(deposits − paid − refunded) + (bondsIn −
-  slashed − bondsOut) + (paid − earningsOut) + (slashed − swept)`.
+  R-STOR-8 and R-STOR-9 (earnings and reporters' rewards), bond withdrawal or cancellation, and the
+  treasury sweep of `slashed − rewarded − swept`. `slashed` counts slashes and registration fees.
+  `conserved()`: `paid + refunded <= deposits`, `slashed + bondsOut <= bondsIn`,
+  `earningsOut <= paid + rewarded`, `swept + rewarded <= slashed`, and the token balance equals
+  `(deposits − paid − refunded) + (bondsIn − slashed − bondsOut) + (paid + rewarded − earningsOut) +
+  (slashed − rewarded − swept)`. The money events replay to the same totals
+  (`onyx_storage::ledger::Replay`).
 - **R-STOR-12 (storage node).** Each pass, in this order: record the seed; answer each slot it is
   challenged in with a proof it checked first (fetching again a shard that does not read back); as
   a keeper, settle the open challenges of the last two epochs (an answer re-fetches only a shard

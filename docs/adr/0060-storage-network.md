@@ -53,7 +53,8 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
    blockhash(start of e) ‖ e)`, recorded by anyone in the 256 blocks after the start block (an
    unrecorded epoch has no challenges and pays nothing). Each deal has `challengesPerDeal` slots per
    epoch; slot `s` picks shard `keccak("onyx-storage-slot-v1" ‖ seed ‖ deal ‖ s) mod shardCount` and
-   row `keccak("onyx-storage-row-v1" ‖ seed ‖ deal ‖ s) mod rows`.
+   row `keccak("onyx-storage-row-v1" ‖ seed ‖ deal ‖ s) mod rows` (amendment 1 item 1: from the
+   next deployment the row also takes the answering node's id, `onyx-storage-row-v2`).
 7. **Answers.** A challenged holder's operator calls `answer` in the epoch with the 84-byte shard
    entry, its Merkle path to `shards_root`, the row bytes and their path to the entry's root
    (`OnyxMerkle`, ADR-0003). Indexes and leaf counts come from the challenge and the entry, never
@@ -63,7 +64,8 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
    (within two epochs). A failed or missed answer takes `slashPpm` of the node's bond to the
    treasury account, excludes the node from that shard from the next epoch (rendezvous moves the
    copy to the next node in the ranking, which fetches it: repair) and, after `maxMisses` in a row
-   or a bond below half of `minBond`, jails the node (out of the list from the next epoch; all its
+   or a bond below half of `minBond` (amendment 1 item 4: of its own activation bond, if larger),
+   jails the node (out of the list from the next epoch; all its
    shards move). Exit is voluntary with the same one-epoch notice; bonds return after the settle
    window. A node may also `decline` one shard or a whole deal it cannot get (a withholding
    publisher or replicas): the same exclusion from the next epoch, without a slash; a challenge
@@ -85,7 +87,7 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
 ## Consequences
 - Many people can store data and many nodes can hold it; the chain holds fingerprints and money.
   Scaling math, costs and phases: docs/STORAGE-NETWORK.md.
-- `OnyxStorage` is 21,157 bytes of runtime code (EIP-170 limit 24,576; 2026-11-02, with the heap of THREATS STORAGE-S16-R1-2). Gas: docs/STORAGE-NETWORK.md
+- `OnyxStorage` is 21,700 bytes of runtime code (EIP-170 limit 24,576; 2026-11-02, with the heap of THREATS STORAGE-S16-R1-2 and amendment 1). Gas: docs/STORAGE-NETWORK.md
   "Status" and `contracts/.gas-snapshot`.
 - An answer carries the whole node list (32 bytes per node) and recomputes all weights: fine to 128
   nodes, not to thousands (later: per-epoch committee lists or a Merkle proof of the node's rank).
@@ -105,6 +107,11 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
   the block producer can bias the seed (H2); a node may pass proofs and still refuse reads.
 
 ## Amendment 1 (2026-11-02): close v0's cheap holes (ROADMAP S16)
+Status: items 1 to 4 built and tested (2026-11-02) in `OnyxStorage`, `OnyxStorageLib`,
+`onyx_storage` (`ids`, `challenge`, `ledger::Replay`), `onyx_api::storage` and the `onyx-storage`
+tool; shared vectors written again. Not deployed: the S15 contract on Base Sepolia keeps v0.
+Tests: THREATS STORAGE-S16-R2-1 to -3 and STORAGE-3.
+
 ADR-0062 finding 7 and THREATS STORAGE-S16-R2-1 to -3. A first draft was reviewed before code
 (THREATS STORAGE-S16-R3: 2 High, 4 Medium); this text is the second draft. Every change needs a new
 `OnyxStorage` deployment; the S15 contract keeps v0.

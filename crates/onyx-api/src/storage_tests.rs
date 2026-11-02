@@ -92,6 +92,9 @@ struct Quirks {
     /// Only this many more `eth_getLogs` calls are answered; the rest fail
     /// with HTTP 429 (a public endpoint's rate limit, THREATS STORAGE-S15-4).
     answer_logs: Option<usize>,
+    /// The contract is from before ADR-0060 amendment 1 (no
+    /// `REGISTRATION_FEE_PPM()`: the call reverts).
+    v0: bool,
 }
 
 /// The safe block of the fake chain: 64 below the head.
@@ -246,7 +249,12 @@ impl JsonRpc for FakeChain {
                     };
                     let u =
                         |i: usize| u64::from_be_bytes(arg(i)[24..].try_into().unwrap_or([0; 8]));
-                    let out = if sel == abi::selector("currentEpoch()") {
+                    let out = if sel == abi::selector("ROW_VERSION()") {
+                        if f.quirks.v0 {
+                            return Err("execution reverted".into());
+                        }
+                        encode(&[uint(2)])
+                    } else if sel == abi::selector("currentEpoch()") {
                         encode(&[uint(f.epoch.into())])
                     } else if sel == abi::selector("params()") {
                         encode(&[
@@ -611,8 +619,17 @@ async fn a_storage_node_fetches_checks_and_proves_only_its_shards() {
             row: abi::dyn_bytes(b, 7).expect("row"),
             row_siblings: abi::dyn_words(b, 8).expect("rs"),
         };
-        challenge::verify(&d.info.shards_root, d.info.shard_count, &seed, 0, slot, &p)
-            .expect("valid");
+        // The row drawn for this node (ADR-0060 amendment 1 item 1): valid for it.
+        challenge::verify(
+            &d.info.shards_root,
+            d.info.shard_count,
+            &seed,
+            0,
+            slot,
+            &me,
+            &p,
+        )
+        .expect("valid");
         assert_eq!(
             abi::dyn_words(b, 4).expect("nodes"),
             s.nodes.iter().map(|n| n.0).collect::<Vec<_>>()
@@ -790,6 +807,38 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
         .expect("publisher alone");
     assert_eq!(ok.rows.len(), 30);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+#[tokio::test]
+async fn a_node_sends_nothing_to_an_older_contract() {
+    // ADR-0060 amendment 1: an S15 contract draws rows without the node id,
+    // so this node's answers would all fail there. It must send nothing.
+    let s = setup(5).await;
+    s.chain.0.lock().expect("lock").quirks.v0 = true;
+    let own = world();
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        net(&s, &[]),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: s.nodes[0],
+            fetch: true,
+            keeper: true,
+            fetches_per_tick: 64,
+        },
+    );
+    let err = node.tick().await.expect_err("an older contract is refused");
+    assert!(
+        err.contains("rows v2") && err.contains("exit its node"),
+        "{err}"
+    );
+    assert!(tx.0.lock().expect("lock").is_empty(), "nothing sent");
+    // The same node runs once the contract answers as amendment 1 does.
+    s.chain.0.lock().expect("lock").quirks.v0 = false;
+    node.tick().await.expect("tick");
 }
 
 /// THREATS STORAGE-16: when no source serves a shard placed on the node (a
@@ -1350,4 +1399,21 @@ async fn the_placement_key_follows_its_inputs() {
     assert_eq!(node.wanted(&d), d.wanted(&s.nodes[1]));
     let _ = std::fs::remove_dir_all(&own.dir);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// `books()` of an S15 contract has eight words (no `rewarded`); from
+/// ADR-0060 amendment 1 it has nine. Anything else is refused.
+#[test]
+fn books_decode_eight_or_nine_words() {
+    let words =
+        |n: u64| -> Vec<u8> { encode(&(1..=n).map(|i| uint(i.into())).collect::<Vec<_>>()) };
+    assert_eq!(
+        decode_books(&words(9)).expect("nine"),
+        [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    );
+    assert_eq!(
+        decode_books(&words(8)).expect("eight"),
+        [1, 2, 3, 4, 5, 6, 7, 8, 0]
+    );
+    assert!(decode_books(&words(7)).is_err());
 }

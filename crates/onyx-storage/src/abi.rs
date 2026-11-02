@@ -350,6 +350,12 @@ pub fn books() -> Vec<u8> {
     call("books()", &[])
 }
 
+/// `ROW_VERSION()`: the challenged-row rule (2: the row is drawn with the
+/// answering node's id, ADR-0060 amendment 1). Older contracts have none.
+pub fn row_version() -> Vec<u8> {
+    call("ROW_VERSION()", &[])
+}
+
 /// `conserved()`.
 pub fn conserved() -> Vec<u8> {
     call("conserved()", &[])
@@ -468,6 +474,38 @@ pub mod events {
     pub const SLASHED: &str = "Slashed(bytes32,uint64,uint64,uint32,uint32,uint256,uint64,uint8)";
     /// A node gave up a shard (or a whole deal) without a slash.
     pub const DECLINED: &str = "Declined(bytes32,uint64,uint32,uint64)";
+    /// The part of a bond `register` keeps for the treasury (ADR-0060 amendment 1 item 2).
+    pub const REGISTRATION_FEE: &str = "RegistrationFee(uint64,address,uint256)";
+    /// A registration not activated in time: its bond less the fee returned.
+    pub const REGISTRATION_CANCELLED: &str = "RegistrationCancelled(uint64)";
+    /// The reporter of a miss credited part of its slash (amendment 1 item 3).
+    pub const MISS_REWARD: &str = "MissReward(bytes32,address,uint256)";
+    /// More epochs paid for a deal.
+    pub const DEAL_EXTENDED: &str = "DealExtended(uint64,uint64,uint256)";
+    /// A deal closed: its remainder back to the payer.
+    pub const DEAL_CLOSED: &str = "DealClosed(uint64,uint256)";
+    /// A bond returned after exit or jail.
+    pub const BOND_WITHDRAWN: &str = "BondWithdrawn(bytes32,address,uint256)";
+    /// Earnings (pay and rewards) withdrawn.
+    pub const EARNINGS_WITHDRAWN: &str = "EarningsWithdrawn(address,uint256)";
+    /// Slashes and fees sent to the treasury.
+    pub const TREASURY_SWEPT: &str = "TreasurySwept(address,uint256)";
+    /// Every event that moves money or the books (`onyx_storage::ledger::Replay`).
+    pub const MONEY: [&str; 13] = [
+        REGISTERED,
+        REGISTRATION_FEE,
+        ACTIVATED,
+        REGISTRATION_CANCELLED,
+        DEAL_CREATED,
+        DEAL_EXTENDED,
+        ANSWERED,
+        SLASHED,
+        MISS_REWARD,
+        DEAL_CLOSED,
+        BOND_WITHDRAWN,
+        EARNINGS_WITHDRAWN,
+        TREASURY_SWEPT,
+    ];
 }
 
 #[cfg(test)]

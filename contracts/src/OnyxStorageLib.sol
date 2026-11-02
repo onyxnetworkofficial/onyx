@@ -84,13 +84,17 @@ library OnyxStorageLib {
         );
     }
 
-    function slotRow(bytes32 s, uint64 dealId, uint32 slot, uint64 rows)
+    /// The row a challenged holder must prove: drawn for each holder (`node`), so one answer in
+    /// calldata answers for no other holder of the shard (ADR-0060 amendment 1 item 1, THREATS
+    /// STORAGE-S16-R2-2).
+    function slotRow(bytes32 s, uint64 dealId, uint32 slot, bytes32 node, uint64 rows)
         internal
         pure
         returns (uint64)
     {
         return uint64(
-            uint256(keccak256(abi.encodePacked("onyx-storage-row-v1", s, dealId, slot))) % rows
+            uint256(keccak256(abi.encodePacked("onyx-storage-row-v2", s, dealId, slot, node)))
+                % rows
         );
     }
 
@@ -177,13 +181,15 @@ library OnyxStorageLib {
     }
 
     /// `onyx_storage::challenge::verify`: the entry is the challenged shard and proves to
-    /// `shardsRoot` among `shardCount`; the row is row `slotRow(rows)` of the entry's root.
+    /// `shardsRoot` among `shardCount`; the row is row `slotRow(node, rows)` of the entry's root,
+    /// the row drawn for the answering holder `node`.
     function verifyProof(
         bytes32 shardsRoot,
         uint32 shardCount,
         bytes32 s,
         uint64 dealId,
         uint32 slot,
+        bytes32 node,
         bytes calldata entry,
         bytes32[] calldata entrySiblings,
         bytes calldata row,
@@ -196,7 +202,7 @@ library OnyxStorageLib {
         uint64 rows = uint64(readU64(entry, 36));
         if (rows == 0) return false;
         return OnyxMerkle.verify(
-            bytes32(entry[4:36]), row, slotRow(s, dealId, slot, rows), rows, rowSiblings
+            bytes32(entry[4:36]), row, slotRow(s, dealId, slot, node, rows), rows, rowSiblings
         );
     }
 }

@@ -10,8 +10,9 @@
 # five storage nodes register with a bond and run onyx-node in storage mode; a deal with R=3; the
 # nodes fetch and check their shards; reads from the replicas; an epoch of challenges every node
 # passes; one node killed (reads keep working) and one node that dropped its shards (a forged row
-# it sends is refused on chain); misses settled and slashed; repair to new replicas; the books
-# balanced on chain (conservation). Prints what it measured, then STORAGE NETWORK DEMO PASSED.
+# it sends is refused on chain); misses settled and slashed (the keeper earns 10% of each); repair
+# to new replicas; the books balanced on chain (conservation) and rebuilt from the contract's events.
+# Prints what it measured, then STORAGE NETWORK DEMO PASSED.
 # Env: STORAGE_DEMO_MIB (4), STORAGE_EPOCH_BLOCKS (40), FOUNDRY_BIN (~/.foundry/bin),
 # CARGO_TARGET_DIR.
 set -euo pipefail
@@ -408,7 +409,9 @@ print("  ok: nodes 2, 3, 4 earned " + ", ".join(n["earned"] for n in nodes))
 PY
 bA=$(status_of "$A" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')
 bB=$(status_of "$B" | python3 -I -c 'import json,sys; print(json.load(sys.stdin)["node"]["bond"])')
-[ "$bA" != 1000000000000000000 ] && [ "$bB" != 1000000000000000000 ] || fail "a misbehaving node kept its whole bond"
+# Each node activated with its 1 tONYX bond less the 2% registration fee (ADR-0060 amendment 1).
+python3 -I -c 'import sys; sys.exit(0 if all(int(b) < 98 * 10**16 for b in sys.argv[1:]) else 1)' "$bA" "$bB" \
+  || fail "a misbehaving node kept its whole bond"
 before=$(castw call "$token" 'balanceOf(address)(uint256)' "${ops[3]}" | awk '{print $1}')
 # shellcheck disable=SC2046
 "$st_bin" withdraw $(SK "${keys[3]}") >/dev/null
@@ -417,13 +420,19 @@ python3 -I -c 'import sys; assert int(sys.argv[2]) > int(sys.argv[1])' "$before"
 # shellcheck disable=SC2046
 "$st_bin" sweep $(SK "${keys[3]}") >/dev/null
 tre=$(castw call "$token" 'balanceOf(address)(uint256)' "$treasury" | awk '{print $1}')
-"$st_bin" books "${S[@]}" >"$work/books.json" || { cat "$work/books.json"; fail "the books do not balance"; }
+"$st_bin" books "${S[@]}" --replay yes >"$work/books.json" || { cat "$work/books.json"; fail "the books do not balance or do not replay"; }
 python3 -I - "$work/books.json" "$tre" <<'PY'
 import json, sys
 b = json.load(open(sys.argv[1]))
 assert b["conserved"] is True and b["balance"] == b["held"], b
-assert int(b["slashed"]) > 0 and int(sys.argv[2]) == int(b["swept"]) == int(b["slashed"]), (b, sys.argv[2])
-print(f"  ok: deposits {b['deposits']}, bonds {b['bonds_in']}; paid {b['paid']}, slashed {b['slashed']} (all swept to the treasury); held {b['held']} = balance")
+# The same totals rebuilt from the contract's money events (onyx_storage::ledger::replay).
+assert b["replayed"] is True, b
+# Slashes and the five registration fees; the keeper's reward for the misses it settled stays
+# in its earnings; the rest went to the treasury.
+slashed, rewarded = int(b["slashed"]), int(b["rewarded"])
+assert slashed > 5 * 2 * 10**16 and rewarded > 0, b
+assert int(sys.argv[2]) == int(b["swept"]) == slashed - rewarded, (b, sys.argv[2])
+print(f"  ok: deposits {b['deposits']}, bonds {b['bonds_in']}; paid {b['paid']}, slashed and fees {slashed}, {rewarded} to the keeper, the rest swept to the treasury; held {b['held']} = balance; the events replay to the same books")
 PY
 [ "$(castw call "$storage" 'conserved()(bool)')" = true ] || fail "conserved() is false"
 pass "conserved() is true on chain"

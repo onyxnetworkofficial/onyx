@@ -18,8 +18,9 @@ pub const HRW_DOMAIN: &[u8] = b"onyx-storage-hrw-v1";
 pub const SEED_DOMAIN: &[u8] = b"onyx-storage-seed-v1";
 /// Domain of the slot's shard pick.
 pub const SLOT_DOMAIN: &[u8] = b"onyx-storage-slot-v1";
-/// Domain of the slot's row pick.
-pub const ROW_DOMAIN: &[u8] = b"onyx-storage-row-v1";
+/// Domain of the slot's row pick for one holder (v2 adds the node id: ADR-0060
+/// amendment 1 item 1).
+pub const ROW_DOMAIN: &[u8] = b"onyx-storage-row-v2";
 
 /// A storage node's id: fixed by the chain when the node is activated, never
 /// chosen by its operator (THREATS STORAGE-3).
@@ -119,14 +120,17 @@ pub fn slot_shard(seed: &Hash32, deal_id: u64, slot: u32, shard_count: u32) -> u
     mod_u256(&h, u64::from(shard_count)) as u32
 }
 
-/// `uint256(keccak256("onyx-storage-row-v1" ‖ seed ‖ uint64 dealId ‖ uint32
-/// slot)) % rows`: the row the slot asks for in its shard.
-pub fn slot_row(seed: &Hash32, deal_id: u64, slot: u32, rows: u64) -> u64 {
+/// `uint256(keccak256("onyx-storage-row-v2" ‖ seed ‖ uint64 dealId ‖ uint32
+/// slot ‖ bytes32 nodeId)) % rows`: the row the slot asks holder `node` for in
+/// its shard. Each holder is asked for its own row, so one answer (public in
+/// calldata) answers for no other holder (THREATS STORAGE-S16-R2-2).
+pub fn slot_row(seed: &Hash32, deal_id: u64, slot: u32, node: &NodeId, rows: u64) -> u64 {
     let h = packed(&[
         ROW_DOMAIN,
         &seed.0,
         &deal_id.to_be_bytes(),
         &slot.to_be_bytes(),
+        &node.0 .0,
     ]);
     mod_u256(&h, rows)
 }
@@ -158,5 +162,20 @@ mod tests {
         let b = node_id(&[1; 20], 1, &s);
         assert_ne!(a, b);
         assert_ne!(set_hash(&[a, b]), set_hash(&[b, a]));
+    }
+
+    /// ADR-0060 amendment 1 item 1: the row depends on the holder. Ten
+    /// holders of one slot, 2^40 rows: ten different rows.
+    #[test]
+    fn each_holder_draws_its_own_row() {
+        let seed = Hash32([3; 32]);
+        let mut rows: Vec<u64> = (0..10)
+            .map(|i| slot_row(&seed, 7, 1, &node_id(&[1; 20], i, &seed), 1 << 40))
+            .collect();
+        rows.sort_unstable();
+        rows.dedup();
+        assert_eq!(rows.len(), 10);
+        // Under 1 row every holder draws row 0 (the stated residual).
+        assert_eq!(slot_row(&seed, 7, 1, &node_id(&[1; 20], 0, &seed), 1), 0);
     }
 }

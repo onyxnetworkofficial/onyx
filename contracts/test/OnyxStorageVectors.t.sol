@@ -27,12 +27,13 @@ contract LibHarness {
         bytes32 s,
         uint64 dealId,
         uint32 slot,
+        bytes32 node,
         bytes calldata entry,
         bytes32[] calldata es,
         bytes calldata row,
         bytes32[] calldata rs
     ) external pure returns (bool) {
-        return L.verifyProof(shardsRoot, shardCount, s, dealId, slot, entry, es, row, rs);
+        return L.verifyProof(shardsRoot, shardCount, s, dealId, slot, node, entry, es, row, rs);
     }
 }
 
@@ -40,7 +41,7 @@ contract LibHarness {
 /// directly (test only).
 contract PlacementHarness is OnyxStorage {
     constructor(IStorageToken t, OnyxSignedBook b)
-        OnyxStorage(t, b, address(1), 10, 1, 1, 1, 1, 1, 1)
+        OnyxStorage(t, b, address(1), 10, 1, 1, 50, 1, 1, 1)
     {}
 
     function addDeal(bytes32 salt, uint8 r, uint32 shardCount) external returns (uint64 id) {
@@ -115,7 +116,7 @@ contract OnyxStorageVectorsTest is Test {
         uint32 sc = uint32(_u(_k(p, ".shardCount")));
         assertEq(L.slotShard(s, d, slot, sc), _u(_k(p, ".shard")));
         uint64 rows = uint64(_u(_k(p, ".rows")));
-        assertEq(L.slotRow(s, d, slot, rows), _u(_k(p, ".row")));
+        assertEq(L.slotRow(s, d, slot, _b(_k(p, ".node")), rows), _u(_k(p, ".row")));
     }
 
     function test_ids() public view {
@@ -203,6 +204,7 @@ contract OnyxStorageVectorsTest is Test {
         uint64 d;
         uint32 slot;
         uint32 sc;
+        bytes32 node;
     }
 
     function _p() internal view returns (P memory p) {
@@ -215,15 +217,24 @@ contract OnyxStorageVectorsTest is Test {
         p.d = uint64(_u(".proof.dealId"));
         p.slot = uint32(_u(".proof.slot"));
         p.sc = uint32(_u(".proof.shardCount"));
+        p.node = _b(".proof.node");
     }
 
     function _verify(P memory p) internal view returns (bool) {
-        return lib.verifyProof(p.sr, p.sc, p.s, p.d, p.slot, p.entry, p.es, p.row, p.rs);
+        return lib.verifyProof(p.sr, p.sc, p.s, p.d, p.slot, p.node, p.entry, p.es, p.row, p.rs);
     }
 
     function test_proof() public view {
         P memory p = _p();
         assertTrue(_verify(p));
+        // ADR-0060 amendment 1 item 1: the same answer sent for another holder of the shard,
+        // whose row differs, is refused (THREATS STORAGE-S16-R2-2).
+        p.node = _b(".proof.otherNode");
+        assertTrue(
+            L.slotRow(p.s, p.d, p.slot, p.node, uint64(_u(".proof.rows"))) != _u(".proof.rowIndex")
+        );
+        assertFalse(_verify(p));
+        p = _p();
         // Another seed (another slot pick), a changed row byte: refused.
         p.s = bytes32(uint256(p.s) ^ 1);
         assertFalse(_verify(p));
@@ -275,6 +286,42 @@ contract OnyxStorageVectorsTest is Test {
         uint256 k = _u(".params.challengesPerDeal");
         for (uint256 i = 0; i < 3; i++) {
             _amount(i, price, k);
+        }
+    }
+
+    /// ADR-0060 amendment 1: the registration fee and the reporter's reward as Rust computes
+    /// them (`onyx_storage::ledger`), and the money events its replay reads, by signature.
+    function test_feesRewardsAndEvents() public {
+        OnyxTestToken t = new OnyxTestToken(address(this));
+        OnyxSignedBook b = new OnyxSignedBook(address(0xBEEF));
+        PlacementHarness ph = new PlacementHarness(IStorageToken(address(t)), b);
+        for (uint256 i = 0; i < 3; i++) {
+            string memory p = string.concat(".fees[", vm.toString(i), "]");
+            uint256 bond = vm.parseJsonUint(json, _k(p, ".bond"));
+            assertEq(bond * ph.REGISTRATION_FEE_PPM() / 1e6, vm.parseJsonUint(json, _k(p, ".fee")));
+            p = string.concat(".rewards[", vm.toString(i), "]");
+            uint256 slash = vm.parseJsonUint(json, _k(p, ".slash"));
+            assertEq(slash * ph.REPORTER_PPM() / 1e6, vm.parseJsonUint(json, _k(p, ".reward")));
+        }
+        bytes32[13] memory sel = [
+            OnyxStorage.Registered.selector,
+            OnyxStorage.RegistrationFee.selector,
+            OnyxStorage.Activated.selector,
+            OnyxStorage.RegistrationCancelled.selector,
+            OnyxStorage.DealCreated.selector,
+            OnyxStorage.DealExtended.selector,
+            OnyxStorage.Answered.selector,
+            OnyxStorage.Slashed.selector,
+            OnyxStorage.MissReward.selector,
+            OnyxStorage.DealClosed.selector,
+            OnyxStorage.BondWithdrawn.selector,
+            OnyxStorage.EarningsWithdrawn.selector,
+            OnyxStorage.TreasurySwept.selector
+        ];
+        for (uint256 i = 0; i < sel.length; i++) {
+            string memory p = string.concat(".events[", vm.toString(i), "]");
+            assertEq(keccak256(bytes(vm.parseJsonString(json, _k(p, ".signature")))), sel[i]);
+            assertEq(_b(_k(p, ".topic")), sel[i]);
         }
     }
 }

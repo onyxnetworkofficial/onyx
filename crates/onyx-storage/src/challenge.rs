@@ -1,15 +1,17 @@
 //! Storage proofs (R-STOR-7).
 //!
 //! In epoch `e` with seed `s`, slot `i` of deal `d` picks shard
-//! [`slot_shard`]`(s, d, i, shardCount)` and, in it, row
-//! [`slot_row`]`(s, d, i, rows)`. A challenged holder answers with the
+//! [`slot_shard`]`(s, d, i, shardCount)` for all its holders and, in it, a
+//! row for each holder `n`: [`slot_row`]`(s, d, i, n, rows)` (ADR-0060
+//! amendment 1 item 1: one holder's answer, public in calldata, answers for no
+//! other holder; THREATS STORAGE-S16-R2-2). A challenged holder answers with the
 //! shard's 84-byte entry (Borsh [`ShardEntry`]) and its Merkle path to the
 //! manifest's `shards_root`, and the row's bytes and their path to the
 //! entry's root (ADR-0003 layout, `OnyxMerkle.sol`). The contract recomputes
 //! both paths with Keccak; the index and leaf count of each path come from
 //! the challenge and the entry, never from the answer.
 
-use crate::ids::{slot_row, slot_shard};
+use crate::ids::{slot_row, slot_shard, NodeId};
 use onyx_bulk::manifest::{shards_tree, Manifest, ShardEntry};
 use onyx_bulk::shard::split_rows;
 use onyx_core::Hash32;
@@ -101,30 +103,33 @@ pub fn prove(
     })
 }
 
-/// The answer to slot `slot` of deal `deal` in the epoch with `seed`.
+/// Holder `node`'s answer to slot `slot` of deal `deal` in the epoch with
+/// `seed`.
 pub fn answer(
     manifest: &Manifest,
     shard_file: &[u8],
     seed: &Hash32,
     deal: u64,
     slot: u32,
+    node: &NodeId,
 ) -> Result<StorageProof, ProofError> {
     let index = slot_shard(seed, deal, slot, manifest.header.shard_count);
     let entry = manifest
         .shards
         .get(index as usize)
         .ok_or(ProofError::NoShard(index))?;
-    let row = slot_row(seed, deal, slot, entry.rows);
+    let row = slot_row(seed, deal, slot, node, entry.rows);
     prove(manifest, shard_file, index, row)
 }
 
-/// Check a proof exactly as `OnyxStorage.answer` does.
+/// Check holder `node`'s proof exactly as `OnyxStorage.answer` does.
 pub fn verify(
     shards_root: &Hash32,
     shard_count: u32,
     seed: &Hash32,
     deal: u64,
     slot: u32,
+    node: &NodeId,
     p: &StorageProof,
 ) -> Result<(), ProofError> {
     let want = slot_shard(seed, deal, slot, shard_count);
@@ -146,7 +151,7 @@ pub fn verify(
         return Err(ProofError::Empty);
     }
     let rp = Proof {
-        index: slot_row(seed, deal, slot, p.entry.rows),
+        index: slot_row(seed, deal, slot, node, p.entry.rows),
         leaf_count: p.entry.rows,
         siblings: p.row_siblings.clone(),
     };
@@ -206,6 +211,10 @@ pub(crate) mod tests {
         (m, files)
     }
 
+    fn node(i: u64) -> NodeId {
+        crate::ids::node_id(&[0x22; 20], i, &Hash32([9; 32]))
+    }
+
     #[test]
     fn honest_answers_verify_for_every_slot() {
         let (m, files) = dataset(5, 13);
@@ -213,9 +222,12 @@ pub(crate) mod tests {
             let seed = Hash32([e; 32]);
             for slot in 0..3 {
                 let idx = slot_shard(&seed, 4, slot, 5);
-                let p = answer(&m, &files[idx as usize], &seed, 4, slot).expect("proves");
-                verify(&m.header.shards_root, 5, &seed, 4, slot, &p).expect("verifies");
-                assert_eq!(parse_entry(&entry_bytes(&p.entry)), Some(p.entry));
+                for n in 0..3 {
+                    let me = node(n);
+                    let p = answer(&m, &files[idx as usize], &seed, 4, slot, &me).expect("proves");
+                    verify(&m.header.shards_root, 5, &seed, 4, slot, &me, &p).expect("verifies");
+                    assert_eq!(parse_entry(&entry_bytes(&p.entry)), Some(p.entry));
+                }
             }
         }
     }
@@ -224,30 +236,37 @@ pub(crate) mod tests {
     fn forgeries_fail() {
         let (m, files) = dataset(4, 9);
         let seed = Hash32([1; 32]);
+        let me = node(0);
         let idx = slot_shard(&seed, 1, 0, 4);
-        let p = answer(&m, &files[idx as usize], &seed, 1, 0).expect("proves");
+        let p = answer(&m, &files[idx as usize], &seed, 1, 0, &me).expect("proves");
         let root = m.header.shards_root;
         // A changed byte in the row.
         let mut f = p.clone();
         let last = f.row.len() - 1;
         f.row[last] ^= 1;
-        assert_eq!(verify(&root, 4, &seed, 1, 0, &f), Err(ProofError::RowPath));
+        assert_eq!(
+            verify(&root, 4, &seed, 1, 0, &me, &f),
+            Err(ProofError::RowPath)
+        );
         // Another row of the same shard (the wrong index).
-        let other = slot_row(&seed, 1, 0, 9).wrapping_add(1) % 9;
+        let other = slot_row(&seed, 1, 0, &me, 9).wrapping_add(1) % 9;
         let q = prove(&m, &files[idx as usize], idx, other).expect("proves");
-        assert_eq!(verify(&root, 4, &seed, 1, 0, &q), Err(ProofError::RowPath));
+        assert_eq!(
+            verify(&root, 4, &seed, 1, 0, &me, &q),
+            Err(ProofError::RowPath)
+        );
         // Another shard's proof.
         let o = (idx + 1) % 4;
         let r = prove(&m, &files[o as usize], o, 0).expect("proves");
         assert!(matches!(
-            verify(&root, 4, &seed, 1, 0, &r),
+            verify(&root, 4, &seed, 1, 0, &me, &r),
             Err(ProofError::WrongShard { .. })
         ));
         // An entry with a changed row count (to move the asked index).
         let mut c = p.clone();
         c.entry.rows += 1;
         assert_eq!(
-            verify(&root, 4, &seed, 1, 0, &c),
+            verify(&root, 4, &seed, 1, 0, &me, &c),
             Err(ProofError::EntryPath)
         );
         // The wrong file for an entry cannot even be proven.
@@ -256,6 +275,46 @@ pub(crate) mod tests {
             Err(ProofError::WrongFile)
         );
         // The wrong shard count.
-        assert!(verify(&root, 5, &seed, 1, 0, &p).is_err());
+        assert!(verify(&root, 5, &seed, 1, 0, &me, &p).is_err());
+    }
+
+    /// THREATS STORAGE-S16-R2-2 (ADR-0060 amendment 1 item 1): the holders of
+    /// one challenged shard are asked for different rows, so a holder that
+    /// copies another holder's answer (public in calldata once sent) fails.
+    #[test]
+    fn a_holder_cannot_answer_with_another_holders_proof() {
+        let (m, files) = dataset(2, 1000);
+        let root = m.header.shards_root;
+        let mut copied = 0;
+        for e in 0..10u8 {
+            let seed = Hash32([e; 32]);
+            for slot in 0..2 {
+                let idx = slot_shard(&seed, 3, slot, 2);
+                let file = &files[idx as usize];
+                let holders: Vec<NodeId> = (0..3).map(node).collect();
+                let rows: Vec<u64> = holders
+                    .iter()
+                    .map(|n| slot_row(&seed, 3, slot, n, 1000))
+                    .collect();
+                for (a, ra) in holders.iter().zip(&rows) {
+                    let p = answer(&m, file, &seed, 3, slot, a).expect("proves");
+                    verify(&root, 2, &seed, 3, slot, a, &p).expect("own answer");
+                    for (b, rb) in holders.iter().zip(&rows) {
+                        if a == b || ra == rb {
+                            continue;
+                        }
+                        assert_eq!(
+                            verify(&root, 2, &seed, 3, slot, b, &p),
+                            Err(ProofError::RowPath),
+                            "{b:?} answered with {a:?}'s proof"
+                        );
+                        copied += 1;
+                    }
+                }
+            }
+        }
+        // 20 slots of 3 holders: 6 ordered pairs each, a shared row among
+        // 1,000 is rare.
+        assert!(copied >= 110, "{copied}");
     }
 }

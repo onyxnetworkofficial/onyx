@@ -127,7 +127,9 @@ pool=$(c call "$prepaid" 'pool()(uint256)' | first)
 held=$(c call "$token" 'balanceOf(address)(uint256)' "$prepaid" | first)
 paid=$(c call "$token" 'balanceOf(address)(uint256)' "$relayer" | first)
 round=$(kk "credits demo round")
-logged=$(c call "$registry" 'commitLogOf(bytes32,uint32,address,bytes32)(bytes32,uint64,bytes)' "$fact" 0 "$observer" "$round" | head -n1)
+# sed reads all of cast's output: `head` would close the pipe early, and under pipefail cast's
+# "Broken pipe" then failed the whole check (public check 15, 2026-11-02).
+logged=$(c call "$registry" 'commitLogOf(bytes32,uint32,address,bytes32)(bytes32,uint64,bytes)' "$fact" 0 "$observer" "$round" | sed -n 1p)
 rlog=$(c call "$registry" 'receiptLog(bytes32)(bytes32)' "$(c call "$registry" 'logKey(bytes32,uint32,address,bytes32)(bytes32)' "$fact" 0 "$observer" "$round")")
 sends=$(( $(c nonce "$relayer") - nonce_before ))
 echo "chain: observer ETH $eth, account ($dep, $red, $ex), miner ($mdep, $mred), pool $pool, prepaid holds $held, relayer paid $paid, relayer sent $sends transaction(s)"

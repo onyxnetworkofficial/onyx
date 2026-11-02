@@ -23,10 +23,12 @@ interface IStorageToken {
 /// ranking (repair).
 ///
 /// Every parameter is immutable and there is no owner: no admin path moves funds (R-STOR-11).
-/// Tokens leave only as earnings to an operator, a bond to its operator after exit, a deal's
-/// remainder to its payer after the deal ends, or slashes to the immutable treasury.
+/// Tokens leave only as earnings to an operator (or to the reporter of a miss), a bond to its
+/// operator after exit, a deal's remainder to its payer after the deal ends, or slashes and
+/// registration fees to the immutable treasury.
 /// Conservation: the token held equals deal deposits not yet paid or refunded, plus bonds held,
-/// plus earnings not withdrawn, plus slashes not swept (`conserved()`).
+/// plus earnings and rewards not withdrawn, plus slashes and fees not rewarded or swept
+/// (`conserved()`).
 contract OnyxStorage {
     uint256 internal constant ANVIL = 31_337;
     uint256 internal constant BASE_SEPOLIA = 84_532;
@@ -38,6 +40,16 @@ contract OnyxStorage {
     /// Most capacity one node may declare (1 EiB): sums stay far from overflow.
     uint64 public constant MAX_CAPACITY_GIB = 1 << 30;
     uint32 internal constant PPM = 1_000_000;
+    /// Part of every bond `register` keeps for the treasury, never returned (2%; ADR-0060
+    /// amendment 1 item 2, THREATS STORAGE-S16-R2-1): each try at grinding a node id costs money.
+    uint32 public constant REGISTRATION_FEE_PPM = 20_000;
+    /// Part of a missed answer's slash that goes to whoever reported it with `settleMissed`
+    /// (10%; amendment 1 item 3, THREATS STORAGE-S16-R2-3), unless that is the node's operator.
+    uint32 public constant REPORTER_PPM = 100_000;
+    /// The challenged-row rule this contract checks: 2 draws the row with the answering node's id
+    /// (`onyx-storage-row-v2`, amendment 1 item 1). A node reads it before it answers, so a node
+    /// built for another rule sends nothing instead of failing every answer (review STORAGE-S16-R4).
+    uint8 public constant ROW_VERSION = 2;
     /// `decline`'s index for every shard of a deal.
     uint32 public constant WHOLE_DEAL = type(uint32).max;
     uint64 internal constant GIB = 1 << 30;
@@ -86,6 +98,7 @@ contract OnyxStorage {
     );
     event Activated(bytes32 indexed nodeId, uint64 indexed index, address indexed operator);
     event RegistrationCancelled(uint64 indexed index);
+    event RegistrationFee(uint64 indexed index, address indexed operator, uint256 fee);
     event NodeSet(uint64 indexed fromEpoch, bytes32 setHash, bytes32[] nodes);
     event Removed(bytes32 indexed nodeId, uint64 fromEpoch, bool jailed);
     event BondWithdrawn(bytes32 indexed nodeId, address indexed operator, uint256 amount);
@@ -126,6 +139,7 @@ contract OnyxStorage {
         uint64 excludedFrom,
         uint8 cause
     );
+    event MissReward(bytes32 indexed nodeId, address indexed reporter, uint256 amount);
     event EarningsWithdrawn(address indexed operator, uint256 amount);
     event TreasurySwept(address indexed treasury, uint256 amount);
     event Declined(bytes32 indexed nodeId, uint64 indexed dealId, uint32 index, uint64 fromEpoch);
@@ -147,6 +161,9 @@ contract OnyxStorage {
         uint64 jailedFrom;
         uint64 index;
         uint128 bond;
+        /// The bond the node activated with (after the registration fee): it is jailed when its
+        /// bond falls below half of this or of `minBond`, whichever is larger (amendment 1 item 4).
+        uint128 startBond;
         /// Position in `_active` plus one (0: not in the list).
         uint256 pos;
     }
@@ -203,6 +220,8 @@ contract OnyxStorage {
     uint256 public bondsOut;
     uint256 public earningsOut;
     uint256 public swept;
+    /// The part of `slashed` credited to reporters of misses (in `earned`, not the treasury's).
+    uint256 public rewarded;
 
     uint256 private _lock = 1;
 
@@ -230,10 +249,13 @@ contract OnyxStorage {
         }
         if (
             address(token_) == address(0) || address(book_) == address(0) || treasury_ == address(0)
-                || epochBlocks_ < 2 || pricePerGiBEpoch_ == 0 || bondPerGiB_ == 0 || minBond_ == 0
-                || slashPpm_ == 0 || slashPpm_ > PPM || challengesPerDeal_ == 0
-                || challengesPerDeal_ > 16 || maxMisses_ == 0
-        ) revert BadParams();
+                || epochBlocks_ < 2 || pricePerGiBEpoch_ == 0 || bondPerGiB_ == 0
+                // The registration fee of the smallest bond is at least 1 base unit.
+                || minBond_ < PPM / REGISTRATION_FEE_PPM || slashPpm_ == 0 || slashPpm_ > PPM
+                || challengesPerDeal_ == 0 || challengesPerDeal_ > 16 || maxMisses_ == 0
+        ) {
+            revert BadParams();
+        }
         token = token_;
         book = book_;
         treasury = treasury_;
@@ -279,7 +301,9 @@ contract OnyxStorage {
     }
 
     /// Step 1: post the bond and declare capacity. The node id is fixed by `activate` from this
-    /// block's hash, unknown when the transaction was sent (THREATS STORAGE-3).
+    /// block's hash, unknown when the transaction was sent (THREATS STORAGE-3). The operator sees
+    /// that hash a block later and may cancel, so `REGISTRATION_FEE_PPM` of the bond goes to the
+    /// treasury at once and is never returned: grinding ids costs a fee per try (STORAGE-S16-R2-1).
     function register(uint64 capacityGiB, string calldata url)
         external
         nonReentrant
@@ -296,6 +320,9 @@ contract OnyxStorage {
         if (bond > type(uint128).max) revert BadAmount();
         _pull(msg.sender, bond);
         bondsIn += bond;
+        // The fee is bond money gone to the treasury, counted in `slashed` like a slash.
+        uint256 fee = bond * REGISTRATION_FEE_PPM / PPM;
+        slashed += fee;
         index = uint64(_regs.length);
         _regs.push(
             Registration({
@@ -303,10 +330,11 @@ contract OnyxStorage {
                 capacityGiB: capacityGiB,
                 block_: uint64(block.number),
                 done: false,
-                bond: uint128(bond)
+                bond: uint128(bond - fee)
             })
         );
         emit Registered(index, msg.sender, capacityGiB, bond, url);
+        emit RegistrationFee(index, msg.sender, fee);
     }
 
     /// Step 2, in a later block within `SEED_WINDOW`: the node joins the list from the next epoch.
@@ -332,6 +360,7 @@ contract OnyxStorage {
         n.capacityGiB = g.capacityGiB;
         n.index = index;
         n.bond = g.bond;
+        n.startBond = g.bond;
         _active.push(id);
         n.pos = _active.length;
         totalCapacityGiB += g.capacityGiB;
@@ -339,7 +368,7 @@ contract OnyxStorage {
         _checkpoint();
     }
 
-    /// A registration not activated within its window returns its bond.
+    /// A registration not activated within its window returns its bond less the registration fee.
     function cancelRegistration(uint64 index) external nonReentrant {
         if (index >= _regs.length) revert NotRegistration();
         Registration storage g = _regs[index];
@@ -425,6 +454,12 @@ contract OnyxStorage {
 
     function activeNodes() external view returns (bytes32[] memory) {
         return _active;
+    }
+
+    /// The bond node `id` activated with (after the registration fee): it is jailed when its bond
+    /// falls below half of this or of `minBond`, whichever is larger.
+    function startBondOf(bytes32 id) external view returns (uint128) {
+        return _nodes[id].startBond;
     }
 
     function nodeInfo(bytes32 id)
@@ -805,7 +840,16 @@ contract OnyxStorage {
         bytes32 k = _slotKey(dealId, e, slot, node);
         if (_slot[k] != 0) revert AlreadyAnswered();
         passed = L.verifyProof(
-            d.shardsRoot, d.shardCount, s, dealId, slot, entry, entrySiblings, row, rowSiblings
+            d.shardsRoot,
+            d.shardCount,
+            s,
+            dealId,
+            slot,
+            node,
+            entry,
+            entrySiblings,
+            row,
+            rowSiblings
         );
         if (passed) {
             _slot[k] = PASSED;
@@ -825,7 +869,9 @@ contract OnyxStorage {
     }
 
     /// After epoch `e` ends and within `SETTLE_EPOCHS`: a challenge nobody answered is a miss,
-    /// slashed like a wrong answer (anyone may call; R-STOR-9).
+    /// slashed like a wrong answer (anyone may call; R-STOR-9). The caller earns `REPORTER_PPM`
+    /// of the slash (rounded down), unless it is the node's own operator: then the treasury keeps
+    /// it (THREATS STORAGE-S16-R2-3).
     function settleMissed(
         uint64 dealId,
         uint64 e,
@@ -839,26 +885,38 @@ contract OnyxStorage {
         bytes32 k = _slotKey(dealId, e, slot, node);
         if (_slot[k] != 0) revert AlreadyAnswered();
         _slot[k] = MISSED;
-        _slash(node, dealId, e, slot, index, MISSED);
+        uint256 amt = _slash(node, dealId, e, slot, index, MISSED);
+        if (msg.sender != _nodes[node].operator) {
+            uint256 reward = amt * REPORTER_PPM / PPM;
+            if (reward != 0) {
+                rewarded += reward;
+                earned[msg.sender] += reward;
+                emit MissReward(node, msg.sender, reward);
+            }
+        }
     }
 
     /// Take `slashPpm` of the bond for the treasury, exclude the node from the shard from the
     /// next epoch (its copy moves to the next node in the ranking), and jail the node after
-    /// `maxMisses` in a row or when its bond falls below half of `minBond`.
+    /// `maxMisses` in a row or when its bond falls below half of the bond it activated with or of
+    /// `minBond`, whichever is larger (so a large bond is jailed after as few slashes as a small
+    /// one, about 7 at 10%). Returns the amount taken.
     function _slash(bytes32 id, uint64 dealId, uint64 e, uint32 slot, uint32 index, uint8 cause)
         internal
+        returns (uint256 amt)
     {
         Node storage n = _nodes[id];
-        uint256 amt = uint256(n.bond) * slashPpm / PPM;
+        amt = uint256(n.bond) * slashPpm / PPM;
         n.bond -= uint128(amt);
         slashed += amt;
         n.misses += 1;
         bytes32 xk = _exKey(dealId, index, id);
         if (_exclFrom[xk] == 0) _exclFrom[xk] = currentEpoch() + 1;
         emit Slashed(id, dealId, e, slot, index, amt, exclusionFrom(dealId, index, id), cause);
+        uint256 ref = n.startBond > minBond ? n.startBond : minBond;
         if (
             (n.status == ACTIVE || n.status == EXITING)
-                && (n.misses >= maxMisses || n.bond < minBond / 2)
+                && (n.misses >= maxMisses || n.bond < ref / 2)
         ) {
             _remove(id, n, true);
         }
@@ -875,16 +933,18 @@ contract OnyxStorage {
         emit EarningsWithdrawn(msg.sender, a);
     }
 
-    /// Send the slashed tokens to the immutable treasury (anyone may call).
+    /// Send the slashed tokens and registration fees not credited to reporters to the immutable
+    /// treasury (anyone may call).
     function sweepTreasury() external nonReentrant {
-        uint256 a = slashed - swept;
+        uint256 a = slashed - rewarded - swept;
         if (a == 0) revert BadAmount();
         swept += a;
         _push(treasury, a);
         emit TreasurySwept(treasury, a);
     }
 
-    /// Every flow in and out (R-STOR-11).
+    /// Every flow in and out (R-STOR-11). `slashed` includes registration fees; `rewarded` is
+    /// the part of it credited to reporters of misses.
     function books()
         external
         view
@@ -896,20 +956,24 @@ contract OnyxStorage {
             uint256 refunded_,
             uint256 bondsOut_,
             uint256 earningsOut_,
-            uint256 swept_
+            uint256 swept_,
+            uint256 rewarded_
         )
     {
-        return (deposits, bondsIn, paid, slashed, refunded, bondsOut, earningsOut, swept);
+        return (deposits, bondsIn, paid, slashed, refunded, bondsOut, earningsOut, swept, rewarded);
     }
 
     /// Conservation (R-STOR-11): every token held is accounted for, and no flow out exceeds its
-    /// flow in.
+    /// flow in. Earnings are fed by pay and by reporters' rewards; the treasury's part is what was
+    /// slashed or taken as a fee, less rewards, less what was swept.
     function conserved() external view returns (bool) {
         if (paid + refunded > deposits || slashed + bondsOut > bondsIn) return false;
-        if (earningsOut > paid || swept > slashed) return false;
+        if (earningsOut > paid + rewarded || swept + rewarded > slashed) return false;
         uint256 held = (deposits - paid - refunded) + (bondsIn - slashed - bondsOut)
-            + (paid - earningsOut) + (slashed - swept);
-        return token.balanceOf(address(this)) == held;
+            + (paid + rewarded - earningsOut) + (slashed - rewarded - swept);
+        // At least what is owed: tokens sent to the contract directly (outside every flow) stay
+        // there unowned and must not make the books read as broken forever (review STORAGE-S16-R4).
+        return token.balanceOf(address(this)) >= held;
     }
 
     function params()
