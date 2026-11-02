@@ -1,7 +1,7 @@
 // Product U1: contributor entry, progressive technical detail and no surprise data loading.
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
-import { settled } from './wait.mjs';
+import { settled, WAIT_CAP } from './wait.mjs';
 
 export async function product(browser, base, root, expect) {
 	const axeSrc = await readFile(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
@@ -63,6 +63,9 @@ export async function product(browser, base, root, expect) {
 		await pg.locator('header a.mark').click();
 		await settled(pg);
 		await pg.getByTestId('home-secondary').click();
+		// The navigation, not only a quiet page: on a loaded machine the old page could count as
+		// settled before the click had changed the route (a gated check failed so, 2026-11-02).
+		await pg.waitForURL((u) => new URL(u).hash === '#/data', { timeout: WAIT_CAP }).catch(() => {});
 		await settled(pg);
 		expect(new URL(pg.url()).hash === '#/data', `U1 ${width}: browse opens the existing data page`);
 		await pg.locator('header a.mark').click();

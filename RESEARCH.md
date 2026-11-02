@@ -1983,7 +1983,27 @@ Onyx's v0 differs.
   row tree that buyers already use.
 - Storj v3: erasure coding and audits of storage nodes,
   [Storj whitepaper v3](https://www.storj.io/storjv3.pdf). Onyx v0 keeps full replicas; erasure
-  coding is ROADMAP S17.
+  coding is ROADMAP S17. Read again for S17 (2026-11-02): each segment is Reed-Solomon coded into
+  n pieces of which any k rebuild it (expansion n/k); a repair threshold m between k and n
+  triggers a rebuild before too many pieces are lost (section 3.4 and the model in section 7.1,
+  after "Peer-to-Peer Storage Systems: a Practical Guideline to be Lazy"). At the same expansion
+  a wider code is more durable (its example: k = 20, n = 40 beats k = 10, n = 20), and section
+  7.3.4 concludes that n should be as large as the network allows, so m can sit close to k and
+  repairs (which cost bandwidth) stay rare.
+- Walrus (Mysten Labs): "RedStuff", a two-dimensional Reed-Solomon construction with about 4.5x
+  overhead; a lost sliver is rebuilt from symbols of other shards' slivers, not from the whole
+  blob; a client that encoded a blob wrongly is caught by an inconsistency proof (decoded symbols
+  that do not match their committed hash), after which nodes may drop the blob
+  ([Walrus docs: encoding](https://docs.wal.app/design/encoding.html),
+  [paper, arXiv 2505.05370](https://arxiv.org/abs/2505.05370)). For S17: a coded deal needs a
+  rule for a publisher whose pieces do not decode to its anchored shards.
+- Reed-Solomon in Rust: [`reed-solomon-simd`](https://github.com/AndersTrier/reed-solomon-simd)
+  3.1.0 (2025-10-14, crates.io licence `MIT AND BSD-3-Clause`, both allowed by deny.toml): a
+  fork of `reed-solomon-16`, after Leopard-RS, over GF(2^16), 1 to 32,768 original and recovery
+  shards, runtime SIMD choice with a plain-Rust fallback (whether every path gives the same bytes
+  is not stated: S17 would pin it with shared vectors run on each path).
+  [`reed-solomon-erasure`](https://crates.io/crates/reed-solomon-erasure) 6.0.0 (MIT, last
+  release 2022-09-23) is an older alternative.
 - Arweave: permanent storage with proofs of access to random past data,
   [Arweave yellow paper](https://www.arweave.org/yellow-paper.pdf). A candidate for the cold
   archive tier (ROADMAP S18), the owner's choice.

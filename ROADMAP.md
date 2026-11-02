@@ -143,11 +143,16 @@ results, what was fixed, what stays open with a THREATS row).
       level recomputed from its inputs in any order, attestation bound to the binding's recipe and
       label set, money effect recorded (settles only for a label set registered at 3), health
       counts fallback-withheld shards apart, docker-smoke mounts the reporter key after L15)
-- [ ] L17 Contract delta audit (launch checklist LC-16, from P7): Slither over `OnyxRegistry.sol`
+- [x] L17 Contract delta audit (launch checklist LC-16, from P7): Slither over `OnyxRegistry.sol`
       (+407 lines since the L2 merge `15635c4`: C4, C11, C51) and `OnyxSignedBook.sol` (new, 811
       lines: C2, C7, C10), triage every finding into THREATS, and a written role/access table of
       every new external function (who may call it, what it moves); the report under docs/audit/;
-      about 2 hours; Slither is not installed on the dev box (free, pip)
+      about 2 hours; Slither is not installed on the dev box (free, pip). Done: first pass
+      2026-10-27 (docs/audit/2026-10-27-lc16-slither.md), delta pass 2026-11-02 over the 11
+      contracts changed since (OnyxStorage, OnyxCorrections, OnyxParametric, OnyxPrepaidV2,
+      OnyxRevenueV2 and edits; docs/audit/2026-11-02-slither-delta.md): 63 results triaged, 0
+      security findings, 1 cosmetic (THREATS STORAGE-S16-R12); 16 new invariants at audit depth
+      held. LC-16 still closes only on the launch commit (P7a)
 - [ ] L19 Hosted API front leftovers (from NS17, review NS17-R1): a per-address connection cap
       on port 443 in the web server's firewall (nftables `ct count`, deployment.md "TLS in front";
       Caddy is a trusted proxy, so the node's own per-address cap does not see its clients), and
@@ -1062,7 +1067,13 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       capacity, erasure coding (k of n pieces instead of R copies; each holder keeps a different
       piece, the fix for STORAGE-4, ADR-0062 finding 6),
       aggregated proofs (one answer per node per epoch, more samples), per-epoch committees or a
-      proof of rank instead of the whole node list (past 128 nodes)
+      proof of rank instead of the whole node list (past 128 nodes). Started 2026-11-02: research in
+      RESEARCH.md; ADR-0063 (coded pieces) proposed, reviewed (THREATS STORAGE-S17-R1: 3 High,
+      e.g. one operator needs n - k + 1 pieces, not k + 1, and coding does not make fetching on
+      demand dearer); second draft reviewed (STORAGE-S17-R2: lazy repair reopened the hole and
+      could not be checked on chain; placement gas 1.1 to 7.5 million); third draft written. Next:
+      measure an assembly placement, choose the contract split, a third review, then code. Coded
+      deals need `N >= 2n - k` nodes (36 for 12-of-24), so the live five nodes stay on copies
 - [ ] S18 Cold archive tier on an outside network (the owner picks it) and store on first use
       (ADR-0055 item 2): Onyx keeps the fingerprints and a fetch path; the publisher keeps the bulk
       until the first paid read

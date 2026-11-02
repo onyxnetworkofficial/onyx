@@ -208,7 +208,10 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   depth (512 x 256, seed `0x20261028`) pass: 24 invariants in 7 suites, 0 failures, 1,500 s.
   Slither 0.11.6 (`--filter-paths "lib/|test/|script/"`): 172 results (High 8, Medium 48, Low 83,
   Informational 30, Optimization 3), 9 more than on 2026-10-27, all on the changed contracts and
-  triaged in the report's 2026-10-28 addendum: 0 security findings. Open: the gate closes only on
+  triaged in the report's 2026-10-28 addendum: 0 security findings. Delta pass 2026-11-02 on
+  `054cca71` (docs/audit/2026-11-02-slither-delta.md): 11 contracts changed since, 63 results
+  triaged, 0 security findings; the 16 new invariants at audit depth (seed `0x20261102`) pass.
+  Open: the gate closes only on
   the launch commit, which is not chosen yet (a contract change after `ccbe553` reopens it); the
   live reobserve, panel and stakes contracts still run the pre-LC16 code until redeployed. Before:
   PARTIAL 2026-10-27 (north-star loop NL12, lane B, branch `nl-lane-b` at main `037bc1a`'s

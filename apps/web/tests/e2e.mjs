@@ -1220,6 +1220,10 @@ try {
 		const slot = pg.locator('.setslot');
 		await slot.getByRole('status', { name: 'Decoding the label set' }).waitFor({ timeout: WAIT_CAP }).catch(() => {});
 		await pg.evaluate(() => document.fonts.ready);
+		// The rest of the page settles first (the label set itself is held above): content that
+		// loaded late above the slot moved it 2.5 px between the two readings on a loaded machine
+		// (2026-11-02, with the suites in lanes), which is not the shift this check is about.
+		await quietDom(pg, { quiet: 1500, timeout: WAIT_CAP });
 		const before = await slot.boundingBox();
 		expect(
 			(await slot.locator('h2').allInnerTexts()).join('|') === 'Label set' && (await slot.locator('.pill').count()) === 0 && (await slot.getByRole('status', { name: 'Decoding the label set' }).count()) === 1,
