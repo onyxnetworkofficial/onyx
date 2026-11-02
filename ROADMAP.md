@@ -1031,11 +1031,16 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       reads fixed for the public endpoint's 200-block log limit (THREATS STORAGE-S15-1); five nodes
       live, three deals (btc.price, eth.price, btc.mvrv), epoch 13: 18 of 18 challenges passed, 0.036
       tONYX paid, nothing slashed; nodes keep their chain reads through HTTP 429 (STORAGE-S15-4);
-      24-minute epochs on 0.2 s blocks, deals end 2026-11-02 about 01:30 UTC (STORAGE-S15-5)
-- [ ] S16 Sealed replicas and operator diversity (THREATS STORAGE-1, STORAGE-2, STORAGE-4): a
-      node-specific slow encoding of each copy so a node cannot fetch from another replica only when
-      asked; at most one copy of a shard per declared operator; nodes that decline everything stop
-      counting in N and in total capacity (STORAGE-R2-2)
+      24-minute epochs on 0.2 s blocks (STORAGE-S15-5). Run finished 2026-11-02: seeds recorded in
+      epochs 10 to 43 (none in 2 to 9, before the keeper ran), 612 of 612 challenges passed, 0
+      missed, 0 slashed; 0.306 tONYX paid to four nodes (n2 held no shard), 0.072 refunded at close;
+      earnings withdrawn; `conserved()` true (`scripts/storage-sepolia.sh close`)
+- [ ] S16 Sealed replicas (THREATS STORAGE-1, STORAGE-2, STORAGE-4): a node-specific slow encoding
+      of each copy so a node cannot fetch from another replica only when asked, and so several copies
+      held by one operator cost several disks; nodes that decline everything stop counting in N and in
+      total capacity (STORAGE-R2-2; a decline penalty must not let a publisher that withholds data
+      push honest nodes out, STORAGE-16). One copy per operator address was built and withdrawn on
+      2026-11-02 after review STORAGE-S16-R1 (it paid operators to split their addresses)
 - [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6): placement weighted by declared
       capacity, erasure coding (k of n pieces instead of R copies),
       aggregated proofs (one answer per node per epoch, more samples), per-epoch committees or a

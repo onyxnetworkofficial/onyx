@@ -252,8 +252,8 @@ Formulas:
 | Phase | What | State |
 |---|---|---|
 | v0 | Replicas (R = 3), rendezvous placement, on-chain row proofs, pay, slash, repair, reads with fail-over, bonded nodes, conservation on chain | **Built and tested on a local chain** |
-| v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4) |
-| Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch from another copy only when asked; operator diversity in placement | Later (ROADMAP S16) |
+| v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4); **run finished 2026-11-02**: 612 of 612 challenges passed over 34 epochs, nothing slashed, deals closed, books balanced |
+| Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch from another copy only when asked and one operator's several copies cost several disks (one copy per operator address was tried and withdrawn: THREATS STORAGE-S16-R1) | Later (ROADMAP S16) |
 | Erasure coding | Split each shard into k-of-n pieces (for example 10 of 16) instead of 3 full copies: about half the disk for more safety; aggregated proofs (one answer per node per epoch); placement weighted by declared size | Later (ROADMAP S17) |
 | Cold archive tier | Old, rarely read data kept on an outside storage network, with Onyx keeping only the fingerprints and a fetch path | Later, owner's choice of network (ROADMAP S18) |
 | Store on first use | The publisher keeps the bulk until the first paid read (ADR-0055 item 2) | Later (ROADMAP S18) |
@@ -274,7 +274,18 @@ Formulas:
 | Local five-node demo (`scripts/storage-network-anvil.sh`) | Done | see "Last demo run" below |
 | Adversarial reviews | STORAGE-R1 (9 findings) and STORAGE-R2 (a fresh review of those fixes, 6 findings): all fixed with tests except nodes that decline everything still counting in N (S16) | THREATS "STORAGE-R1", "STORAGE-R2" |
 | Decline (`decline`, one shard or a whole deal) | Done (local) | 3 forge tests, 5 node tests, in the money invariants |
-| Base Sepolia | `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` at block 52986889 (2026-11-01): epochs of 7,200 blocks, 0.001 tONYX per GiB per copy per epoch, bond 0.01 tONYX per GiB (10 tONYX minimum), slash 10%, 2 checks per deal per epoch, jail after 3 misses; `conserved()` true. Five node keys funded (0.00012 test ETH, 20 tONYX each). Epochs are 24 minutes (0.2 s blocks, STORAGE-S15-5). Five nodes run since 2026-11-01 (10 tONYX bond, 6 GiB each); three deals end at block 53303689 (about 2026-11-02 01:30 UTC); a longer run needs test ETH for the nodes first | ROADMAP S15, THREATS STORAGE-S15 |
+| Base Sepolia | `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` at block 52986889 (2026-11-01): epochs of 7,200 blocks, 0.001 tONYX per GiB per copy per epoch, bond 0.01 tONYX per GiB (10 tONYX minimum), slash 10%, 2 checks per deal per epoch, jail after 3 misses; `conserved()` true. Five node keys funded (0.00012 test ETH, 20 tONYX each). Epochs are 24 minutes (0.2 s blocks, STORAGE-S15-5). Five nodes run since 2026-11-01 (10 tONYX bond, 6 GiB each); three deals ran to block 53303689 (2026-11-02 01:30 UTC) and were closed (see "First live run" below); a longer run needs test ETH for the nodes first | ROADMAP S15, THREATS STORAGE-S15 |
+
+### First live run (Base Sepolia, 2026-11-01 to 2026-11-02)
+| What | Result |
+|---|---|
+| Nodes | 5 on one web host, 5 operator addresses, 10 tONYX bond and 6 GiB each; n1 also the keeper |
+| Deals | btc.price, eth.price, btc.mvrv: 1 shard each, 3 copies, epochs 2 to 43, 0.126 tONYX deposit each |
+| Epochs with checks | 34 (10 to 43, about 14 hours); no seed was recorded in 2 to 9, before the keeper ran, so those epochs had no checks and paid nothing |
+| Checks | 612 of 612 passed (18 per epoch), 0 missed, 0 slashed, nobody jailed |
+| Pay | 0.306 tONYX: n1, n3 and n4 0.068 each, n5 0.102, n2 nothing (it held none of the 9 copies) |
+| Close | 0.072 tONYX refunded to the payer; every node withdrew its earnings; `conserved()` true; the contract holds the 50 tONYX of bonds |
+| Gas left | nodes 0.00004 to 0.00012 test ETH; the next run needs a faucet top-up first |
 
 ### Last demo run (2026-11-01, local anvil, debug build, epochs of 40 blocks)
 | What | Result |

@@ -24,7 +24,10 @@ estimate first. Test ETH only.
 **Rehearsed:** locally by `scripts/corrections-anvil.sh` and `scripts/recheck-anvil.sh` (both in
 check-all): the same contracts, the live manifest's real template ids, a market, rechecks that
 disagree and agree, payouts to the wei. **Deployed** on Base Sepolia 2026-11-01 (step 2:
-`0x3765dab41115fc2b849b13f81c75fce96a771133`, docs/ops/deployment.md).
+`0x3765dab41115fc2b849b13f81c75fce96a771133`, docs/ops/deployment.md), and steps 3 to 5 done the
+same day for `us.treasury.tga_total_deposits`: its `.recheck` metric registered (template
+`0x2d5828d8ebfcbfa6545463c11e43ab24aee03e8cf2fa7ba65f0985345d0c3016`, block 53274589) and paired
+with tolerance 0; `recheck-plan` against Base Sepolia reads it (state `none`: no market yet).
 
 ## Preconditions
 

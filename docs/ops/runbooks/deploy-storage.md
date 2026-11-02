@@ -75,6 +75,8 @@ before mainnet, ROADMAP H1). Each storage node operator uses its own fresh key.
 2. `onyx-storage deal --rpc "$RPC" --chain-id 84532 --contract <storage> --from-block <deploy block>
    --key <publisher gas key> --dir <dataset dir> --r 3 --epochs <N> --source-url https://<publisher node>/`.
 3. After two epochs: `onyx-storage epoch ... --epoch <start>` shows every challenge passed.
+4. When the deals end: `scripts/storage-sepolia.sh close` closes each recorded deal (the unpaid
+   deposit goes back to the payer), withdraws each node's earnings and prints `conserved()`.
 
 ## Rollback
 

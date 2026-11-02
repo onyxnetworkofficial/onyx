@@ -13,6 +13,9 @@
 #   scripts/storage-sepolia.sh install              each node as onyx-storage@<name> on the web host
 #   scripts/storage-sepolia.sh deal DIR [DIR ...]   pay for 3 copies of each anchored dataset
 #   scripts/storage-sepolia.sh status               every node, this epoch's challenges, the books
+#   scripts/storage-sepolia.sh close                close every recorded deal that has ended (the
+#                                                   unpaid deposit goes back to the payer) and
+#                                                   withdraw each node's earnings
 #
 # Every step can be run again: a deploy that was sent is found by its address, a node or deal
 # already on chain is never registered or paid twice (review STORAGE-R3-3), funding tops up to a
@@ -325,8 +328,38 @@ status)
   echo "== books"
   run "$bin/onyx-storage" books $(common)
   ;;
+close)
+  need_contract
+  a=$(get contract)
+  now=$(cast_ call "$a" 'currentEpoch()(uint64)' | awk '{print $1}')
+  for k in $(python3 -I -c 'import json,sys; print(" ".join(sorted(k for k in json.load(open(sys.argv[1])) if k.startswith("deal_"))))' "$state"); do
+    id=$(get "$k")
+    # dealInfo: ..., endEpoch (9th), deposit, paidOut, closed (12th).
+    info=$(cast_ call "$a" 'dealInfo(uint64)(address,bytes32,bytes32,bytes32,uint32,uint8,uint64,uint64,uint64,uint256,uint256,bool)' "$id" | awk '{print $1}')
+    end=$(sed -n 9p <<<"$info")
+    closed=$(sed -n 12p <<<"$info")
+    if [ "$closed" = true ]; then
+      echo "${k#deal_} (deal $id): already closed"
+    elif [ "$now" -lt "$end" ]; then
+      echo "${k#deal_} (deal $id): runs until epoch $end (now $now)"
+    else
+      run "$bin/onyx-storage" close $(common) --chain-id "$chain_id" --key "$keys/storage-payer.key" --deal "$id" | tail -1
+      echo "${k#deal_} (deal $id): closed; deposit $(sed -n 10p <<<"$info"), paid $(sed -n 11p <<<"$info")"
+    fi
+  done
+  for n in $(names); do
+    e=$(cast_ call "$a" 'earned(address)(uint256)' "$(addr "$n")" | awk '{print $1}')
+    if [ "$e" = 0 ]; then
+      echo "$n: nothing to withdraw"
+    else
+      run "$bin/onyx-storage" withdraw $(common) --chain-id "$chain_id" --key "$keys/storage-$n.key" | tail -1
+      echo "$n: withdrew $e"
+    fi
+  done
+  echo "conserved: $(cast_ call "$a" 'conserved()(bool)')"
+  ;;
 *)
-  sed -n '2,24p' "$0" >&2
+  sed -n '2,27p' "$0" >&2
   exit 2
   ;;
 esac
