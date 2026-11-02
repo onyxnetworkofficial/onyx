@@ -11,7 +11,8 @@
 # nodes fetch and check their shards; reads from the replicas; an epoch of challenges every node
 # passes; one node killed (reads keep working) and one node that dropped its shards (a forged row
 # it sends is refused on chain); misses settled and slashed (the keeper earns 10% of each); repair
-# to new replicas; the books balanced on chain (conservation) and rebuilt from the contract's events.
+# to new replicas; the books balanced on chain (conservation) and rebuilt from the contract's events;
+# the declines report shows the slashes on the two misbehaving nodes only.
 # Prints what it measured, then STORAGE NETWORK DEMO PASSED.
 # Env: STORAGE_DEMO_MIB (4), STORAGE_EPOCH_BLOCKS (40), FOUNDRY_BIN (~/.foundry/bin),
 # CARGO_TARGET_DIR.
@@ -456,6 +457,21 @@ print(f"  ok: deposits {b['deposits']}, bonds {b['bonds_in']}; paid {b['paid']},
 PY
 [ "$(castw call "$storage" 'conserved()(bool)')" = true ] || fail "conserved() is false"
 pass "conserved() is true on chain"
+# ADR-0060 amendment 2 item 1: the public report of declines and slashes per node and per deal.
+"$st_bin" declines "${S[@]}" >"$work/declines.json" || { cat "$work/declines.json"; fail "declines"; }
+python3 -I - "$work/declines.json" "${ids[A]}" "${ids[B]}" <<'PY'
+import json, sys
+r, bad = json.load(open(sys.argv[1])), {x.lower() for x in sys.argv[2:]}
+by = {n["id"].lower(): n for n in r["nodes"]}
+assert len(by) == 5 and bad <= set(by), r
+for i, n in by.items():
+    assert n["shard_declines"] == 0 and n["whole_deal_declines"] == 0, n
+    assert (n["slashes"] > 0) == (i in bad), n
+total = sum(n["slashes"] for n in r["nodes"])
+assert sum(d["slashes"] for d in r["deals"]) == total, r
+print(f"  ok: {total} slashed shards, all on the two misbehaving nodes; no declines")
+PY
+pass "declines report: slashes only on the misbehaving nodes"
 
 gas_of() { python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["gasUsed"], 16))'; }
 answer_tx=$(castw logs --from-block "$genesis" --address "$storage" 'Answered(uint64,uint64,uint32,bytes32,uint32,bool,uint256)' --json \

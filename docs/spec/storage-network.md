@@ -6,8 +6,9 @@ Status: **Accepted as ADR-0060 (2026-10-30), built on a local anvil.** Test netw
 docs/STORAGE-NETWORK.md. Threats: THREATS.md "STORAGE". Operator guide: docs/ops/storage-node.md.
 ADR-0060 amendment 1 (a row for each holder, the registration fee, the reporter's reward, jail by
 a node's own bond) and amendment 2 item 2 (a notice on declines of proven shards) are in the rules
-below and built, not deployed: the Base Sepolia contract of ROADMAP S15 runs v0 (row v1, no fee,
-no reward, jail below `minBond / 2`, no notice).
+below, built and deployed on Base Sepolia 2026-11-02 (`0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`, block 53457522,
+`RULES_VERSION` 3). The S15 contract (v0: row v1, no fee, no reward, jail below `minBond / 2`, no
+notice) is retired.
 
 ## Scope
 

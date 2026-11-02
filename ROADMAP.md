@@ -1046,9 +1046,14 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       (ADR-0062, review STORAGE-S16-R2; now S21); one copy per operator address was built and
       withdrawn the same day (STORAGE-S16-R1). Done so far: the `_challenged` scan became a heap
       (STORAGE-S16-R1-2); amendment 1 built and tested locally on 2026-11-02 (a node refuses an
-      older contract), not deployed; amendment 2 item 2 (a decline of a shard the node proved in
+      older contract); amendment 2 item 2 (a decline of a shard the node proved in
       in the decline's epoch or the 7 before it starts one epoch later; `RULES_VERSION` 3) built and tested locally on
-      2026-11-02 after design review STORAGE-S16-R6, not deployed
+      2026-11-02 after design review STORAGE-S16-R6. Both redeployed on Base Sepolia 2026-11-02:
+      `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` (block 53457522), the five nodes registered again,
+      two 3-hour deals (btc.price, eth.price); `storage-sepolia.sh` now stops on a failed chain read
+      instead of reading it as "nothing on chain" (THREATS STORAGE-S16-R8); `onyx-storage declines`
+      reports declines and slashes per node and per deal (amendment 2 item 1). Open: judge the fee
+      on the live contract (STORAGE-3)
 - [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6, STORAGE-4): placement weighted by declared
       capacity, erasure coding (k of n pieces instead of R copies; each holder keeps a different
       piece, the fix for STORAGE-4, ADR-0062 finding 6),

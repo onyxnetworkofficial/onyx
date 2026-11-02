@@ -1783,9 +1783,56 @@ impl StorageNode {
     }
 }
 
-/// Run the loop every `every` until the process stops (errors are logged
-/// and retried next tick).
+/// Spacing for [`run`]: a xorshift64* stream seeded from the node id, the
+/// clock and the process id. Not for anything secret: it only keeps nodes
+/// that started together from staying in step.
+pub(crate) struct Jitter(u64);
+
+impl Jitter {
+    pub(crate) fn new(node: &NodeId) -> Self {
+        let mut b = [0u8; 8];
+        b.copy_from_slice(&node.0 .0[..8]);
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos() as u64)
+            .unwrap_or(0);
+        let x = u64::from_be_bytes(b) ^ nanos ^ u64::from(std::process::id()).rotate_left(32);
+        Jitter(if x == 0 { 0x9E37_79B9_7F4A_7C15 } else { x })
+    }
+
+    fn next(&mut self) -> u64 {
+        self.0 ^= self.0 >> 12;
+        self.0 ^= self.0 << 25;
+        self.0 ^= self.0 >> 27;
+        self.0.wrapping_mul(0x2545_F491_4F6C_DD1D)
+    }
+
+    /// A random time in `[0, d)` (0 when `d` is under a millisecond).
+    pub(crate) fn part(&mut self, d: Duration) -> Duration {
+        let ms = u64::try_from(d.as_millis()).unwrap_or(u64::MAX);
+        if ms == 0 {
+            return Duration::ZERO;
+        }
+        Duration::from_millis(self.next() % ms)
+    }
+
+    /// `d` plus or minus up to a quarter of `d`.
+    pub(crate) fn around(&mut self, d: Duration) -> Duration {
+        let q = d / 4;
+        d - q + self.part(q * 2)
+    }
+}
+
+/// Run the loop about every `every` until the process stops (errors are
+/// logged and retried next pass). The first pass waits a random part of
+/// `every` and each wait is `every` give or take a random quarter, so nodes
+/// started together on one host do not stay in step: a pass cut short by
+/// HTTP 429 is quick, and five nodes started in the same second kept meeting
+/// the public endpoint's rate limit together for a whole epoch (THREATS
+/// STORAGE-S16-R10).
 pub async fn run(node: Arc<StorageNode>, every: Duration) {
+    let mut jitter = Jitter::new(&node.cfg.node);
+    tokio::time::sleep(jitter.part(every)).await;
     loop {
         match node.tick().await {
             Ok(r) => {
@@ -1798,7 +1845,7 @@ pub async fn run(node: Arc<StorageNode>, every: Duration) {
             }
             Err(e) => eprintln!("onyx-node: storage: tick: {e}"),
         }
-        tokio::time::sleep(every).await;
+        tokio::time::sleep(jitter.around(every)).await;
     }
 }
 

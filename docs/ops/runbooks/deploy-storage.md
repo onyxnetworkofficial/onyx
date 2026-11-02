@@ -1,7 +1,8 @@
 # Runbook: deploy the storage network on Base Sepolia (ADR-0060, lead only)
 
 **Trigger:** the lead decides to put the storage network live (ROADMAP S15). Deployed on Base Sepolia
-2026-11-01: `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889), with
+2026-11-02 (S16, `RULES_VERSION` 3): `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` (block 53457522; the v0
+contract `0x2423837572b58caf82896491ff6ee23080849419` of 2026-11-01 is retired), with
 `scripts/storage-sepolia.sh` (it runs the steps below; state in `.onyx-testnet/storage-sepolia.json`).
 The public endpoint answers `eth_getLogs` for at most 200 blocks per call (THREATS STORAGE-S15-1)
 and HTTP 429 past its rate limit: the five nodes share one address, so each runs one pass a minute
@@ -77,6 +78,18 @@ before mainnet, ROADMAP H1). Each storage node operator uses its own fresh key.
 3. After two epochs: `onyx-storage epoch ... --epoch <start>` shows every challenge passed.
 4. When the deals end: `scripts/storage-sepolia.sh close` closes each recorded deal (the unpaid
    deposit goes back to the payer), withdraws each node's earnings and prints `conserved()`.
+
+## Redeploy (a new contract version)
+
+1. Close the old deals (`scripts/storage-sepolia.sh close`) once they end.
+2. Move `.onyx-testnet/storage-sepolia.json` aside (for example `storage-sepolia-v0.json`).
+3. Build onyx-node, onyx-storage and onyx-publish from the commit and deploy the API with
+   `scripts/deploy-api.sh` (a node refuses a contract whose `RULES_VERSION` it does not know).
+4. `plan`, `deploy --yes`, `register`, `install`, `deal`. Run `fund --yes` only when a key is
+   short. Done this way on 2026-11-02 (S16).
+5. The old contract keeps each node's bond until that node runs `onyx-storage exit --node ID`
+   and, two epochs later, `onyx-storage withdraw-bond --node ID` against it (node gas). On
+   2026-11-02 the five v0 bonds (10 tONYX each, no value) were left there to save test ETH.
 
 ## Rollback
 

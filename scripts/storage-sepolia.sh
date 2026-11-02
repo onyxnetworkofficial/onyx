@@ -128,10 +128,47 @@ forge_script() {
   out=$(run bash -c 'cd "$1/contracts" && shift && exec "$@"' _ "$REPO" "$FOUNDRY_BIN/forge" script "$s" "$@")
   printf '%s\n' "$out" | grep -E 'Contract Address|Estimated|ONCHAIN EXECUTION|Total Paid|SUCCESS' || true
 }
+# A chain read that failed stops the script with its reason; it never reads as "no code", "no
+# logs" or an empty value. Bash clears `set -e` inside $(...), so each read is checked here and its
+# caller assigns the result to a variable first (an assignment's failure stops the script; inside a
+# function run in $(...) the assignment needs its own `|| exit 1`).
+whole() { case "$2" in '' | *[!0-9]*) echo "$1 is not a whole number: ${2:0:200}" >&2; exit 1 ;; esac; }
+code_at() {
+  local c
+  c=$(cast_ code "$@") || { printf '%s\n' "$c" | tail -c 400 >&2; echo "eth_getCode failed for $1" >&2; exit 1; }
+  case "$c" in 0x*) printf '%s\n' "$c" ;; *) echo "eth_getCode for $1 answered: ${c:0:200}" >&2; exit 1 ;; esac
+}
+# A cast read whose failure prints its reason (the caller's assignment then stops the script).
+read_() {
+  local o
+  o=$(cast_ "$@") || { printf '%s\n' "$o" | tail -c 400 >&2; echo "cast $1 failed" >&2; exit 1; }
+  printf '%s\n' "$o"
+}
+# Sends from $2 only when none of its transactions waits unmined: a send that timed out can still
+# land, and the on-chain checks below see only mined logs (review STORAGE-S16-R9 finding 2).
+no_pending() {
+  local mined pending
+  mined=$(read_ nonce "$2")
+  pending=$(read_ nonce "$2" --block pending)
+  whole "the mined nonce of $2" "$mined"
+  whole "the pending nonce of $2" "$pending"
+  [ "$mined" = "$pending" ] || { echo "$1 ($2) has $((pending - mined)) transaction(s) not yet mined: wait for them, then run again; nothing sent" >&2; exit 1; }
+}
+head_block() {
+  local b
+  b=$(cast_ block-number) || { printf '%s\n' "$b" | tail -c 400 >&2; echo "eth_blockNumber failed" >&2; exit 1; }
+  whole "the chain head" "$b"
+  echo "$b"
+}
 # The first block from $2 on where $1 has code.
 code_block() {
-  local b=$2
-  while [ "$(cast_ code "$1" --block "$b")" = 0x ]; do b=$((b + 1)); done
+  local b=$2 c
+  whole "the start block" "$b"
+  while :; do
+    c=$(code_at "$1" --block "$b") || exit 1
+    [ "$c" = 0x ] || break
+    b=$((b + 1))
+  done
   echo "$b"
 }
 # Logs of the contract for an event, filtered by topics, as one JSON list: 200 blocks per call
@@ -140,7 +177,10 @@ code_block() {
 logs_for() {
   local from to end o
   from=$(get block)
-  to=$(cast_ block-number)
+  whole "the deploy block" "$from"
+  to=$(head_block) || exit 1
+  # A lagging endpoint can answer a head before the deploy block: that is not "no logs".
+  [ "$to" -ge "$from" ] || { echo "the chain head $to is before the deploy block $from: a lagging endpoint; run again" >&2; exit 1; }
   while [ "$from" -le "$to" ]; do
     end=$((from + 199))
     [ "$end" -le "$to" ] || end=$to
@@ -170,17 +210,25 @@ plan | deploy)
   # A deploy that was sent but not recorded (forge stopped after broadcasting) is found here
   # by the address it was sent to, never deployed twice.
   pending=$(get pending_contract)
-  if [ -n "$pending" ] && [ "$(cast_ code "$pending")" != 0x ]; then
+  code=0x
+  [ -z "$pending" ] || code=$(code_at "$pending")
+  if [ "$code" != 0x ]; then
+    first=$(code_block "$pending" "$(get pending_block)")
     put contract "$pending"
-    put block "$(code_block "$pending" "$(get pending_block)")"
+    put block "$first"
     echo "found the earlier deploy: $pending (block $(get block))"
     exit 0
   fi
   args=()
   if [ "$cmd" = deploy ]; then
     args=(--broadcast --slow)
-    put pending_contract "$(cast_ compute-address "$deployer" --nonce "$(cast_ nonce "$deployer")" | grep -oE '0x[0-9a-fA-F]{40}' | tr '[:upper:]' '[:lower:]')"
-    put pending_block "$(cast_ block-number)"
+    nonce=$(read_ nonce "$deployer")
+    whole "the deployer's nonce" "$nonce"
+    next=$(read_ compute-address "$deployer" --nonce "$nonce" | grep -oE '0x[0-9a-fA-F]{40}' | tr '[:upper:]' '[:lower:]' || true)
+    [ -n "$next" ] || { echo "cast compute-address gave no address" >&2; exit 1; }
+    at=$(head_block)
+    put pending_contract "$next"
+    put pending_block "$at"
   fi
   key=$(deployer_key)
   BASE_SEPOLIA_PRIVATE_KEY=$key ONYX_STORAGE_TOKEN=$tonyx ONYX_SIGNED_BOOK=$book ONYX_STORAGE_TREASURY=$deployer \
@@ -188,9 +236,12 @@ plan | deploy)
   unset key
   [ "$cmd" = deploy ] || { echo "PLAN ONLY: nothing sent"; exit 0; }
   a=$(get pending_contract)
-  [ "$(cast_ code "$a")" != 0x ] || { echo "no code at the expected address $a" >&2; exit 1; }
+  code=0x
+  [ -z "$a" ] || code=$(code_at "$a")
+  [ "$code" != 0x ] || { echo "no code at the expected address $a" >&2; exit 1; }
+  first=$(code_block "$a" "$(get pending_block)")
   put contract "$a"
-  put block "$(code_block "$a" "$(get pending_block)")"
+  put block "$first"
   put epoch_blocks "$epoch_blocks"
   put treasury "$deployer"
   echo "OnyxStorage $a at block $(get block) ($(cast_ codesize "$a") bytes); conserved: $(cast_ call "$a" 'conserved()(bool)')"
@@ -208,7 +259,11 @@ keys)
 fund)
   need_contract
   [ "${1:-}" = --yes ] || { echo "fund sends from the deployer: fund --yes" >&2; exit 2; }
-  to=$(for n in $(names); do addr "$n"; done | paste -sd,)
+  to=
+  for n in $(names); do
+    a=$(addr "$n")
+    to=${to:+$to,}$a
+  done
   key=$(deployer_key)
   # Topped up to (never added on top of): nodes 0.00012 test ETH (about a week of answers at
   # 0.006 gwei) and 20 tONYX (the bond); the deal payer gas for a few deals and 100 tONYX.
@@ -229,12 +284,13 @@ register)
     # A registration this operator already sent (activation failed, or the id was not recorded)
     # is never repeated: that would post a second bond.
     op=$(addr "$n")
+    no_pending "$n" "$op"
     seen=$(logs_for 'Registered(uint64 indexed,address indexed,uint64,uint256,string)' '' "$op" \
       | python3 -I -c 'import json,sys; print(len(json.load(sys.stdin)))')
     [ "$seen" = 0 ] || { echo "$n ($op) already has $seen registration(s) on chain: finish or cancel it by hand (onyx-storage status --operator $op); nothing sent" >&2; exit 1; }
     out=$(run "$bin/onyx-storage" register $(common) --chain-id "$chain_id" --key "$keys/storage-$n.key" \
       --capacity-gib "$capacity" --url "https://$domain/storage/$n/")
-    id=$(printf '%s\n' "$out" | grep -oE 'NODE_ID=0x[0-9a-f]{64}' | cut -d= -f2)
+    id=$(printf '%s\n' "$out" | grep -oE 'NODE_ID=0x[0-9a-f]{64}' | cut -d= -f2 || true)
     [ -n "$id" ] || { printf '%s\n' "$out" >&2; echo "register $n: no NODE_ID" >&2; exit 1; }
     put "node_$n" "$id"
     echo "$n NODE_ID=$id"
@@ -309,6 +365,7 @@ deal)
     ds=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["dataset"])' "$d/manifest.json")
     root=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["root"].lower())' "$d/manifest.json")
     [ -z "$(get "deal_$ds")" ] || { echo "$ds already has deal $(get "deal_$ds")"; continue; }
+    no_pending payer "$payer"
     # A deal this payer already made for this manifest (the id was not recorded) is never paid
     # twice: its first data word is the manifest root.
     seen=$(logs_for 'DealCreated(uint64 indexed,address indexed,bytes32,bytes32,uint32,uint64,uint8,uint64,uint64,bytes32,uint256,string,string,string)' '' "$payer" \
@@ -316,7 +373,7 @@ deal)
     [ "$seen" = 0 ] || { echo "$ds: the payer already has a deal for manifest $root on chain: record its id by hand; nothing sent" >&2; exit 1; }
     out=$(run "$bin/onyx-storage" deal $(common) --chain-id "$chain_id" --key "$keys/storage-payer.key" \
       --dir "$d" --r 3 --epochs "$deal_epochs" --source-url "https://$domain/")
-    id=$(printf '%s\n' "$out" | grep -oE 'DEAL_ID=[0-9]+' | cut -d= -f2)
+    id=$(printf '%s\n' "$out" | grep -oE 'DEAL_ID=[0-9]+' | cut -d= -f2 || true)
     [ -n "$id" ] || { printf '%s\n' "$out" >&2; echo "deal $ds: no DEAL_ID" >&2; exit 1; }
     put "deal_$ds" "$id"
     printf '%s\n' "$out"
@@ -336,13 +393,17 @@ status)
 close)
   need_contract
   a=$(get contract)
-  now=$(cast_ call "$a" 'currentEpoch()(uint64)' | awk '{print $1}')
+  now=$(read_ call "$a" 'currentEpoch()(uint64)' | awk '{print $1}')
+  whole "the current epoch" "$now"
   for k in $(python3 -I -c 'import json,sys; print(" ".join(sorted(k for k in json.load(open(sys.argv[1])) if k.startswith("deal_"))))' "$state"); do
     id=$(get "$k")
     # dealInfo: ..., endEpoch (9th), deposit, paidOut, closed (12th).
-    info=$(cast_ call "$a" 'dealInfo(uint64)(address,bytes32,bytes32,bytes32,uint32,uint8,uint64,uint64,uint64,uint256,uint256,bool)' "$id" | awk '{print $1}')
+    info=$(read_ call "$a" 'dealInfo(uint64)(address,bytes32,bytes32,bytes32,uint32,uint8,uint64,uint64,uint64,uint256,uint256,bool)' "$id" | awk '{print $1}')
     end=$(sed -n 9p <<<"$info")
     closed=$(sed -n 12p <<<"$info")
+    # Finding 5 of STORAGE-S16-R9: a value that is not a number never reads as "ended".
+    whole "deal $id's end epoch" "$end"
+    case "$closed" in true | false) ;; *) echo "deal $id: closed is ${closed:0:80}" >&2; exit 1 ;; esac
     if [ "$closed" = true ]; then
       echo "${k#deal_} (deal $id): already closed"
     elif [ "$now" -lt "$end" ]; then
@@ -353,7 +414,9 @@ close)
     fi
   done
   for n in $(names); do
-    e=$(cast_ call "$a" 'earned(address)(uint256)' "$(addr "$n")" | awk '{print $1}')
+    op=$(addr "$n")
+    e=$(read_ call "$a" 'earned(address)(uint256)' "$op" | awk '{print $1}')
+    whole "the earnings of $n" "$e"
     if [ "$e" = 0 ]; then
       echo "$n: nothing to withdraw"
     else

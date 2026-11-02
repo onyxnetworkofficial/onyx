@@ -1843,3 +1843,35 @@ async fn a_slashed_node_does_not_ask_the_contract() {
     let _ = std::fs::remove_dir_all(&own.dir);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }
+
+/// THREATS STORAGE-S16-R10: passes are spaced at random around `every`, so
+/// nodes started in the same second drift apart; the spacing stays within a
+/// quarter of `every` and never waits past it on the first pass.
+#[test]
+fn passes_are_spaced_at_random_around_the_interval() {
+    use super::Jitter;
+    let every = Duration::from_secs(60);
+    let a = NodeId(Hash32([1; 32]));
+    let mut j = Jitter::new(&a);
+    let mut seen = std::collections::BTreeSet::new();
+    for _ in 0..2_000 {
+        let w = j.around(every);
+        assert!(
+            w >= Duration::from_secs(45) && w < Duration::from_secs(75),
+            "{w:?}"
+        );
+        let p = j.part(every);
+        assert!(p < every, "{p:?}");
+        seen.insert(w.as_secs());
+    }
+    // Spread over the window, not stuck on one value.
+    assert!(seen.len() > 25, "{} distinct waits", seen.len());
+    assert_eq!(j.part(Duration::ZERO), Duration::ZERO);
+    assert_eq!(j.around(Duration::ZERO), Duration::ZERO);
+    // Two nodes started together do not draw the same waits.
+    let mut x = Jitter::new(&NodeId(Hash32([2; 32])));
+    let mut y = Jitter::new(&NodeId(Hash32([3; 32])));
+    let xs: Vec<Duration> = (0..8).map(|_| x.around(every)).collect();
+    let ys: Vec<Duration> = (0..8).map(|_| y.around(every)).collect();
+    assert_ne!(xs, ys);
+}

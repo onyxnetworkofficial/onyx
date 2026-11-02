@@ -68,7 +68,62 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 const browser = capWaits(await chromium.launch({ channel: 'chrome' }));
 const failures = [];
 const expect = (ok, what) => (ok ? console.log(`ok   ${what}`) : (failures.push(what), console.log(`FAIL ${what}`)));
+// The suites in their own modules run beside the checks below, in three lanes (each opens its own
+// pages in their own contexts, so nothing is shared): the whole run took about 10 minutes one
+// after another (2026-11-02). Each lane keeps its suites in order; a failure is still a failure.
+const lane = async (steps) => {
+	for (const step of steps) await step();
+};
+const runSuites = () =>
+	Promise.all([
+		lane([
+			// W12 continuous styling: section openers, page kickers, sentences in the body face, one
+			// figure tile, the footer's page list and state, the Reserves table inside its panel.
+			() => w12(browser, base, root, expect),
+			// ROADMAP C6: level-5 track records (no real one yet; the example, checked and labelled).
+			() => c6(browser, base, root, expect),
+			// ROADMAP C61: the level-3 card (no live book; the recorded rehearsal, checked and labelled).
+			() => c61(browser, base, root, expect)
+		]),
+		lane([
+			// W10 visual polish (tokens only, hover and press states, motion, placeholders) and the W11
+			// follow-ups (tooltips inside their charts, the reserve down week, legend words, tag class).
+			() => w10(browser, base, root, expect),
+			// W4 speed: heavy files only where and when needed, one cached verifier, the slab in a worker.
+			() => w4(browser, base, root, expect),
+			// ROADMAP S1: the Add data page (shared intake vectors, the Treasury and FRED walk-throughs, offline download).
+			() => s1(browser, base, root, expect)
+		]),
+		lane([
+			() => product(browser, base, root, expect),
+			() => markets(browser, base, expect),
+			() => daily(browser, base, root, expect),
+			// NORTH-STAR NS5 (ADR-0048): level badges and the level history.
+			() => ns5(browser, base, root, expect),
+			() => ns11(browser, base, root, expect),
+			() => ns14(browser, base, root, expect),
+			() => ns15(browser, base, root, expect),
+			() => downloads(browser, base, root, expect),
+			() => download(browser, base, root, expect),
+			() => ns16(browser, base, root, expect),
+			() => t10(browser, base, expect),
+			// Pre-public loop PP1: a fed receipt's observer evidence (the live view is in submission-live.mjs).
+			async () => {
+				try { expect(true, pp1Parser()); } catch (e) { expect(false, `PP1 receipt parser: ${e.message}`); }
+			},
+			// Pre-public loop PP6: the API page's Reference is the OpenAPI file, every route.
+			() => pp6(browser, base, expect),
+			// Pre-public loop PP3: a salted label row checked in the browser (ROADMAP D30).
+			() => pp3(browser, base, expect),
+			// Pre-public loop PP4: Browse data opens with the datasets (U5).
+			() => pp4(browser, base, expect, FB)
+		])
+	]);
+let suites = Promise.resolve();
 try {
+	suites = runSuites();
+	// Awaited below; a lane that fails before then must not end the run as an unhandled rejection.
+	suites.catch(() => {});
 	const p = await browser.newPage();
 	const errors = [];
 	p.on('pageerror', (e) => errors.push(String(e)));
@@ -1900,40 +1955,8 @@ try {
 		expect(before > 0 && paused && kept && back, `a11y motion: the pause button stops all ${before} running animations on /#/explorer, is remembered after a reload, and plays them again`);
 		await desk.close();
 	}
-	await product(browser, base, root, expect);
-	await markets(browser, base, expect);
-	await daily(browser, base, root, expect);
-	// NORTH-STAR NS5 (ADR-0048): level badges and the level history.
-	await ns5(browser, base, root, expect);
-	await ns11(browser, base, root, expect);
-	await ns14(browser, base, root, expect);
-	await ns15(browser, base, root, expect);
-	await downloads(browser, base, root, expect);
-	await download(browser, base, root, expect);
-	await ns16(browser, base, root, expect);
-	await t10(browser, base, expect);
-	// Pre-public loop PP1: a fed receipt's observer evidence (the live view is in submission-live.mjs).
-	try { expect(true, pp1Parser()); } catch (e) { expect(false, `PP1 receipt parser: ${e.message}`); }
-	// Pre-public loop PP6: the API page's Reference is the OpenAPI file, every route.
-	await pp6(browser, base, expect);
-	// Pre-public loop PP3: a salted label row checked in the browser (ROADMAP D30).
-	await pp3(browser, base, expect);
-	// Pre-public loop PP4: Browse data opens with the datasets (U5).
-	await pp4(browser, base, expect, FB);
-	// W10 visual polish (tokens only, hover and press states, motion, placeholders) and the W11
-	// follow-ups (tooltips inside their charts, the reserve down week, legend words, tag class).
-	await w10(browser, base, root, expect);
-	// W4 speed: heavy files only where and when needed, one cached verifier, the slab in a worker.
-	await w4(browser, base, root, expect);
-	// W12 continuous styling: section openers, page kickers, sentences in the body face, one
-	// figure tile, the footer's page list and state, the Reserves table inside its panel.
-	await w12(browser, base, root, expect);
-	// ROADMAP C6: level-5 track records (no real one yet; the example, checked and labelled).
-	await c6(browser, base, root, expect);
-	// ROADMAP C61: the level-3 card (no live book; the recorded rehearsal, checked and labelled).
-	await c61(browser, base, root, expect);
-	// ROADMAP S1: the Add data page (shared intake vectors, the Treasury and FRED walk-throughs, offline download).
-	await s1(browser, base, root, expect);
+	// The suites in their own modules, started at the top, run beside the checks above.
+	await suites;
 	expect(errors.length === 0, `no console errors${errors.length ? ': ' + errors.join('; ') : ''}`);
 } finally {
 	await browser.close();

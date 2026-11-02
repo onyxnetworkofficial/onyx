@@ -22,6 +22,7 @@ proof. Test network only. Overview: docs/STORAGE-NETWORK.md; rules: docs/spec/st
 | `withdraw-bond --node ID` | The bond back, two epochs after leaving |
 | `settle [--epoch E]` | Report the misses of an ended epoch (any keeper may; with amendment 1 the reporter earns 10% of each slash, unless it reports its own node) |
 | `books [--replay yes]` | Every flow of the contract and the conservation check; `--replay yes` also rebuilds the totals from the contract's events (one log call per 200 blocks: for a local chain or a short history) |
+| `declines` | Every node and every deal with its declines (`shard_declines` and `whole_deal_declines`, one per shard or deal and node), the declines whose one-epoch notice set when the node leaves, and its `slashes`, from the contract's events (ADR-0060 amendment 2 item 1): a node that declines much more than others with the same deals stands out |
 | `read --deal N --from K --to K` | Read rows from the replicas, every row checked, with fail-over |
 | `deal --dir DIR --r 3 --epochs N --source-url URL` | (publisher) pay for storage of an anchored manifest |
 

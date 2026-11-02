@@ -6,6 +6,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PATH:$HOME/.foundry/bin"
+# Each stage prints how long it took (`[time]` lines), so the slowest one is easy to find.
+t_all=$SECONDS
+t_stage=$SECONDS
+stage() { echo "[time] $1: $((SECONDS - t_stage)) s (total $((SECONDS - t_all)) s)"; t_stage=$SECONDS; }
 # The gas regression check (see below, where its result is read) rebuilds every contract, about
 # five minutes on one core: it starts now and runs beside the Rust stages. The gas profile has its
 # own out-gas and cache-gas folders, so the default-profile builds in between never touch it.
@@ -24,9 +28,11 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 # The test-only open path still compiles and lints (SER-R2-F1).
 cargo clippy --locked -p onyx-coordinator --features unchecked-open -- -D warnings
+stage "recipes, fmt, clippy"
 # `cargo test --locked --workspace`, with the test binaries run in parallel (scripts/test-workspace.py:
 # the same tests, from each package's folder; about 690 s one after another on 2026-11-02).
 python3 -I scripts/test-workspace.py
+stage "rust tests"
 # ROADMAP C50: the time-lock vectors on wasm32 (blst's C built by clang, run in node).
 scripts/check-tlock-wasm.sh
 # CL3 (THREATS CL3-3): the generic JSON fetcher's shared vectors on wasm32, as natively.
@@ -42,6 +48,7 @@ node --test apps/contrib/test/*.test.mjs
 python3 -I scripts/check-workflows.py --self-test
 python3 -I scripts/check-workflows.py
 node --test apps/web/tests/release.test.mjs
+stage "wasm vectors, agent, contrib, workflows"
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.
 # (--workspace with an example: the feature set of the workspace test build above, dev
 # dependencies included, so nothing compiles twice; the rehearsals below reuse the same build.)
@@ -49,40 +56,50 @@ cargo build --locked -q --workspace --bin onyx-node --bin onyx-node-btc --exampl
 "${CARGO_TARGET_DIR:-$PWD/target}/debug/onyx-node" --help >/dev/null
 # The Bitcoin build with the reserve serving check (ADR-0034 Amendment 1).
 "${CARGO_TARGET_DIR:-$PWD/target}/debug/onyx-node-btc" --help >/dev/null
+stage "debug binaries"
 # ROADMAP C5 (ADR-0036 amendment 1): the track-record intake against a local anvil on a free
 # loopback port: posts, chain-time `committed_at`, sealing, the client recheck and five attacks.
 scripts/track-intake-anvil.sh
+stage "track-intake-anvil"
 # ROADMAP C7 (ADR-0036 amendment 3): resolutions from OnyxSignedBook facts only and commitments in
 # its append-only log, against a local anvil: the client recheck and eight attacks (incl. a reorg).
 scripts/track-onchain-anvil.sh
+stage "track-onchain-anvil"
 scripts/prepaid-anvil.sh
+stage "prepaid-anvil"
 # CL6 (ADR-0056, THREATS CL6): the credits ledger on a local anvil: an observer with no ETH deposits
 # and posts its commit and receipt through the relayer, paid from credits; a miner's earned share
 # moved in; forged, repeated and over-cap relays refused; the fees paid to the relayer.
 scripts/credits-anvil.sh
+stage "credits-anvil"
 # CL7 (ADR-0057): a correction market end to end on anvil (about 30 s once contracts are built):
 # the live manifest and its recheck registered with their real template ids, a value, a market,
 # bets, a recheck that disagrees, settlement and payouts to the wei; a forged value, a market after the
 # recheck, an insider bet and the original round as the recheck all refused.
 scripts/corrections-anvil.sh
+stage "corrections-anvil"
 # CL7 (ADR-0057 item 7): the recheck runner end to end on a local anvil: a real original round, a
 # market and bets (one by a pool member), the plan (wait, then run), a real recheck round from the
 # plan's pool without the original observers and the bettor, resolve and the payout.
 scripts/recheck-anvil.sh
+stage "recheck-anvil"
 # ROADMAP C10 (ADR-0028 amendment 7): OnyxSignedBook deployed and pinned with the tooling the lead
 # runs live (reviewer == deployer refused), onyx-node refusing broken pins and serving level 3 only
 # against `settleable` at its finalized block, coordinator posts, censorship hold, clock skew.
 scripts/level3-book.sh local
+stage "level3-book"
 # CL5 (ADR-0059): a publisher's dataset end to end on anvil (synthetic rows, a fresh test key):
 # build, sign, anchor in OnyxSignedBook, upload, proven range reads checked by onyx-check --bulk,
 # and the attacks (forged row and shard, unanchored swap, unknown key, compromised key and its
 # recovery). Small here; `scripts/bulk-demo.sh local` alone runs the 100 MiB rehearsal.
 BULK_DEMO_MIB=6 BULK_DEMO_SHARD_MIB=1 scripts/bulk-demo.sh local
+stage "bulk-demo"
 # ADR-0060 (docs/STORAGE-NETWORK.md): the storage network on anvil (about 2 min once built): five
 # bonded storage nodes, R=3, every node fetches and checks its shards, an epoch of proofs all
 # passed and paid, reads that fail over past a killed node, a node that dropped its shards and a
 # forged row slashed, misses settled by a keeper, repair onto new replicas, conservation on chain.
 scripts/storage-network-anvil.sh
+stage "storage-network-anvil"
 scripts/check-boundaries.sh
 scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).
@@ -100,6 +117,9 @@ python3 -I scripts/recount-chain-input.py --self-test
 # The machine-wide lock of scripts/docker-smoke.sh (no Docker, about 14 s): two holders never hold
 # it at once, a held lock times out cleanly and names its holder, a leaked child cannot keep it.
 scripts/smoke-lock-tests.sh
+# THREATS STORAGE-S16-R8: scripts/storage-sepolia.sh with a fake cast (no network, no key): a chain
+# read that fails stops the step; it never reads as "nothing on chain" and sends a second bond or deposit.
+scripts/storage-sepolia-tests.sh
 # ROADMAP E13 (THREATS REMOTE-1..10): the remote check's refusals without the host: arguments,
 # secrets, credential files and never-synced paths in the file list, symlinks and the real rsync
 # into a local folder, an unreachable host (255), check-all's status passed back unchanged even
@@ -115,6 +135,7 @@ python3 -I scripts/record-sec-etf-holdings.py --self-test
 # ADR-0044 (THREATS ETH-7): the Ethereum window fetch against fake JSON-RPC servers on 127.0.0.1
 # serving the committed mainnet blocks: what it writes, the lies it refuses, the rate and the pins.
 python3 -I scripts/refresh-eth-onchain-tests.py
+stage "script tests"
 # THREATS L9A-6: a public build flag other than 0 or 1 is refused before anything builds.
 if ONYX_PUBLIC=true scripts/build-web.sh >/dev/null 2>&1; then
   echo "build-web.sh accepted ONYX_PUBLIC=true (must refuse anything but 0 or 1)"; exit 1
@@ -133,10 +154,12 @@ done
 # Dependencies (ROADMAP L1): RustSec advisories, licences, bans and sources (deny.toml) and
 # the apps/web npm advisories; network checks skip with a message when offline.
 scripts/check-deps.sh
+stage "build-web refusals, dependencies"
 # `--sizes` fails if any contract exceeds the EIP-170 runtime limit (24,576 B), which only a real
 # deploy would otherwise reveal (M6-L36-F1). Test-only contracts (the L35 `Harness` extends the
 # settlement contract) never deploy on chain, so they are skipped (M5-L46-F3).
 (cd contracts && forge fmt --check && forge build --sizes --skip test && forge test)
+stage "forge build and test"
 # OnyxSettlement runs OnyxSettlementExt by delegatecall on its own storage (ADR-0024 item 1): the
 # two storage layouts must be identical (L2 audit, Slither uninitialized-state triage S-2..6).
 # Each side is captured on its own (pipefail is on, so a failing `forge inspect` or parser stops
@@ -166,6 +189,7 @@ if ! wait "$gas_pid"; then
 fi
 gas_pid=
 cat "$gas_log"
+stage "storage layouts, gas snapshot (waited)"
 # Website gate (AUD-1-F6): needs pnpm, wasm-bindgen-cli and the demo export with the live blocks
 # (apps/web/README.md), so it is opt-in here and absent from CI: ONYX_WEB=1 scripts/check-all.sh.
 # ROADMAP E10: the public builds' guards (no label row, no level-2 value; with fallback rights no
@@ -188,6 +212,7 @@ if [ "${ONYX_WEB:-0}" = 1 ] || [ "${ONYX_WEB_PUBLIC:-0}" = 1 ]; then
 else
   echo "web gate skipped (ONYX_WEB=1 runs scripts/build-web.sh)"
 fi
+stage "web"
 # Docker images (ROADMAP A3/L7): two release image builds and a smoke run against a local chain
 # in containers (docs/ops/deployment.md "Run with Docker"); slow and needs Docker and the reserve
 # tail files, so opt-in: ONYX_DOCKER=1 scripts/check-all.sh.
@@ -196,4 +221,5 @@ if [ "${ONYX_DOCKER:-0}" = 1 ]; then
 else
   echo "docker gate skipped (ONYX_DOCKER=1 runs scripts/docker-smoke.sh)"
 fi
+stage "docker"
 echo "ALL CHECKS PASSED"

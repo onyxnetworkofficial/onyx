@@ -107,7 +107,7 @@ It needs `ONYX_BULK_DIR` (shards are held and served by the bulk store, so raise
 | `ONYX_STORAGE_NODE_ID` | required with the contract | This node's id (`0x` and 64 hex digits), printed by `onyx-storage register` |
 | `ONYX_STORAGE_KEY_FILE` | required with the contract | The node operator's key file (64 hex digits, mode 0600): answers, seeds and settlements are sent from it; it must be the registered operator |
 | `ONYX_STORAGE_FROM_BLOCK` | `0` | The contract's deploy block, where log scans start |
-| `ONYX_STORAGE_EVERY_SECS` | `15` | Seconds between passes, 1-3600 |
+| `ONYX_STORAGE_EVERY_SECS` | `15` | Seconds between passes, 1-3600; each wait is this give or take a random quarter, and the first pass waits a random part of it, so nodes started together drift apart (THREATS STORAGE-S16-R10) |
 | `ONYX_STORAGE_FETCH` | `on` | `off`: fetch nothing, serve and prove only what is held (maintenance; a held-but-missing shard is then a miss) |
 | `ONYX_STORAGE_KEEPER` | `off` | `on`: also settle other nodes' missed challenges of the last two epochs |
 | `ONYX_STORAGE_FETCHES_PER_TICK` | `8` | Shard fetches started per pass, 1-1000 (repair pace) |

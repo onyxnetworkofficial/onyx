@@ -19,6 +19,7 @@
 //! onyx-storage sweep                                        # slashes to the treasury
 //! onyx-storage books         [--replay yes]                 # every flow, and the conservation check (yes: also rebuilt from the events)
 //! onyx-storage epoch         [--epoch E]                    # who was asked for what, passed, failed, missed, paid, slashed
+//! onyx-storage declines                                    # declines and slashes per node and per deal (ADR-0060 amendment 2 item 1)
 //! onyx-storage read          --deal N --from K --to K       # rows from any replica, checked; fails over
 //! onyx-storage prove         --deal N --slot S --node 0x… --dir DIR   # answer calldata from the publisher's files (test tool)
 //! ```
@@ -45,7 +46,7 @@ use std::time::Duration;
 
 type Res<T> = Result<T, String>;
 
-const USAGE: &str = "usage: onyx-storage <register|status|deal|seed|settle|withdraw|exit|withdraw-bond|decline|close|sweep|books|epoch|read|prove> --rpc URL --contract 0x… [options]\n\
+const USAGE: &str = "usage: onyx-storage <register|status|deal|seed|settle|withdraw|exit|withdraw-bond|decline|close|sweep|books|epoch|declines|read|prove> --rpc URL --contract 0x… [options]\n\
 see the header of crates/onyx-node/src/bin/onyx-storage.rs or docs/ops/storage-node.md";
 
 struct Opts(BTreeMap<String, String>);
@@ -437,6 +438,57 @@ async fn books(o: &Opts) -> Res<()> {
     Ok(())
 }
 
+/// Every node and every deal with its declines and slashes, from the chain's
+/// events (ADR-0060 amendment 2 item 1: public, no rule on them before S17).
+/// A node that declines much more than others with the same deals shows here.
+async fn declines(o: &Opts) -> Res<()> {
+    o.only(&[])?;
+    let c = chain(o)?;
+    let s = c.snapshot().await?;
+    let r = s.excl.decline_report();
+    let counts = |x: onyx_storage::placement::DeclineCount| {
+        json!({"shard_declines": x.shard_declines, "whole_deal_declines": x.whole_deal_declines,
+               "declines_with_notice": x.with_notice, "slashes": x.slashes})
+    };
+    let mut nodes = Vec::new();
+    for (id, n) in &s.nodes {
+        let x = r.nodes.get(id).copied().unwrap_or_default();
+        let mut v = counts(x);
+        v["id"] = json!(id.to_string());
+        v["operator"] = json!(hx(&n.info.operator));
+        v["status"] = json!(n.info.status);
+        v["deals"] = json!(x.across);
+        nodes.push(v);
+    }
+    let mut deals = Vec::new();
+    for d in &s.deals {
+        let x = r.deals.get(&d.id).copied().unwrap_or_default();
+        let mut v = counts(x);
+        v["deal"] = json!(d.id);
+        v["shards"] = json!(d.info.shard_count);
+        v["copies"] = json!(d.info.r);
+        v["open"] = json!(true);
+        v["nodes"] = json!(x.across);
+        deals.push(v);
+    }
+    // The snapshot leaves out closed deals (and deals no node can place);
+    // their declines still count for the nodes and are listed here.
+    for (id, x) in &r.deals {
+        if s.deals.iter().all(|d| d.id != *id) {
+            let mut v = counts(*x);
+            v["deal"] = json!(id);
+            v["open"] = json!(false);
+            v["nodes"] = json!(x.across);
+            deals.push(v);
+        }
+    }
+    println!(
+        "{:#}",
+        json!({"epoch": s.epoch, "block": s.block, "nodes": nodes, "deals": deals})
+    );
+    Ok(())
+}
+
 async fn read(o: &Opts) -> Res<()> {
     o.only(&["deal", "from", "to"])?;
     let c = chain(o)?;
@@ -536,6 +588,7 @@ async fn run(cmd: &str, o: &Opts) -> Res<()> {
             simple(o, abi::sweep_treasury(), "SWEPT").await
         }
         "books" => books(o).await,
+        "declines" => declines(o).await,
         "read" => read(o).await,
         "prove" => prove(o).await,
         "epoch" => {

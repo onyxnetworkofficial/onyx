@@ -859,7 +859,8 @@ pub struct StorageConfig {
     /// `ONYX_STORAGE_FROM_BLOCK` (default 0): the contract's deploy block,
     /// where log scans start.
     pub from_block: u64,
-    /// `ONYX_STORAGE_EVERY_SECS` (default 15): seconds between passes.
+    /// `ONYX_STORAGE_EVERY_SECS` (default 15): seconds between passes, give
+    /// or take a random quarter (`onyx_api::storage::run`).
     pub every_secs: u64,
     /// `ONYX_STORAGE_FETCH` (`on` default, `off`): fetch placed shards.
     pub fetch: bool,

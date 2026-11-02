@@ -111,7 +111,7 @@ know it is the real row. And all of this without trusting one company's server.
   deal's placement salt comes from the block before the deal. A publisher cannot pick its
   placement. An operator can: it sees its id one block after
   registering, activates only an id it likes and cancels the rest (ADR-0062 finding 7). In v0 it
-  gets the whole bond back. The next contract (ADR-0060 amendment 1, built, not deployed) keeps 2%
+  gets the whole bond back. The S16 contract (ADR-0060 amendment 1, live since 2026-11-02) keeps 2%
   of every bond at registration, so each try costs money.
 - **One epoch of notice.** Checks in an epoch use the node list of the epoch before, so a node
   always has at least one full epoch to fetch a shard before it can be asked for it.
@@ -141,8 +141,8 @@ Base Sepolia) every holder of the shard is asked for the same row, so after the 
 others can copy it from the chain; all R holders may keep nothing while some source serves rows.
 The data survives while one holder or the publisher keeps it and stays reachable until a new holder
 copies it. A shard costs a holder at most one slash (it is then taken off the shard), and giving a
-shard up (`decline`) is free. ROADMAP S16 closes the cheap holes, built and tested in the next
-contract, not deployed yet (ADR-0060 amendment 1): a different row for each holder, a fee on every
+shard up (`decline`) is free. ROADMAP S16 closes the cheap holes in the contract deployed on
+2026-11-02 (ADR-0060 amendment 1): a different row for each holder, a fee on every
 registration so grinding ids costs money, 10% of each reported slash for the reporter, and jail
 below half of a node's own bond. What stays: a holder can still fetch its own row from any source
 when asked, and a shard of very few rows gives holders the same row by chance (1 row: always);
@@ -285,7 +285,7 @@ Formulas:
 |---|---|---|
 | v0 | Replicas (R = 3), rendezvous placement, on-chain row proofs, pay, slash, repair, reads with fail-over, bonded nodes, conservation on chain | **Built and tested on a local chain** |
 | v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4); **run finished 2026-11-02**: 612 of 612 challenges passed over 34 epochs, nothing slashed, deals closed, books balanced |
-| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1); a decline of a shard the node proved in the last 7 epochs starts one epoch later (amendment 2 item 2) | Built and tested on a local chain (2026-11-02); not deployed: the Base Sepolia contract keeps v0 (ROADMAP S16) |
+| Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1); a decline of a shard the node proved in the last 7 epochs starts one epoch later (amendment 2 item 2) | Built and tested on a local chain; **deployed on Base Sepolia 2026-11-02** (`0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`, block 53457522, `RULES_VERSION` 3; ROADMAP S16) |
 | Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch only when asked. Compared and not built: every sound design is too slow, needs seal units v0 does not have, or needs one key holder for every repair (ADR-0062). One copy per operator address was tried and withdrawn (THREATS STORAGE-S16-R1) | Later, after S17 (ROADMAP S21) |
 | Erasure coding | Split each shard into k-of-n pieces (for example 10 of 16) instead of 3 full copies: about half the disk for more safety; each holder keeps a different piece, so one operator saves disk only with more than k pieces of a stripe (the fix for STORAGE-4, ADR-0062 finding 6); aggregated proofs (one answer per node per epoch); placement weighted by declared size | Later (ROADMAP S17) |
 | Cold archive tier | Old, rarely read data kept on an outside storage network, with Onyx keeping only the fingerprints and a fetch path | Later, owner's choice of network (ROADMAP S18) |
@@ -299,15 +299,15 @@ Formulas:
 
 | Part | Status | Evidence |
 |---|---|---|
-| Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 35 Rust tests, shared vectors `fixtures/storage/vectors.json` |
+| Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 37 Rust tests, shared vectors `fixtures/storage/vectors.json` |
 | Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 47 unit and fuzz tests (8 for the decline notice), 5 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 8 vector tests, a heap-order fuzz test, deploy script test; 22,057 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendments 1 and 2) |
 | Storage-node mode in onyx-node (`ONYX_STORAGE_*`) | Done (local) | `onyx_api::storage` tests: fetch only placed shards, refuse forged bytes, answer with proofs the contract accepts |
 | Client read with fail-over | Done (local) | Test: down, missing and forging replicas skipped; demo: one node killed |
-| Operator tool `onyx-storage` | Done | register, status, deal, epoch, settle, withdraw, exit, books, read |
+| Operator tool `onyx-storage` | Done | register, status, deal, epoch, settle, withdraw, exit, books, declines, read |
 | Local five-node demo (`scripts/storage-network-anvil.sh`) | Done | see "Last demo run" below |
 | Adversarial reviews | STORAGE-R1 (9 findings) and STORAGE-R2 (a fresh review of those fixes, 6 findings): all fixed with tests except nodes that decline everything still counting in N (S16) | THREATS "STORAGE-R1", "STORAGE-R2" |
 | Decline (`decline`, one shard or a whole deal) | Done (local) | 3 forge tests, 5 node tests, in the money invariants |
-| Base Sepolia | `OnyxStorage` `0x2423837572b58caf82896491ff6ee23080849419` at block 52986889 (2026-11-01): epochs of 7,200 blocks, 0.001 tONYX per GiB per copy per epoch, bond 0.01 tONYX per GiB (10 tONYX minimum), slash 10%, 2 checks per deal per epoch, jail after 3 misses; `conserved()` true. Five node keys funded (0.00012 test ETH, 20 tONYX each). Epochs are 24 minutes (0.2 s blocks, STORAGE-S15-5). Five nodes run since 2026-11-01 (10 tONYX bond, 6 GiB each); three deals ran to block 53303689 (2026-11-02 01:30 UTC) and were closed (see "First live run" below); a longer run needs test ETH for the nodes first | ROADMAP S15, THREATS STORAGE-S15 |
+| Base Sepolia | `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` at block 53457522 (2026-11-02, commit 1d608ffd, ADR-0060 amendments 1 and 2, `RULES_VERSION` 3, 22,057 bytes): the v0 parameters (epochs of 7,200 blocks, 24 minutes on 0.2 s blocks, STORAGE-S15-5; 0.001 tONYX per GiB per copy per epoch; bond 0.01 tONYX per GiB, 10 tONYX minimum; slash 10%; 2 checks per deal per epoch; jail after 3 misses); `conserved()` true; deploy cost 0.000024 test ETH. The same five node keys registered again (10 tONYX bond, 0.2 tONYX fee kept, 6 GiB each; n1 is the keeper); deals for btc.price and eth.price, 3 copies, epochs 2 to 10 (about 3 hours; 0.024 tONYX deposit each): short, as the node keys hold little test ETH. The v0 contract `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889, 2026-11-01) is retired: its deals ran and closed ("First live run" below) | ROADMAP S15, S16; THREATS STORAGE-S15, STORAGE-S16-R8 |
 
 ### First live run (Base Sepolia, 2026-11-01 to 2026-11-02)
 | What | Result |

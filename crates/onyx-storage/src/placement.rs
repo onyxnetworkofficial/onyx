@@ -179,6 +179,96 @@ impl Exclusions {
                 .collect(),
         )
     }
+
+    /// Declines and slashes counted per node and per deal: the public report
+    /// of ADR-0060 amendment 2 item 1 (`onyx-storage declines`). The chain has
+    /// no rule on them before S17; the report only makes them easy to see.
+    pub fn decline_report(&self) -> DeclineReport {
+        // Whole-deal declines whose notice set when the node leaves at least
+        // one shard: a shard it passed a check on in the window, not already
+        // out earlier by a slash or a decline of its own (review
+        // STORAGE-S16-R9 finding 7).
+        let whole: BTreeMap<(u64, NodeId), u64> = self
+            .0
+            .iter()
+            .filter(|(k, x)| k.1 == WHOLE_DEAL && x.decline_from != 0)
+            .map(|(k, x)| ((k.0, k.2), x.decline_from))
+            .collect();
+        let whole_noticed: BTreeSet<(u64, NodeId)> = self
+            .0
+            .iter()
+            .filter(|(k, _)| k.1 != WHOLE_DEAL)
+            .filter_map(|(k, x)| {
+                let w = *whole.get(&(k.0, k.2))?;
+                let took = noticed(w, x.last_pass) == w + 1;
+                (took && self.from(k.0, k.1, &k.2) == Some(w + 1)).then_some((k.0, k.2))
+            })
+            .collect();
+        let mut r = DeclineReport::default();
+        let mut seen: BTreeSet<(u64, NodeId)> = BTreeSet::new();
+        for (&(deal, index, node), x) in &self.0 {
+            if x.decline_from == 0 && x.slash_from == 0 {
+                continue;
+            }
+            let mut add = |f: &dyn Fn(&mut DeclineCount)| {
+                f(r.nodes.entry(node).or_default());
+                f(r.deals.entry(deal).or_default());
+            };
+            if x.decline_from != 0 {
+                let notice = if index == WHOLE_DEAL {
+                    whole_noticed.contains(&(deal, node))
+                } else {
+                    let f = x.decline_from;
+                    noticed(f, x.last_pass) == f + 1 && self.from(deal, index, &node) == Some(f + 1)
+                };
+                add(&|c: &mut DeclineCount| {
+                    if index == WHOLE_DEAL {
+                        c.whole_deal_declines += 1;
+                    } else {
+                        c.shard_declines += 1;
+                    }
+                    c.with_notice += u64::from(notice);
+                });
+            }
+            if x.slash_from != 0 {
+                add(&|c: &mut DeclineCount| c.slashes += 1);
+            }
+            if seen.insert((deal, node)) {
+                add(&|c: &mut DeclineCount| c.across += 1);
+            }
+        }
+        r
+    }
+}
+
+/// Counts for one node or one deal in a [`DeclineReport`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct DeclineCount {
+    /// Declines of one shard, one per (shard, node): for a deal it can pass
+    /// its shard count (several nodes, or a node that never held the shard).
+    pub shard_declines: u64,
+    /// Whole-deal declines, one per (deal, node).
+    pub whole_deal_declines: u64,
+    /// Of those declines, the ones whose one epoch of notice set when the
+    /// node leaves (at least one shard, for a whole-deal decline): it passed
+    /// a check on that shard in the [`NOTICE_EPOCHS`] window and was not out
+    /// of it earlier.
+    pub with_notice: u64,
+    /// Slashes, one per (shard, node) (the first slash on each).
+    pub slashes: u64,
+    /// For a node: the deals it declined or was slashed on. For a deal: the
+    /// nodes that did.
+    pub across: u64,
+}
+
+/// Declines and slashes per node and per deal ([`Exclusions::decline_report`]);
+/// nodes and deals with none are absent.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct DeclineReport {
+    /// By node id.
+    pub nodes: BTreeMap<NodeId, DeclineCount>,
+    /// By deal id.
+    pub deals: BTreeMap<u64, DeclineCount>,
 }
 
 /// Jailed nodes and the epoch from which they are out (sorted by id).
@@ -582,6 +672,87 @@ mod tests {
 mod notice_bound_tests {
     use super::*;
     use onyx_core::Hash32;
+
+    #[test]
+    fn the_decline_report_counts_per_node_and_per_deal() {
+        let id = |i: u8| NodeId(Hash32([i; 32]));
+        let (a, b, c, d) = (id(1), id(2), id(3), id(4));
+        let mut x = Exclusions::new();
+        // a: shard 0 of deal 1 never proven (no notice); shard 1 proven in
+        // epoch 8, declined in 12 (from 13: 8 + 7 >= 12, notice).
+        x.decline(1, 0, a, 5);
+        x.pass(1, 1, a, 8);
+        x.decline(1, 1, a, 13);
+        // b: deal 2 whole, a shard of it proven in the window (notice), and
+        // deal 3 whole with its only pass long before (no notice).
+        x.pass(2, 4, b, 9);
+        x.decline(2, WHOLE_DEAL, b, 11);
+        x.pass(3, 0, b, 1);
+        x.decline(3, WHOLE_DEAL, b, 20);
+        // c: slashed twice on one shard (one count), once on another.
+        x.slash(1, 0, c, 6);
+        x.slash(1, 0, c, 9);
+        x.slash(1, 2, c, 7);
+        // d: passes only, so it is not in the report.
+        x.pass(1, 0, d, 3);
+        let r = x.decline_report();
+        let count =
+            |shard_declines, whole_deal_declines, with_notice, slashes, across| DeclineCount {
+                shard_declines,
+                whole_deal_declines,
+                with_notice,
+                slashes,
+                across,
+            };
+        assert_eq!(r.nodes.len(), 3);
+        assert_eq!(r.nodes[&a], count(2, 0, 1, 0, 1));
+        assert_eq!(r.nodes[&b], count(0, 2, 1, 0, 2));
+        assert_eq!(r.nodes[&c], count(0, 0, 0, 2, 1));
+        assert!(!r.nodes.contains_key(&d));
+        assert_eq!(r.deals.len(), 3);
+        assert_eq!(r.deals[&1], count(2, 0, 1, 2, 2));
+        assert_eq!(r.deals[&2], count(0, 1, 1, 0, 1));
+        assert_eq!(r.deals[&3], count(0, 1, 0, 0, 1));
+        // The notice counted here is the one `from` applies.
+        assert_eq!(x.from(1, 1, &a), Some(14));
+        assert_eq!(x.from(2, 4, &b), Some(12));
+        assert_eq!(x.from(3, 0, &b), Some(20));
+        // The order the events are read in changes nothing.
+        let mut y = Exclusions::new();
+        y.decline(3, WHOLE_DEAL, b, 20);
+        y.slash(1, 2, c, 7);
+        y.decline(1, 1, a, 13);
+        y.decline(2, WHOLE_DEAL, b, 11);
+        y.slash(1, 0, c, 9);
+        y.pass(1, 0, d, 3);
+        y.pass(3, 0, b, 1);
+        y.slash(1, 0, c, 6);
+        y.decline(1, 0, a, 5);
+        y.pass(2, 4, b, 9);
+        y.pass(1, 1, a, 8);
+        assert_eq!(y.decline_report(), r);
+        assert_eq!(Exclusions::new().decline_report(), DeclineReport::default());
+
+        // Review STORAGE-S16-R9 finding 7: a notice that moves nothing is not
+        // counted. e: passed shard 3 of deal 5 in epoch 10, slashed on it
+        // from 12, then declined the deal whole from 14 (out of shard 3 from
+        // 12 anyway). f: declined deal 6 whole from 10, passed shard 0 in 11
+        // (the whole decline takes the notice: out from 11), then declined
+        // shard 0 from 12 (its own notice would say 13: moves nothing).
+        let (e, f) = (id(5), id(6));
+        let mut z = Exclusions::new();
+        z.pass(5, 3, e, 10);
+        z.slash(5, 3, e, 12);
+        z.decline(5, WHOLE_DEAL, e, 14);
+        z.decline(6, WHOLE_DEAL, f, 10);
+        z.pass(6, 0, f, 11);
+        z.decline(6, 0, f, 12);
+        assert_eq!(z.from(5, 3, &e), Some(12));
+        assert_eq!(z.from(6, 0, &f), Some(11));
+        let q = z.decline_report();
+        assert_eq!(q.nodes[&e], count(0, 1, 0, 1, 1));
+        assert_eq!(q.nodes[&f], count(1, 1, 1, 0, 1));
+    }
 
     /// `out_by_any_notice` is never true where `from` would let the contract
     /// ask, whatever the passes (review STORAGE-S16-R7 L2).

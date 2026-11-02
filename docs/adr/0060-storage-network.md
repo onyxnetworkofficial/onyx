@@ -111,7 +111,8 @@ the data (a 64 MiB shard would cost far more gas than a block allows), only fing
 ## Amendment 1 (2026-11-02): close v0's cheap holes (ROADMAP S16)
 Status: items 1 to 4 built and tested (2026-11-02) in `OnyxStorage`, `OnyxStorageLib`,
 `onyx_storage` (`ids`, `challenge`, `ledger::Replay`), `onyx_api::storage` and the `onyx-storage`
-tool; shared vectors written again. Not deployed: the S15 contract on Base Sepolia keeps v0.
+tool; shared vectors written again. Deployed on Base Sepolia 2026-11-02 with amendment 2 item 2
+(`OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`, block 53457522); the S15 contract (v0) is retired.
 Tests: THREATS STORAGE-S16-R2-1 to -3 and STORAGE-3.
 
 ADR-0062 finding 7 and THREATS STORAGE-S16-R2-1 to -3. A first draft was reviewed before code
@@ -160,11 +161,12 @@ ADR-0062 finding 7 and THREATS STORAGE-S16-R2-1 to -3. A first draft was reviewe
    misses toward jail; item 4 bounds what that saves.
 
 ## Amendment 2 (2026-11-02): decline accounting (ROADMAP S16)
-Status: item 2 built and tested (not deployed), after design review THREATS STORAGE-S16-R6;
+Status: item 2 built and tested after design review THREATS STORAGE-S16-R6, deployed on Base
+Sepolia 2026-11-02 with amendment 1;
 item 3 built in the node; item 1 needs no code. Item 2 is in `OnyxStorage` (`Excl`,
 `exclusionFrom`, `decline`, `answer`, `_slash`, `NOTICE_EPOCHS`, `RULES_VERSION`),
 `onyx_storage::placement::Exclusions` and `onyx_api::storage`; shared vectors written again. It
-ships in the same redeployment as amendment 1. The S15 contract on Base Sepolia keeps v0.
+shipped in the same redeployment as amendment 1 (`RULES_VERSION` 3).
 
 The two problems: a node that declines everything still counts in N and in total capacity, so
 `createDeal` can commit copies that only the other nodes hold (STORAGE-R2-2); and a decline is
@@ -182,8 +184,8 @@ top R decline a withheld shard, the next nodes in the ranking are asked and decl
    declines, a fee) can be turned against honest nodes by a withholding publisher: a one-shard
    withheld deal walks the whole ranking, so a capacity charge costs N times what the deal
    commits. Capacity-weighted placement with aggregated proofs (S17) gives the signal. Until then
-   the declines are public in the `Declined` events; a report of them per node and per deal is
-   TODO S17.
+   the declines are public in the `Declined` events, and `onyx-storage declines` reports them per
+   node and per deal (with slashes and the declines that took the notice; built 2026-11-02).
 2. **A one-epoch notice on shards the node itself proved** (STORAGE-S16-R2-3). The rule:
    - Each (deal, shard, node) has one storage slot, `Excl { declineFrom, slashFrom, lastPass }`
      (three `uint64`), under the existing key `keccak256(dealId ‖ index ‖ node)`. The
