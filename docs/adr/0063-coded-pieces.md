@@ -1,16 +1,15 @@
 # ADR-0063: Erasure-coded pieces instead of full copies (ROADMAP S17, first slice)
 
 ## Status
-Proposed, 2026-11-02 (test network only); nothing is built. Reviewed three times the same day by
-fresh adversarial reviewers, each "build with changes": the first draft (THREATS STORAGE-S17-R1:
-3 High, 4 Medium), the second (STORAGE-S17-R2: 2 High, 5 Medium; its lazy repair could not be
-checked on chain and reopened the loss threshold) and the third (STORAGE-S17-R3: 1 High, 4 Medium;
-the core held, it asked for copies instead of rebuilds where the old holder lives, a repair lag,
-a capped placement gas and four rule fixes). This is the fourth draft, with every change. Before
-code: see "Before code" (split (b) measured and proposed; numbers for the lag and the ramp). It answers the S17 item "erasure coding (k of n pieces instead of R
-copies)". Capacity-weighted placement, aggregated proofs and committees past 128 nodes are later
-slices. Research: RESEARCH.md "Storage network" (Storj v3, Walrus, the Reed-Solomon crates).
-Plain-English master document: docs/STORAGE-NETWORK.md.
+Proposed, **parked** 2026-11-02 (test network only); nothing is built. Four fresh adversarial
+reviews the same day (THREATS STORAGE-S17-R1 to -R4), each "build with changes" or "another draft".
+The code rule, distinct holders, per-stripe exclusion and eager repair held from the third review
+on; repair timing failed three reviews in a row (lazy repair, one-epoch rebuilds, a fixed lag), so
+by the project's rule the design is parked rather than drafted a fifth time (docs/TRACKER.md
+2026-11-02). Why parking costs nothing now: coded deals need at least `2n - k` nodes (36 for
+12-of-24) and the live network has five. What a fifth draft must do is in "Parked: what is left".
+It answers the S17 item "erasure coding (k of n pieces instead of R copies)". Research: RESEARCH.md
+"Storage network". Plain-English master document: docs/STORAGE-NETWORK.md.
 
 ## Context
 A v1 deal (ADR-0060 with amendments 1 and 2, deployed 2026-11-02 at
@@ -40,7 +39,7 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
   about 256 TB of reads at k = 16, against 12.8 TB. Repair stays eager all the same (decision 7):
   lazy repair reopened the loss threshold (STORAGE-S17-R2).
 
-## Decision (proposed, third draft)
+## Decision (proposed, fourth draft; parked)
 1. **A deal names k and n.** `createDeal(header, payload, k, n, piecesRoot, epochs, sourceUrl)`.
    Allowed codes: `4 <= k <= 16`, `n >= 2k` and `n - k + 1 >= 13`, `n <= MAX_PIECES` (32):
    12-of-24 to 16-of-32 at 2x, wider at more. While a stripe is whole and `N >= 2n - k`, every
@@ -123,13 +122,28 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
    or leaves, or a join or a chain takes it (decision 4 names the new holder in every case). When
    the old holder is still serving (a join, a chain move, an exit, a noticed decline) the new holder
    copies the piece from it, P bytes checked against `piecesRoot`; only jails, slashes and crashes
-   need a rebuild from k pieces. The new holder is challenged from `G` epochs after the move, `G`
-   set from a stated bandwidth per node (one full rebuild of a node's share per `G` epochs; `G =
-   1` is v1's rule): a rebuild of a joiner's whole share is k-fold (a 128-node 16-of-32 network
-   holding 500 TB asks about 124 TB of a joiner, 11.5 Gbit/s over a one-day epoch and far more over
-   the 24-minute test epochs), and a holder late with it would be slashed, excluded and moved again,
-   a cascade (STORAGE-S17-R3 H1). Joins are also ramped: a new node takes pieces of at most a set
-   number of stripes per epoch.
+   need a rebuild from k pieces. A rebuild of a whole share is k-fold (a 128-node 16-of-32 network
+   holding 500 TB would ask about 124 TB of a joiner, 11.5 Gbit/s over a one-day epoch), and a
+   holder late with it would be slashed, excluded and moved again, a cascade (STORAGE-S17-R3 H1).
+   Three immutable deploy parameters bound the work per epoch, all from one stated figure, the
+   bandwidth a node gives storage work, `B` (proposed 100 Mbit/s, about 1.08 TB per one-day
+   epoch; the operator guide states it as a requirement):
+   - **Repair lag `G`.** A piece moved by a jail, slash or crash is challenged from `G` epochs after
+     the move (a copy, from 1 epoch as in v1). After one node of the largest allowed capacity
+     `C_max` is jailed, each of the other eligible nodes rebuilds about `k × C_max / (N - 1)`
+     bytes; `G = ceil(k × C_max / ((N_min - 1) × B × T))` with `N_min = 2n - k`. For `C_max` =
+     16 TiB and one-day epochs: about 6.0 TB per node, 5.5 to 5.6 days at 48 (16-of-32) or 36
+     (12-of-24) nodes, so `G` = 6; at 128 nodes it would be 3 for 16-of-32 (2.05 epochs). During those epochs the moved piece
+     is not checked (as in v1's one epoch, longer), and the stripe has n - 1 checked pieces.
+   - **Join ramp.** A node activated in epoch `a` is eligible for a stripe in epoch `e` only when
+     `keccak("onyx-storage-ramp-v1" ‖ node ‖ deal ‖ shard) mod J < e - a`, with `J = ceil(C /
+     (B × T))` from its own declared capacity `C`: its stripes arrive evenly over J epochs (16 TiB:
+     J = 17 at one-day epochs), each by copy, at most about `B × T` bytes per epoch. One hash per
+     candidate, no state; stripes not yet eligible keep their holders.
+   - **Minimum term.** Coded deals run at least `MIN_CODED_EPOCHS = 2k` epochs (32 for k = 16), and
+     the early close of decision 1 cannot come before: each first holder reads the whole shard,
+     k pieces' worth, and earns about one piece's worth an epoch, so 2k epochs repay that fetch
+     twice over at the deal's own price (a rough rule, revisited with real prices).
    Lazy repair (second draft) was dropped: a stripe left at its repair threshold T needs only T - k
    + 1 pieces from one operator (7 for 12-of-24; at f = 1/3, 36 to 92% of stripes against 3.2 to
    3.4% for three copies), and the contract could not tell a moved, unbuilt piece from a held one
@@ -213,4 +227,21 @@ rebuild it, at n/k times the data. What coding does and does not buy (review STO
 2. **Floors (done 2026-11-02).** `MIN_PIECE_BYTES` = 8 MiB (v1's floor per copy) and coded shards
    of at least `k × 2 KiB` (decision 1).
 3. Reviews done: STORAGE-S17-R1, -R2, -R3 (this fourth draft takes R3's changes). A fourth review
-   once `G`, the join ramp and `MIN_CODED_EPOCHS` have numbers, together with split (b).
+   of decision 7's numbers (`B`, `G`, the ramp, the minimum term) together with split (b).
+
+## Parked: what is left (review STORAGE-S17-R4)
+A fifth draft, when the network nears `2n - k` nodes or aggregated proofs (a later S17 slice)
+change what is checked, must:
+1. Apply the repair lag to every move, not only jails (a whole-deal decline or an exit followed by
+   refusing to serve turns a copy into a k-fold rebuild for free), and make it dynamic: a
+   rebuild-debt counter on chain (each jail, exit and whole-deal decline adds about `k × committed
+   / N / (N - 1)`; `B × T` drains each epoch; the lag is `1 + ceil(debt / (B × T))`), with handed-off
+   pieces kept by the old holder for the lag.
+2. Leave the join ramp off new deals (it gates only stripes of deals that started before the
+   node's first epoch in the list) and cap declared capacity at `C_max` in `register`.
+3. Delay a coded deal's first checks by `ceil(n × bytes / (N × B × T))` epochs and count first
+   placements in the same debt.
+4. Credit a rebuilt piece's skipped slots on its first pass after the lag, so a rebuild is paid.
+5. Re-measure gas with the lag's second placement and the ramp (about 2.3 to 2.5 million per
+   answer warm), and state `B × T` as one immutable in bytes per epoch.
+

@@ -1074,8 +1074,11 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       could not be checked on chain; placement gas 1.1 to 7.5 million); third draft reviewed
       (STORAGE-S17-R3: core sound; copy instead of rebuild, a repair lag, gas capped at 1.65
       million); fourth draft written; contract split measured as stubs: a coded-only contract
-      with one linked library, 22,918 bytes (1,658 under the limit), v1 untouched. Next: numbers
-      for the repair lag, the join ramp and the minimum term, a fourth review, then code. Coded
+      with one linked library, 22,918 bytes (1,658 under the limit), v1 untouched; repair lag, join
+      ramp and minimum term given numbers from a stated 100 Mbit/s per node; fourth review
+      (STORAGE-S17-R4: forced rebuilds stack past a fixed lag, the ramp weakens new deals). Coded
+      pieces PARKED (docs/TRACKER.md 2026-11-02: repair timing failed three reviews in a row; coded
+      deals need 36+ nodes); the other S17 parts are next. Coded
       deals need `N >= 2n - k` nodes (36 for 12-of-24), so the live five nodes stay on copies
 - [ ] S18 Cold archive tier on an outside network (the owner picks it) and store on first use
       (ADR-0055 item 2): Onyx keeps the fingerprints and a fetch path; the publisher keeps the bulk
