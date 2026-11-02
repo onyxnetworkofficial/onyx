@@ -24,7 +24,9 @@ cargo fmt --all -- --check
 cargo clippy --locked --workspace --all-targets -- -D warnings
 # The test-only open path still compiles and lints (SER-R2-F1).
 cargo clippy --locked -p onyx-coordinator --features unchecked-open -- -D warnings
-cargo test --locked --workspace
+# `cargo test --locked --workspace`, with the test binaries run in parallel (scripts/test-workspace.py:
+# the same tests, from each package's folder; about 690 s one after another on 2026-11-02).
+python3 -I scripts/test-workspace.py
 # ROADMAP C50: the time-lock vectors on wasm32 (blst's C built by clang, run in node).
 scripts/check-tlock-wasm.sh
 # CL3 (THREATS CL3-3): the generic JSON fetcher's shared vectors on wasm32, as natively.
@@ -41,9 +43,12 @@ python3 -I scripts/check-workflows.py --self-test
 python3 -I scripts/check-workflows.py
 node --test apps/web/tests/release.test.mjs
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.
-cargo run --locked -q -p onyx-node -- --help >/dev/null
+# (--workspace with an example: the feature set of the workspace test build above, dev
+# dependencies included, so nothing compiles twice; the rehearsals below reuse the same build.)
+cargo build --locked -q --workspace --bin onyx-node --bin onyx-node-btc --example pin-signed-book
+"${CARGO_TARGET_DIR:-$PWD/target}/debug/onyx-node" --help >/dev/null
 # The Bitcoin build with the reserve serving check (ADR-0034 Amendment 1).
-cargo run --locked -q -p onyx-reserve-serve --bin onyx-node-btc -- --help >/dev/null
+"${CARGO_TARGET_DIR:-$PWD/target}/debug/onyx-node-btc" --help >/dev/null
 # ROADMAP C5 (ADR-0036 amendment 1): the track-record intake against a local anvil on a free
 # loopback port: posts, chain-time `committed_at`, sealing, the client recheck and five attacks.
 scripts/track-intake-anvil.sh

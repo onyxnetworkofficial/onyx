@@ -1299,6 +1299,19 @@ impl StorageNode {
         }
     }
 
+    /// Shards of `deal` that failed in an earlier epoch and have not been
+    /// fetched since: no source served them across an epoch boundary.
+    fn failing(&self, deal: u64, epoch: u64) -> usize {
+        self.failures
+            .lock()
+            .map(|f| {
+                f.iter()
+                    .filter(|(k, c)| k.0 == deal && k.1 != WHOLE_DEAL && c.0 < epoch)
+                    .count()
+            })
+            .unwrap_or(0)
+    }
+
     fn forget_deal(&self, deal: u64) {
         if let Ok(mut f) = self.failures.lock() {
             f.retain(|k, _| k.0 != deal);
@@ -1330,7 +1343,8 @@ impl StorageNode {
     /// this node already gave up or was excluded from is skipped; deals take
     /// turns (review STORAGE-R2-1); failures do not use up the fetch pace. Data
     /// no source served across an epoch is declined: the whole deal in one
-    /// transaction when nothing of it is held and every try failed.
+    /// transaction when nothing of it is held and every try failed, or when
+    /// more of its shards fail than one pass can try (partial withholding).
     async fn fetch_placed(&self, s: &Snapshot, rep: &mut TickReport) {
         let me = self.cfg.node;
         let deadline = Some(tokio::time::Instant::now() + FETCH_BUDGET);
@@ -1432,6 +1446,16 @@ impl StorageNode {
                     self.decline(s, deal, WHOLE_DEAL, rep).await;
                     self.forget_deal(deal);
                 }
+                continue;
+            }
+            // Partial withholding (a source serves a few shards of a deal and
+            // withholds the rest): one decline a shard, each due only after three
+            // failed passes in an epoch, cannot keep up with thousands of
+            // withheld shards, and the node is jailed for misses on them first.
+            // More failing shards than one pass can try: give the deal up whole.
+            if !due.is_empty() && self.failing(deal, s.epoch) > 2 * self.cfg.fetches_per_tick {
+                self.decline(s, deal, WHOLE_DEAL, rep).await;
+                self.forget_deal(deal);
                 continue;
             }
             for i in due {

@@ -9,8 +9,9 @@
 # in apps/agent/test.
 set -euo pipefail
 cd "$(dirname "$0")/.."
-cargo build --locked -q -p onyx-check
-cargo build --locked -q -p onyx-source-btc --example serve-api
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --bin onyx-check --example serve-api
 target="${CARGO_TARGET_DIR:-target}/debug"
 # An absolute CARGO_TARGET_DIR (a shared cache) stays as it is; a relative one is under this checkout.
 case $target in /*) ;; *) target=$PWD/$target ;; esac

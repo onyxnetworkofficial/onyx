@@ -28,7 +28,9 @@ trap 'exit 130' INT TERM HUP
   || { cat "$work/forge.log"; echo "forge build failed"; exit 1; }
 artifact=$PWD/contracts/out/OnyxSignedBook.sol/OnyxSignedBook.json
 [ -s "$artifact" ] || { echo "no OnyxSignedBook artifact"; exit 1; }
-cargo build --locked -q -p onyx-coordinator --example track-onchain-anvil
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --example track-onchain-anvil
 # Port 0: anvil binds a free port itself and prints it (review TR-R4-3).
 (cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 >"$work/anvil.log" 2>&1) &
 anvil_pid=$!

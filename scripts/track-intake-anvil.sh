@@ -22,7 +22,9 @@ cleanup() {
 }
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
-cargo build --locked -q -p onyx-coordinator --example track-intake-anvil
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --example track-intake-anvil
 # Port 0: anvil binds a free port itself and prints it, so no other process can take it between
 # a probe and the bind. Probing a port first and passing it raced parallel check-all runs (other
 # worktrees): when another anvil won the port, this one died on "Address already in use" and the

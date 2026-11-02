@@ -5,7 +5,7 @@
 //! served by a real `BulkStore` (the publisher's node).
 
 use super::*;
-use crate::bulk_serve::tests::{published, sign, world, World};
+use crate::bulk_serve::tests::{published, published_keys, sign, world, World};
 use crate::bulk_serve::{parse_rows_query, BulkStore};
 use onyx_storage::abi::{encode, uint, Tok};
 use onyx_storage::ids::{deal_salt, node_id};
@@ -442,6 +442,17 @@ struct Setup {
 async fn setup(n: usize) -> Setup {
     let publisher = world();
     let (m, _) = published(&publisher).await;
+    setup_with(n, publisher, m)
+}
+
+/// `setup` for a dataset of `shards` shards (10 rows each).
+async fn setup_shards(n: usize, shards: i128) -> Setup {
+    let publisher = world();
+    let (m, _) = published_keys(&publisher, 0..shards * 10).await;
+    setup_with(n, publisher, m)
+}
+
+fn setup_with(n: usize, publisher: World, m: Manifest) -> Setup {
     let nodes: Vec<(NodeId, String)> = (0..n)
         .map(|i| {
             (
@@ -1124,6 +1135,131 @@ async fn a_withheld_deal_is_declined_whole_when_only_some_shards_are_tried() {
         .find(|d| d[..4] == abi::selector("decline(uint64,uint32,bytes32)"))
         .expect("decline");
     assert_eq!(abi::word_u64(&d[4..], 1).expect("index") as u32, WHOLE_DEAL);
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Partial withholding: the node holds one shard of a deal and no source
+/// serves the others. Declined one by one (three failed passes each in an
+/// epoch) thousands of withheld shards would take many epochs of misses; with
+/// more failing shards than a pass can try, the deal is given up whole at once.
+#[tokio::test]
+async fn a_partly_withheld_deal_is_declined_whole() {
+    let s = setup_shards(3, 8).await;
+    let me = s.nodes[0];
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    assert_eq!(
+        snap.wanted(&me).len(),
+        8,
+        "R = N = 3: every shard is placed here"
+    );
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    own.store
+        .accept_manifest(
+            &s.manifest.to_bytes(),
+            &borsh::to_vec(&sign(&s.manifest)).expect("report"),
+        )
+        .await
+        .expect("manifest");
+    // The node already holds shard 0; nobody serves shards 1 to 7.
+    let e = &s.manifest.shards[0];
+    let body = s.publisher.store.shard_file(&e.root).await.expect("file");
+    own.store
+        .put_shard("example.publisher", "synthetic.metrics", &e.root, body)
+        .await
+        .expect("shard");
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        withholding(&s),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: me,
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 1,
+        },
+    );
+    // Epoch 3: two tries a pass, so all 7 missing shards have failed once
+    // after four passes; nothing is declined within one epoch.
+    for _ in 0..4 {
+        let r = node.tick().await.expect("tick");
+        assert_eq!(r.fetch_failed, 2, "two tries a pass");
+    }
+    assert_eq!(decline_count(&tx), 0, "not within one epoch");
+    // Epoch 4: once a shard is due (three failed passes here), 7 failing
+    // shards are more than a pass can try (2): one decline of the whole deal.
+    s.chain.0.lock().expect("lock").epoch = 4;
+    let mut passes = 0;
+    while decline_count(&tx) == 0 {
+        passes += 1;
+        assert!(passes <= 12, "declined within the epoch");
+        node.tick().await.expect("tick");
+    }
+    assert_eq!(decline_count(&tx), 1);
+    let sent = tx.0.lock().expect("lock").clone();
+    let d = sent
+        .iter()
+        .find(|d| d[..4] == abi::selector("decline(uint64,uint32,bytes32)"))
+        .expect("decline");
+    assert_eq!(abi::word_u64(&d[4..], 1).expect("index") as u32, WHOLE_DEAL);
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// A few failing shards among many held ones are still declined one by one:
+/// the whole deal is given up only past what a pass can try.
+#[tokio::test]
+async fn a_few_withheld_shards_are_declined_one_by_one() {
+    let s = setup_shards(3, 8).await;
+    let me = s.nodes[0];
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    own.store
+        .accept_manifest(
+            &s.manifest.to_bytes(),
+            &borsh::to_vec(&sign(&s.manifest)).expect("report"),
+        )
+        .await
+        .expect("manifest");
+    // The node holds shards 0 to 5; nobody serves 6 and 7.
+    for e in &s.manifest.shards[..6] {
+        let body = s.publisher.store.shard_file(&e.root).await.expect("file");
+        own.store
+            .put_shard("example.publisher", "synthetic.metrics", &e.root, body)
+            .await
+            .expect("shard");
+    }
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        withholding(&s),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: me,
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 1,
+        },
+    );
+    node.tick().await.expect("tick");
+    s.chain.0.lock().expect("lock").epoch = 4;
+    for _ in 0..3 {
+        node.tick().await.expect("tick");
+    }
+    let sent = tx.0.lock().expect("lock").clone();
+    let mut idx: Vec<u32> = sent
+        .iter()
+        .filter(|d| d[..4] == abi::selector("decline(uint64,uint32,bytes32)"))
+        .map(|d| abi::word_u64(&d[4..], 1).expect("index") as u32)
+        .collect();
+    idx.sort_unstable();
+    assert_eq!(idx, vec![6, 7]);
     let _ = std::fs::remove_dir_all(&own.dir);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }

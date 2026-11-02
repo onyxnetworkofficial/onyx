@@ -258,13 +258,21 @@ fn code(e: ApiError) -> &'static str {
 
 /// Publish 3 shards (keys 0..30, 10 rows each) and upload them all.
 pub(crate) async fn published(w: &World) -> (Manifest, Vec<Vec<u8>>) {
-    let files = shard_files(0..30, 10);
+    published_keys(w, 0..30).await
+}
+
+/// Publish the rows of `keys`, 10 rows a shard, and upload every shard.
+pub(crate) async fn published_keys(
+    w: &World,
+    keys: std::ops::Range<i128>,
+) -> (Manifest, Vec<Vec<u8>>) {
+    let files = shard_files(keys, 10);
     let m = manifest(&files, None, T0);
     let r = sign(&m);
     w.node.anchor(&r);
     let (s, v) = w.post(&m, &r).await.expect("ok");
     assert_eq!(s, StatusCode::CREATED);
-    assert_eq!(v["missing"].as_array().expect("ok").len(), 3);
+    assert_eq!(v["missing"].as_array().expect("ok").len(), files.len());
     for (f, e) in files.iter().zip(&m.shards) {
         assert_eq!(
             w.put(&e.root, f.clone()).await.expect("ok").0,

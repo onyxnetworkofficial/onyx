@@ -25,7 +25,9 @@
 # ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com), STORAGE_NODES (5),
 # STORAGE_EPOCH_BLOCKS (7200: 24 minutes at Base Sepolia's 0.2 s blocks, THREATS STORAGE-S15-5),
 # STORAGE_DEAL_EPOCHS (42: about 17 hours at 7,200-block epochs),
-# STORAGE_CAPACITY_GIB (6 per node: five nodes fit the host's disk).
+# STORAGE_CAPACITY_GIB (6 per node: five nodes fit the host's disk), STORAGE_FUND_NODE_WEI and
+# STORAGE_FUND_PAYER_WEI (the test ETH `fund` tops each node and the payer up to: 120000000000000
+# and 30000000000000; 0 sends no ETH, for a run on what the keys already hold).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$PWD
@@ -37,6 +39,9 @@ nodes=${STORAGE_NODES:-5}
 epoch_blocks=${STORAGE_EPOCH_BLOCKS:-7200}
 deal_epochs=${STORAGE_DEAL_EPOCHS:-42}
 capacity=${STORAGE_CAPACITY_GIB:-6}
+fund_node_wei=${STORAGE_FUND_NODE_WEI:-120000000000000}
+fund_payer_wei=${STORAGE_FUND_PAYER_WEI:-30000000000000}
+case "$fund_node_wei$fund_payer_wei" in *[!0-9]*) echo "STORAGE_FUND_*_WEI must be whole numbers" >&2; exit 2 ;; esac
 keys=$REPO/.onyx-testnet/keys
 state=$REPO/.onyx-testnet/storage-sepolia.json
 book=0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5
@@ -207,9 +212,9 @@ fund)
   key=$(deployer_key)
   # Topped up to (never added on top of): nodes 0.00012 test ETH (about a week of answers at
   # 0.006 gwei) and 20 tONYX (the bond); the deal payer gas for a few deals and 100 tONYX.
-  BASE_SEPOLIA_PRIVATE_KEY=$key ONYX_FUND_TO=$to ONYX_FUND_WEI=120000000000000 ONYX_FUND_TONYX=20000000000000000000 \
+  BASE_SEPOLIA_PRIVATE_KEY=$key ONYX_FUND_TO=$to ONYX_FUND_WEI=$fund_node_wei ONYX_FUND_TONYX=20000000000000000000 \
     ONYX_STORAGE_TOKEN=$tonyx forge_script script/FundStorage.s.sol:FundStorage --broadcast --slow
-  BASE_SEPOLIA_PRIVATE_KEY=$key ONYX_FUND_TO=$(addr payer) ONYX_FUND_WEI=30000000000000 ONYX_FUND_TONYX=100000000000000000000 \
+  BASE_SEPOLIA_PRIVATE_KEY=$key ONYX_FUND_TO=$(addr payer) ONYX_FUND_WEI=$fund_payer_wei ONYX_FUND_TONYX=100000000000000000000 \
     ONYX_STORAGE_TOKEN=$tonyx forge_script script/FundStorage.s.sol:FundStorage --broadcast --slow
   unset key
   for n in $(names) payer; do

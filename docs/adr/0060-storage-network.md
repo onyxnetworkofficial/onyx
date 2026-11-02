@@ -157,6 +157,52 @@ ADR-0062 finding 7 and THREATS STORAGE-S16-R2-1 to -3. A first draft was reviewe
    cheaper than a decline (STORAGE-S16-R3-3, -4). Any passed check still resets the count of
    misses toward jail; item 4 bounds what that saves.
 
+## Amendment 2 (proposed 2026-11-02): decline accounting (ROADMAP S16)
+Status: proposed; item 3 built in the node. Items 1 and 2 need a design review before code
+(THREATS STORAGE-S16-R5, an independent comparison of seven mechanisms, is the input). Item 2
+changes `OnyxStorage`, so it ships in the same redeployment as amendment 1.
+
+The two problems: a node that declines everything still counts in N and in total capacity, so
+`createDeal` can commit copies that only the other nodes hold (STORAGE-R2-2); and a decline is
+free, so a node that keeps nothing and fetches on demand gives a shard up at no cost when its
+source fails (STORAGE-S16-R2-3). Three rules from earlier reviews bound any fix: a decline never
+costs more than staying silent and risking a miss (or nodes stay silent and the copy is not
+repaired, STORAGE-S16-R3-4); no flag that never clears (STORAGE-S16-R3-3); a publisher that
+withholds its data cannot push honest nodes out or block new deals cheaply (STORAGE-16; when the
+top R decline a withheld shard, the next nodes in the ranking are asked and decline too).
+
+1. **No on-chain change for STORAGE-R2-2 before S17.** On chain, a node that declines everything
+   and an honest node facing a withholding publisher do the same thing: they decline data they
+   never passed a check on. "Somebody passed a check on this shard" is forged by one node the
+   publisher runs. Every rule compared (a capacity charge for declined GiB, removal past a count of
+   declines, a fee) can be turned against honest nodes by a withholding publisher: a one-shard
+   withheld deal walks the whole ranking, so a capacity charge costs N times what the deal
+   commits. Capacity-weighted placement with aggregated proofs (S17) gives the signal. Until then
+   the declines are public in the `Declined` events; a report of them per node and per deal is
+   TODO S17.
+2. **A one-epoch notice on shards the node itself proved** (STORAGE-S16-R2-3). Each passed answer
+   stores its epoch for (deal, shard, node). A `decline` of one shard takes effect one epoch later
+   than now (from the epoch after next) when the node passed a check on that shard in the last
+   K = 100 epochs; otherwise from the next epoch, as now. For a whole-deal decline the delay is
+   per shard: `exclusionFrom` adds the epoch only for shards the node passed in the window, so a
+   pass on one shard never delays the decline of a withheld one. A slash still excludes from the
+   next epoch (the earlier of the two wins). Why it meets the three rules: under notice a decline is
+   silence for one more epoch and then out, so on every sequence of challenges it costs no more
+   than silence; the mark expires after K epochs, and a node keeps the files of a shard it moved
+   away from, so it still answers when the shard moves back; an honest node answers only from its
+   own copy, so a withholding publisher cannot put it under notice for data it never had. What it
+   buys: on a one-shard deal (every live deal so far) both challenge slots hit that shard, so an
+   outsourcer whose source fails is slashed once; on large deals almost nothing until aggregated
+   proofs (S17). Estimated cost: about 22,000 gas on a node's first pass on a shard and 5,000 on
+   later ones, about 2,100 per whole-deal decliner in `_challenged`, about 400 bytes of code. The
+   `Answered` event names the shard, so the node's `Exclusions` mirror the rule without seeds.
+3. **The node declines a partly withheld deal whole** (STORAGE-S16-R5-2; built, no contract
+   change). The node gave a deal up whole only when it held none of it, so a source that served
+   one shard and withheld the rest kept it declining one shard at a time, each after three failed
+   passes in an epoch, while it was challenged and jailed on the missing ones. Now, once a shard is
+   due for a decline and more of the deal's shards have failed across an epoch boundary than one
+   pass can try, the node declines the whole deal in one transaction.
+
 ## Alternatives
 - **Assignments stored on chain** (a table of shard -> nodes): millions of entries at 500 TB;
   rejected. Rendezvous needs no table and moves the least data on a change.

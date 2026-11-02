@@ -38,7 +38,9 @@ trap 'exit 130' INT TERM HUP
 fail() { echo "RECHECK ANVIL FAILED: $*"; exit 1; }
 (cd "$work" && "$FOUNDRY_BIN/forge" build --root "$REPO/contracts" >"$work/forge.log" 2>&1) \
   || { tail -20 "$work/forge.log"; fail "forge build"; }
-cargo build --locked -q -p onyx-level2 --example level2-manifest --example onyx-source
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --example level2-manifest --example onyx-source
 bin=$work/bin
 mkdir "$bin"
 cp "${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/level2-manifest" \

@@ -126,7 +126,8 @@ coordinator=$(castw call "$settlement" 'coordinator()(address)' | lc)
 if [ -n "${ONYX_PIN_BIN:-}" ]; then
   pin=$ONYX_PIN_BIN
 else
-  cargo build --locked -q -p onyx-node --example pin-signed-book
+  # --workspace: the feature set of `cargo test --workspace`, so check-all reuses that build.
+  cargo build --locked -q --workspace --example pin-signed-book
   pin=${CARGO_TARGET_DIR:-$REPO/target}/debug/examples/pin-signed-book
 fi
 [ -x "$pin" ] || { echo "no pin-signed-book binary at $pin" >&2; exit 1; }

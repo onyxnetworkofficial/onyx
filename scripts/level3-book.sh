@@ -49,11 +49,11 @@ trap 'exit 130' INT TERM HUP
 fail() { echo "FAIL: $*" >&2; exit 1; }
 pass() { echo "  ok: $*"; }
 
-cargo build --locked -q -p onyx-node --bin onyx-node --example pin-signed-book
-cargo build --locked -q -p onyx-coordinator --example level3-book-anvil
-cargo build --locked -q -p onyx-web-verify --example signed-client
-cargo build --locked -q -p onyx-api --example submit-review
-cargo build --locked -q -p onyx-source-fiscaldata --example feed-approved --example check-observation
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --bin onyx-node --example pin-signed-book \
+  --example level3-book-anvil --example signed-client --example submit-review \
+  --example feed-approved --example check-observation
 (cd "$work" && "$FOUNDRY_BIN/forge" build --root "$REPO/contracts" >"$work/forge.log" 2>&1) \
   || { cat "$work/forge.log"; fail "forge build"; }
 

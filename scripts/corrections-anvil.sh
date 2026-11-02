@@ -39,7 +39,11 @@ fail() { echo "CORRECTIONS ANVIL FAILED: $*"; exit 1; }
 (cd contracts && "$FOUNDRY_BIN/forge" build >"$work/forge.log" 2>&1) || { cat "$work/forge.log"; fail "forge build"; }
 # The real ids of the live manifest and its recheck (7 days after the last observable day, 7 days).
 manifest=sources/us.treasury.tga_total_deposits/manifest.json
-cargo run --locked -q -p onyx-level2 --example onyx-source -- \
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --example onyx-source --example level2-manifest
+examples=${CARGO_TARGET_DIR:-$PWD/target}/debug/examples
+"$examples/onyx-source" \
   recheck "$manifest" --after-days 7 --span-days 7 --date 2026-10-28 >"$work/ids.txt"
 id() { awk -v k="$1" '$1 == k {print $2}' "$work/ids.txt"; }
 metric=$(id original_metric_key); template=$(id original_template_id)
@@ -140,7 +144,7 @@ echo "market 1 open until block $close: Yes 40 tONYX (2 bettors), No 20 tONYX (2
 # The recheck runner's plan (onyx_level2::corrections) while trading is open: the value's markets
 # and every bettor read from the contract's lists (no log scan), the pair and the registered
 # recheck template checked; it waits for the close.
-plan=$(cargo run --locked -q -p onyx-level2 --example level2-manifest -- recheck-plan \
+plan=$("$examples/level2-manifest" recheck-plan \
   --manifest "$manifest" --recheck 7:7 --record-date 2026-10-28 --rpc "$RPC" \
   --corrections "$corrections" --margin-blocks 5) || fail "recheck-plan"
 python3 -I -c 'import json,sys; p=json.loads(sys.argv[1]); assert (p["state"], p["markets"], p["served"], p["left"], p["bettors"], p["afterBlock"]) == ("wait", [1], [1], [], 4, int(sys.argv[2])), p' "$plan" "$close" \

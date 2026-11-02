@@ -39,8 +39,10 @@ now() { date +%s.%N; }
 since() { python3 -I -c 'import sys; print(f"{float(sys.argv[2]) - float(sys.argv[1]):.1f}")' "$1" "$(now)"; }
 t_start=$(now)
 
-cargo build --locked -q -p onyx-node --bin onyx-node --bin onyx-storage --example pin-signed-book
-cargo build --locked -q -p onyx-publish
+# --workspace (not -p): the same feature set as check-all's `cargo test --workspace`, so these
+# targets reuse its build instead of compiling a second variant of the shared crates.
+cargo build --locked -q --workspace --bin onyx-node --bin onyx-storage --example pin-signed-book \
+  --bin onyx-publish
 pub_bin=$target/debug/onyx-publish
 st_bin=$target/debug/onyx-storage
 (cd "$work" && "$FOUNDRY_BIN/forge" build --root "$REPO/contracts" >"$work/forge.log" 2>&1) \
