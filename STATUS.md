@@ -1,16 +1,16 @@
-Latest: 2026-11-02: storage network S16 redeployed on Base Sepolia (a row per holder, a registration fee, a notice on declines); testnet live at https://onyx.cryptagraph.com
+Latest: 2026-11-02: storage network S16 done on Base Sepolia: second live run passed 85 of 90 checks, slashed and repaired on chain, books balanced; testnet live at https://onyx.cryptagraph.com
 - Website: browse checked data, run the checks in your browser, add data (form, API or AI connector)
 - Markets on Base Sepolia: two U.S. debt futures (one settled from observed data, one open)
 - Test insurance: frost and earthquake cover, backed by a 1,000 tONYX pool
 - Level 2 data (bonded observers agree on chain): U.S. debt, Treasury cash and deposits, weather, earthquakes
 - New sources from a reviewed manifest, no new code (CL3): Treasury daily deposits is the first, live
 - Large datasets (CL5): 549 daily on-chain datasets from the first bulk publisher, every row provable
-- Storage network (CL9, S15, S16): first run 612 of 612 checks passed over 14 hours. New contract 0x9244…ee43 live 2026-11-02 with the S16 fixes; 5 nodes, 2 deals of 3 hours. A check proves a correct row, not a kept copy (ADR-0062); sealed copies were studied and not built
+- Storage network (CL9, S15, S16): run 1 passed 612 of 612 checks over 14 hours; run 2 (S16 contract 0x9244…ee43) passed 85 of 90: 5 misses in its first epoch from a rate limit, fixed. A check proves a correct row, not a kept copy (ADR-0062)
 - Desktop app and onyx-contrib (CL2, CL10): installers for Windows, macOS and Linux in v0.3.1-testnet; keys stay on your computer
 - API: https://onyx.cryptagraph.com/v1 (OpenAPI at /v1/openapi.json); payments not switched on
 - AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
 - Testnet only: tONYX and test USDC have no value; token economics are not final
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
-- Test ETH: about 0.000075 left for the deployer after the redeploy (0.000024); nodes 0.00004 to 0.00012; a long run needs a faucet, which needs a sign-up
+- Test ETH: deployer 0.000075, nodes 0.000026 to 0.000083, payer 0.000023; a long storage run needs a faucet, which needs a sign-up
 - Correction markets (CL7): contract live on Base Sepolia and paired with Treasury deposits; the recheck runner passes end to end locally; no market yet
-- Next: judge the storage fee on the live contract (S16), open each installer on a real machine (S20), outside observers, the first correction market, a security audit
+- Next: open each installer on a real machine (S20), outside observers, the first correction market (recheck days from 2026-11-14), a security audit

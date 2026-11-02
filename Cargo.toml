@@ -135,6 +135,13 @@ opt-level = 3
 opt-level = 3
 [profile.dev.package.onyx-api]
 opt-level = 3
+# Every hashed structure goes through onyx-core's Borsh encoding (ADR-0002): the level-2 store
+# tests sign and check tens of thousands of rounds (observation_store_scale). Optimizing them
+# changes no result; overflow checks and debug assertions stay on.
+[profile.dev.package.onyx-core]
+opt-level = 3
+[profile.dev.package.borsh]
+opt-level = 3
 
 # Browser verifier build (ADR-0020): whole-program LTO and size-leaning
 # optimization; the canonical engine's semantics do not depend on it.

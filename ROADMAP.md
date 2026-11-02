@@ -1035,7 +1035,7 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       epochs 10 to 43 (none in 2 to 9, before the keeper ran), 612 of 612 challenges passed, 0
       missed, 0 slashed; 0.306 tONYX paid to four nodes (n2 held no shard), 0.072 refunded at close;
       earnings withdrawn; `conserved()` true (`scripts/storage-sepolia.sh close`)
-- [ ] S16 Close v0's cheap holes (ADR-0062 decision 3; THREATS STORAGE-S16-R2-1 to -3, STORAGE-3),
+- [x] S16 Close v0's cheap holes (ADR-0062 decision 3; THREATS STORAGE-S16-R2-1 to -3, STORAGE-3),
       ADR-0060 amendment 1 (design reviewed twice: STORAGE-S16-R3), then a redeploy on Base
       Sepolia: a challenged row per holder (seed, deal, slot and node id); a non-refundable 2%
       registration fee, so grinding ids costs money; 10% of each reported slash for the reporter;
@@ -1052,8 +1052,12 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` (block 53457522), the five nodes registered again,
       two 3-hour deals (btc.price, eth.price); `storage-sepolia.sh` now stops on a failed chain read
       instead of reading it as "nothing on chain" (THREATS STORAGE-S16-R8); `onyx-storage declines`
-      reports declines and slashes per node and per deal (amendment 2 item 1). Open: judge the fee
-      on the live contract (STORAGE-3)
+      reports declines and slashes per node and per deal (amendment 2 item 1); the 2% fee judged on
+      the live contract (STORAGE-3: about 3(N + 1) tries to hold every copy of a chosen shard; kept
+      for the test network, S17 and H2 change the target). Done 2026-11-02: the second live run
+      passed 85 of 90 checks (the 5 misses in its first epoch, five nodes in lockstep on the
+      public endpoint's rate limit, STORAGE-S16-R10, fixed live and in code), slashed and repaired
+      on chain, closed with the books balanced (docs/STORAGE-NETWORK.md "Second live run")
 - [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6, STORAGE-4): placement weighted by declared
       capacity, erasure coding (k of n pieces instead of R copies; each holder keeps a different
       piece, the fix for STORAGE-4, ADR-0062 finding 6),

@@ -33,7 +33,8 @@ trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 fail() { echo "CREDITS ANVIL FAILED: $*"; exit 1; }
 (cd contracts && "$FOUNDRY_BIN/forge" build >"$work/forge.log" 2>&1) || { cat "$work/forge.log"; fail "forge build"; }
-cargo build --locked -q -p onyx-api --features http-client --example credits-rehearsal
+# --workspace: the feature set of check-all's workspace build (see scripts/prepaid-anvil.sh).
+cargo build --locked -q --workspace --example credits-rehearsal
 # One slot per epoch: anvil's `finalized` block is then two blocks behind `latest`.
 (cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 --slots-in-an-epoch 1 >"$work/anvil.log" 2>&1) &
 anvil_pid=$!

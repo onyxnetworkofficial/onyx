@@ -28,6 +28,7 @@ Run from the repo root (scripts/check-docs.sh calls it). Exit 1 with one line pe
   --self-test   plant bad rows (fake citations, bare ACCEPTED, missing docs path, stale TODO,
                 duplicate ID) in a copy of the real file and require each to fail.
 """
+import functools
 import os
 import re
 import subprocess
@@ -46,7 +47,14 @@ SRC_DIRS = ("crates", "adapters", "contracts/test", "contracts/src", "apps/web/t
 SKIP_DIRS = {"target", "node_modules", "out", "build", ".svelte-kit", "pkg", "cache", "target-review"}
 
 
+# The per-line and per-cell parsers below are pure and cached: the self-test checks the same
+# file about two dozen times.
+@functools.lru_cache(maxsize=None)
 def cells(line):
+    return tuple(_cells(line))
+
+
+def _cells(line):
     s = line.strip()
     if s.startswith("|"):
         s = s[1:]
@@ -106,6 +114,12 @@ class Code:
                             self.e2e += text
         self.names = set()
         self.all_tests = set()
+        # Lookups are pure for one run (the tree does not change under it): kept, so the
+        # self-test's two dozen full checks of THREATS.md cost about one (40 s to a few).
+        self._scopes = {}
+        self._verified = {}
+        self._runners = None
+        self._tested = {}
         for v in self.files.values():
             self.names |= v["fns"] | v["mods"]
             self.all_tests |= v["tests"]
@@ -133,6 +147,12 @@ class Code:
     def scope(self, seg):
         """Files a path segment can name: a crate or adapter directory, a file (stem or name), a
         module declared in a file, or a type defined in it."""
+        if seg in self._scopes:
+            return self._scopes[seg]
+        self._scopes[seg] = out = self._scope(seg)
+        return out
+
+    def _scope(self, seg):
         s = norm(seg)
         out = set()
         for p, v in self.files.items():
@@ -161,15 +181,22 @@ class Code:
         with open(path, encoding="utf-8", errors="ignore") as h:
             if not re.search(rf"(?<![\w-]){re.escape(rid)}(?![\w-])", h.read()):
                 return False
-        runners = ""
-        for r in ("scripts/check-all.sh", "scripts/check-docs.sh"):
-            with open(r, encoding="utf-8", errors="ignore") as h:
-                runners += h.read()
-        return path == "scripts/check-all.sh" or os.path.basename(path) in runners
+        if self._runners is None:
+            self._runners = ""
+            for r in ("scripts/check-all.sh", "scripts/check-docs.sh"):
+                with open(r, encoding="utf-8", errors="ignore") as h:
+                    self._runners += h.read()
+        return path == "scripts/check-all.sh" or os.path.basename(path) in self._runners
 
     def verified(self, token, rid=""):
         """A citation that names a test function inside the scope its path names, or a check
         script that guards this row (`guard`)."""
+        key = (token, rid)
+        if key not in self._verified:
+            self._verified[key] = self._verify(token, rid)
+        return self._verified[key]
+
+    def _verify(self, token, rid):
         if "/" in token or token.endswith((".sh", ".py")):
             return self.guard(token, rid)
         parts = token.split("::")
@@ -189,7 +216,12 @@ class Code:
         return any(last in self.files[p]["tests"] for p in pool)
 
 
+@functools.lru_cache(maxsize=None)
 def citations(cell):
+    return tuple(_citations(cell))
+
+
+def _citations(cell):
     """Backticked tokens before any TODO in a cell, minus old names ("was `x`", "old `x`")."""
     cell = cell.split("TODO", 1)[0]
     for m in re.finditer(r"`([^`]+)`", cell):
@@ -210,7 +242,12 @@ def citations(cell):
             yield t
 
 
+@functools.lru_cache(maxsize=None)
 def cited_tests(cell):
+    return tuple(_cited_tests(cell))
+
+
+def _cited_tests(cell):
     """Citations that look like test paths, for the existence rule (4)."""
     for t in citations(cell):
         if not ("::" in t or re.match(r"(test|testFuzz|invariant)_", t)):
@@ -226,6 +263,13 @@ def cited_tests(cell):
 
 
 def row_tested(code, c):
+    key = tuple(c)
+    if key not in code._tested:
+        code._tested[key] = _row_tested(code, c)
+    return code._tested[key]
+
+
+def _row_tested(code, c):
     for cell in c[1:]:
         if any(code.verified(t, c[0]) for t in citations(cell)):
             return True

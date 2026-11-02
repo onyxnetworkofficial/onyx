@@ -32,7 +32,7 @@ Every command takes `--rpc URL --contract 0x… [--from-block N]`; sending ones 
 ## onyx-node settings
 See docs/ops/config.md "Storage network". The node fetches at most `ONYX_STORAGE_FETCHES_PER_TICK`
 shards per pass, checks every byte against the deal's anchored manifest, records the epoch's seed
-when nobody has, answers its challenges, and with `ONYX_STORAGE_KEEPER=on` reports other nodes'
+when nobody has and a deal is checked in that epoch, answers its challenges, and with `ONYX_STORAGE_KEEPER=on` reports other nodes'
 misses.
 
 **Match the node to the contract.** From ADR-0060 amendment 1 each holder proves its own row;

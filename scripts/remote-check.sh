@@ -369,7 +369,13 @@ SH
   h1=$!
   flock -o "$base/locks/slot-2" sleep 60 &
   h2=$!
-  sleep 0.5
+  # Both holders have their lock before the third run (a fixed 0.5 s was a race on a busy machine).
+  held=0
+  for _ in $(seq 100); do
+    if ! flock -n "$base/locks/slot-1" true && ! flock -n "$base/locks/slot-2" true; then held=1; break; fi
+    sleep 0.1
+  done
+  [ "$held" = 1 ] || { echo "remote-check self-test: the two slot holders did not start"; exit 1; }
   expect_fail "a third run with both slots held" env ONYX_REMOTE_BASE="$base" bash "$RUNNER" slot 0
   grep -q 'REFUSED: 2 Onyx runs' "$t/out" || { echo "remote-check self-test: slot refusal"; cat "$t/out"; exit 1; }
   kill "$h2"

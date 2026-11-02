@@ -1317,10 +1317,17 @@ impl StorageNode {
             epoch: s.epoch,
             ..Default::default()
         };
-        // The seed of this epoch (anyone may record it; the first wins).
+        // The seed of this epoch (anyone may record it; the first wins). Only
+        // when a deal is checked in this epoch: with none, a seed asks nobody
+        // and its transaction only spends the node's gas (after the S16 run's
+        // deals closed, every node kept recording one every epoch).
         let e = s.epoch;
         let mut seed = self.chain.seed_of(e).await?;
-        if seed == Hash32::ZERO {
+        let checked = s
+            .deals
+            .iter()
+            .any(|d| d.info.start_epoch <= e && e < d.info.end_epoch);
+        if seed == Hash32::ZERO && checked {
             let start = self.chain.epoch_start(e).await?;
             if s.block > start && s.block <= start + onyx_storage::SEED_WINDOW {
                 if self.send(abi::record_seed(e)).await.is_ok() {
@@ -1823,6 +1830,14 @@ impl Jitter {
     }
 }
 
+/// The waits of [`run`] for this node: first a random part of `every`, then
+/// `every` give or take a random quarter, for ever.
+pub(crate) fn pass_waits(node: &NodeId, every: Duration) -> impl Iterator<Item = Duration> {
+    let mut j = Jitter::new(node);
+    let first = j.part(every);
+    std::iter::once(first).chain(std::iter::repeat_with(move || j.around(every)))
+}
+
 /// Run the loop about every `every` until the process stops (errors are
 /// logged and retried next pass). The first pass waits a random part of
 /// `every` and each wait is `every` give or take a random quarter, so nodes
@@ -1831,8 +1846,8 @@ impl Jitter {
 /// the public endpoint's rate limit together for a whole epoch (THREATS
 /// STORAGE-S16-R10).
 pub async fn run(node: Arc<StorageNode>, every: Duration) {
-    let mut jitter = Jitter::new(&node.cfg.node);
-    tokio::time::sleep(jitter.part(every)).await;
+    let mut waits = pass_waits(&node.cfg.node, every);
+    tokio::time::sleep(waits.next().unwrap_or(every)).await;
     loop {
         match node.tick().await {
             Ok(r) => {
@@ -1845,7 +1860,7 @@ pub async fn run(node: Arc<StorageNode>, every: Duration) {
             }
             Err(e) => eprintln!("onyx-node: storage: tick: {e}"),
         }
-        tokio::time::sleep(jitter.around(every)).await;
+        tokio::time::sleep(waits.next().unwrap_or(every)).await;
     }
 }
 
@@ -1891,17 +1906,31 @@ pub async fn epoch_report(chain: &StorageChain, s: &Snapshot, e: u64) -> Result<
     if seed == Hash32::ZERO || e == 0 {
         return Ok(json!({"epoch": e, "seed": null, "asks": [], "lines": []}));
     }
-    let deals: Vec<onyx_storage::epoch::DealAsk> = s
+    let ask = |id: u64, info: &DealInfo| onyx_storage::epoch::DealAsk {
+        id,
+        salt: info.salt,
+        shard_count: info.shard_count,
+        r: info.r,
+    };
+    let active = |info: &DealInfo| info.start_epoch <= e && e < info.end_epoch;
+    let mut deals: Vec<onyx_storage::epoch::DealAsk> = s
         .deals
         .iter()
-        .filter(|d| d.info.start_epoch <= e && e < d.info.end_epoch)
-        .map(|d| onyx_storage::epoch::DealAsk {
-            id: d.id,
-            salt: d.info.salt,
-            shard_count: d.info.shard_count,
-            r: d.info.r,
-        })
+        .filter(|d| active(&d.info))
+        .map(|d| ask(d.id, &d.info))
         .collect();
+    // The snapshot leaves closed deals out (a node never asks about them
+    // again), but their past epochs had checks: read them here, so the report
+    // of an epoch is the same before and after its deals close (seen on the
+    // S16 run: epoch 9 read empty once both deals were closed).
+    let listed: BTreeSet<u64> = s.deals.iter().map(|d| d.id).collect();
+    for id in (0..s.deal_logs).filter(|id| !listed.contains(id)) {
+        let info = chain.deal_info(id).await?;
+        if info.closed && active(&info) && info.shard_count <= onyx_bulk::manifest::MAX_SHARDS {
+            deals.push(ask(id, &info));
+        }
+    }
+    deals.sort_by_key(|d| d.id);
     let asks = onyx_storage::epoch::expected(
         e,
         &seed,

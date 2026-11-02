@@ -600,6 +600,47 @@ fn net(s: &Setup, peers: &[(&str, Peer)]) -> Arc<Net> {
     })
 }
 
+/// A seed is recorded only for an epoch in which a deal is checked: with the
+/// only deal ended (or closed), the node sends nothing (no gas spent on a seed
+/// that asks nobody).
+#[tokio::test]
+async fn no_seed_is_recorded_when_no_deal_is_checked() {
+    let s = setup(5).await;
+    let me = s.nodes[0];
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let net = net(&s, &[("http://publisher", Peer::Good)]);
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        net,
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: me,
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 8,
+        },
+    );
+    // Epoch 3, in the seed window; the deal ran epochs 2..3 and has ended.
+    s.chain.0.lock().expect("lock").deal.end_epoch = 3;
+    node.tick().await.expect("tick");
+    assert!(
+        tx.0.lock().expect("lock").is_empty(),
+        "a seed was sent for an epoch with no deal"
+    );
+    // The same epoch with the deal running: the seed is recorded.
+    s.chain.0.lock().expect("lock").deal.end_epoch = 10;
+    node.tick().await.expect("tick");
+    let sent = tx.0.lock().expect("lock").clone();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0][..4], abi::selector("recordSeed(uint64)"));
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
 #[tokio::test]
 async fn a_storage_node_fetches_checks_and_proves_only_its_shards() {
     let s = setup(5).await;
@@ -1868,6 +1909,16 @@ fn passes_are_spaced_at_random_around_the_interval() {
     assert!(seen.len() > 25, "{} distinct waits", seen.len());
     assert_eq!(j.part(Duration::ZERO), Duration::ZERO);
     assert_eq!(j.around(Duration::ZERO), Duration::ZERO);
+    // The waits `run` takes: the first within `every`, the rest within a quarter of it.
+    let mut w = super::pass_waits(&a, every);
+    assert!(w.next().expect("first") < every);
+    for _ in 0..500 {
+        let d = w.next().expect("next");
+        assert!(
+            d >= Duration::from_secs(45) && d < Duration::from_secs(75),
+            "{d:?}"
+        );
+    }
     // Two nodes started together do not draw the same waits.
     let mut x = Jitter::new(&NodeId(Hash32([2; 32])));
     let mut y = Jitter::new(&NodeId(Hash32([3; 32])));

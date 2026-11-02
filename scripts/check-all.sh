@@ -10,6 +10,37 @@ export PATH="$PATH:$HOME/.foundry/bin"
 t_all=$SECONDS
 t_stage=$SECONDS
 stage() { echo "[time] $1: $((SECONDS - t_stage)) s (total $((SECONDS - t_all)) s)"; t_stage=$SECONDS; }
+# Independent offline tests run side by side (each has its own temp folder and free loopback
+# ports). Each runs in its own process group with a time limit, its whole output is printed in
+# order when all end, and any failure fails the check; on an early exit (Ctrl-C included) the
+# EXIT trap stops every group. Timing-sensitive tests (the smoke lock) stay outside.
+sbs_pids=()
+sbs_dir=
+side_by_side() {
+  local i st rc=0 cmds=("$@")
+  sbs_dir=$(mktemp -d)
+  sbs_pids=()
+  echo "side by side (logs in $sbs_dir until all end):"
+  for i in "${!cmds[@]}"; do
+    echo "  running: ${cmds[i]}"
+    setsid timeout 900 bash -c "${cmds[i]}" >"$sbs_dir/$i.log" 2>&1 &
+    sbs_pids+=("$!")
+  done
+  for i in "${!sbs_pids[@]}"; do
+    if wait "${sbs_pids[i]}"; then
+      cat "$sbs_dir/$i.log"
+    else
+      st=$?
+      cat "$sbs_dir/$i.log"
+      [ "$st" = 124 ] && echo "TIMED OUT after 900 s: ${cmds[i]}" || echo "FAILED (exit $st): ${cmds[i]}"
+      rc=1
+    fi
+  done
+  sbs_pids=()
+  rm -rf "$sbs_dir"
+  sbs_dir=
+  return "$rc"
+}
 # The gas regression check (see below, where its result is read) rebuilds every contract, about
 # five minutes on one core: it starts now and runs beside the Rust stages. The gas profile has its
 # own out-gas and cache-gas folders, so the default-profile builds in between never touch it.
@@ -17,7 +48,10 @@ gas_log=$(mktemp)
 (cd contracts && exec env FOUNDRY_PROFILE=gas forge snapshot --check --force --no-match-test 'testFuzz_|invariant_' --no-match-contract 'Fork') >"$gas_log" 2>&1 &
 gas_pid=$!
 # On an early exit: stop it and its solc (by PID, so a rerun's --force never meets a leftover build).
-trap '[ -z "$gas_pid" ] || { pkill -P "$gas_pid"; kill "$gas_pid"; } 2>/dev/null || true; rm -f "$gas_log"' EXIT
+# (and every side_by_side group still running, below).
+trap '[ -z "$gas_pid" ] || { pkill -P "$gas_pid"; kill "$gas_pid"; } 2>/dev/null || true; rm -f "$gas_log"
+for p in ${sbs_pids[@]+"${sbs_pids[@]}"}; do kill -TERM -- "-$p" 2>/dev/null || true; done
+[ -z "${sbs_dir:-}" ] || rm -rf "$sbs_dir"' EXIT
 scripts/build-recipes.sh >/dev/null
 # Rebuilt bytes must equal what is staged or committed, and nothing may be untracked (R-REPRO-2).
 if [ -n "$(git ls-files --others --exclude-standard -- recipes/out)" ] || ! git diff --quiet -- recipes/out; then
@@ -105,36 +139,38 @@ scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).
 scripts/check-secrets.sh --self-test
 scripts/check-secrets.sh
-# ROADMAP L12: the health watch against fake node/RPC/site servers on 127.0.0.1 (every threshold
-# edge, malformed answers, RPC down, stalled, wrong chain, de-duplication; no outside network).
-python3 -I scripts/health-watch-tests.py
-# ADR-0043 (THREATS CHAIN-6): the on-chain refresh against a fake Bitcoin Core REST server on
-# 127.0.0.1 (synthetic blocks): what it writes, the lies it refuses, and the pin writer.
-python3 -I scripts/refresh-onchain-tests.py
+# Side by side (about 25 s, 70 s one after another; 2026-11-02):
+# - ROADMAP L12: the health watch against fake node/RPC/site servers on 127.0.0.1 (every threshold
+#   edge, malformed answers, RPC down, stalled, wrong chain, de-duplication; no outside network).
+# - ADR-0043 (THREATS CHAIN-6): the on-chain refresh against a fake Bitcoin Core REST server on
+#   127.0.0.1 (synthetic blocks): what it writes, the lies it refuses, and the pin writer.
+# - THREATS STORAGE-S16-R8: scripts/storage-sepolia.sh with a fake cast (no network, no key): a chain
+#   read that fails stops the step; it never reads as "nothing on chain" and sends a second bond or deposit.
+# - ROADMAP E13 (THREATS REMOTE-1..10): the remote check's refusals without the host: arguments,
+#   secrets, credential files and never-synced paths in the file list, symlinks and the real rsync
+#   into a local folder, an unreachable host (255), check-all's status passed back unchanged even
+#   when the script is rewritten mid-run, the recipes/out and submodule gates, the host's
+#   load and disk rules, two build slots, --clean deleting only the branch's two folders, and the
+#   job's Landlock rules.
+# - ADR-0044 (THREATS ETH-7): the Ethereum window fetch against fake JSON-RPC servers on 127.0.0.1
+#   serving the committed mainnet blocks: what it writes, the lies it refuses, the rate and the pins.
+side_by_side \
+  "python3 -I scripts/health-watch-tests.py" \
+  "python3 -I scripts/refresh-onchain-tests.py" \
+  "scripts/storage-sepolia-tests.sh" \
+  "scripts/remote-check.sh --self-test" \
+  "python3 -I scripts/refresh-eth-onchain-tests.py"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.
 python3 -I scripts/recount-chain-input.py --self-test
 # The machine-wide lock of scripts/docker-smoke.sh (no Docker, about 14 s): two holders never hold
 # it at once, a held lock times out cleanly and names its holder, a leaked child cannot keep it.
 scripts/smoke-lock-tests.sh
-# THREATS STORAGE-S16-R8: scripts/storage-sepolia.sh with a fake cast (no network, no key): a chain
-# read that fails stops the step; it never reads as "nothing on chain" and sends a second bond or deposit.
-scripts/storage-sepolia-tests.sh
-# ROADMAP E13 (THREATS REMOTE-1..10): the remote check's refusals without the host: arguments,
-# secrets, credential files and never-synced paths in the file list, symlinks and the real rsync
-# into a local folder, an unreachable host (255), check-all's status passed back unchanged even
-# when the script is rewritten mid-run, the recipes/out and submodule gates, the host's
-# load and disk rules, two build slots, --clean deleting only the branch's two folders, and the
-# job's Landlock rules.
-scripts/remote-check.sh --self-test
 # THREATS L9A-7: the run-page indexer reader keeps only scheme://host[:port] of its RPC URL.
 python3 -I scripts/read-indexer-sepolia.py --self-test
 # THREATS ETF-5: the SEC ETF recorder paces requests within SEC's 10 per second, fetches only
 # data.sec.gov, follows no redirect, names no person in its User-Agent (offline, no request sent).
 python3 -I scripts/record-sec-etf-holdings.py --self-test
-# ADR-0044 (THREATS ETH-7): the Ethereum window fetch against fake JSON-RPC servers on 127.0.0.1
-# serving the committed mainnet blocks: what it writes, the lies it refuses, the rate and the pins.
-python3 -I scripts/refresh-eth-onchain-tests.py
 stage "script tests"
 # THREATS L9A-6: a public build flag other than 0 or 1 is refused before anything builds.
 if ONYX_PUBLIC=true scripts/build-web.sh >/dev/null 2>&1; then

@@ -307,7 +307,7 @@ Formulas:
 | Local five-node demo (`scripts/storage-network-anvil.sh`) | Done | see "Last demo run" below |
 | Adversarial reviews | STORAGE-R1 (9 findings) and STORAGE-R2 (a fresh review of those fixes, 6 findings): all fixed with tests except nodes that decline everything still counting in N (S16) | THREATS "STORAGE-R1", "STORAGE-R2" |
 | Decline (`decline`, one shard or a whole deal) | Done (local) | 3 forge tests, 5 node tests, in the money invariants |
-| Base Sepolia | `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` at block 53457522 (2026-11-02, commit 1d608ffd, ADR-0060 amendments 1 and 2, `RULES_VERSION` 3, 22,057 bytes): the v0 parameters (epochs of 7,200 blocks, 24 minutes on 0.2 s blocks, STORAGE-S15-5; 0.001 tONYX per GiB per copy per epoch; bond 0.01 tONYX per GiB, 10 tONYX minimum; slash 10%; 2 checks per deal per epoch; jail after 3 misses); `conserved()` true; deploy cost 0.000024 test ETH. The same five node keys registered again (10 tONYX bond, 0.2 tONYX fee kept, 6 GiB each; n1 is the keeper); deals for btc.price and eth.price, 3 copies, epochs 2 to 10 (about 3 hours; 0.024 tONYX deposit each): short, as the node keys hold little test ETH. The v0 contract `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889, 2026-11-01) is retired: its deals ran and closed ("First live run" below) | ROADMAP S15, S16; THREATS STORAGE-S15, STORAGE-S16-R8 |
+| Base Sepolia | `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` at block 53457522 (2026-11-02, commit 1d608ffd, ADR-0060 amendments 1 and 2, `RULES_VERSION` 3, 22,057 bytes): the v0 parameters (epochs of 7,200 blocks, 24 minutes on 0.2 s blocks, STORAGE-S15-5; 0.001 tONYX per GiB per copy per epoch; bond 0.01 tONYX per GiB, 10 tONYX minimum; slash 10%; 2 checks per deal per epoch; jail after 3 misses); `conserved()` true; deploy cost 0.000024 test ETH. The same five node keys registered again (10 tONYX bond, 0.2 tONYX fee kept, 6 GiB each; n1 is the keeper); deals for btc.price and eth.price, 3 copies, epochs 2 to 10 (about 3 hours; 0.024 tONYX deposit each): short, as the node keys hold little test ETH; **run finished 2026-11-02**: 85 of 90 checks passed, closed, books balanced ("Second live run" below). The v0 contract `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889, 2026-11-01) is retired: its deals ran and closed ("First live run" below) | ROADMAP S15, S16; THREATS STORAGE-S15, STORAGE-S16-R8 to -R11 |
 
 ### First live run (Base Sepolia, 2026-11-01 to 2026-11-02)
 | What | Result |
@@ -319,6 +319,18 @@ Formulas:
 | Pay | 0.306 tONYX: n1, n3 and n4 0.068 each, n5 0.102, n2 nothing (it held none of the 9 copies) |
 | Close | 0.072 tONYX refunded to the payer; every node withdrew its earnings; `conserved()` true; the contract holds the 50 tONYX of bonds |
 | Gas left | nodes 0.00004 to 0.00012 test ETH; the next run needs a faucet top-up first |
+
+### Second live run (Base Sepolia, S16 contract, 2026-11-02)
+| What | Result |
+|---|---|
+| Contract | `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` (ADR-0060 amendments 1 and 2, `RULES_VERSION` 3); the same five node keys, 10 tONYX bond each, 0.2 tONYX fee kept |
+| Deals | btc.price and eth.price: 1 shard each, 3 copies, epochs 2 to 9 (8 epochs of 24 minutes), 0.024 tONYX deposit each |
+| Checks | 85 of 90 passed. Epoch 2: 5 missed (n4 and n5 both of theirs, n3 one): the five nodes were started in the same second and kept meeting the public endpoint's rate limit together (THREATS STORAGE-S16-R10); restarted 12 s apart in epoch 3, then random pass spacing in code: every check passed in epochs 3 to 9 |
+| Slashes and repair | n3 0.98, n4 and n5 1.862 tONYX each (n4 and n5 two misses, one short of jail); in epoch 4 the slashed holders were skipped and their replacements fetched (6 checks instead of 12, by design); from epoch 5 the replacement n1 held a repaired copy and passed every check |
+| Pay | 0.0425 tONYX: n2 0.016, n3 0.0095, n4 and n5 0.006 each, n1 0.005; the keeper n1 also earned 0.4704 tONYX, 10% of the slashes it reported |
+| Close | 0.0055 tONYX refunded to the payer; every node withdrew; `conserved()` true; books: bonds 50, fees and slashes 5.704, rewards 0.4704 tONYX |
+| Found | the lockstep above (STORAGE-S16-R10); `onyx-storage epoch` showed no checks for a closed deal's past epochs, and nodes kept recording a seed every epoch with no deal left, spending gas (STORAGE-S16-R11) |
+| Gas left | nodes 0.000026 to 0.000083 test ETH, payer 0.000023, deployer 0.000075 |
 
 ### Last demo run (2026-11-01, local anvil, debug build, epochs of 40 blocks)
 | What | Result |
