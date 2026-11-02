@@ -5,7 +5,7 @@ Latest: 2026-11-02: the first storage run on Base Sepolia finished (612 of 612 c
 - Level 2 data (bonded observers agree on chain): U.S. debt, Treasury cash and deposits, weather, earthquakes
 - New sources from a reviewed manifest, no new code (CL3): Treasury daily deposits is the first, live
 - Large datasets (CL5): 549 daily on-chain datasets from the first bulk publisher, every row provable
-- Storage network (CL9, S15): 5 nodes on Base Sepolia kept 3 copies of 3 datasets for 34 epochs (about 14 hours); 612 of 612 checks passed, nothing slashed; deals closed 2026-11-02, books balanced
+- Storage network (CL9, S15): 5 nodes on Base Sepolia kept 3 copies of 3 datasets for 34 epochs (about 14 hours); 612 of 612 checks passed, nothing slashed; deals closed 2026-11-02, books balanced. A check proves a correct row, not a kept copy (ADR-0062); sealed copies were studied and not built
 - Desktop app and onyx-contrib (CL2, CL10): installers for Windows, macOS and Linux in v0.3.1-testnet; keys stay on your computer
 - API: https://onyx.cryptagraph.com/v1 (OpenAPI at /v1/openapi.json); payments not switched on
 - AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
@@ -13,4 +13,4 @@ Latest: 2026-11-02: the first storage run on Base Sepolia finished (612 of 612 c
 - Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
 - Owner: test ETH from a faucet before the next storage run (deployer 0.0001 left, nodes 0.00004 to 0.00012)
 - Correction markets (CL7): contract live on Base Sepolia and paired with Treasury deposits; the recheck runner passes end to end locally; no market yet
-- Next: open each installer on a real machine (S20), outside observers, the first correction market, sealed storage copies (S16), a security audit
+- Next: close three storage holes found by review (S16: a row per holder, a registration fee, a reward for reporting misses), open each installer on a real machine (S20), outside observers, the first correction market, a security audit

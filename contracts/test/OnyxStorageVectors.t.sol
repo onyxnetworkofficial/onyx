@@ -278,3 +278,88 @@ contract OnyxStorageVectorsTest is Test {
         }
     }
 }
+
+/// THREATS STORAGE-S16-R1-2: the heap in `_challenged` picks the same holders as the plain rule
+/// (order every node by weight, higher first, then the lower id; walk that order; a node excluded
+/// by e-1 is passed over, one excluded in e still fills a place but is not challenged).
+contract OnyxStoragePlacementOrderTest is Test {
+    PlacementHarness internal ph;
+
+    function setUp() public {
+        OnyxTestToken t = new OnyxTestToken(address(this));
+        OnyxSignedBook b = new OnyxSignedBook(address(0xBEEF));
+        ph = new PlacementHarness(IStorageToken(address(t)), b);
+    }
+
+    function testFuzz_heapMatchesThePlainOrder(uint256 seed) public {
+        uint256 n = 1 + seed % 128;
+        uint8 r = uint8(1 + (seed >> 8) % 8);
+        uint64 e = 10;
+        uint64 d = ph.addDeal(keccak256(abi.encode(seed, "salt")), r, 4);
+        uint32 index = uint32((seed >> 16) % 4);
+        bytes32[] memory nodes = new bytes32[](n);
+        uint64[] memory from = new uint64[](n);
+        for (uint256 i = 0; i < n; i++) {
+            nodes[i] = keccak256(abi.encode(seed, i));
+            // About half the nodes are excluded, from epochs 1 to 12: before, in and after e.
+            uint256 x = uint256(keccak256(abi.encode(seed, i, "from")));
+            if (x % 2 == 0) continue;
+            from[i] = uint64(1 + (x >> 8) % 12);
+            ph.exclude(d, index, nodes[i], from[i]);
+        }
+        // Equal weights would need a Keccak collision, so the id tie-break is not reached here.
+        assertEq(ph.challengedAt(d, e, index, nodes), _plain(d, index, r, e, nodes, from));
+    }
+
+    function _plain(
+        uint64 d,
+        uint32 index,
+        uint8 r,
+        uint64 e,
+        bytes32[] memory nodes,
+        uint64[] memory from
+    ) internal view returns (bytes32[] memory) {
+        (,,, bytes32 salt,,,,,,,,) = ph.dealInfo(d);
+        bytes32 key = L.shardKey(salt, index);
+        uint256 n = nodes.length;
+        uint256[] memory order = new uint256[](n);
+        for (uint256 i = 0; i < n; i++) {
+            order[i] = i;
+        }
+        // Insertion sort: higher weight first, then the lower id.
+        for (uint256 i = 1; i < n; i++) {
+            uint256 x = order[i];
+            uint256 j = i;
+            while (j > 0 && _before(key, nodes, x, order[j - 1])) {
+                order[j] = order[j - 1];
+                j--;
+            }
+            order[j] = x;
+        }
+        bytes32[] memory out = new bytes32[](r);
+        uint256 found;
+        uint256 count;
+        for (uint256 k = 0; k < n && found < r; k++) {
+            uint256 i = order[k];
+            if (from[i] != 0 && from[i] <= e - 1) continue;
+            found++;
+            if (from[i] != 0 && from[i] <= e) continue;
+            out[count++] = nodes[i];
+        }
+        bytes32[] memory h = new bytes32[](count);
+        for (uint256 i = 0; i < count; i++) {
+            h[i] = out[i];
+        }
+        return h;
+    }
+
+    function _before(bytes32 key, bytes32[] memory nodes, uint256 a, uint256 b)
+        internal
+        pure
+        returns (bool)
+    {
+        uint256 wa = L.weight(key, nodes[a]);
+        uint256 wb = L.weight(key, nodes[b]);
+        return wa > wb || (wa == wb && nodes[a] < nodes[b]);
+    }
+}

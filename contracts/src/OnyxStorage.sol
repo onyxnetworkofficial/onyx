@@ -669,7 +669,8 @@ contract OnyxStorage {
     /// The nodes challenged for shard `index` of deal `dealId` in epoch `e` (R-STOR-6,
     /// `onyx_storage::placement::challenged`): the top R of `nodes` (the list of epoch e-1) by
     /// rendezvous weight, skipping nodes excluded from the shard by e-1; less nodes excluded
-    /// from it or jailed by e.
+    /// from it or jailed by e. Nodes come off a heap in that order, so passing over nodes excluded
+    /// from the shard costs a heap step each, not a scan of the list (THREATS STORAGE-S16-R1-2).
     function _challenged(
         Deal storage d,
         uint64 dealId,
@@ -680,23 +681,22 @@ contract OnyxStorage {
         uint256 n = nodes.length;
         bytes32 key = L.shardKey(d.salt, index);
         uint256[] memory w = new uint256[](n);
+        uint256[] memory h = new uint256[](n);
         for (uint256 i = 0; i < n; i++) {
             w[i] = L.weight(key, nodes[i]);
+            h[i] = i;
+        }
+        for (uint256 i = n / 2; i > 0; i--) {
+            _siftDown(h, n, i - 1, w, nodes);
         }
         out = new bytes32[](d.r);
-        uint256 picked;
+        uint256 left = n;
         uint256 found;
-        while (found < d.r) {
-            uint256 best = type(uint256).max;
-            for (uint256 i = 0; i < n; i++) {
-                if (picked & (1 << i) != 0) continue;
-                if (
-                    best == type(uint256).max || w[i] > w[best]
-                        || (w[i] == w[best] && nodes[i] < nodes[best])
-                ) best = i;
-            }
-            if (best == type(uint256).max) break;
-            picked |= 1 << best;
+        while (found < d.r && left > 0) {
+            uint256 best = h[0];
+            left--;
+            h[0] = h[left];
+            _siftDown(h, left, 0, w, nodes);
             uint64 f = exclusionFrom(dealId, index, nodes[best]);
             if (f != 0 && f <= e - 1) continue;
             found++;
@@ -704,6 +704,41 @@ contract OnyxStorage {
             Node storage nd = _nodes[nodes[best]];
             if (nd.jailedFrom != 0 && nd.jailedFrom <= e) continue;
             out[count++] = nodes[best];
+        }
+    }
+
+    /// Restore the heap `h[0..m)` below position `i`: a parent comes before its children in the
+    /// placement order (higher weight first, then the lower node id).
+    function _siftDown(
+        uint256[] memory h,
+        uint256 m,
+        uint256 i,
+        uint256[] memory w,
+        bytes32[] calldata nodes
+    ) private pure {
+        // m <= nodes.length, far below 2^255, so 2 * i + 2 cannot overflow; bounds checks remain.
+        unchecked {
+            uint256 x = h[i];
+            uint256 wx = w[x];
+            while (true) {
+                uint256 c = 2 * i + 1;
+                if (c >= m) break;
+                uint256 y = h[c];
+                uint256 wy = w[y];
+                if (c + 1 < m) {
+                    uint256 z = h[c + 1];
+                    uint256 wz = w[z];
+                    if (wz > wy || (wz == wy && nodes[z] < nodes[y])) {
+                        c++;
+                        y = z;
+                        wy = wz;
+                    }
+                }
+                if (!(wy > wx || (wy == wx && nodes[y] < nodes[x]))) break;
+                h[i] = y;
+                i = c;
+            }
+            h[i] = x;
         }
     }
 

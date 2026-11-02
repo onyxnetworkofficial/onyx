@@ -719,6 +719,43 @@ contract OnyxStorageTest is StorageFixture {
         emit log_named_uint("answer gas with 128 nodes (execution only)", g - gasleft());
     }
 
+    /// THREATS STORAGE-S16-R1-2: the worst answer at the node cap. Every node but the three
+    /// lowest-weighted declines the shard, so `_challenged` passes over 125 excluded nodes
+    /// before it finds the three holders.
+    function test_answerGasAtTheNodeCapWithDeclines() public {
+        for (uint256 i = 5; i < st.MAX_NODES(); i++) {
+            _addNode(i, 100);
+        }
+        uint64 d = _deal();
+        (,,, bytes32 salt, uint32 shards,,, uint64 e,,,,) = st.dealInfo(d);
+        bytes32[] memory list = _list();
+        for (uint32 s = 0; s < shards; s++) {
+            bytes32 key = OnyxStorageLib.shardKey(salt, s);
+            for (uint256 i = 0; i < list.length; i++) {
+                uint256 below;
+                uint256 wi = OnyxStorageLib.weight(key, list[i]);
+                for (uint256 j = 0; j < list.length; j++) {
+                    if (OnyxStorageLib.weight(key, list[j]) < wi) below++;
+                }
+                if (below < 3) continue;
+                vm.prank(_opOf(list[i]));
+                st.decline(d, s, list[i]);
+            }
+        }
+        _seed(e);
+        (, bytes32[] memory hs) = st.challengedHolders(d, e, 0, list);
+        assertEq(hs.length, 3);
+        (bytes memory entry, bytes32[] memory es, bytes memory row, bytes32[] memory rs) =
+            _proof(st.seedOf(e), d, 0);
+        vm.prank(_opOf(hs[0]));
+        uint256 g = gasleft();
+        assertTrue(st.answer(d, e, 0, hs[0], list, entry, es, row, rs));
+        uint256 used = g - gasleft();
+        emit log_named_uint("answer gas with 128 nodes, 125 declined (execution only)", used);
+        // 5,972,284 with the old scan per pick; 1,634,354 with the heap (2026-11-02).
+        assertLt(used, 2_000_000);
+    }
+
     function addOneMore() external {
         _addNode(500, 1);
     }

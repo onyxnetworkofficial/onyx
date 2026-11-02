@@ -1035,14 +1035,20 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       epochs 10 to 43 (none in 2 to 9, before the keeper ran), 612 of 612 challenges passed, 0
       missed, 0 slashed; 0.306 tONYX paid to four nodes (n2 held no shard), 0.072 refunded at close;
       earnings withdrawn; `conserved()` true (`scripts/storage-sepolia.sh close`)
-- [ ] S16 Sealed replicas (THREATS STORAGE-1, STORAGE-2, STORAGE-4): a node-specific slow encoding
-      of each copy so a node cannot fetch from another replica only when asked, and so several copies
-      held by one operator cost several disks; nodes that decline everything stop counting in N and in
-      total capacity (STORAGE-R2-2; a decline penalty must not let a publisher that withholds data
-      push honest nodes out, STORAGE-16). One copy per operator address was built and withdrawn on
-      2026-11-02 after review STORAGE-S16-R1 (it paid operators to split their addresses)
-- [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6): placement weighted by declared
-      capacity, erasure coding (k of n pieces instead of R copies),
+- [ ] S16 Close v0's cheap holes (ADR-0062 decision 3; THREATS STORAGE-S16-R2-1 to -3, STORAGE-3),
+      ADR-0060 amendment 1 (design reviewed twice: STORAGE-S16-R3), then a redeploy on Base
+      Sepolia: a challenged row per holder (seed, deal, slot and node id); a non-refundable 2%
+      registration fee, so grinding ids costs money; 10% of each reported slash for the reporter;
+      jail below half of a node's own activation bond. Then decline accounting, with a slash for
+      declining a shard the node has proven (moved there by review STORAGE-S16-R3-3, -4): nodes that decline everything stop counting in N and in total
+      capacity (STORAGE-R2-2; a decline penalty must not let a publisher that withholds data push
+      honest nodes out, STORAGE-16). Sealed replicas were compared on 2026-11-02 and not built
+      (ADR-0062, review STORAGE-S16-R2; now S21); one copy per operator address was built and
+      withdrawn the same day (STORAGE-S16-R1). Done so far: the `_challenged` scan became a heap
+      (STORAGE-S16-R1-2)
+- [ ] S17 Scale past v0 (THREATS STORAGE-14, STORAGE-R1-6, STORAGE-4): placement weighted by declared
+      capacity, erasure coding (k of n pieces instead of R copies; each holder keeps a different
+      piece, the fix for STORAGE-4, ADR-0062 finding 6),
       aggregated proofs (one answer per node per epoch, more samples), per-epoch committees or a
       proof of rank instead of the whole node list (past 128 nodes)
 - [ ] S18 Cold archive tier on an outside network (the owner picks it) and store on first use
@@ -1050,6 +1056,11 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       until the first paid read
 - [ ] S19 Read payments (THREATS STORAGE-8): nodes paid per read or with retrieval receipts, so
       serving is rewarded and refusing to serve is visible
+- [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
+      (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
+      sealed on its own, checked often enough that sealing on demand costs more than keeping it);
+      a time-bound seal only with seal units (sectors) and an audited proof system that fits the
+      gas budget
 
 ## Phase W: website (own lane, runs alongside the other phases)
 
