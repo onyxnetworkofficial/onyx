@@ -233,18 +233,23 @@ fn fee_gas_and_per_client_limits_are_settable_and_bounded() {
     // AUD-1R-F1/F3: defaults, overrides, and out-of-range values refused.
     let c = load(&base()).expect("config");
     assert_eq!(c.max_per_client, crate::serve::DEFAULT_MAX_PER_CLIENT);
+    assert_eq!(c.reads_per_minute, onyx_api::DEFAULT_READS_PER_MINUTE);
     assert_eq!(c.max_fee_per_gas, onyx_api::evm_tx::DEFAULT_MAX_FEE_PER_GAS);
     assert_eq!(c.max_gas, onyx_api::evm_tx::DEFAULT_MAX_GAS);
     let mut m = base();
     m.insert("ONYX_MAX_CONNS_PER_IP", "8");
+    m.insert("ONYX_READS_PER_MINUTE", "0");
     m.insert("ONYX_MAX_FEE_GWEI", "50");
     m.insert("ONYX_MAX_GAS", "2000000");
     let c = load(&m).expect("config");
     assert_eq!(c.max_per_client, 8);
+    assert_eq!(c.reads_per_minute, 0);
     assert_eq!(c.max_fee_per_gas, 50_000_000_000);
     assert_eq!(c.max_gas, 2_000_000);
     for (k, v) in [
         ("ONYX_MAX_CONNS_PER_IP", "0"),
+        ("ONYX_READS_PER_MINUTE", "1000001"),
+        ("ONYX_READS_PER_MINUTE", "-1"),
         ("ONYX_MAX_FEE_GWEI", "0"),
         ("ONYX_MAX_FEE_GWEI", "10001"),
         ("ONYX_MAX_FEE_GWEI", "1.5"),

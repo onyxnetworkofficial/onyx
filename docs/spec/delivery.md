@@ -690,6 +690,12 @@ Body: `{"error":{"code","message"}}`. Codes are stable; messages are not. The ma
 - Client address: the peer, or behind a configured trusted proxy the right-most
   `X-Forwarded-For` address outside the trusted ranges (M7-L48-F2); `ip:port` and `[v6]:port`
   entries count as their address (M7-L50-F4).
+- Request limit (THREATS NL20-1): every request, on every route, takes one unit from its client's
+  bucket (default 1,200 a minute with the same burst, `ONYX_READS_PER_MINUTE`; the same /56 and /48
+  scopes as below), else 429 `rate_limited` with `Retry-After: 1`. A request from a trusted proxy
+  with no `X-Forwarded-For` header at all is not counted (a local service on the host); one whose
+  forwarded header names no client is counted under the proxy's own key. A refused request adds
+  no bucket for a key not yet tracked (review L19-R1 M2). The limits below come on top.
 - Limits: payment attempts per client (IPv4 address or IPv6 /64; token bucket, default 30 per
   minute; at most 65,536 clients tracked, least recent dropped). An IPv6 /64 also draws from its
   /56 (4 times the budget) and its /48 (16 times); an attempt takes from all three or from none,

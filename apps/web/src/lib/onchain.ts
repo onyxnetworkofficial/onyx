@@ -2,7 +2,7 @@
 // `btc-chain-stats` window. Every figure is a field of `ChainCheck`, which the Rust verifier
 // computed from the leaves it checked against the pinned commitment; this file only turns
 // those integers into labels (string math for exact values, numbers only for drawing).
-import { btc, group, int } from './format.ts';
+import { btc, dayMonth, group, int } from './format.ts';
 import { heightLabel, tickBtc, type ChainPoint } from './chart.ts';
 import type { ChainCheck, ChainSums } from './verifier.ts';
 
@@ -10,7 +10,7 @@ type Day = ChainCheck['days'][number];
 type Block = ChainCheck['blocks'][number];
 
 /** "4 Oct" in UTC. */
-export const dayLabel = (t: number) => new Date(t * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+export const dayLabel = dayMonth;
 /** "2026-10-04 11:59" in UTC. */
 export const stamp = (t: number) => new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ');
 const hm = (t: number) => new Date(t * 1000).toISOString().slice(11, 16);

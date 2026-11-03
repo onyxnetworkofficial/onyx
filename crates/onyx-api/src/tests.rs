@@ -1279,6 +1279,203 @@ async fn payment_attempts_are_rate_limited_per_address() {
     assert_eq!(s, StatusCode::PAYMENT_REQUIRED);
 }
 
+/// THREATS NL20-1: every route behind the guard (reads, health, the 404
+/// fallback) is limited per client address; local services that call the
+/// node directly are not counted; 0 turns the limit off.
+#[tokio::test]
+async fn nl20_1_every_route_is_rate_limited_per_address() {
+    let f = build(Setup {
+        config: ApiConfig {
+            reads_per_minute: 3,
+            trusted_proxies: vec!["127.0.0.1/32".parse().expect("cidr")],
+            ..ApiConfig::default()
+        },
+        ..Setup::default()
+    });
+    let a = Some(IpAddr::from([10, 0, 0, 1]));
+    for _ in 0..3 {
+        assert_eq!(
+            send(&f, Method::GET, "/v1/health", &[], a).await.0,
+            StatusCode::OK
+        );
+    }
+    let (s, h, b) = send(&f, Method::GET, "/v1/health", &[], a).await;
+    assert_eq!(
+        (s, code(&b)),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    assert_eq!(h[header::RETRY_AFTER], "1");
+    // The same bucket covers every route: a value read and the 404 fallback.
+    let uri = format!("/v1/proofs/1/{}/0", f.shard);
+    assert_eq!(
+        send(&f, Method::GET, &uri, &[], a).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let (s, _, b) = send(&f, Method::GET, "/v1/nope", &[], a).await;
+    assert_eq!(
+        (s, code(&b)),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    // Another address has its own bucket; unknown paths count there too.
+    let c = Some(IpAddr::from([10, 0, 0, 2]));
+    for _ in 0..3 {
+        assert_eq!(
+            send(&f, Method::GET, "/v1/nope", &[], c).await.0,
+            StatusCode::NOT_FOUND
+        );
+    }
+    assert_eq!(
+        send(&f, Method::GET, &uri, &[], c).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // In-process calls (no connect info) and a trusted proxy with no
+    // X-Forwarded-For (a local service) are not counted.
+    let proxy = Some(IpAddr::from([127, 0, 0, 1]));
+    for _ in 0..10 {
+        assert_eq!(get(&f, "/v1/health", &[]).await.0, StatusCode::OK);
+        assert_eq!(
+            send(&f, Method::GET, "/v1/health", &[], proxy).await.0,
+            StatusCode::OK
+        );
+    }
+    // Through the proxy, each forwarded client has its own bucket.
+    let via = |ip: &str| [("x-forwarded-for", ip.to_string())];
+    for _ in 0..3 {
+        let r = send(&f, Method::GET, "/v1/health", &via("10.0.0.9"), proxy).await;
+        assert_eq!(r.0, StatusCode::OK);
+    }
+    let r = send(&f, Method::GET, "/v1/health", &via("10.0.0.9"), proxy).await;
+    assert_eq!(r.0, StatusCode::TOO_MANY_REQUESTS);
+    let r = send(&f, Method::GET, "/v1/health", &via("10.0.0.8"), proxy).await;
+    assert_eq!(r.0, StatusCode::OK);
+    // A forwarded header that names no client is counted under the proxy's
+    // own key (fails closed): the fourth such request is refused.
+    for _ in 0..3 {
+        let r = send(&f, Method::GET, "/v1/health", &via("not an address"), proxy).await;
+        assert_eq!(r.0, StatusCode::OK);
+    }
+    let r = send(&f, Method::GET, "/v1/health", &via("not an address"), proxy).await;
+    assert_eq!(r.0, StatusCode::TOO_MANY_REQUESTS);
+    // Review L19-R1 M1: a forwarded value that is not readable as ASCII (an
+    // nginx-style `é, 203.0.113.5`) is counted under the proxy's key too.
+    let odd = Some(IpAddr::from([127, 0, 0, 1]));
+    let f2 = build(Setup {
+        config: ApiConfig {
+            reads_per_minute: 3,
+            trusted_proxies: vec!["127.0.0.1/32".parse().expect("cidr")],
+            ..ApiConfig::default()
+        },
+        ..Setup::default()
+    });
+    for _ in 0..3 {
+        let r = send(&f2, Method::GET, "/v1/health", &via("é, 203.0.113.5"), odd).await;
+        assert_eq!(r.0, StatusCode::OK);
+    }
+    let r = send(&f2, Method::GET, "/v1/health", &via("é, 203.0.113.5"), odd).await;
+    assert_eq!(r.0, StatusCode::TOO_MANY_REQUESTS);
+    // HEAD and a 405 are counted like any request.
+    let h = Some(IpAddr::from([10, 0, 0, 7]));
+    assert_eq!(
+        send(&f2, Method::HEAD, "/v1/health", &[], h).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&f2, Method::DELETE, "/v1/health", &[], h).await.0,
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        send(&f2, Method::GET, "/v1/health", &[], h).await.0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        send(&f2, Method::GET, "/v1/health", &[], h).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Rotating IPv6 /64s inside one /56 shares the /56 bucket (4 x the rate).
+    let n = 3 * PREFIX_RATE_MULTIPLIER;
+    for i in 0..n {
+        let ip = IpAddr::from([0x2001, 0xdb8, 0, i as u16, 0, 0, 0, 1]);
+        assert_eq!(
+            send(&f, Method::GET, "/v1/health", &[], Some(ip)).await.0,
+            StatusCode::OK
+        );
+    }
+    let ip = IpAddr::from([0x2001, 0xdb8, 0, n as u16, 0, 0, 0, 1]);
+    assert_eq!(
+        send(&f, Method::GET, "/v1/health", &[], Some(ip)).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // reads_per_minute 0: no limit.
+    let off = build(Setup {
+        config: ApiConfig {
+            reads_per_minute: 0,
+            ..ApiConfig::default()
+        },
+        ..Setup::default()
+    });
+    for _ in 0..20 {
+        assert_eq!(
+            send(&off, Method::GET, "/v1/health", &[], a).await.0,
+            StatusCode::OK
+        );
+    }
+}
+
+/// Review L19-R1 M3: routes merged after the guard get the client key and
+/// the limit from [`client_limited`], and a request through both layers is
+/// counted once.
+#[tokio::test]
+async fn l19_r1_m3_routes_outside_the_guard_are_limited_and_counted_once() {
+    let f = build(Setup {
+        config: ApiConfig {
+            reads_per_minute: 3,
+            ..ApiConfig::default()
+        },
+        ..Setup::default()
+    });
+    let outside = Router::new().route(
+        "/v1/outside",
+        axum::routing::get(|key: Option<axum::Extension<ClientKey>>| async move {
+            key.map_or_else(|| "none".to_string(), |axum::Extension(k)| k.0)
+        }),
+    );
+    let app = client_limited(f.state.clone(), router(f.state.clone()).merge(outside));
+    let call = |uri: &'static str, ip: [u8; 4]| {
+        let app = app.clone();
+        async move {
+            let mut req = Request::builder()
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request");
+            req.extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from((IpAddr::from(ip), 4000))));
+            let resp = app.oneshot(req).await.expect("response");
+            let s = resp.status();
+            let b = resp.into_body().collect().await.expect("body").to_bytes();
+            (s, String::from_utf8_lossy(&b).to_string())
+        }
+    };
+    // Three requests through both layers: each is counted once.
+    for _ in 0..2 {
+        assert_eq!(call("/v1/health", [10, 1, 0, 1]).await.0, StatusCode::OK);
+    }
+    // The outside route sees the caller's own key, not `local`.
+    assert_eq!(
+        call("/v1/outside", [10, 1, 0, 1]).await,
+        (StatusCode::OK, "10.1.0.1".to_string())
+    );
+    let (s, b) = call("/v1/outside", [10, 1, 0, 1]).await;
+    assert_eq!(s, StatusCode::TOO_MANY_REQUESTS, "{b}");
+    assert_eq!(
+        call("/v1/health", [10, 1, 0, 1]).await.0,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        call("/v1/outside", [10, 1, 0, 2]).await,
+        (StatusCode::OK, "10.1.0.2".to_string())
+    );
+}
+
 /// A facilitator that never answers.
 struct Hangs;
 impl Facilitator for Hangs {

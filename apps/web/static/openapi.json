@@ -80,6 +80,9 @@
               }
             }
           },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
           "503": {
             "$ref": "#/components/responses/Error"
           },

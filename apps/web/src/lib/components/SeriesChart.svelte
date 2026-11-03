@@ -3,7 +3,7 @@
 	// one BTC scale so the two are directly comparable. Values come from the
 	// verifier's checked series (#lib/live.ts), never from the export's fields.
 	// Style, keys, tooltip and table: ChartFrame and src/lib/chart.ts (W6).
-	import { btc, int } from '#lib/format.ts';
+	import { btc, dayMonth, int } from '#lib/format.ts';
 	import { nice, utc, type FlowPoint } from '#lib/live.ts';
 	import { barPath, barWidth, COLOR, edgeTicks, heightLabel, padFor, tickAnchor, tickBtc } from '#lib/chart.ts';
 	import ChartFrame from './ChartFrame.svelte';
@@ -42,7 +42,7 @@
 	const cx = (i: number) => padL + band * i + band / 2;
 	const y = (v: number) => H / 2 - (v / max) * (H / 2 - 10);
 	const line = $derived(running.map((r, i) => `${i ? 'L' : 'M'}${cx(i)},${y(toBtc(r))}`).join(''));
-	const day = (t: number) => new Date(t * 1000).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+	const day = dayMonth;
 	const total = $derived(running[running.length - 1] ?? 0n);
 	const steps = $derived(ends ? 'six-block steps' : 'blocks');
 	const label = $derived(n === 0 ? `${name}: no blocks to draw.` : `${name}: net flow in ${n} ${steps}, ending at ${btc(total)} BTC.`);

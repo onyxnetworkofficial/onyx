@@ -855,6 +855,7 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             rights: c.rights,
             allow_mainnet: c.allow_mainnet,
             trusted_proxies: c.trusted_proxies.clone(),
+            reads_per_minute: c.reads_per_minute,
             ..ApiConfig::default()
         },
     )
@@ -1320,11 +1321,14 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         ),
         None => (extra, axum::Router::new()),
     };
+    let limit_state = state.clone();
     let server = tokio::spawn(async move {
         // Header read timeout and a connection cap (AUD-1-F5).
         crate::serve::serve_with(
             listener,
-            router_with(state, extra).merge(bulk_uploads),
+            // Review L19-R1 M3: the routes merged after the guard (bulk uploads, storage
+            // peer reads) get the client key and the per-client limit too.
+            onyx_api::client_limited(limit_state, router_with(state, extra).merge(bulk_uploads)),
             limits,
             &trusted,
             async {

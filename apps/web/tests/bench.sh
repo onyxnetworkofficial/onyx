@@ -12,7 +12,7 @@ PORT=${PORT:-4179}
 node tests/serve.mjs "$PORT" "${BUILD:-build}" & SRV=$!
 trap 'kill $SRV' EXIT
 sleep 1
-for page in ${PAGES:-home data reserves run explorer labels api}; do
+for page in ${PAGES:-home how-it-works data markets reserves run explorer labels api arena submit download}; do
   url="http://127.0.0.1:$PORT/"; [ "$page" = home ] || url="$url#/$page"
   npx -y lighthouse@12 "$url" --chrome-path="${CHROME:-/usr/bin/google-chrome}" \
     --chrome-flags="--headless=new" --only-categories=performance,accessibility,best-practices,seo \

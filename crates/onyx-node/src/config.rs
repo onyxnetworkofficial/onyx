@@ -166,6 +166,11 @@ pub struct NodeConfig {
     /// client (an IPv4 address or an IPv6 /64); trusted proxies are exempt
     /// (AUD-1R-F1).
     pub max_per_client: usize,
+    /// `ONYX_READS_PER_MINUTE` (default
+    /// [`onyx_api::DEFAULT_READS_PER_MINUTE`], 0..=1000000; 0 is off):
+    /// requests per client per minute on every API route (THREATS NL20-1);
+    /// 429 `rate_limited` beyond.
+    pub reads_per_minute: u32,
     /// `ONYX_MAX_FEE_GWEI` (default 10, 1..=10000): the fee cap of every
     /// transaction the node signs, sends and replacements alike (AUD-1R-F3).
     pub max_fee_per_gas: u128,
@@ -490,6 +495,15 @@ impl NodeConfig {
                 "ONYX_MAX_CONNS_PER_IP ({max_per_client}) cannot exceed ONYX_MAX_CONNECTIONS ({max_connections})"
             ));
         }
+        let reads_per_minute = match get("ONYX_READS_PER_MINUTE") {
+            None => onyx_api::DEFAULT_READS_PER_MINUTE,
+            Some(s) => s
+                .trim()
+                .parse::<u32>()
+                .ok()
+                .filter(|n| *n <= 1_000_000)
+                .ok_or("ONYX_READS_PER_MINUTE must be 0..=1000000 (0 is off)")?,
+        };
         let max_fee_per_gas = match get("ONYX_MAX_FEE_GWEI") {
             None => onyx_api::evm_tx::DEFAULT_MAX_FEE_PER_GAS,
             Some(s) => {
@@ -673,6 +687,7 @@ impl NodeConfig {
             header_read_timeout,
             max_connections,
             max_per_client,
+            reads_per_minute,
             max_fee_per_gas,
             max_gas,
             indexer,

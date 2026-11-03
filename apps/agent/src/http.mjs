@@ -87,7 +87,8 @@ export function createHttpServer({ env = process.env, fetch, now = Date.now } = 
 	const write = env.ONYX_MCP_ALLOW_PROPOSE === '1';
 	// The raw submit tool is never offered remotely: onyx_propose_dataset checks first.
 	const tools = buildTools(spec, { ...env, ONYX_MCP_ALLOW_SUBMIT: '0' }, { write });
-	const client = createClient({ baseUrl: env.ONYX_API_URL || 'http://127.0.0.1:8080', spec, fetch, userAgent: env.ONYX_USER_AGENT || 'onyx-agent/0.1' });
+	const clientOptions = { baseUrl: env.ONYX_API_URL || 'http://127.0.0.1:8080', spec, fetch, userAgent: env.ONYX_USER_AGENT || 'onyx-agent/0.1' };
+	createClient(clientOptions); // checks the base URL at start
 	const path = env.ONYX_MCP_PATH || '/mcp';
 	const origins = new Set((env.ONYX_MCP_ORIGINS ?? '').split(',').map((s) => s.trim()).filter(Boolean));
 	const trusted = env.ONYX_MCP_TRUSTED_PROXY || '';
@@ -119,6 +120,8 @@ export function createHttpServer({ env = process.env, fetch, now = Date.now } = 
 			proposals.set(addr, p);
 			if (proposals.size > 10_000) proposals.delete(proposals.keys().next().value);
 		}
+		// The node counts this session's calls against its user's address (THREATS L19-R1 L1).
+		const client = createClient({ ...clientOptions, forwardedFor: addr });
 		const state = { tools, client, env, write, remote: true, answers: answerStore(), limit: (task) => own(() => limit(task)), proposals: p, seen: now() };
 		sessions.set(id, state);
 		return { id, state };

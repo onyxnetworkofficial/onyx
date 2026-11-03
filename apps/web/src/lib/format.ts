@@ -17,3 +17,12 @@ export function btc(sats: string | bigint): string {
 }
 export const short = (h: string, a = 10, b = 6) => (h.length > a + b + 1 ? `${h.slice(0, a)}…${h.slice(-b)}` : h);
 export const int = (n: number | string) => EN.format(Number(n));
+
+// The same for dates: `toLocaleDateString` with options builds a new Intl.DateTimeFormat on
+// every call (L5, 2026-11-03: about 1.1 s of the Data page's main thread at 4x CPU throttling,
+// one call per chart point of the chain statistics windows).
+const DAY = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+
+/** Unix seconds as "4 Oct" in UTC; same text as
+ *  `toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })`. */
+export const dayMonth = (t: number): string => DAY.format(new Date(t * 1000));

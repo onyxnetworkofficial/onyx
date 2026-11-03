@@ -205,6 +205,25 @@ test('remote: foreign origins, GET, bad versions, batches and big bodies are ref
 	}
 });
 
+test('remote: API calls carry the session user\'s address for the node\'s limit (L19-R1 L1)', async () => {
+	for (const [env, hdr, want] of [
+		[{}, {}, '127.0.0.1'],
+		[{ ONYX_MCP_TRUSTED_PROXY: '127.0.0.1' }, { 'x-forwarded-for': '203.0.113.7' }, '203.0.113.7'],
+	]) {
+		const f = fakeFetch({ status: 200, body: CHECK_OK });
+		const s = await start({ ONYX_MCP_ALLOW_PROPOSE: '1', ...env }, f);
+		try {
+			const r = await s.post({ jsonrpc: '2.0', id: 1, method: 'initialize', params: { protocolVersion: '2025-06-18', capabilities: {}, clientInfo: { name: 't', version: '1' } } }, hdr);
+			const sid = r.headers.get('mcp-session-id');
+			await (await s.post({ jsonrpc: '2.0', id: 2, method: 'tools/call', params: { name: 'onyx_propose_dataset', arguments: PROPOSAL } }, { 'mcp-session-id': sid, ...hdr })).json();
+			assert.ok(f.seen.length > 0, 'the node was called');
+			for (const { init } of f.seen) assert.equal(init.headers['x-forwarded-for'], want);
+		} finally {
+			await s.stop();
+		}
+	}
+});
+
 test('remote: each client address is rate-limited (NL21-4)', async () => {
 	const s = await start();
 	try {

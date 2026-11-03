@@ -68,11 +68,18 @@ results, what was fixed, what stays open with a THREATS row).
 - [x] L4 Mutation testing (cargo-mutants) on core crates; add tests for surviving mutants
       (docs/audit/2026-10-13-mutation.md; open: THREATS MUT-1..5, coordinator validate.rs/round.rs
       unit tests, dispute.rs and self_settle.rs not yet run)
-- [ ] L5 Benchmarks: rerun every benchmark in docs/ops/benchmarks.md; add API load test
+- [x] L5 Benchmarks: rerun every benchmark in docs/ops/benchmarks.md; add API load test
       (2026-10-28, NL20: the API load test is added, `scripts/load-test.mjs`, run against the
       release binary and the deployed export on the dev box; left: rerun the other benchmarks)
       (req/s, p50/p99, paid and unpaid paths), indexer catch-up speed, rerun cost per
       shard, website bundle size and first paint; record numbers, never invent them
+      (2026-11-03 on 32b7a450, benchmarks.md "Rerun of every benchmark": all fuel, roots and gas
+      recorded again; both website exports rebuilt byte-identical; reference fuel -454 from the
+      shard-bound input of loop 14; new: indexer catch-up 3,196,194 blocks in 13 min 53 s over the
+      public RPC; API 6,795-18,421 requests/s, p99 under 8 ms, 0 errors on a quiet machine; website
+      Lighthouse median of 3 on 12 pages: 91-96 except Data 78, a regression filed under
+      docs/website-plan.md W4. Not rerun: the Ethereum window, whose blocks are not kept. Paid
+      path: payments are off on the testnet API, so only unpaid routes were loaded)
 - [x] L6 Soak and chaos: onyx-node for hours against anvil with injected RPC failures,
       restarts and slow nodes; memory and file-descriptor growth; no stuck intents
       (docs/audit/2026-10-14-soak.md, `scripts/soak.sh`: SOAK-1..4 fixed; open SOAK-5..7)
@@ -153,7 +160,7 @@ results, what was fixed, what stays open with a THREATS row).
       OnyxRevenueV2 and edits; docs/audit/2026-11-02-slither-delta.md): 63 results triaged, 0
       security findings, 1 cosmetic (THREATS STORAGE-S16-R12); 16 new invariants at audit depth
       held. LC-16 still closes only on the launch commit (P7a)
-- [ ] L19 Hosted API front leftovers (from NS17, review NS17-R1): a per-address connection cap
+- [x] L19 Hosted API front leftovers (from NS17, review NS17-R1): a per-address connection cap
       on port 443 in the web server's firewall (nftables `ct count`, deployment.md "TLS in front";
       Caddy is a trusted proxy, so the node's own per-address cap does not see its clients), and
       the API operator's balance in the health watch before payments are turned on there
@@ -163,7 +170,12 @@ results, what was fixed, what stays open with a THREATS row).
       `scripts/conn-cap-test.sh` in a throwaway network namespace. Left: install the cap on the
       web server, with the owner's OK; then tick. 2026-10-28: the cap went live with release
       `2f01280`. NL20 added: a per-client request limit on the read routes (THREATS NL20-1) and
-      a rehearsal of the API rollback from `/var/backups/onyx-prev` at the next release (NL20-4))
+      a rehearsal of the API rollback from `/var/backups/onyx-prev` at the next release (NL20-4).
+      2026-11-03: the per-client request limit is built (`ONYX_READS_PER_MINUTE`, default 1,200 a
+      minute, every route; THREATS NL20-1 FIXED), with a token-bucket refill fix found on the way
+      (L19-1), then review L19-R1's fixes and the agent connector forwarding its users' addresses.
+      Deployed with release `3b9de28e`: live 1,695 answers and 1,305 429s out of a 3,000-request
+      burst; the rollback from `/var/backups/onyx-prev` rehearsed and rolled forward (NL20-4))
 - [ ] L18 TLS front leftovers that need no domain (LC-7, from P7): with Caddy on `tls internal`
       and a local anvil, the paid x402 flow through the proxy (402 with `payment-required`, a settled
       200 with `payment-response`, a 503 `payment_pending` retry), a server-side TLS 1.1 refusal

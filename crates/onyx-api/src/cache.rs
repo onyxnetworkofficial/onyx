@@ -189,15 +189,27 @@ const UNSETTLED: u64 = 3_600_000;
 
 impl Bucket {
     /// The bucket refilled to `now`, for `rate` attempts per `period` ms.
+    /// Only whole milliseconds are credited, and `at` moves by exactly those,
+    /// so the part of a millisecond not yet credited carries to the next
+    /// call: calls less than a millisecond apart still refill (L19-1; before,
+    /// `at = now` dropped it, and a client sending more than one request a
+    /// millisecond never refilled).
     fn refilled(b: Option<Bucket>, rate: u64, period: u64, now: Instant) -> Bucket {
         let cap = rate.saturating_mul(period);
         let mut e = b.unwrap_or(Bucket {
             units: cap,
             at: now,
         });
-        let ms = u64::try_from(now.duration_since(e.at).as_millis()).unwrap_or(u64::MAX);
-        e.units = e.units.saturating_add(ms.saturating_mul(rate)).min(cap);
-        e.at = now;
+        let ms = u64::try_from(now.saturating_duration_since(e.at).as_millis()).unwrap_or(u64::MAX);
+        let units = e.units.saturating_add(ms.saturating_mul(rate));
+        if units >= cap {
+            e.units = cap;
+            e.at = now;
+        } else {
+            // Not full: at most `period` ms were credited, so this stays <= now.
+            e.units = units;
+            e.at += Duration::from_millis(ms);
+        }
         e
     }
 }
@@ -530,18 +542,20 @@ impl Caches {
         let now = Instant::now();
         let mut next = Vec::with_capacity(scopes.len());
         for (key, per_minute) in scopes {
-            let e = Bucket::refilled(
-                b.get(key, now),
-                u64::from((*per_minute).max(1)),
-                ATTEMPT,
-                now,
-            );
-            next.push((key, e));
+            let old = b.get(key, now);
+            let known = old.is_some();
+            let e = Bucket::refilled(old, u64::from((*per_minute).max(1)), ATTEMPT, now);
+            next.push((key, e, known));
         }
-        let ok = next.iter().all(|(_, e)| e.units >= ATTEMPT);
-        for (key, mut e) in next {
+        let ok = next.iter().all(|(_, e, _)| e.units >= ATTEMPT);
+        for (key, mut e, known) in next {
             if ok {
                 e.units -= ATTEMPT;
+            } else if !known {
+                // A refused attempt adds no bucket (review L19-R1 M2): a new
+                // full one written on a 429 would push a drained bucket out
+                // of the bounded store, and its key would start full again.
+                continue;
             }
             b.insert(key.clone(), e, None, 1, now);
         }
@@ -685,6 +699,65 @@ impl Caches {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Review L19-R1 M2: refused attempts from fresh keys add no bucket, so
+    /// a flood of 429s cannot evict a drained bucket and reset it.
+    #[test]
+    fn l19_r1_m2_refused_attempts_add_no_buckets() {
+        let c = Caches::new(1, 1);
+        // Drain the wide scope through one narrow key.
+        assert!(c.take_attempts(&[("a".into(), 5), ("wide".into(), 1)]));
+        assert!(!c.take_attempts(&[("a".into(), 5), ("wide".into(), 1)]));
+        let tracked = c.buckets_tracked();
+        for i in 0..1_000 {
+            assert!(!c.take_attempts(&[(format!("fresh {i}"), 5), ("wide".into(), 1)]));
+        }
+        assert_eq!(
+            c.buckets_tracked(),
+            tracked,
+            "no bucket was added by a refusal"
+        );
+        // The drained wide bucket is still there and still empty.
+        assert!(!c.take_attempts(&[("b".into(), 5), ("wide".into(), 1)]));
+    }
+
+    /// L19-1: a bucket polled more often than once a millisecond still
+    /// refills at its rate (the sub-millisecond rest carries over).
+    #[test]
+    fn l19_1_a_bucket_refills_under_sub_millisecond_calls() {
+        let t0 = Instant::now();
+        // 1,200 attempts a minute: one attempt is earned every 50 ms.
+        let (rate, period) = (1_200, ATTEMPT);
+        let mut b = Some(Bucket { units: 0, at: t0 });
+        // 200 calls 0.25 ms apart: 50 ms in all.
+        for i in 1..=200u64 {
+            b = Some(Bucket::refilled(
+                b,
+                rate,
+                period,
+                t0 + Duration::from_micros(250 * i),
+            ));
+        }
+        let e = b.expect("bucket");
+        assert_eq!(e.units, 50 * rate, "50 ms earn exactly one attempt");
+        assert!(e.units >= ATTEMPT);
+        // A full bucket stays at its cap and does not bank time.
+        let full = Bucket::refilled(None, rate, period, t0);
+        let later = Bucket::refilled(Some(full), rate, period, t0 + Duration::from_secs(600));
+        assert_eq!(later.units, rate * period);
+        assert_eq!(later.at, t0 + Duration::from_secs(600));
+        // A clock that reads earlier than the bucket's stamp credits nothing.
+        let back = Bucket::refilled(
+            Some(Bucket {
+                units: 7,
+                at: t0 + Duration::from_secs(1),
+            }),
+            rate,
+            period,
+            t0,
+        );
+        assert_eq!(back.units, 7);
+    }
 
     #[test]
     fn lru_evicts_oldest_by_count_and_weight_and_expires() {

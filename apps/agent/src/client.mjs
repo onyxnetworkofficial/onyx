@@ -137,14 +137,19 @@ function decodeOffer(h) {
  * A 402 is a normal result: `paymentRequired` holds the decoded x402 offer; pay it with your own
  * wallet and call again with `PAYMENT-SIGNATURE` (or a prepaid `ONYX-PREPAID-VOUCHER`).
  */
-export function createClient({ baseUrl, spec = loadSpec(), fetch: f = globalThis.fetch, userAgent = 'onyx-agent/0.1' } = {}) {
+// `forwardedFor`: the address of the client this one acts for (the remote MCP server's user),
+// sent as X-Forwarded-For so the node's per-client request limit counts that user, not the
+// connector (THREATS L19-R1 L1). The node believes it only from a trusted proxy address.
+export function createClient({ baseUrl, spec = loadSpec(), fetch: f = globalThis.fetch, userAgent = 'onyx-agent/0.1', forwardedFor = '' } = {}) {
 	const base = checkBaseUrl(baseUrl);
 	const ops = new Map(operations(spec).map((o) => [o.id, o]));
 	return {
 		/** GET a JSON file from the same origin (the website's catalog files), size-capped. */
 		async getJson(path, max = 1024 * 1024) {
 			if (!/^\/[a-z0-9/_.-]+\.json$/.test(path)) throw new Error(`not a catalog path: ${path}`);
-			const res = await f(`${base}${path}`, { headers: { accept: 'application/json', 'user-agent': userAgent }, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) });
+			const headers = { accept: 'application/json', 'user-agent': userAgent };
+			if (forwardedFor) headers['x-forwarded-for'] = forwardedFor;
+			const res = await f(`${base}${path}`, { headers, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) });
 			if (res.status !== 200) {
 				await res.body?.cancel();
 				return null;
@@ -167,6 +172,7 @@ export function createClient({ baseUrl, spec = loadSpec(), fetch: f = globalThis
 			if (!op) throw new Error(`unknown operation ${id}`);
 			let { url, init } = buildRequest(base, op, args);
 			init.headers['user-agent'] = userAgent;
+			if (forwardedFor) init.headers['x-forwarded-for'] = forwardedFor;
 			let res;
 			// The API answers 308 to a non-canonical spelling: follow it on the same server only.
 			for (let hop = 0; ; hop++) {

@@ -15,7 +15,7 @@ if (!buildDir || !outDir) throw new Error('usage: node tests/audit.mjs <build di
 const BUILD = resolve(buildDir);
 await mkdir(join(outDir, 'phone'), { recursive: true });
 // AUDIT_PAGES=home,run measures only those pages (W5 measured the home page alone).
-const ALL_PAGES = ['', 'how-it-works', 'data', 'reserves', 'run', 'explorer', 'labels', 'api'];
+const ALL_PAGES = ['', 'how-it-works', 'data', 'markets', 'reserves', 'run', 'explorer', 'labels', 'api', 'arena', 'submit', 'download'];
 const PAGES = process.env.AUDIT_PAGES ? ALL_PAGES.filter((p) => process.env.AUDIT_PAGES.split(',').includes(p || 'home')) : ALL_PAGES;
 const pname = (p) => p || 'home';
 // Throttled profile = Lighthouse's mobile preset numbers (slow 4G, 4x CPU slowdown), applied

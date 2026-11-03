@@ -294,11 +294,13 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   `fuzz/artifacts/`; build 7 min 49 s; `fuzz/target` 4.6 GB. `fuzz/Cargo.lock` was stale against
   the workspace's path crates and is refreshed. Open: re-run on the chosen launch commit
   (`scripts/fuzz-smoke.sh`, nightly, about 10 min). Evidence: [fuzzing report](../audit/2026-10-13-fuzzing.md).
-- [ ] **LC-22 Benchmarks and an API load test (L5).** Owner: loop. State: PARTIAL 2026-10-28
-  (NL20): `scripts/load-test.mjs` ran against the release binary and the deployed export on the
-  dev box (no Caddy, no TLS): up to 7,090 requests/s, p99 41 ms at 64 concurrent, no error or
-  5xx; the server itself was not load-tested. Open: the rest of L5 (rerun every benchmark).
-  Evidence: [benchmarks.md "API load test"](benchmarks.md#api-load-test-2026-10-28-north-star-loop-nl20-lc-22).
+- [ ] **LC-22 Benchmarks and an API load test (L5).** Owner: loop. State: PARTIAL 2026-11-03 on
+  32b7a450 (L5 done): every benchmark rerun (fuel, roots and gas recorded; both website exports
+  byte-identical); the API load test on the deployed binary and export on the dev box (no Caddy,
+  no TLS): up to 18,421 requests/s, p99 7.7 ms at 64 concurrent, no error or 5xx (NL20 2026-10-28:
+  7,090 requests/s on a busy machine); the server itself was not load-tested. Open: rerun on the
+  launch commit (P7a) and the Data page regression (website-plan W4).
+  Evidence: [benchmarks.md "Rerun of every benchmark"](benchmarks.md#rerun-of-every-benchmark-2026-11-03-roadmap-l5).
 - [x] **LC-23 Fresh-machine systemd install (L7).** Owner: loop. State: VERIFIED 2026-10-15 on
   branch fresh-install: the shipped unit on a fresh Ubuntu 26.04 (systemd 259 as PID 1, in a
   container with `CAP_SYS_ADMIN`) by deployment.md alone: health 200, row 200, restart, clean
@@ -603,4 +605,8 @@ Rollback, fastest first:
   `/etc/caddy/Caddyfile.bak-<UTC>`; put it back and `sudo systemctl restart caddy`. A release
   deployed before 2026-10-28's NL20 change has no `/var/backups/onyx-prev`: roll back by building
   and deploying the previous commit (steps 2 and 6).
+  Rehearsed 2026-11-03 (L19): these commands put the previous release back (SHA-256 checked); the
+  node listens about 8 s after the restart (it checks its registry and book pins first) and Caddy
+  answers 502 until then, so wait for `/v1/health` instead of reading the first answer; then
+  `scripts/deploy-api.sh` went forward again and kept the older release as the copy.
 - **Contracts and chain data** cannot roll back (section 5).

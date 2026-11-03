@@ -57,9 +57,13 @@ pub fn template(path: &str) -> Option<String> {
 pub fn check(method: &str, uri: &str, status: u16, body: &Value) {
     let path = uri.split('?').next().unwrap_or(uri);
     let Some(t) = template(path) else {
-        // A route the spec does not have must be the API's own 404 fallback.
-        assert_eq!(status, 404, "{method} {uri}: no spec path, status {status}");
-        assert_eq!(body["error"]["code"], "not_found", "{method} {uri}");
+        // A route the spec does not have must be the API's own 404 fallback, or the guard's
+        // per-client limit, which answers before any route (THREATS NL20-1).
+        let c = body["error"]["code"].as_str();
+        assert!(
+            (status, c) == (404, Some("not_found")) || (status, c) == (429, Some("rate_limited")),
+            "{method} {uri}: no spec path, status {status}, code {c:?}"
+        );
         return;
     };
     let m = method.to_ascii_lowercase();

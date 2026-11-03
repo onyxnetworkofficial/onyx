@@ -52,6 +52,20 @@ sub-path, so absolute paths load nothing and the page is blank (version 76, 2026
         private run of Data (LCP 3,069 ms, load 8.21 -> 9.35; base 3,404 / 3,408 / 3,416 ms at load
         6.3-7.8), then the load stayed at 11-29 for 30 minutes. Re-measure Data and Labels LCP in
         all three builds (median of 3, load < 10).
+        2026-11-03 (L5, private build only, median of 3 at load 3.2-5.6): Labels 2.8 s, Data 3.9 s
+        (worse; see the next item). The public builds are still to measure.
+      - [ ] L5 follow-up (2026-11-03, docs/ops/benchmarks.md "Website size and first paint"):
+        Data's Lighthouse performance 91 -> 78 (runs 78 / 79 / 69), TBT 69 -> 421 ms, LCP 3.4 -> 3.9 s,
+        first-visit wire 2,211 -> 2,745 KiB (data 169 -> 369 KiB with the two chain statistics
+        windows, JS 77 -> 107 KiB, verifier WASM +300 KiB). The longest task (386 ms) is in the
+        verifier client chunk (`src/lib/verifier.ts`). Trace it with a performance profile, then
+        move the work off the first paint (load the windows when their section is on screen, or
+        transfer typed arrays instead of copying arrays to the worker).
+        2026-11-03, partly fixed (`4b4d6e1a`): the profile put 1.1 s (4x CPU) in the day label
+        of the chain statistics charts (`toLocaleDateString` with options per point); one shared
+        `Intl.DateTimeFormat` (`format.ts` `dayMonth`, tested against the old form in
+        `tests/format.test.mjs`): performance 87, TBT 122 ms (median of 3). Left: LCP 3.9 s
+        (W9 3.4 s; LCP element `p.lede`), and the verifier WASM's +300 KiB.
       - [ ] Not new, still open from W1: public Explorer's throttled browser LCP 11.5-11.7 s in the
         cleared build (W1 11.9 s), 2.0 s in the fallback build, so the late element is likely a
         label-derived one (not traced).

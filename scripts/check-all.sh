@@ -82,6 +82,8 @@ node --test apps/contrib/test/*.test.mjs
 python3 -I scripts/check-workflows.py --self-test
 python3 -I scripts/check-workflows.py
 node --test apps/web/tests/release.test.mjs
+# The site's shared formatters print what the per-call toLocale* forms printed (W4, L5).
+node --test apps/web/tests/format.test.mjs
 stage "wasm vectors, agent, contrib, workflows"
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.
 # (--workspace with an example: the feature set of the workspace test build above, dev

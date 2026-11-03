@@ -2,7 +2,150 @@
 
 Measured 2026-10-08 on an AMD Ryzen 5 5600X (6 cores / 12 threads, 60 GiB RAM), Linux, rustc 1.98.0,
 release builds, wasmi 2.0.0, wasmtime 49.0.2 (numbers measured on 49.0.2; the pin is 49.0.5 since 2026-10-30). Numbers are wall-clock and vary by machine; rerun with
-the commands below before relying on them. Nothing here is a claim about other projects.
+the commands below before relying on them. Nothing here is a claim about other projects. The
+benchmarks below were rerun on 2026-11-03 (first section, which names the two that were not); the
+older sections keep their numbers.
+
+## Rerun of every benchmark (2026-11-03, ROADMAP L5)
+
+Same machine, rustc 1.98.0, wasmi 2.0.0, wasmtime 49.0.5, release builds of commit `32b7a450`, one
+benchmark at a time (the indexer scan, which waits on the network, ran beside them). Other projects
+shared the machine for most of the morning: the 1-minute load average at the start of each run is in
+the table (12 threads, so a load of 12 means every thread was busy). Fuel, roots, rows, bytes and
+gas do not depend on load; wall times do. Logs: the session scratchpad `l5/` (not committed).
+Commands: the ones in each section below.
+
+| Benchmark | Before | 2026-11-03 | Load |
+|---|---|---|---|
+| Reference recipe, wasmi fuel / root | 136,914,259 / `0xf912872a…86b2` | **136,913,805** / same root | 24 |
+| Reference recipe, wasmi warm run (median of 5) | 0.125 s | 0.256 s | 24 |
+| Reference recipe, wasmtime opt none fuel / warm run | 126,559,637 / 0.016 s | 126,559,615 / 0.034 s | 24 |
+| `bench-compile`: outcomes of all 21 shape and engine pairs | as in "Hostile shapes" | the same (only licm 36.9k on opt speed traps) | 24-26 |
+| `bench-compile`: licm 36.9k on opt speed (until the trap) / peak RSS | 29.70 s / 562 MB | 51.50 s / 538,084 KiB | 24-26 |
+| `bench-frames`: depth and bytes per frame, all 8 rows | as in "Native frame size" | the same | 26 |
+| Attestations, 2,000 / 20,000 P2WPKH | 0.159 s / 1.627-2.410 s | 0.199 s / 2.530 s | 22 |
+| Attestations, 1,000 P2WSH 16-of-16 / 1-of-16 | 0.601-0.640 s / 0.626-0.636 s | 0.933 s / 0.769 s | 21 |
+| Series recipe, fuel on all five inputs | as in "Series recipe" | the same, to the unit | 20 |
+| Series recipe, 24 live blocks on wasmi | 2.57 s | 2.74 s | 20 |
+| Series recipe, second live 12-block shard | not measured | 1,550,303,828 fuel (39% of 4 B) | 20 |
+| Pool blocks, the week from raw blocks (`golden_pools the_week`) | 18.1 s | 28.6 s, passes | 15 |
+| History week rerun (`golden_history`, 66 shards x 2 recipes) | 385 s | 459 s, passes | 15 |
+| History week export, wall clock / series runs alone | 12 min 53 s / 112.0 s | 12 min 51 s / 109.7 s | 10 to 3 |
+| History week export, output | the committed `apps/web/static/history/week` | **byte-identical** (8 files; 66 shards, 1,888 rows, largest fuel 1,809,603,141 = 45.2%) | 10 to 3 |
+| History week export, series run per shard | 0.81-2.09 s | 0.69-2.13 s | 10 to 3 |
+| Chain statistics window, 1,360 blocks, in the exporter | 1,220 s (load 40-60) | 349 s (0.26 s a block); 8 min 12 s with the Python recount | 3 to 17 |
+| Chain statistics window, output | the committed `btc-chain-stats.json` and rerun input | **byte-identical** (fuel mean 65,446,333, max 81,900,478) | 3 to 17 |
+| `golden_chain` (30 sample blocks rebuilt and rerun) | 22.4 s | 7.4 s | 17 |
+| Placement, 200,000 shards over 118 nodes, r = 3 (`bench-placement`) | 19.8 s | 10.8 s (18,552 shards/s; 5,125 copies, 0.85%, move when one node leaves); 1.5 GB peak | 16 |
+| Level-2 transcript log gas: `postCommit` / `postReceipt` / `transcriptComplete` (3 observers) | 182,480 / 115,571 / 25,316 | 183,018 / 116,109 / 25,778 | 14 |
+| Contract runtime sizes: `OnyxRegistry` / `OnyxSettlement` (`forge build --sizes`) | 13,604 / 23,179 B | 20,505 / 23,232 B (`OnyxStorage` 22,057 B; limit 24,576 B) | 14 |
+
+- The reference recipe's fuel moved by 454 because its input changed after the measurement: the
+  2026-10-08 number was taken at 11:59 (commit `1727d174`), and loop 14 (`57054828`, 20:02 the
+  same day) made the input shard-bound. The recipe file is unchanged since 2026-10-06 and the
+  root is the same. Round 1 of the live Base Sepolia deployment finalized this same root (see
+  "Indexer catch-up" below).
+- The three transcript-log calls cost 462-538 gas more. `OnyxRegistry` grew from 13,604 to
+  20,505 B with later work; the extra gas is not traced to one change.
+- Wall times under load 15-26 were 5-112% slower than the October runs; the runs on a quieter
+  machine (history export, chain window, placement, `golden_chain`) were as fast or faster.
+- Not rerun: the Ethereum chain statistics window (its 300 fetched blocks, 405 MB, are not kept on
+  this machine; a new fetch would be a different window) and `bench-nested` (a review probe, not a
+  benchmark).
+
+### Indexer catch-up (new, 2026-11-03)
+
+`cargo run --release -p onyx-node --example index-scan -- --rpc https://sepolia.base.org --chain-id
+84532 --settlement 0xe4be87932d29ecb85c332ef7057e12a7a83aae8f --from 50736980` from the dev box: a
+fresh node with no saved state reads every `Finalized` event of the live deployment over the
+public RPC, then checks each one with `getFinalizedRoot`.
+
+| Measure | Value |
+|---|---|
+| Blocks scanned (deploy block to the finalized head) | 50,736,980-53,933,173 (3,196,194) |
+| `eth_getLogs` calls (span 200) / splits / failed polls | 15,986 / 0 / 0 |
+| Wall clock | 13 min 53 s (3,837 blocks a second, 19.2 calls a second) |
+| Peak memory | 6.4 MiB |
+| Events found | 2 (rounds 1 and 3); both agree with `getFinalizedRoot` at the head |
+
+Base Sepolia makes a block every 2 s, so a fresh node catches up about 7,700 times faster than
+the chain grows. A restart does not wait for such a scan: the live API, restarted on 2026-11-02
+at 14:27:20 UTC, served both held shards one second after it started listening (its journal).
+
+### API load test rerun (2026-11-03)
+
+The same method as "API load test" below, on a quiet machine (load 3.0-4.0 during both runs):
+the deployed release binary (`onyx-node` built from `054cca71`, on the server since 2026-11-02
+14:27 UTC) with a copy of the deployed export, now nine level-2 stores (NL20: six), payments and
+the indexer off (so the two indexed label shards and the market on them are left out of the copied
+catalog), intake on, `ONYX_RIGHTS=fallback`, plain HTTP on 127.0.0.1.
+
+| Clients | Concurrency | Requests in 10 s | Requests/s | p50 | p95 | p99 | max | 5xx or errors |
+|---|---|---|---|---|---|---|---|---|
+| 1 | 1 | 67,951 | 6,795 | 0.14 | 0.21 | 0.25 | 7.66 | 0 |
+| 1 | 8 | 160,183 | 16,018 | 0.41 | 0.85 | 1.12 | 4.43 | 0 |
+| 1 | 32 | 168,533 | 16,853 | 1.75 | 3.24 | 4.03 | 9.72 | 0 |
+| 1 | 64 | 170,025 | 17,000 | 3.58 | 5.11 | 7.73 | 16.96 | 0 |
+| 256 | 1 | 73,211 | 7,321 | 0.13 | 0.19 | 0.23 | 5.05 | 0 |
+| 256 | 8 | 168,172 | 16,817 | 0.38 | 0.81 | 1 | 4.54 | 0 |
+| 256 | 32 | 181,331 | 18,132 | 1.56 | 3 | 3.73 | 7.4 | 0 |
+| 256 | 64 | 184,241 | 18,421 | 3.2 | 4.39 | 6.91 | 12.02 | 0 |
+
+- Every served value answered 200 at every level (all nine stores; checked one by one before the
+  run), and no request failed or answered 5xx. Peak memory 19.3 MiB (systemd `MemoryPeak`).
+- 2.3-5.2 times the NL20 rates, with a p99 under 8 ms at 64 concurrent: NL20 shared the machine
+  with a Rust build. `/v1/submit/check` is still the only route that answers 429.
+- Not measured, as before: the server itself (its CPU, Caddy, TLS, the network).
+- Later the same day (L19, THREATS NL20-1) every route got a per-client limit, 1,200 requests a
+  minute with the same burst. The same test with one client that is not a trusted proxy: 1,309
+  answers in the first 10 s, then 185-193 per 10 s at 1, 8, 32 and 64 concurrent (the 20 a second
+  refill), every other request 429 in under 16 ms (p99); with 64 connections the node's
+  32-connection cap per address closed the rest. Before the refill fix (THREATS L19-1) it was 14-15
+  answers per 10 s. The table above has no limit: the test came through the trusted proxy with no
+  forwarded address, which is not counted.
+
+### Website size and first paint (2026-11-03)
+
+The private preview build that the gated check of `32b7a450` left in the worktree, served
+locally with gzip; Chrome 152.0.7977.82, Lighthouse 12.8.2 (mobile, simulated slow 4G), median of
+3 runs per page; wire bytes from `AUDIT_LOAD_ONLY=1 node tests/audit.mjs` (first visit, gzip).
+Load gate as in W9 (1-minute load under 10 at the start of every run): the load was 3.2-5.6 for
+all 36 Lighthouse runs and the audit. Both scripts now cover all 12 pages (Markets, Arena, Submit
+and Download were added). W9 = docs/audit/website-final.md, private build of 2026-10-17.
+
+| Page | Wire KiB, W9 -> now | Perf, W9 -> now | FCP s | LCP s | TBT ms | CLS | Lighthouse total KiB |
+|---|---|---|---|---|---|---|---|
+| home | 221.5 -> **185.9** | 88 -> 96 | 1.7 | 2.6 | 49 | 0.000 | 198 |
+| how-it-works | not in W9: **227.5** | 92 | 1.5 | 3.2 | 93 | 0.000 | 244 |
+| data | 2,211.4 -> **2,745.2** | 91 -> 78 | 1.5 | 3.9 | 421 | 0.014 | 2,766 |
+| markets | new: **223.1** | 91 | 1.5 | 3.4 | 106 | 0.000 | 237 |
+| reserves | 2,050.1 -> **2,365.5** | 94 -> 93 | 1.5 | 3.1 | 61 | 0.000 | 2,381 |
+| run | 231.6 -> **239.2** | 92 -> 92 | 1.5 | 3.3 | 33 | 0.000 | 254 |
+| explorer | 3,180.7 -> **3,488.2** | 94 -> 95 | 1.5 | 2.9 | 18 | 0.000 | 3,504 |
+| labels | 3,179.2 -> **3,486.0** | 94 -> 95 | 1.7 | 2.8 | 20 | 0.000 | 3,501 |
+| api | 193.9 -> **221.2** | 94 -> 93 | 1.5 | 3.0 | 92 | 0.000 | 234 |
+| arena | new: **223.4** | 91 | 1.5 | 3.3 | 44 | 0.000 | 237 |
+| submit | new: **209.6** | 92 | 1.5 | 3.3 | 54 | 0.000 | 223 |
+| download | new: **172.6** | 96 | 1.7 | 2.6 | 40 | 0.000 | 184 |
+
+- Accessibility, best practices and SEO: 100 in all 36 runs.
+- Pages that load the verifier grew about 300 KiB: its WASM went from 1,836.2 to 2,136.7 KiB on
+  the wire (not split by item). Reserves, Explorer and Labels kept their scores; Labels CLS went
+  from 0.014 to 0.
+- **Regression: Data.** Performance 91 -> 78 (runs 78 / 79 / 69), TBT 421 ms (W9: 69 ms), LCP 3.9 s
+  (W9: 3.4 s). Its data grew 169 -> 369 KiB (the Bitcoin and Ethereum chain statistics windows,
+  137 + 34 KiB) and its JS 77 -> 107 KiB. Lighthouse puts the longest task (386 ms in run 1) in
+  the verifier's client chunk (`src/lib/verifier.ts`, which copies every array argument before
+  `postMessage`); not traced further. Follow-up: docs/website-plan.md W4.
+- **Data, after the fix (`4b4d6e1a`, same day).** A CPU profile (4x slowdown) put 1.1 s of
+  main-thread self time in the chain statistics' day label, a `toLocaleDateString` with options
+  per chart point (a new `Intl.DateTimeFormat` each call); one shared formatter
+  (`format.ts` `dayMonth`) gives the same text. Lighthouse on the private build of that commit,
+  median of 3 at load 4.6-7.0: Data performance 78 -> **87** (88 / 84 / 87), TBT 421 -> **122 ms**,
+  LCP 3.9 s (unchanged; W9 3.4 s). Home (96, TBT 32 ms) and Reserves (93, TBT 48 ms) did not
+  move.
+- Not measured: the public builds (cleared and fallback; the public site is the fallback build),
+  and the keyboard and phone checks (`AUDIT_LOAD_ONLY=1` skips them).
 
 ## Reference recipe on real blocks
 

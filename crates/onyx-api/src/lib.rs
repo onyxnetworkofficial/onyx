@@ -139,6 +139,14 @@ pub struct ApiConfig {
     /// (M7-L47-F4). Off by default; this project is testnet-only and never
     /// sets it.
     pub allow_mainnet: bool,
+    /// Requests per client per minute on every route behind the guard, the
+    /// read routes included (same burst; THREATS NL20-1); 429 `rate_limited`
+    /// beyond. Counted per client key with the wider IPv6 scopes of
+    /// [`rate_scopes`]. A request from a trusted proxy with no
+    /// `X-Forwarded-For` at all (a local service calling the node directly,
+    /// such as the agent connector or the health watch) is not counted: such
+    /// services keep their own per-client limits. 0 turns the limit off.
+    pub reads_per_minute: u32,
     /// Reverse proxies whose `X-Forwarded-For` is believed (M7-L48-F2).
     /// When the peer is in one of these ranges, the client is the
     /// right-most `X-Forwarded-For` address outside them; otherwise the
@@ -167,6 +175,11 @@ pub struct ApiConfig {
     /// the stop budget.
     pub settle_recheck_wait: Duration,
 }
+
+/// Default [`ApiConfig::reads_per_minute`]: 20 a second on average, with a
+/// burst of a minute's worth, far above a page or an agent session and far
+/// below the 17,000 a second one address reached on the dev box (L5).
+pub const DEFAULT_READS_PER_MINUTE: u32 = 1_200;
 
 /// An address range, `addr/prefix` (M7-L48-F2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -343,6 +356,7 @@ impl Default for ApiConfig {
             settled_bytes: cache::SETTLED_BYTES,
             unsettled_per_hour: 20,
             allow_mainnet: false,
+            reads_per_minute: DEFAULT_READS_PER_MINUTE,
             trusted_proxies: Vec::new(),
             authorization_slack: Duration::from_secs(300),
             root_miss_ttl: Duration::from_secs(5),
@@ -424,6 +438,9 @@ pub struct ApiState {
     pub observe: Option<Arc<observe::ObserveState>>,
     inflight: Arc<Semaphore>,
     facilitator_slots: Arc<Semaphore>,
+    /// Per-client request buckets of [`ApiConfig::reads_per_minute`], apart
+    /// from the payment-attempt buckets so a read flood cannot evict those.
+    reads: Caches,
 }
 
 impl ApiState {
@@ -455,6 +472,7 @@ impl ApiState {
             public_url: public_url.into(),
             inflight: Arc::new(Semaphore::new(config.max_concurrency)),
             facilitator_slots: Arc::new(Semaphore::new(config.max_facilitator_calls)),
+            reads: Caches::new(1, 1),
             config,
             caches,
             contributors: None,
@@ -655,6 +673,84 @@ pub fn rate_scopes(client: &str, per_minute: u32) -> Vec<(String, u32)> {
     v
 }
 
+/// Set on a request whose client key was computed and counted once, by
+/// [`client_limited`] or by the guard, whichever runs first (THREATS NL20-1).
+#[derive(Clone, Copy, Debug)]
+struct Admitted;
+
+/// The client key of `req` and whether the per-client request limit counts it
+/// (THREATS NL20-1). Not counted: no connect info (in-process tests), and a
+/// trusted proxy that sent no `X-Forwarded-For` at all (a local service). A
+/// forwarded header that names no client (malformed, not readable as ASCII,
+/// or only trusted hops) is counted under the proxy's own key: it fails
+/// closed, not open (review L19-R1 M1).
+fn client_of(state: &ApiState, req: &Request) -> (String, bool) {
+    let headers = req.headers();
+    let has_forwarded = headers.contains_key("x-forwarded-for");
+    let forwarded: Vec<&str> = headers
+        .get_all("x-forwarded-for")
+        .iter()
+        .filter_map(|v| v.to_str().ok())
+        .collect();
+    let trusted = &state.config.trusted_proxies;
+    let ip = req
+        .extensions()
+        .get::<ConnectInfo<SocketAddr>>()
+        .map(|c| client_ip(c.0.ip(), &forwarded, trusted));
+    let key = ip.map_or_else(|| "local".to_string(), client_key);
+    let counted = ip.is_some_and(|ip| has_forwarded || !trusted.iter().any(|c| c.contains(ip)));
+    (key, counted)
+}
+
+/// Compute the client key once, take one request from its buckets and insert
+/// [`ClientKey`]; `Some` is the 429 to answer instead.
+fn admit_client(state: &ApiState, req: &mut Request) -> Option<Response> {
+    if req.extensions().get::<Admitted>().is_some() {
+        return None;
+    }
+    let (key, counted) = client_of(state, req);
+    if counted && state.config.reads_per_minute > 0 {
+        let scopes: Vec<(String, u32)> = rate_scopes(&key, state.config.reads_per_minute)
+            .into_iter()
+            .map(|(k, n)| (format!("read:{k}"), n))
+            .collect();
+        if !state.reads.take_attempts(&scopes) {
+            return Some(
+                ApiError::new(
+                    StatusCode::TOO_MANY_REQUESTS,
+                    "rate_limited",
+                    "too many requests from this address",
+                )
+                .with_header("retry-after", "1".into())
+                .into_response(),
+            );
+        }
+    }
+    req.extensions_mut().insert(ClientKey(key));
+    req.extensions_mut().insert(Admitted);
+    None
+}
+
+/// `router` with the per-client request limit and [`ClientKey`] as an outer
+/// layer: for routes merged after [`router_with`]'s guard (the bulk upload
+/// and storage peer routes), which otherwise had neither, so every caller
+/// shared the key `local` (review L19-R1 M3). A request is counted once: the
+/// guard skips what this layer already did.
+pub fn client_limited(state: Arc<ApiState>, router: Router) -> Router {
+    router.layer(middleware::from_fn_with_state(state, client_limit))
+}
+
+async fn client_limit(
+    State(state): State<Arc<ApiState>>,
+    mut req: Request,
+    next: Next,
+) -> Response {
+    if let Some(refused) = admit_client(&state, &mut req) {
+        return refused;
+    }
+    next.run(req).await
+}
+
 /// One concurrency limit and one deadline for the whole server (M7-F3; the
 /// permit lasts until the body is written, M7-L47-F2), plus
 /// the client key for rate limiting (behind a trusted proxy, from
@@ -684,26 +780,9 @@ async fn guard(State(state): State<Arc<ApiState>>, mut req: Request, next: Next)
         )
         .into_response();
     }
-    let forwarded: Vec<&str> = req
-        .headers()
-        .get_all("x-forwarded-for")
-        .iter()
-        .filter_map(|v| v.to_str().ok())
-        .collect();
-    let key = req
-        .extensions()
-        .get::<ConnectInfo<SocketAddr>>()
-        .map_or_else(
-            || "local".to_string(),
-            |c| {
-                client_key(client_ip(
-                    c.0.ip(),
-                    &forwarded,
-                    &state.config.trusted_proxies,
-                ))
-            },
-        );
-    req.extensions_mut().insert(ClientKey(key));
+    if let Some(refused) = admit_client(&state, &mut req) {
+        return refused;
+    }
     let Ok(permit) = state.inflight.clone().try_acquire_owned() else {
         return ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,

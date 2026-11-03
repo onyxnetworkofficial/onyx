@@ -213,6 +213,16 @@ new connection closed. Clients behind `ONYX_TRUSTED_PROXIES` share the proxy's a
 proxy is exempt from the per-client cap: give the proxy its own per-client connection limit and
 TLS slowloris protection.
 
+Requests are limited too (THREATS NL20-1): every route takes at most `ONYX_READS_PER_MINUTE`
+(default 1,200) requests a minute from one client, with the same burst, and answers 429
+`rate_limited` beyond; the bulk upload and storage peer routes are counted too. Behind a proxy
+the client is the forwarded address; a local service that calls the node directly, with no
+`X-Forwarded-For`, is not counted, but only from an address in `ONYX_TRUSTED_PROXIES` (on the
+hosted server 127.0.0.1: the agent connector and the health watch). If `ONYX_TRUSTED_PROXIES` is
+wrong, every client shares the proxy's bucket, so check it after an install: two clients should
+get separate 429s. The intake, payment, export and credits routes keep their own, lower limits
+on top.
+
 ## Checks
 - `cargo test -p onyx-api` (router, mock data).
 - `cargo test -p onyx-source-btc --test api` (real fixture round, golden root, x402, settlement
