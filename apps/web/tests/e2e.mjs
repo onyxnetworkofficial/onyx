@@ -1549,12 +1549,16 @@ try {
 		expect((at === nextRoute || (nextRoute === '' && (at === '' || at === '#/'))) && !(await nav.isVisible()) && (await menu.getAttribute('aria-expanded')) === 'false', `phone: the menu on /${route} opens ${nextName} and closes`);
 	}
 	{
-		// Esc closes the menu and gives focus back to its button.
-		await phone.goto(base + '#/api');
-		await phone.getByTestId('menu-button').click();
-		await phone.keyboard.press('Escape');
-		const escOk = !(await phone.getByTestId('site-nav').isVisible()) && (await phone.evaluate(() => document.activeElement?.dataset.testid === 'menu-button'));
+		// Esc closes the menu and gives focus back to its button. A fresh page: the same-document
+		// hash change on the page above waited out its 120 s "navigation to finish" on a loaded
+		// machine (2026-11-04).
+		const esc = await browser.newPage({ viewport: { width: 390, height: 844 } });
+		await esc.goto(base + '#/api');
+		await esc.getByTestId('menu-button').click();
+		await esc.keyboard.press('Escape');
+		const escOk = !(await esc.getByTestId('site-nav').isVisible()) && (await esc.evaluate(() => document.activeElement?.dataset.testid === 'menu-button'));
 		expect(escOk, 'phone: Esc closes the menu and returns focus to the menu button');
+		await esc.close();
 		// A wide screen keeps the inline nav and no menu button.
 		const wide = await browser.newPage({ viewport: { width: 1280, height: 800 } });
 		await wide.goto(base + '#/api');

@@ -1109,7 +1109,11 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       the 18 widest datasets among them (9,044 in all). Search: `GET /v1/bulk?q=&limit=&after=` (every word in the id, pages in
       id order, `total` and `next`; the AI connector's `onyx_list_bulk_datasets` takes the same) and
       the site's All datasets page (#/datasets: search, 50 a page, a dataset opens to its newest rows
-      and the two commands that check them). Left: CAT-1 (a history check), CAT-2 (deals), CAT-3
+      and the two commands that check them). Plain English (2026-11-04): each dataset reads as a title
+      ("Bitcoin · Short-term holder net position") with one-line meanings of the standard terms in it
+      (apps/web/src/lib/glossary.ts: 73 assets, 512 metric kinds, 330 with a meaning; abbreviations
+      without a settled meaning stay as written), and search goes by meaning ("bitcoin holders",
+      "whale", "stablecoin") through the node's whole-word `any` search. Left: CAT-1 (a history check), CAT-2 (deals), CAT-3
       (takedown), CAT-4 (catalog lines past 10,000 datasets a publisher)
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk

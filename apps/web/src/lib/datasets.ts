@@ -2,6 +2,7 @@
 // (`GET /v1/bulk?q=&limit=&after=`). Every value shown comes from the answer through the checks
 // below: an item that does not match the shape is dropped, never printed.
 import { group } from './format.ts';
+import { anyGroups, anyValue } from './glossary.ts';
 
 export type Dataset = {
 	publisher: string;
@@ -39,10 +40,11 @@ export function cleanSearch(s: string): string {
 		.slice(0, MAX_SEARCH);
 }
 
-/** The list URL for a search and the `next` cursor of the page before. */
+/** The list URL for a search and the `next` cursor of the page before: what was typed goes as the
+ * node's whole-word `any` search, each word with the ids that mean it (#lib/glossary.ts). */
 export function listUrl(q: string, after: string | null = null, limit = PAGE): string {
 	const p = new URLSearchParams();
-	if (q) p.set('q', q);
+	if (q) p.set('any', anyValue(anyGroups(q)));
 	p.set('limit', String(limit));
 	if (after) p.set('after', after);
 	return `/v1/bulk?${p}`;
@@ -186,4 +188,39 @@ export function toLink(q: string, d: string | null = null): string {
 	if (d) p.set('d', d);
 	const s = p.toString();
 	return `#/datasets${s ? '?' + s : ''}`;
+}
+
+/** Days a chart covers at most (one row a day: about 90 rows, under the node's 100 a page). */
+export const CHART_DAYS = 90;
+
+/** The rows URL a dataset opens with: for day keys the newest CHART_DAYS days (a chart and the
+ * newest rows from one answer), else the newest 10 rows. */
+export function detailUrl(d: Dataset): string {
+	if (!dayKeys(d.keyMin, d.keyMax)) return newestUrl(d);
+	const to = BigInt(d.keyMax);
+	const from = to - BigInt((CHART_DAYS - 1) * DAY);
+	const lo = BigInt(d.keyMin);
+	return `/v1/bulk/${d.publisher}/${d.dataset}/rows?from=${from > lo ? from : lo}&to=${to}&limit=100`;
+}
+
+const DEC = /^-?[0-9]+(\.[0-9]+)?$/;
+
+/** The columns a chart can draw: every value a plain number, at least two of them, never in a
+ * table of series (one row per series and day: one line would mix them). */
+export function chartColumns(s: Sample): number[] {
+	if (s.columns.includes('series')) return [];
+	return s.columns
+		.map((_, i) => i)
+		.filter((i) => i > 0)
+		.filter((i) => {
+			const vals = s.rows.map((r) => r[i]).filter((v) => v !== '');
+			return vals.length >= 2 && vals.every((v) => DEC.test(v));
+		});
+}
+
+/** One column as chart points: the exact value as text, a number only for drawing. */
+export function chartPoints(s: Sample, col: number, days: boolean): { v: number; text: string; head: string }[] {
+	return s.rows
+		.filter((r) => r[col] !== '' && DEC.test(r[col]))
+		.map((r) => ({ v: Number(r[col]), text: r[col], head: keyText(r[0], days) }));
 }

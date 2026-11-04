@@ -1318,6 +1318,33 @@ async fn the_dataset_list_searches_and_pages() {
         (json!(3), Value::Null)
     );
     assert_eq!(list("q=synthetic&limit=3")["next"], Value::Null);
+    // any: whole words, a group needs one of its terms, every group must match.
+    assert_eq!(ids(&list("any=alpha")), ["synthetic.alpha"]);
+    assert_eq!(ids(&list("any=alph*")), ["synthetic.alpha"]);
+    assert_eq!(
+        list("any=alph")["total"],
+        json!(0),
+        "a part of a word is not a word"
+    );
+    assert_eq!(
+        ids(&list("any=alpha%2Cmetrics")),
+        ["synthetic.alpha", "synthetic.metrics"]
+    );
+    assert_eq!(
+        ids(&list("any=synthetic%3Balpha,copy2")),
+        ["synthetic.alpha", "synthetic.copy2"]
+    );
+    assert_eq!(
+        list("any=example-publisher")["total"],
+        json!(3),
+        "words next to each other"
+    );
+    assert_eq!(
+        list("any=publisher-example")["total"],
+        json!(0),
+        "in their order"
+    );
+    assert_eq!(ids(&list("q=synth&any=METRICS")), ["synthetic.metrics"]);
     let too_long = format!("q={}", "a".repeat(MAX_SEARCH_CHARS + 1));
     for bad in [
         "q=a<b",
@@ -1330,6 +1357,12 @@ async fn the_dataset_list_searches_and_pages() {
         "sort=rows",
         "q=%zz",
         "q=%ff",
+        "any=",
+        "any=a;;b",
+        "any=a+b",
+        "any=a*b",
+        "any=-a",
+        "any=a;b;c;d;e;f;g;h;i",
     ] {
         let e = parse_list_query(Some(bad)).expect_err(bad);
         assert_eq!(e.status, StatusCode::BAD_REQUEST, "{bad}");
@@ -1430,5 +1463,81 @@ async fn scale_3_older_catalogs_are_read_from_their_files() {
         BulkLimits::default()
     )
     .is_err());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// SCALE-5: at start the two newest catalogs are checked whole; an older one
+/// by its signed header and its link to the one before. Changed leaves under
+/// an intact header are refused when that catalog is read; a changed header
+/// or a broken link stops the start.
+#[tokio::test]
+async fn scale_5_older_catalogs_are_checked_by_header_at_start() {
+    let w = world();
+    let m = manifest(&shard_files(0..30, 10), None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![CatalogLeaf::of(&m.header), other_leaf("synthetic.b")],
+    );
+    let c2 = catalog_of(Some(&c1), T0 + 30, c1.leaves.clone());
+    let c3 = catalog_of(Some(&c2), T0 + 40, c2.leaves.clone());
+    for c in [&c0, &c1, &c2, &c3] {
+        w.node.anchor(&sign_catalog(c));
+        w.post_catalog(c, &sign_catalog(c)).await.expect("catalog");
+    }
+    let reopen = || {
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0 + 50),
+            &w.dir,
+            &w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+    };
+    let file = |n: u64| {
+        w.dir
+            .join("catalogs")
+            .join(&publisher().0)
+            .join(format!("{n}.bin"))
+    };
+    let record = |n: u64| -> (Vec<u8>, Vec<u8>, Vec<u8>) {
+        BorshDeserialize::try_from_slice(&std::fs::read(file(n)).expect("read")).expect("rec")
+    };
+    let write = |n: u64, c: &Catalog, r: Vec<u8>, a: Vec<u8>| {
+        std::fs::write(
+            file(n),
+            borsh::to_vec(&(borsh::to_vec(c).expect("enc"), r, a)).expect("enc"),
+        )
+        .expect("write")
+    };
+    let s = reopen().expect("start");
+    assert_eq!(
+        s.catalog_record(&publisher().0, 1).map(|(c, _)| c),
+        Some(c1.clone())
+    );
+    // Catalog 1 (older): one leaf changed, header intact. The start passes;
+    // reading it refuses it.
+    let (_, r1, a1) = record(1);
+    let mut bad = c1.clone();
+    bad.leaves[1].version = 9;
+    write(1, &bad, r1.clone(), a1.clone());
+    let s = reopen().expect("start: the header still holds");
+    assert_eq!(s.catalog_record(&publisher().0, 1), None);
+    // Its header changed: the signature fails, the start stops.
+    let mut bad = c1.clone();
+    bad.header.created_unix += 1;
+    write(1, &bad, r1.clone(), a1.clone());
+    assert!(reopen().is_err());
+    // A validly signed catalog 1 that does not follow catalog 0: refused.
+    let mut unlinked = c1.clone();
+    unlinked.header.prev = Hash32([7; 32]);
+    let ru = sign_catalog(&unlinked);
+    write(1, &unlinked, borsh::to_vec(&ru).expect("enc"), a1.clone());
+    let e = reopen().err().expect("refused");
+    assert!(e.contains("does not follow catalog 0"), "{e}");
+    write(1, &c1, r1, a1);
+    assert!(reopen().is_ok());
     let _ = std::fs::remove_dir_all(&w.dir);
 }

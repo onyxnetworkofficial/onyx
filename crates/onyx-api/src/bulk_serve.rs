@@ -559,50 +559,68 @@ impl BulkStore {
         let mut all: BTreeMap<String, BTreeMap<u64, HeldCatalog>> = BTreeMap::new();
         for p in pubs.flatten() {
             let mut held: BTreeMap<u64, HeldCatalog> = BTreeMap::new();
-            // Only the catalog before is kept whole while the files are read.
+            let file = |n: u64| p.path().join(format!("{n}.bin"));
+            let count = (0u64..).take_while(|n| file(*n).exists()).count() as u64;
+            // SCALE-5: only the newest catalog and the one before it are read
+            // whole and checked (shape, successor), as when they were taken; an
+            // older one by its header alone: its signature, its number and its
+            // link to the one before. Its leaves are checked when it is read
+            // (`catalog_body`). A catalog a day made start-up grow by a whole
+            // catalog check per day.
             let mut before: Option<Catalog> = None;
-            let mut n = 0u64;
-            loop {
-                let f = p.path().join(format!("{n}.bin"));
-                let Ok(bytes) = std::fs::read(&f) else { break };
+            let mut prev_root = Hash32::ZERO;
+            for n in 0..count {
+                let f = file(n);
+                let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
                 let (c, r, a): (Vec<u8>, Vec<u8>, Vec<u8>) =
                     BorshDeserialize::try_from_slice(&bytes)
                         .map_err(|_| format!("{}: does not decode", f.display()))?;
-                let catalog = Catalog::try_from_slice(&c)
-                    .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
-                catalog
-                    .validate()
-                    .map_err(|e| format!("{}: {e}", f.display()))?;
+                let whole = n + 2 >= count;
+                let catalog = if whole {
+                    let c = Catalog::try_from_slice(&c)
+                        .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
+                    c.validate().map_err(|e| format!("{}: {e}", f.display()))?;
+                    Some(c)
+                } else {
+                    None
+                };
+                let header = match &catalog {
+                    Some(c) => c.header.clone(),
+                    None => CatalogHeader::deserialize(&mut c.as_slice())
+                        .map_err(|_| format!("{}: catalog header does not decode", f.display()))?,
+                };
                 let report = SignedReport::try_from_slice(&r)
                     .map_err(|_| format!("{}: report does not decode", f.display()))?;
-                let signer = cat::verify(&catalog.header, &report)
-                    .map_err(|e| format!("{}: {e}", f.display()))?;
+                let signer =
+                    cat::verify(&header, &report).map_err(|e| format!("{}: {e}", f.display()))?;
                 let anchor =
                     anchor_from_bytes(&a).ok_or_else(|| format!("{}: anchor", f.display()))?;
-                if catalog.header.number != n {
+                if header.number != n {
+                    return Err(format!("{}: holds number {}", f.display(), header.number));
+                }
+                if header.prev != prev_root {
                     return Err(format!(
-                        "{}: holds number {}",
+                        "{}: does not follow catalog {}",
                         f.display(),
-                        catalog.header.number
+                        n.saturating_sub(1)
                     ));
                 }
-                if let Some(prev) = &before {
-                    catalog
-                        .check_successor(prev)
+                if let (Some(c), Some(prev)) = (&catalog, &before) {
+                    c.check_successor(prev)
                         .map_err(|e| format!("{}: {e}", f.display()))?;
                 }
+                prev_root = header.root();
                 held.insert(
                     n,
                     HeldCatalog {
-                        header: catalog.header.clone(),
+                        header,
                         body: None,
                         report,
                         signer,
                         anchor,
                     },
                 );
-                before = Some(catalog);
-                n += 1;
+                before = catalog;
             }
             if let (Some(last), Some(c)) = (held.values_mut().next_back(), before) {
                 last.body = Some(CatalogBody::new(c));
@@ -1649,7 +1667,11 @@ impl BulkStore {
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
         let matches = |p: &str, d: &str| {
             let id = format!("{p}/{d}");
-            q.words.iter().all(|w| id.contains(w.as_str()))
+            if !q.words.iter().all(|w| id.contains(w.as_str())) {
+                return false;
+            }
+            let words = id_words(&id);
+            q.any.iter().all(|g| g.iter().any(|t| t.matches(&words)))
         };
         let (mut total, mut more) = (0usize, false);
         let mut page = Vec::new();
@@ -1976,15 +1998,60 @@ pub struct RowsQuery {
 pub const MAX_LIST_PAGE: usize = 500;
 /// Characters of a `GET /v1/bulk` search at most.
 pub const MAX_SEARCH_CHARS: usize = 64;
+/// Groups of an `any` search at most.
+pub const MAX_ANY_GROUPS: usize = 8;
+/// Terms of an `any` search at most, in all groups.
+pub const MAX_ANY_TERMS: usize = 200;
+/// Characters of one `any` term at most.
+pub const MAX_ANY_TERM_CHARS: usize = 48;
+
+/// One `any` term: whole words of the id in a row (`cost-basis` is the words
+/// cost and basis next to each other); a last `*` lets the last word be a
+/// prefix (`realiz*`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AnyTerm {
+    /// Lowercase words.
+    pub words: Vec<String>,
+    /// The last word may be a prefix.
+    pub prefix: bool,
+}
+
+impl AnyTerm {
+    fn matches(&self, id: &[&str]) -> bool {
+        let n = self.words.len();
+        n > 0
+            && id.len() >= n
+            && id.windows(n).any(|w| {
+                w.iter().zip(&self.words).enumerate().all(|(i, (a, b))| {
+                    if self.prefix && i == n - 1 {
+                        a.starts_with(b.as_str())
+                    } else {
+                        *a == b
+                    }
+                })
+            })
+    }
+}
+
+/// The words of a dataset id for `any` (split at anything but a-z and 0-9).
+fn id_words(id: &str) -> Vec<&str> {
+    id.split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect()
+}
 
 /// `GET /v1/bulk` query: `q` (search words, each must be in
 /// `publisher/dataset`; letters, digits, `.`, `-`, `_`, `/` and spaces),
-/// `limit` (1..=[`MAX_LIST_PAGE`]) and `after` (the `next` cursor of the page
-/// before). None given: every dataset, as before.
+/// `any` (groups split by `;`, terms by `,`: every group must have a term
+/// among the id's whole words, [`AnyTerm`]), `limit` (1..=[`MAX_LIST_PAGE`])
+/// and `after` (the `next` cursor of the page before). None given: every
+/// dataset, as before.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ListQuery {
     /// Lowercase search words.
     pub words: Vec<String>,
+    /// `any` groups: each must match.
+    pub any: Vec<Vec<AnyTerm>>,
     /// Page size; `None` lists every match.
     pub limit: Option<usize>,
     /// Only ids after this `(publisher, dataset)`.
@@ -2043,6 +2110,41 @@ pub fn parse_list_query(q: Option<&str>) -> Result<ListQuery, ApiError> {
                         .filter(|n| (1..=MAX_LIST_PAGE).contains(n))
                         .ok_or_else(|| bad_request(format!("limit must be 1..={MAX_LIST_PAGE}")))?,
                 )
+            }
+            "any" => {
+                let bad = || {
+                    bad_request(format!(
+                        "any: at most {MAX_ANY_GROUPS} groups split by ; of at most {MAX_ANY_TERMS} terms split by , (letters, digits and -, at most {MAX_ANY_TERM_CHARS} each, a last * for a prefix)"
+                    ))
+                };
+                let mut terms = 0usize;
+                for g in v.split(';') {
+                    let mut group = Vec::new();
+                    for t in g.split(',').filter(|t| !t.is_empty()) {
+                        let (body, prefix) = match t.strip_suffix('*') {
+                            Some(b) => (b, true),
+                            None => (t, false),
+                        };
+                        let words: Vec<String> =
+                            body.split('-').map(str::to_ascii_lowercase).collect();
+                        if t.len() > MAX_ANY_TERM_CHARS
+                            || words.iter().any(|w| {
+                                w.is_empty() || !w.chars().all(|c| c.is_ascii_alphanumeric())
+                            })
+                        {
+                            return Err(bad());
+                        }
+                        group.push(AnyTerm { words, prefix });
+                        terms += 1;
+                    }
+                    if group.is_empty() {
+                        return Err(bad());
+                    }
+                    out.any.push(group);
+                }
+                if out.any.len() > MAX_ANY_GROUPS || terms > MAX_ANY_TERMS {
+                    return Err(bad());
+                }
             }
             "after" => {
                 let (p, d) = v

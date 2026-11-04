@@ -37,10 +37,12 @@ pub const CATALOG_METRIC: &str = "bulk.catalog";
 pub const CATALOG_SUBJECT: &str = "catalog";
 /// The one catalog format this crate reads.
 pub const FORMAT: u8 = 1;
-/// Most leaves in one catalog (ADR-0059 amendment 1 item 1).
-pub const MAX_CATALOG_LEAVES: usize = 10_000;
-/// Largest Borsh catalog (header and every leaf), for request limits.
-pub const MAX_CATALOG_BYTES: usize = 4 << 20;
+/// Most leaves in one catalog (ADR-0059 amendment 1 item 1; 10,000 until
+/// THREATS CAT-4: the first publisher reached 9,044).
+pub const MAX_CATALOG_LEAVES: usize = 50_000;
+/// Largest Borsh catalog (header and every leaf), for request limits: about
+/// 120 bytes a leaf, so 50,000 leaves fit with room for long ids.
+pub const MAX_CATALOG_BYTES: usize = 8 << 20;
 
 /// One dataset's newest manifest, as a catalog lists it.
 #[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
@@ -499,6 +501,28 @@ mod tests {
             .map(|i| leaf(&format!("d.n{i:05}"), 1, 0, 1))
             .collect();
         assert!(Catalog::build(src(), None, 1, too_many).is_err());
+    }
+
+    /// THREATS CAT-4: a full catalog (MAX_CATALOG_LEAVES leaves of the first
+    /// publisher's id and long dataset ids) builds, proves its last leaf and
+    /// fits MAX_CATALOG_BYTES.
+    #[test]
+    fn cat_4_a_full_catalog_fits_its_byte_cap() {
+        let p = SourceId("onchain-archive".into());
+        let leaves: Vec<_> = (0..MAX_CATALOG_LEAVES)
+            .map(|i| CatalogLeaf {
+                publisher: p.clone(),
+                dataset: format!("usdt-trx.entity-adjusted-realized-profit-loss-{i:06}"),
+                version: 1,
+                prev: Hash32::ZERO,
+                root: Hash32([7; 32]),
+            })
+            .collect();
+        let c = Catalog::build(p, None, 1, leaves).expect("a full catalog builds");
+        let bytes = borsh::to_vec(&c).expect("encode");
+        assert!(bytes.len() <= MAX_CATALOG_BYTES, "{} bytes", bytes.len());
+        let lp = c.leaf_proof(MAX_CATALOG_LEAVES - 1).expect("proof");
+        assert!(c.header.proves(&lp).is_ok());
     }
 
     #[test]

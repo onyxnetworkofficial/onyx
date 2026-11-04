@@ -84,7 +84,7 @@ conn_cap=${ONYX_API_CONN_CAP:-1}
 # brings it to about 9,050, ADR-0059 amendment 1).
 bulk=${ONYX_API_BULK:-1}
 if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
-  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=20 ONYX_BULK_QUOTA_GIB=12 ONYX_BULK_MAX_DATASETS=10000 >>"$stage/node.env"
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=20 ONYX_BULK_QUOTA_GIB=12 ONYX_BULK_MAX_DATASETS=50000 >>"$stage/node.env"
 fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
 # pinned by <export>/observations/pins (metric=0x<template id>, one per line); the node checks

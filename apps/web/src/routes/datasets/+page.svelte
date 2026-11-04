@@ -7,8 +7,10 @@
 	import { replaceState } from '$app/navigation';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
+	import DatasetChart from '#lib/components/DatasetChart.svelte';
 	import { group } from '#lib/format.ts';
-	import { MAX_SEARCH, cleanSearch, dayKeys, fromLink, isoDay, toLink, keyRange, keyText, listUrl, newestUrl, page as readPage, sample as readSample, size, type Dataset, type Sample } from '#lib/datasets.ts';
+	import { datasetTitle, meanings, split } from '#lib/glossary.ts';
+	import { MAX_SEARCH, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, listUrl, page as readPage, sample as readSample, size, type Dataset, type Sample } from '#lib/datasets.ts';
 
 	let query = $state('');
 	let items = $state<Dataset[]>([]);
@@ -20,7 +22,11 @@
 	let none = $state(false);
 	let open = $state<string | null>(null);
 	let samples = $state<Record<string, Sample | 'none' | 'loading'>>({});
+	// The column each open dataset's chart draws (an index into its sample's columns).
+	let drawn = $state<Record<string, number>>({});
 	let origin = $state('');
+	// A dataset link whose dataset this node does not hold (the search shows the closest names).
+	let missing = $state<string | null>(null);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -73,6 +79,7 @@
 		clearTimeout(timer);
 		timer = setTimeout(() => {
 			open = null;
+			missing = null;
 			remember();
 			load(cleanSearch(query), null);
 		}, 350);
@@ -90,8 +97,10 @@
 		if (samples[id] && samples[id] !== 'none') return;
 		samples[id] = 'loading';
 		try {
-			const r = await fetch(newestUrl(d), { headers: { accept: 'application/json' } });
-			samples[id] = (r.ok ? readSample(await r.json()) : null) ?? 'none';
+			const r = await fetch(detailUrl(d), { headers: { accept: 'application/json' } });
+			const s = (r.ok ? readSample(await r.json()) : null) ?? 'none';
+			samples[id] = s;
+			if (s !== 'none') drawn[id] = chartColumns(s)[0] ?? -1;
 		} catch {
 			samples[id] = 'none';
 		}
@@ -105,6 +114,7 @@
 		load(cleanSearch(query), null).then(() => {
 			const d = link.d ? items.find((x) => idOf(x) === link.d) : undefined;
 			if (d) toggle(d);
+			else if (link.d && !none) missing = link.d;
 		});
 		return () => clearTimeout(timer);
 	});
@@ -131,10 +141,13 @@
 			<Pill live state={pill.state} text={pill.text} />
 		</div>
 		<div class="find">
-			<label for="ds-q" class="muted">Words in the name, for example <span class="mono">btc realized</span> or <span class="mono">eth.supply</span></label>
+			<label for="ds-q" class="muted">Names or meanings, for example <span class="mono">bitcoin holders</span>, <span class="mono">whale</span> or <span class="mono">eth supply</span></label>
 			<input id="ds-q" type="search" bind:value={query} oninput={search} maxlength={MAX_SEARCH} spellcheck="false" autocomplete="off" placeholder={all !== null ? `Search ${group(all)} datasets` : 'Search datasets'} data-testid="datasets-q" />
 		</div>
 
+		{#if missing}
+			<p class="muted" data-testid="datasets-missing">This node holds no dataset <span class="mono">{missing}</span>. {total ? 'The closest names are below.' : ''}</p>
+		{/if}
 		{#if none}
 			<p class="muted" data-testid="datasets-none">This site’s node shows no datasets.</p>
 		{:else if items.length}
@@ -143,9 +156,10 @@
 					{@const id = idOf(d)}
 					<li class="panel item" data-testid="datasets-row">
 						<button type="button" class="name" aria-expanded={open === id} aria-controls="ds-{id}" onclick={() => toggle(d)} data-testid="datasets-open">
-							<span class="mono">{d.dataset}</span>
-							<span class="muted pub">{d.publisher} · version {d.version}</span>
+							<span class="ttl" data-testid="datasets-title">{datasetTitle(d.dataset)}</span>
+							<span class="muted pub"><span class="mono" data-testid="datasets-id">{d.dataset}</span> · {d.publisher} · version {d.version}</span>
 						</button>
+						{#each meanings(split(d.dataset).words) as m (m)}<p class="about" data-testid="datasets-about">{m}</p>{/each}
 						<dl class="dsfacts">
 							<div><dt>Rows</dt><dd class="mono">{group(d.rows)}</dd></div>
 							<div><dt>Covers</dt><dd class="mono">{keyRange(d.keyMin, d.keyMax)}</dd></div>
@@ -161,13 +175,26 @@
 								{:else if s === 'none'}
 									<p class="muted" data-testid="datasets-detail-none">The node did not answer with rows. Try again in a minute.</p>
 								{:else}
-									<p class="fine">The newest {s.rows.length} {s.rows.length === 1 ? 'row' : 'rows'}{d.license ? ` · license ${d.license}` : ''} · <a href={toLink('', id)} data-testid="datasets-link">link to this dataset</a></p>
+									{@const cols = chartColumns(s)}
+									{@const days = dayKeys(d.keyMin, d.keyMax)}
+									{#if cols.length && (drawn[id] ?? -1) >= 0}
+										<div class="chartrow">
+											{#if cols.length > 1}
+												<label class="muted">Chart <select bind:value={drawn[id]} data-testid="datasets-chart-col">{#each cols as c (c)}<option value={c}>{s.columns[c]}</option>{/each}</select></label>
+											{:else}
+												<span class="muted">Chart: <span class="mono">{s.columns[cols[0]]}</span></span>
+											{/if}
+										</div>
+										<div class="panel chartbox"><DatasetChart points={chartPoints(s, drawn[id], days)} name={s.columns[drawn[id]]} testid="datasets-chart" /></div>
+									{/if}
+									{@const shown = s.rows.slice(-10)}
+									<p class="fine">The newest {shown.length} {shown.length === 1 ? 'row' : 'rows'}{d.license ? ` · license ${d.license}` : ''} · <a href={toLink('', id)} data-testid="datasets-link">link to this dataset</a></p>
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 									<div class="tablebox sample" tabindex="0" role="region" aria-label="Newest rows of {d.dataset}">
 										<table data-testid="datasets-sample">
 											<thead><tr>{#each s.columns as c, i (c)}<th class:r={i > 0}>{c}</th>{/each}</tr></thead>
 											<tbody>
-												{#each s.rows as r, ri (ri)}
+												{#each shown as r, ri (ri)}
 													<tr>{#each r as v, i (i)}<td class="mono" class:r={i > 0}>{i === 0 ? keyText(v, dayKeys(d.keyMin, d.keyMax)) : v}</td>{/each}</tr>
 												{/each}
 											</tbody>
@@ -227,15 +254,25 @@
 		transform: none;
 		box-shadow: none;
 	}
-	.name:hover .mono {
+	.name:hover .ttl {
 		text-decoration: underline;
+	}
+	.ttl {
+		font-weight: 500;
+		overflow-wrap: anywhere;
 	}
 	.name .mono {
 		overflow-wrap: anywhere;
 		white-space: normal;
 	}
-	.name[aria-expanded='true'] .mono {
+	.name[aria-expanded='true'] .ttl {
 		text-decoration: underline;
+	}
+	.about {
+		margin: 0;
+		font-size: var(--text-sm);
+		color: var(--muted);
+		max-width: 70ch;
 	}
 	.pub {
 		font-size: var(--text-xs);
@@ -285,6 +322,17 @@
 	pre.code {
 		white-space: pre-wrap;
 		overflow-wrap: anywhere;
+	}
+	.chartrow {
+		margin-block: var(--sp-2);
+		font-size: var(--text-sm);
+	}
+	.chartrow select {
+		margin-left: var(--sp-1);
+	}
+	.chartbox {
+		margin-bottom: var(--sp-3);
+		padding: var(--sp-3);
 	}
 	.pager {
 		display: flex;

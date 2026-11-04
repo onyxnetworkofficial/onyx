@@ -2,7 +2,9 @@
 
 ## Status
 Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) accepted
-2026-11-03 after review THREATS CAT-R1, being built (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+2026-11-03 after review THREATS CAT-R1, built except item 3's withdrawn-catalog and fork-marking rules (THREATS
+CAT-5, CAT-6); amendment 2 (catalogs kept small on disk) draft 2 after review CAT-RET-R1,
+not built (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -109,7 +111,7 @@ to the newest manifest of each of its datasets.
    its index and the leaf count). Header (Borsh): format, publisher source id, catalog number n,
    the root of catalog n - 1 (zero for n = 0), creation time, leaf count, leaves root. Catalog
    root = `keccak256("onyx-bulk-catalog-v1" ‖ borsh(header))`. At most `MAX_CATALOG_LEAVES`
-   (10,000) leaves.
+   (50,000; 10,000 until THREATS CAT-4) leaves.
 2. **Signature and anchor: the same scheme and the same book.** `SignedPayload {source:
    publisher, key, metric: "bulk.catalog", subject: Aggregate("catalog"), value: Bytes(catalog
    root), observed_unix: creation time, sequence}`, the sequence fixed by n
@@ -134,7 +136,7 @@ to the newest manifest of each of its datasets.
    manifest report posted later for a catalog-anchored version with another root forks the
    dataset, as item 5.
 5. **Node.** `POST /v1/bulk/catalogs` takes the header, every leaf and the signed report (at most
-   `MAX_CATALOG_LEAVES` leaves and 4 MiB; catalogs count against the publisher's dataset quota
+   `MAX_CATALOG_LEAVES` leaves and 8 MiB; catalogs count against the publisher's dataset quota
    by leaf, CAT-R1 L1), keeps it only when its report is final in the pinned book with the key
    active (or retired) and not suspended, its predecessor is held (or n = 0), and items 3 and 4
    hold. `GET /v1/bulk/catalogs/{publisher}/{n}` serves a held catalog, so a node that missed one
@@ -167,7 +169,40 @@ its dataset in that catalog (item 6), not that later catalogs kept it; walking t
 back (an opt-in `onyx-check --bulk --history`, about 0.6 KiB per catalog) is not built yet (THREATS
 CAT-2). Both catalogs are signed by the publisher's key, so the publisher cannot deny either.
 
-## Alternatives
+## Amendment 2 (2026-11-04, draft 2 after review CAT-RET-R1): catalogs that stay small as they repeat
+
+**Why.** Item 3 makes every catalog repeat every dataset of its publisher. With a catalog a day (the
+first publisher's daily refresh), every node stores a whole copy each day: about 1 MB a day for
+9,044 datasets now, about 6 MB a day at the 50,000-leaf cap (THREATS CAT-4).
+
+**Draft 1 and its review.** Draft 1 kept only the newest two catalogs whole and let a node with no
+catalog of a publisher start at any anchored catalog n. The review (THREATS CAT-RET-R1, verdict
+"redesign") showed that starting late reopens CAT-R1 H1 (two groups of nodes serving two roots for
+one version), and that pruning blocks recovery from a stolen key and strands versions a slow node
+has not taken yet. Draft 1 is withdrawn.
+
+**Draft 2** (not built; to be reviewed again):
+
+1. **First, the missing parts of item 3** (THREATS CAT-5, CAT-6): a catalog the book withdrew is
+   set aside before a successor is checked, and a conflicting anchored catalog marks the
+   publisher's catalog datasets forked, with both headers, both reports and the leaf proofs kept as
+   the fork record (about 2 KiB).
+2. **Every catalog kept, but small on disk.** A node keeps the newest catalog whole and stores
+   each older one as the leaves that differ from the next catalog, rebuilt when asked
+   (`GET /v1/bulk/catalogs/{publisher}/{n}` answers the same bytes as today). Nothing a client or a
+   peer checks changes. With 483 of 9,044 datasets changed on the first refresh day, a day costs
+   about 60 KB instead of 1 MB. Catalog bytes count against the publisher's byte quota.
+3. **Joining stays as built:** a new node takes catalogs from 0 in order, so every node checks
+   every successor.
+
+Review CAT-FIX-R1 (2026-11-04) asks three changes before draft 2 is built: a catalog stored as a
+diff against the next must be written whole first when the next is set aside; joining gets cheaper
+only with a diff route beside the unchanged `GET`; and rebuilding an old catalog from a year of
+diffs needs periodic whole checkpoints and a cache. A first build of item 1 was reviewed (THREATS
+CAT-FIX-R1: it set catalogs aside on temporary refusals and its fork marks could not clear) and
+reverted before it shipped; item 1 is rebuilt with the review's rules (THREATS CAT-5, CAT-6).
+
+## Alternatives## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and
   replay book `OnyxSignedBook` already has, and needs its own review; rejected.
 - One Merkle tree over all rows of a dataset: an append would rebuild it, and a node would need

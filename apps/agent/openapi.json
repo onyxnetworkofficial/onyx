@@ -1601,7 +1601,7 @@
       "get": {
         "operationId": "listBulkDatasets",
         "summary": "Bulk datasets this node holds",
-        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); `limit` pages them in id order; `after` takes the `next` of the page before. `total` counts every match.",
+        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); `any` matches whole words, any of a group; `limit` pages them in id order; `after` takes the `next` of the page before. `total` counts every match.",
         "tags": [
           "Bulk"
         ],
@@ -1616,6 +1616,17 @@
               "pattern": "^[A-Za-z0-9 ./_-]*$"
             },
             "description": "Search words, separated by spaces; each must be in `publisher/dataset`."
+          },
+          {
+            "name": "any",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "maxLength": 4000,
+              "pattern": "^[A-Za-z0-9*,;-]*$"
+            },
+            "description": "Whole-word search: groups split by `;`, terms by `,`. Every group needs one term among the id's words (split at anything but letters and digits); a term `cost-basis` is those words next to each other; a last `*` makes the last word a prefix. At most 8 groups and 200 terms."
           },
           {
             "name": "limit",

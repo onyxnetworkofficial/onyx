@@ -34,6 +34,19 @@ function rowsAnswer(name) {
 	return { anchor: { book: BOOK }, manifest: { schema: { columns: cols.map((name) => ({ name, kind: 'int' })) } }, rows, shards: [], next_page: null };
 }
 
+// The node's `any` search (bulk_serve.rs AnyTerm): groups by ';', terms by ',', whole words of the
+// id in a row, a last '*' for a prefix; every group needs one term.
+const anyOf = (v) => (v ? v.split(';').map((g) => g.split(',').filter(Boolean)) : []);
+function matchesAny(groups, id) {
+	const words = id.split(/[^a-z0-9]+/).filter(Boolean);
+	const term = (t) => {
+		const prefix = t.endsWith('*');
+		const tw = (prefix ? t.slice(0, -1) : t).split('-');
+		return words.some((_, i) => tw.every((w, j) => (prefix && j === tw.length - 1 ? words[i + j]?.startsWith(w) : words[i + j] === w)));
+	};
+	return groups.every((g) => g.some(term));
+}
+
 export async function datasets(browser, base, expect) {
 	for (const width of [1280, 390]) {
 		const at = `datasets ${width}`;
@@ -48,17 +61,17 @@ export async function datasets(browser, base, expect) {
 			const u = new URL(route.request().url());
 			asked.push(u.search);
 			if (busy) return route.fulfill({ status: 429, json: { error: { code: 'rate_limited' } } });
-			const q = (u.searchParams.get('q') ?? '').split(' ').filter(Boolean);
+			const groups = anyOf(u.searchParams.get('any'));
 			const after = u.searchParams.get('after');
 			const limit = Number(u.searchParams.get('limit') ?? 50);
-			const hit = ALL.filter((d) => q.every((w) => `${d.publisher}/${d.dataset}`.includes(w)));
+			const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`));
 			const rest = hit.filter((d) => !after || `${d.publisher}/${d.dataset}` > after);
 			// The fake pages 2 at a time whatever the limit, so "Show more" is reached with 4 datasets.
 			const n = Math.min(limit, 2);
 			const pageItems = rest.slice(0, n);
 			const next = rest.length > n ? `${pageItems[n - 1].publisher}/${pageItems[n - 1].dataset}` : null;
 			// One hostile item rides along on the first page: it must never be printed.
-			const evil = !after && !q.length ? [ds('<img src=x onerror=__xss()>')] : [];
+			const evil = !after && !groups.length ? [ds('<img src=x onerror=__xss()>')] : [];
 			return route.fulfill({ json: { datasets: [...pageItems, ...evil], total: hit.length, next } });
 		});
 		await pg.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => {
@@ -69,7 +82,7 @@ export async function datasets(browser, base, expect) {
 		const list = pg.getByTestId('datasets-list');
 		await list.waitFor({ timeout: 90000 });
 		expect((await pg.locator('h1').innerText()).trim() === 'All datasets', `${at}: one h1, "All datasets"`);
-		const names = async () => (await pg.getByTestId('datasets-open').locator('.mono').allInnerTexts()).map((t) => t.trim());
+		const names = async () => (await pg.getByTestId('datasets-id').allInnerTexts()).map((t) => t.trim());
 		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: the first page lists the node's first datasets (${await names()})`);
 		expect((await pg.getByTestId('datasets-count').innerText()).includes('2 of 4'), `${at}: "Showing 2 of 4"`);
 		expect((await pg.getByTestId('datasets-updated').first().innerText()).trim() === '2026-11-03', `${at}: each dataset shows the day its version was made`);
@@ -80,7 +93,9 @@ export async function datasets(browser, base, expect) {
 		expect((await pg.getByTestId('datasets-more').count()) === 0, `${at}: no "Show more" on the last page`);
 		await pg.getByTestId('datasets-q').fill('ETH  Wide');
 		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 1, null, { timeout: 15000 }).catch(() => {});
-		expect(JSON.stringify(await names()) === '["eth.wide"]' && asked.some((s) => s.includes('q=eth+wide')), `${at}: a search sends q in the node's form and shows the matches (${await names()})`);
+		expect(JSON.stringify(await names()) === '["eth.wide"]' && asked.some((s) => new URLSearchParams(s).get('any') === 'eth*;wide*'), `${at}: a search sends the node's whole-word any search and shows the matches (${await names()})`);
+		const T = { title: (await pg.getByTestId('datasets-title').first().innerText()).trim(), about: await pg.getByTestId('datasets-about').count() };
+		expect(T.title === 'Ethereum · Wide', `${at}: a dataset reads as a title, the asset by name (${T.title})`);
 		await pg.getByTestId('datasets-open').first().click();
 		const sample = pg.getByTestId('datasets-sample');
 		await sample.waitFor({ timeout: 15000 });
@@ -97,6 +112,7 @@ export async function datasets(browser, base, expect) {
 			};
 		});
 		expect(S.cols === 64 && S.rows === 5 && S.first === '2023-12-05', `${at}: the newest rows, 64 columns, day keys as dates (${S.cols}, ${S.rows}, ${S.first})`);
+		expect((await pg.getByTestId('datasets-chart').count()) === 0, `${at}: a table of series (one row per series and day) gets no chart`);
 		expect(!S.pageScroll && (width > 1000 || S.boxScrolls), `${at}: the wide sample scrolls in its own box, never the page`);
 		expect(S.expanded === 'true', `${at}: the opened dataset says so (aria-expanded)`);
 		const cmd = await pg.getByTestId('datasets-commands').innerText();
@@ -104,18 +120,35 @@ export async function datasets(browser, base, expect) {
 		const hash = await pg.evaluate(() => location.hash);
 		expect(hash === '#/datasets?q=eth+wide&d=onchain-archive%2Feth.wide', `${at}: the address keeps the search and the open dataset (${hash})`);
 		// A dataset link, opened fresh, searches for it and opens it.
-		const pg2 = await ctx.newPage();
-		await pg2.route('**/v1/bulk?*', (route) => {
-			const q = new URL(route.request().url()).searchParams.get('q') ?? '';
-			const hit = ALL.filter((d) => q.split(' ').every((w) => d.dataset.includes(w)));
-			return route.fulfill({ json: { datasets: hit, total: hit.length, next: null } });
-		});
-		await pg2.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => route.fulfill({ json: rowsAnswer(new URL(route.request().url()).pathname.split('/')[4]) }));
+		const fresh = async () => {
+			const p = await ctx.newPage();
+			await p.route('**/v1/bulk?*', (route) => {
+				const groups = anyOf(new URL(route.request().url()).searchParams.get('any'));
+				const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`));
+				return route.fulfill({ json: { datasets: hit, total: hit.length, next: null } });
+			});
+			await p.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => route.fulfill({ json: rowsAnswer(new URL(route.request().url()).pathname.split('/')[4]) }));
+			return p;
+		};
+		const pg2 = await fresh();
 		await pg2.goto(base + '#/datasets?d=onchain-archive%2Feth.gamma');
 		await pg2.getByTestId('datasets-sample').waitFor({ timeout: 30000 }).catch(() => {});
 		const L = { q: await pg2.getByTestId('datasets-q').inputValue(), open: await pg2.getByTestId('datasets-detail').count(), link: await pg2.getByTestId('datasets-link').getAttribute('href').catch(() => null) };
 		expect(L.q === 'eth.gamma' && L.open === 1 && L.link === '#/datasets?d=onchain-archive%2Feth.gamma', `${at}: a dataset link opens that dataset (${JSON.stringify(L)})`);
+		const C = await pg2.evaluate(() => {
+			const svg = document.querySelector('[data-testid="datasets-chart"]');
+			const labels = [...(svg?.querySelectorAll('text.axis') ?? [])].map((t) => t.getBoundingClientRect()).filter((r) => r.top > (svg?.getBoundingClientRect().top ?? 0) + 100);
+			const overlap = labels.some((a, i) => labels.some((b, j) => i < j && a.left < b.right && b.left < a.right));
+			return { line: !!svg?.querySelector('path.line'), overlap, scroll: document.documentElement.scrollWidth > innerWidth + 1 };
+		});
+		expect(C.line && !C.scroll && !C.overlap, `${at}: a dataset of plain numbers opens with a chart of its newest rows, inside the page, its dates apart (${JSON.stringify(C)})`);
+		// A link to a dataset this node does not hold says so and shows the closest names.
 		await pg2.close();
+		const pg3 = await fresh();
+		await pg3.goto(base + '#/datasets?d=onchain-archive%2Feth.gone');
+		await pg3.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
+		expect((await pg3.getByTestId('datasets-missing').count()) === 1 && (await pg3.getByTestId('datasets-detail').count()) === 0, `${at}: a link to a dataset the node does not hold says so`);
+		await pg3.close();
 		busy = true;
 		await pg.getByTestId('datasets-q').fill('btc');
 		await pg.waitForFunction(() => /Busy/.test(document.querySelector('[data-testid="datasets"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});

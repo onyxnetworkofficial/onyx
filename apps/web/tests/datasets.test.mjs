@@ -2,7 +2,8 @@
 // node's search exactly as the node takes it. Run: node --test apps/web/tests/datasets.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay } from '../src/lib/datasets.ts';
+import { anyGroups, anyValue } from '../src/lib/glossary.ts';
+import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints } from '../src/lib/datasets.ts';
 
 const good = {
 	publisher: 'onchain-archive',
@@ -28,7 +29,11 @@ test('a search is lowercase, only the characters the node takes, at most 64', ()
 
 test('the list URL carries the search, the page size and the cursor', () => {
 	assert.equal(listUrl('', null), '/v1/bulk?limit=50');
-	assert.equal(listUrl('btc sth', 'onchain-archive/btc.a'), '/v1/bulk?q=btc+sth&limit=50&after=onchain-archive%2Fbtc.a');
+	const u = new URL(listUrl('btc sth', 'onchain-archive/btc.a'), 'http://x');
+	assert.deepEqual([u.searchParams.get('limit'), u.searchParams.get('after'), u.searchParams.get('q')], ['50', 'onchain-archive/btc.a', null]);
+	assert.equal(u.searchParams.get('any'), anyValue(anyGroups('btc sth')));
+	const [g1, g2] = u.searchParams.get('any').split(';').map((g) => g.split(','));
+	assert.ok(g1[0] === 'btc*' && g2[0] === 'sth*');
 });
 
 test('an item out of shape is dropped', () => {
@@ -120,4 +125,22 @@ test('a page link carries the search and the open dataset, and nothing else', ()
 	assert.deepEqual(fromLink('#/datasets'), { q: '', d: null });
 	assert.deepEqual(fromLink('#/datasets?q=%3Cscript%3E&d=javascript:alert(1)'), { q: 'script', d: null });
 	assert.deepEqual(fromLink('#/datasets?d=a/b/c'), { q: '', d: null });
+});
+
+test('a dataset opens with its newest 90 days (day keys) or its newest 10 rows', () => {
+	const d = item(good);
+	assert.equal(detailUrl(d), '/v1/bulk/onchain-archive/btc.sth-net-position/rows?from=1780185600&to=1787875200&limit=100');
+	const young = { ...d, keyMin: '1787788800' };
+	assert.equal(detailUrl(young), '/v1/bulk/onchain-archive/btc.sth-net-position/rows?from=1787788800&to=1787875200&limit=100');
+	assert.equal(detailUrl({ ...d, keyMin: '5', keyMax: '9' }), newestUrl({ ...d, keyMin: '5', keyMax: '9' }));
+});
+
+test('a chart draws only plain-number columns, never a table of series', () => {
+	const s = { columns: ['day', 'price', 'note', 'one'], rows: [['1787788800', '1.5', 'x', ''], ['1787875200', '-2', 'y', '3']], from: '', to: '', book: '' };
+	assert.deepEqual(chartColumns(s), [1]);
+	assert.deepEqual(chartPoints(s, 1, true), [
+		{ v: 1.5, text: '1.5', head: '2026-08-27' },
+		{ v: -2, text: '-2', head: '2026-08-28' }
+	]);
+	assert.deepEqual(chartColumns({ ...s, columns: ['day', 'series', 'i', 'v00'] }), []);
 });

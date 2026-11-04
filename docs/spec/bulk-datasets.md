@@ -81,7 +81,9 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   manifest's own sequence hold at its finalized block.
 
 ### Routes
-`GET /v1/bulk`, `GET /v1/bulk/{publisher}/{dataset}`,
+`GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
+word of `q`, `limit` at a time in id order, `after` the `next` of the page before; `total` counts
+the matches), `GET /v1/bulk/{publisher}/{dataset}`,
 `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`, `POST /v1/bulk/manifests`,
 `POST /v1/bulk/catalogs`, `GET /v1/bulk/catalogs/{publisher}/{n}`,
 `PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`: docs/api/openapi.json and

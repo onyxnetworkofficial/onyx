@@ -1013,7 +1013,11 @@ impl BulkConfig {
         let d = onyx_api::bulk_serve::BulkLimits::default();
         let limits = onyx_api::bulk_serve::BulkLimits {
             quota_bytes: num("ONYX_BULK_QUOTA_GIB", d.quota_bytes >> 30, 1 << 20)? << 30,
-            max_datasets: num("ONYX_BULK_MAX_DATASETS", d.max_datasets as u64, 10_000)? as usize,
+            max_datasets: num(
+                "ONYX_BULK_MAX_DATASETS",
+                d.max_datasets as u64,
+                onyx_bulk::catalog::MAX_CATALOG_LEAVES as u64,
+            )? as usize,
             max_total_bytes: num("ONYX_BULK_MAX_GIB", d.max_total_bytes >> 30, 1 << 20)? << 30,
             warm_after_secs: num(
                 "ONYX_BULK_WARM_AFTER_DAYS",
