@@ -1024,6 +1024,7 @@ impl BulkConfig {
                 d.warm_after_secs / 86_400,
                 3_650,
             )? * 86_400,
+            catalog_checkpoint: d.catalog_checkpoint,
         };
         let warm = get("ONYX_BULK_WARM_DIR")
             .map(|p| p.trim().to_string())

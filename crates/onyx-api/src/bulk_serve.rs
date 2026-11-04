@@ -47,8 +47,8 @@ use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
-use borsh::BorshDeserialize;
-use onyx_bulk::catalog::{self as cat, Catalog, CatalogHeader, LeafProof};
+use borsh::{BorshDeserialize, BorshSerialize};
+use onyx_bulk::catalog::{self as cat, Catalog, CatalogHeader, CatalogLeaf, LeafProof};
 use onyx_bulk::manifest::{shards_tree, Manifest, ShardEntry};
 use onyx_bulk::shard::check_shard;
 use onyx_bulk::wire::{catalog_json, hex0x, row_json, shard_json};
@@ -85,6 +85,19 @@ pub const FREE_PER_MINUTE: u32 = 60;
 /// How long a key the book did not know (or had suspended) is refused
 /// without a chain read (review CL5-R5).
 pub const KEY_REFUSAL_SECS: u64 = 60;
+/// Publisher locks (two publishers may share one: they then wait for each
+/// other, never for longer than one upload).
+const PUBLISHER_LOCKS: usize = 64;
+/// Reports remembered as withdrawn for good (each one cost its poster a
+/// report the book recorded, then a reviewer's withdrawal).
+const MAX_WITHDRAWN: usize = 100_000;
+/// Catalogs stored whole every this many (ADR-0059 amendment 2 draft 4): a
+/// rebuild applies at most this many minus one diffs.
+pub const CATALOG_CHECKPOINT: u64 = 32;
+/// Old-catalog rebuilds at once (`GET /v1/bulk/catalogs/...`).
+const MAX_REBUILDS: usize = 2;
+/// A publisher's catalog fork record (THREATS CAT-6).
+const FORK_FILE: &str = "fork.bin";
 
 /// The signed book manifests are anchored in: the node's pinned
 /// `OnyxSignedBook` (its code hash and reviewer are checked at start by the
@@ -108,6 +121,10 @@ pub struct BulkLimits {
     pub max_total_bytes: u64,
     /// A hot shard not read for this long moves to warm.
     pub warm_after_secs: u64,
+    /// A catalog whose number is a multiple of this is stored whole; any
+    /// other as the leaves that differ from the one before (ADR-0059
+    /// amendment 2 draft 4).
+    pub catalog_checkpoint: u64,
 }
 
 impl Default for BulkLimits {
@@ -117,6 +134,7 @@ impl Default for BulkLimits {
             max_datasets: 64,
             max_total_bytes: 256 << 30,
             warm_after_secs: 7 * 86_400,
+            catalog_checkpoint: CATALOG_CHECKPOINT,
         }
     }
 }
@@ -261,29 +279,85 @@ pub async fn read_anchor(
     report: &SignedReport,
     signer: &[u8; 20],
 ) -> Result<AnchorState, String> {
+    let at = decision_block(rpc, chain_id).await?;
+    Ok(read_anchor_at(rpc, chain_id, book, report, signer, at)
+        .await?
+        .state)
+}
+
+/// A finalized block, number and hash: every read of one decision is made at
+/// one block (review CAT-FIX-R1 M1).
+pub type At = (u64, Hash32);
+
+/// The chain's finalized block, after checking the chain is `chain_id`.
+pub async fn decision_block(rpc: &dyn JsonRpc, chain_id: u64) -> Result<At, String> {
     let id = qty(&rpc.call("eth_chainId", json!([])).await?)?;
     if id != chain_id {
         return Err(format!("the node's chain is {id}, not {chain_id}"));
     }
-    let (block_number, block_hash) = finalized(rpc).await?;
+    finalized(rpc).await
+}
+
+/// What the book says of a report at one block, and whether a refusal is
+/// final (THREATS CAT-5): another signature over its payload, or its fact
+/// holding no value (a key retirement or compromise withdrew it, or the
+/// reviewer cleared a dispute) or another report's. A suspended key, an open
+/// dispute and a record not seen yet can each change back: not final.
+pub struct Reading {
+    /// The anchor, or why not.
+    pub state: AnchorState,
+    /// The refusal is the book's final word on this report.
+    pub withdrawn: bool,
+}
+
+/// [`read_anchor`] at block `at` (from [`decision_block`]).
+pub async fn read_anchor_at(
+    rpc: &dyn JsonRpc,
+    chain_id: u64,
+    book: &[u8; 20],
+    report: &SignedReport,
+    signer: &[u8; 20],
+    (block_number, block_hash): At,
+) -> Result<Reading, String> {
+    let not = |why: &'static str, withdrawn: bool| Reading {
+        state: AnchorState::Not(why),
+        withdrawn,
+    };
     let digest = report.payload.digest();
     let bad = || "the signed book's answer does not decode".to_string();
     let r = call_at(rpc, book, "report(bytes32)", &digest, &block_hash).await?;
     if r.is_empty() || word(&r, 0).ok_or_else(bad)? == [0u8; 32] {
-        return Ok(AnchorState::Not(reason::NOT_FINAL));
+        return Ok(not(reason::NOT_FINAL, false));
     }
     let fact = Hash32(word(&r, 1).ok_or_else(bad)?);
     let report_hash = Hash32(word(&r, 3).ok_or_else(bad)?);
     let recorded_at = word_u64(&word(&r, 6).ok_or_else(bad)?).ok_or_else(bad)?;
     if report_hash != report.hash() {
-        return Ok(AnchorState::Not(reason::OTHER_SIGNATURE));
+        return Ok(not(reason::OTHER_SIGNATURE, true));
     }
     let f = call_at(rpc, book, "factView(bytes32)", &fact, &block_hash).await?;
     let state = word_u64(&word(&f, 0).ok_or_else(bad)?).ok_or_else(bad)?;
     let accepted = Hash32(word(&f, 1).ok_or_else(bad)?);
     let accepted_at = word_u64(&word(&f, 2).ok_or_else(bad)?).ok_or_else(bad)?;
     if state != 1 || accepted != report_hash {
-        return Ok(AnchorState::Not(reason::NOT_ACCEPTED));
+        // `FactState`: 0 none (withdrawn, or a dispute cleared), 1 accepted
+        // (here on another report), 2 disputed: open, unless the report's
+        // key is compromised. The book never lets a compromised key's
+        // report be kept (`resolveFact` and `postReport` need `_permits`),
+        // and an equivocation, the likeliest way a theft shows, leaves the
+        // fact disputed for good (review of CAT-5, M1).
+        let withdrawn = state != 2 || {
+            let k = call_at(
+                rpc,
+                book,
+                "keyState(bytes32)",
+                &report.payload.key,
+                &block_hash,
+            )
+            .await?;
+            word_u64(&word(&k, 0).ok_or_else(bad)?).ok_or_else(bad)? == 3
+        };
+        return Ok(not(reason::NOT_ACCEPTED, withdrawn));
     }
     let key = report.payload.key;
     let k = call_at(rpc, book, "keyState(bytes32)", &key, &block_hash).await?;
@@ -295,21 +369,24 @@ pub async fn read_anchor(
     // state, from its retirement or compromise point on), not suspended, and
     // the signer recovered from the report.
     if life == 0 || suspended != 0 || on_chain_signer[12..] != signer[..] {
-        return Ok(AnchorState::Not(reason::KEY));
+        return Ok(not(reason::KEY, false));
     }
-    Ok(AnchorState::Anchored(AnchorView {
-        chain_id,
-        book: *book,
-        digest,
-        fact,
-        report_hash,
-        key,
-        signer: *signer,
-        block_number,
-        block_hash,
-        recorded_at,
-        accepted_at,
-    }))
+    Ok(Reading {
+        state: AnchorState::Anchored(AnchorView {
+            chain_id,
+            book: *book,
+            digest,
+            fact,
+            report_hash,
+            key,
+            signer: *signer,
+            block_number,
+            block_hash,
+            recorded_at,
+            accepted_at,
+        }),
+        withdrawn: false,
+    })
 }
 
 /// The digest `book` holds under `(key, sequence)` (`sequenceOf`) at the
@@ -345,6 +422,222 @@ struct Held {
     signer: [u8; 20],
     anchor: AnchorView,
     catalog: Option<Box<(CatalogHeader, LeafProof)>>,
+}
+
+/// Where an uploaded catalog fits ([`BulkStore::fit_catalog`]).
+// One per upload, never stored: a `Box` buys nothing.
+#[allow(clippy::large_enum_variant)]
+enum Fit {
+    /// Held already (its status).
+    Same(Value),
+    /// The next one: taken once its anchor reads.
+    Next,
+    /// Its number is held by another catalog: the refusal, unless the held
+    /// ones are withdrawn (THREATS CAT-5).
+    Taken(ApiError),
+    /// Not the append-only successor of the newest held catalog: the
+    /// refusal, or a fork when both are anchored (THREATS CAT-6).
+    Broken(ApiError),
+}
+
+/// Two anchored catalogs of one publisher that cannot both stand (THREATS
+/// CAT-6, ADR-0059 amendment 1 item 3): the same number with two roots, or
+/// a catalog that is not the append-only successor of the one before. Kept
+/// as evidence in `catalogs/<publisher>/fork.bin`; while it stands, the
+/// publisher's catalog datasets are not served and its uploads are refused.
+/// It clears by itself when the book withdraws either side for good.
+#[derive(Clone, Debug, PartialEq, BorshSerialize, BorshDeserialize)]
+struct Fork {
+    /// The held catalog's header and report.
+    held: (CatalogHeader, SignedReport),
+    /// The other catalog's header and report.
+    other: (CatalogHeader, SignedReport),
+    why: String,
+}
+
+/// A catalog stored as the leaves that differ from the one before
+/// (`{n}.diff`, ADR-0059 amendment 2 draft 4): a version moved or a
+/// dataset added, which is all item 3 lets change.
+#[derive(BorshSerialize, BorshDeserialize)]
+struct CatalogDiff {
+    header: CatalogHeader,
+    /// The signed report (Borsh).
+    report: Vec<u8>,
+    /// The anchor read when it was taken.
+    anchor: Vec<u8>,
+    /// Leaves that differ from the catalog before, in dataset order.
+    leaves: Vec<CatalogLeaf>,
+}
+
+/// One stored catalog: whole (the catalog's Borsh) or a diff.
+enum Stored {
+    Whole(Vec<u8>),
+    Diff(Vec<CatalogLeaf>),
+}
+
+/// Stored catalog `n` in a publisher's folder: its header, its body as
+/// stored, its report and anchor bytes, and its size on disk. `None` when
+/// there is neither `{n}.bin` nor `{n}.diff`.
+type StoredCatalog = (CatalogHeader, Stored, Vec<u8>, Vec<u8>, u64);
+
+fn read_stored(dir: &FsPath, n: u64) -> Result<Option<StoredCatalog>, String> {
+    let bin = dir.join(format!("{n}.bin"));
+    let whole = match std::fs::read(&bin) {
+        Ok(b) => Some(b),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+        Err(e) => return Err(format!("{}: {e}", bin.display())),
+    };
+    if let Some(bytes) = whole {
+        if dir.join(format!("{n}.diff")).exists() {
+            // Never both (a rollback past the first diff, or a hand edit):
+            // which one holds is not decided here (review of the build, L1).
+            return Err(format!("{}: both {n}.bin and {n}.diff", dir.display()));
+        }
+        let size = bytes.len() as u64;
+        let (c, r, a): (Vec<u8>, Vec<u8>, Vec<u8>) = BorshDeserialize::try_from_slice(&bytes)
+            .map_err(|_| format!("{}: does not decode", bin.display()))?;
+        let header = CatalogHeader::deserialize(&mut c.as_slice())
+            .map_err(|_| format!("{}: catalog header does not decode", bin.display()))?;
+        return Ok(Some((header, Stored::Whole(c), r, a, size)));
+    }
+    let diff = dir.join(format!("{n}.diff"));
+    match std::fs::read(&diff) {
+        Ok(bytes) => {
+            let size = bytes.len() as u64;
+            let d = CatalogDiff::try_from_slice(&bytes)
+                .map_err(|_| format!("{}: does not decode", diff.display()))?;
+            Ok(Some((
+                d.header,
+                Stored::Diff(d.leaves),
+                d.report,
+                d.anchor,
+                size,
+            )))
+        }
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(format!("{}: {e}", diff.display())),
+    }
+}
+
+/// The leaves before with `changed` merged in by dataset (both sorted).
+fn apply_diff(before: &[CatalogLeaf], changed: &[CatalogLeaf]) -> Vec<CatalogLeaf> {
+    let mut out = Vec::with_capacity(before.len() + changed.len());
+    let (mut i, mut j) = (0, 0);
+    while i < before.len() || j < changed.len() {
+        match (before.get(i), changed.get(j)) {
+            (Some(a), Some(b)) if a.dataset == b.dataset => {
+                out.push(b.clone());
+                i += 1;
+                j += 1;
+            }
+            (Some(a), Some(b)) if a.dataset < b.dataset => {
+                out.push(a.clone());
+                i += 1;
+            }
+            (Some(a), None) => {
+                out.push(a.clone());
+                i += 1;
+            }
+            (_, Some(b)) => {
+                out.push(b.clone());
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    out
+}
+
+/// The leaves of `c` that differ from `before` (a version moved or a
+/// dataset added).
+fn diff_of(before: &Catalog, c: &Catalog) -> Vec<CatalogLeaf> {
+    c.leaves
+        .iter()
+        .filter(|l| before.find(&l.dataset).map(|i| &before.leaves[i]) != Some(*l))
+        .cloned()
+        .collect()
+}
+
+/// Catalog `n` in a publisher's folder, rebuilt from the nearest whole file
+/// at or below it, or from `start` (a checked catalog) when that is nearer,
+/// with every diff after it applied; each step is validated (leaf count,
+/// leaves root, order) and must link to the one before (review CAT-DIFF-R1
+/// M3). At most `CATALOG_CHECKPOINT - 1` diffs.
+fn rebuild_catalog(dir: &FsPath, n: u64, start: Option<&Catalog>) -> Result<Catalog, String> {
+    let mut k = n;
+    let mut cur = loop {
+        if let Some(s) = start.filter(|s| s.header.number == k) {
+            break s.clone();
+        }
+        if let Some((header, Stored::Whole(c), ..)) = read_stored(dir, k)? {
+            let f = dir.join(format!("{k}.bin"));
+            let c = Catalog::try_from_slice(&c)
+                .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
+            c.validate().map_err(|e| format!("{}: {e}", f.display()))?;
+            if c.header != header {
+                return Err(format!("{}: header and catalog differ", f.display()));
+            }
+            break c;
+        }
+        k = k
+            .checked_sub(1)
+            .ok_or_else(|| format!("{}: no whole catalog at or below {n}", dir.display()))?;
+    };
+    for m in k + 1..=n {
+        let (header, stored, ..) = read_stored(dir, m)?
+            .ok_or_else(|| format!("{}: catalog {m} missing", dir.display()))?;
+        let c = match stored {
+            Stored::Whole(c) => Catalog::try_from_slice(&c)
+                .map_err(|_| format!("{}: catalog {m} does not decode", dir.display()))?,
+            Stored::Diff(changed) => Catalog {
+                leaves: apply_diff(&cur.leaves, &changed),
+                header,
+            },
+        };
+        // Every step: its leaf count and its link to the one before; the
+        // whole check (leaves root, order) on the catalog returned, which
+        // binds every leaf it has (review of the build, M1: about 30 times
+        // less hashing than checking each step).
+        if m == n {
+            c.validate()
+                .map_err(|e| format!("{}: catalog {m}: {e}", dir.display()))?;
+        } else if c.leaves.len() as u64 != u64::from(c.header.leaf_count) {
+            return Err(format!("{}: catalog {m}: leaf count", dir.display()));
+        }
+        if c.header.prev != cur.header.root() {
+            return Err(format!(
+                "{}: catalog {m} does not follow {}",
+                dir.display(),
+                m - 1
+            ));
+        }
+        cur = c;
+    }
+    Ok(cur)
+}
+
+/// What [`BulkStore::set_aside_withdrawn`] decided.
+// One per upload, never stored: a `Box` buys nothing.
+#[allow(clippy::large_enum_variant)]
+enum Settle {
+    /// The withdrawn catalogs are set aside; the new catalog's anchor.
+    Done(AnchorView),
+    /// The held catalog with that number has the same root and still holds.
+    Same,
+    /// The held catalog with that number still holds, with another root.
+    Fork(Fork),
+}
+
+/// One dataset's part of a set-aside ([`BulkStore::plan_cut`]).
+struct Cut {
+    dataset: String,
+    /// Index of the first version that goes.
+    from: usize,
+    /// (version, root) from `from` on.
+    versions: Vec<(u32, Hash32)>,
+    /// The version at `from` when the new catalog lists it unchanged: it
+    /// stays, anchored by the new catalog.
+    keep: Option<u32>,
 }
 
 /// One held catalog.
@@ -427,12 +720,26 @@ pub struct BulkStore {
     rechecked: Mutex<BTreeMap<Hash32, (u64, bool)>>,
     /// Held catalogs by publisher and number.
     catalogs: RwLock<BTreeMap<String, BTreeMap<u64, HeldCatalog>>>,
-    /// The older catalog body read last (uploads against one catalog come
-    /// in runs).
-    old_body: Mutex<Option<(String, u64, Arc<CatalogBody>)>>,
+    /// Per publisher, the older catalog rebuilt last: uploads against one
+    /// catalog come in runs, and a joining node reads 0, 1, 2, ... (one diff
+    /// a step; review CAT-DIFF-R1 M1, L3).
+    old_body: Mutex<BTreeMap<String, (u64, Arc<CatalogBody>)>>,
+    rebuilds: Arc<tokio::sync::Semaphore>,
+    /// Bytes of stored catalogs per publisher (counted in its quota).
+    catalog_bytes: Mutex<BTreeMap<String, u64>>,
     /// Keys the book did not know or had suspended, by host time: a POST
     /// under one is refused without a chain read for [`KEY_REFUSAL_SECS`].
     refused_keys: Mutex<BTreeMap<Hash32, u64>>,
+    /// One lock per publisher (striped): a catalog upload holds it for
+    /// writing from its first check to its last write, a manifest upload for
+    /// reading (review CAT-FIX-R1 M2, M3).
+    publishers: Vec<tokio::sync::RwLock<()>>,
+    /// Digests of reports the book withdrew for good (THREATS CAT-5).
+    withdrawn: Mutex<std::collections::BTreeSet<Hash32>>,
+    /// Catalog forks by publisher (THREATS CAT-6).
+    forks: RwLock<BTreeMap<String, Fork>>,
+    /// When each fork was last read against the book (host clock).
+    fork_read: Mutex<BTreeMap<String, u64>>,
     free_per_minute: u32,
     rate: Caches,
 }
@@ -479,6 +786,107 @@ fn write_version(
     write_atomic(&dir.join(format!("v{v}.bin")), &rec).map_err(io)
 }
 
+/// Move `from` to `to`; done already (a crash between two moves) is fine.
+fn move_aside(from: &FsPath, to: &FsPath) -> std::io::Result<()> {
+    if !from.exists() && to.exists() {
+        return Ok(());
+    }
+    if let Some(p) = to.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    std::fs::rename(from, to)
+}
+
+/// Move version `v` (root `root`) of the dataset in `dir` to `withdrawn/`,
+/// its record first, then its catalog proof (a proof left alone is never
+/// read: loading stops at the first missing version, and `write_version`
+/// removes it).
+fn move_version_aside(dir: &FsPath, v: u32, root: &Hash32) -> std::io::Result<()> {
+    let to = dir
+        .join("withdrawn")
+        .join(format!("v{v}-{}.bin", root.to_hex()));
+    move_aside(&dir.join(format!("v{v}.bin")), &to)?;
+    let cf = dir.join(format!("v{v}.catalog.bin"));
+    if cf.exists() {
+        move_aside(&cf, &to.with_extension("catalog.bin"))?;
+    }
+    Ok(())
+}
+
+/// The leaf rules of a catalog against what a node holds (ADR-0059
+/// amendment 1 items 3, 4): no leaf names another root for a held version,
+/// and a dataset `prev` does not list enters at version 1 or right after the
+/// held version its leaf names. `held_at(dataset, v)` is the held root.
+fn check_catalog_leaves(
+    c: &Catalog,
+    prev: Option<&Catalog>,
+    held_at: impl Fn(&str, u32) -> Option<Hash32>,
+) -> Result<(), ApiError> {
+    for l in &c.leaves {
+        if let Some(root) = held_at(&l.dataset, l.version) {
+            if root != l.root {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_conflicting_anchor",
+                    format!(
+                        "{}: version {} is held with another root",
+                        l.dataset, l.version
+                    ),
+                ));
+            }
+        }
+        let listed_before = prev.is_some_and(|p| p.find(&l.dataset).is_some());
+        if !listed_before && l.version > 1 && held_at(&l.dataset, l.version - 1) != Some(l.prev) {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "bulk_catalog_entry",
+                format!(
+                    "{} enters at version {}: upload version {} (its previous root) first",
+                    l.dataset,
+                    l.version,
+                    l.version - 1
+                ),
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// A finalized block read behind one a held record was read at: try again.
+fn behind(at: At, block: u64) -> ApiError {
+    chain_unavailable(format!(
+        "its finalized block {} is behind block {block}, where a held record was read",
+        at.0
+    ))
+}
+
+fn chain_unavailable(e: String) -> ApiError {
+    ApiError::new(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "bulk_chain_unavailable",
+        format!("the chain could not be read ({e}); try again"),
+    )
+    .with_header("retry-after", "30".into())
+}
+
+/// Write `path` through a synced temporary file, then sync its folder: the
+/// file is whole and on disk before it counts (review CAT-DIFF-R1 M2).
+fn write_durable(path: &FsPath, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    let dir = path
+        .parent()
+        .ok_or_else(|| std::io::Error::other("no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let tmp = path.with_extension("tmp");
+    {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+    }
+    std::fs::rename(&tmp, path)?;
+    std::fs::File::open(dir)?.sync_all()
+}
+
 fn write_atomic(path: &FsPath, bytes: &[u8]) -> std::io::Result<()> {
     if let Some(p) = path.parent() {
         std::fs::create_dir_all(p)?;
@@ -517,8 +925,16 @@ impl BulkStore {
             touched: Mutex::new(BTreeMap::new()),
             rechecked: Mutex::new(BTreeMap::new()),
             catalogs: RwLock::new(BTreeMap::new()),
-            old_body: Mutex::new(None),
+            old_body: Mutex::new(BTreeMap::new()),
+            rebuilds: Arc::new(tokio::sync::Semaphore::new(MAX_REBUILDS)),
+            catalog_bytes: Mutex::new(BTreeMap::new()),
             refused_keys: Mutex::new(BTreeMap::new()),
+            publishers: (0..PUBLISHER_LOCKS)
+                .map(|_| tokio::sync::RwLock::new(()))
+                .collect(),
+            withdrawn: Mutex::new(std::collections::BTreeSet::new()),
+            forks: RwLock::new(BTreeMap::new()),
+            fork_read: Mutex::new(BTreeMap::new()),
             free_per_minute: FREE_PER_MINUTE,
             rate: Caches::new(1, 1),
         };
@@ -557,37 +973,37 @@ impl BulkStore {
             return Ok(());
         };
         let mut all: BTreeMap<String, BTreeMap<u64, HeldCatalog>> = BTreeMap::new();
+        let mut forks = BTreeMap::new();
+        let mut cat_bytes = BTreeMap::new();
         for p in pubs.flatten() {
             let mut held: BTreeMap<u64, HeldCatalog> = BTreeMap::new();
-            let file = |n: u64| p.path().join(format!("{n}.bin"));
-            let count = (0u64..).take_while(|n| file(*n).exists()).count() as u64;
-            // SCALE-5: only the newest catalog and the one before it are read
-            // whole and checked (shape, successor), as when they were taken; an
-            // older one by its header alone: its signature, its number and its
-            // link to the one before. Its leaves are checked when it is read
-            // (`catalog_body`). A catalog a day made start-up grow by a whole
-            // catalog check per day.
+            let dir = p.path();
+            let count = (0u64..)
+                .take_while(|n| {
+                    dir.join(format!("{n}.bin")).exists() || dir.join(format!("{n}.diff")).exists()
+                })
+                .count() as u64;
+            // SCALE-5: only the newest catalog and the one before it are
+            // rebuilt whole and checked (shape, successor), as when they were
+            // taken; an older one by its header alone: its signature, its
+            // number and its link to the one before. Its leaves are checked
+            // when it is read (`catalog_body`).
             let mut before: Option<Catalog> = None;
             let mut prev_root = Hash32::ZERO;
+            let mut bytes_held = 0u64;
             for n in 0..count {
-                let f = file(n);
-                let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
-                let (c, r, a): (Vec<u8>, Vec<u8>, Vec<u8>) =
-                    BorshDeserialize::try_from_slice(&bytes)
-                        .map_err(|_| format!("{}: does not decode", f.display()))?;
-                let whole = n + 2 >= count;
-                let catalog = if whole {
-                    let c = Catalog::try_from_slice(&c)
-                        .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
-                    c.validate().map_err(|e| format!("{}: {e}", f.display()))?;
+                let f = dir.join(format!("{n}"));
+                let (header, _, r, a, size) =
+                    read_stored(&dir, n)?.ok_or_else(|| format!("{}: gone", f.display()))?;
+                bytes_held += size;
+                let catalog = if n + 2 >= count {
+                    let c = rebuild_catalog(&dir, n, before.as_ref())?;
+                    if c.header != header {
+                        return Err(format!("{}: header and catalog differ", f.display()));
+                    }
                     Some(c)
                 } else {
                     None
-                };
-                let header = match &catalog {
-                    Some(c) => c.header.clone(),
-                    None => CatalogHeader::deserialize(&mut c.as_slice())
-                        .map_err(|_| format!("{}: catalog header does not decode", f.display()))?,
                 };
                 let report = SignedReport::try_from_slice(&r)
                     .map_err(|_| format!("{}: report does not decode", f.display()))?;
@@ -625,11 +1041,626 @@ impl BulkStore {
             if let (Some(last), Some(c)) = (held.values_mut().next_back(), before) {
                 last.body = Some(CatalogBody::new(c));
             }
+            let f = p.path().join(FORK_FILE);
+            let read = match std::fs::read(&f) {
+                Ok(b) => Some(b),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => None,
+                // An unreadable mark stops the start (never served as no fork).
+                Err(e) => return Err(format!("{}: {e}", f.display())),
+            };
+            if let Some(bytes) = read {
+                let fork = Fork::try_from_slice(&bytes)
+                    .map_err(|_| format!("{}: does not decode", f.display()))?;
+                for (h, r) in [&fork.held, &fork.other] {
+                    cat::verify(h, r).map_err(|e| format!("{}: {e}", f.display()))?;
+                }
+                forks.insert(fork.held.0.publisher.0.clone(), fork);
+            }
             if let Some(first) = held.values().next() {
-                all.insert(first.header.publisher.0.clone(), held);
+                let publisher = first.header.publisher.0.clone();
+                cat_bytes.insert(publisher.clone(), bytes_held);
+                all.insert(publisher, held);
             }
         }
         *self.catalogs.write().map_err(|_| "lock")? = all;
+        *self.catalog_bytes.lock().map_err(|_| "lock")? = cat_bytes;
+        *self.forks.write().map_err(|_| "lock")? = forks;
+        Ok(())
+    }
+
+    fn publisher_lock(&self, publisher: &str) -> &tokio::sync::RwLock<()> {
+        let i = usize::from(keccak256(publisher.as_bytes()).0[0]) % self.publishers.len();
+        &self.publishers[i]
+    }
+
+    /// Remember a key the book did not know or had suspended (review CL5-R5).
+    fn refuse_key(&self, why: &str, r: &SignedReport, now: u64) {
+        if why == reason::KEY {
+            if let Ok(mut k) = self.refused_keys.lock() {
+                k.insert(r.payload.key, now);
+            }
+        }
+    }
+
+    /// Where catalog `c` fits among its publisher's held catalogs, with no
+    /// chain read: held already, the next one (successor and leaf rules
+    /// checked), or its number held by another catalog (`Taken`, with the
+    /// refusal). Anything else is refused.
+    fn fit_catalog(&self, c: &Catalog, r: &SignedReport) -> Result<Fit, ApiError> {
+        let publisher = &c.header.publisher.0;
+        let n = c.header.number;
+        let newest = {
+            let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+            let held = cs.get(publisher);
+            if let Some(same) = held.and_then(|m| m.get(&n)) {
+                if same.header.root() == c.header.root() && same.report == *r {
+                    return Ok(Fit::Same(catalog_status(&same.header)));
+                }
+                return Ok(Fit::Taken(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_catalog_conflict",
+                    format!("this node holds another catalog {n} of this publisher"),
+                )));
+            }
+            held.and_then(|m| m.last_key_value()).map(|(k, _)| *k)
+        };
+        let prev = match newest {
+            None if n == 0 => None,
+            Some(k) if Some(n) == k.checked_add(1) => {
+                let p = self.held_body(publisher, k)?;
+                if let Err(e) = c.check_successor(&p.catalog) {
+                    return Ok(Fit::Broken(ApiError::new(
+                        StatusCode::CONFLICT,
+                        "bulk_catalog_not_successor",
+                        e.to_string(),
+                    )));
+                }
+                Some(p)
+            }
+            _ => {
+                let need = newest.map_or(0, |k| k.saturating_add(1));
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_catalog_gap",
+                    format!("catalogs are taken in order: this node needs catalog {need} next"),
+                )
+                .with_field("need", json!(need)));
+            }
+        };
+        let ds = self.datasets.read().map_err(|_| internal("lock"))?;
+        check_catalog_leaves(c, prev.as_ref().map(|p| &p.catalog), |d, v| {
+            ds.get(&(publisher.clone(), d.to_string()))
+                .and_then(|d| d.versions.get((v as usize).checked_sub(1)?))
+                .map(|h| h.manifest.header.root())
+        })?;
+        Ok(Fit::Next)
+    }
+
+    /// Held catalog `n` of `publisher` whole (the newest from memory; after a
+    /// set-aside, one file read).
+    fn held_body(&self, publisher: &str, n: u64) -> Result<Arc<CatalogBody>, ApiError> {
+        Ok(self
+            .catalog_body(publisher, n)
+            .map_err(|e| internal(format!("catalog: {e}")))?
+            .ok_or_else(|| internal("catalog gone"))?
+            .0)
+    }
+
+    /// [`read_anchor_at`] on this node's chain and book.
+    async fn read_at(
+        &self,
+        r: &SignedReport,
+        signer: &[u8; 20],
+        at: At,
+    ) -> Result<Reading, ApiError> {
+        read_anchor_at(
+            self.rpc.as_ref(),
+            self.pin.chain_id,
+            &self.pin.book,
+            r,
+            signer,
+            at,
+        )
+        .await
+        .map_err(chain_unavailable)
+    }
+
+    /// A report the book withdrew for good is refused from then on without a
+    /// chain read (review of CAT-5, L1: a public withdrawn catalog replayed).
+    fn remember_withdrawn(&self, digest: Hash32) {
+        if let Ok(mut w) = self.withdrawn.lock() {
+            if w.len() < MAX_WITHDRAWN {
+                w.insert(digest);
+            }
+        }
+    }
+
+    /// Catalog `c` has a number another held catalog has (THREATS CAT-5,
+    /// ADR-0059 amendment 1 item 3). `c`'s own anchor is read first, so a
+    /// catalog the book does not hold costs no other read (review CAT-FIX-R1
+    /// L3). Then every held catalog from that number on is read at the same
+    /// finalized block (M1), at or past the block each was taken at; only
+    /// when the book withdrew every one of them for good (H1: never for a
+    /// suspended key, an open dispute or a lagging read) is the set-aside
+    /// planned ([`Self::plan_cut`]), checked against `c`, and done, and `c`'s
+    /// anchor returned. Otherwise the answer is `taken`.
+    async fn set_aside_withdrawn(
+        &self,
+        c: &Catalog,
+        r: &SignedReport,
+        signer: &[u8; 20],
+        taken: ApiError,
+    ) -> Result<Settle, ApiError> {
+        let at = decision_block(self.rpc.as_ref(), self.pin.chain_id)
+            .await
+            .map_err(chain_unavailable)?;
+        let own = self.read_at(r, signer, at).await?;
+        let anchor = match own.state {
+            AnchorState::Anchored(a) => a,
+            AnchorState::Not(why) => {
+                if own.withdrawn {
+                    self.remember_withdrawn(r.payload.digest());
+                }
+                self.refuse_key(why, r, (self.now)());
+                return Err(not_anchored(why));
+            }
+        };
+        let publisher = &c.header.publisher.0;
+        // Newest first: (number, root, report, signer, block it was read at).
+        type Held5 = (u64, Hash32, SignedReport, [u8; 20], u64);
+        let held: Vec<Held5> = {
+            let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+            cs.get(publisher)
+                .map(|m| {
+                    m.range(c.header.number..)
+                        .rev()
+                        .map(|(k, h)| {
+                            let b = h.anchor.block_number;
+                            (*k, h.header.root(), h.report.clone(), h.signer, b)
+                        })
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        if let Some(b) = held.iter().map(|h| h.4).max().filter(|b| *b > at.0) {
+            return Err(behind(at, b));
+        }
+        // The held catalog with this number first: still holding, it is the
+        // same catalog re-signed (nothing to change) or a fork (CAT-6).
+        for (k, root, report, signer, _) in held.iter().rev() {
+            let x = self.read_at(report, signer, at).await?;
+            if *k == c.header.number {
+                if let AnchorState::Anchored(_) = x.state {
+                    if *root == c.header.root() {
+                        return Ok(Settle::Same);
+                    }
+                    let header = self
+                        .catalogs
+                        .read()
+                        .map_err(|_| internal("lock"))?
+                        .get(publisher)
+                        .and_then(|m| m.get(k))
+                        .map(|h| h.header.clone())
+                        .ok_or_else(|| internal("catalog gone"))?;
+                    return Ok(Settle::Fork(Fork {
+                        held: (header, report.clone()),
+                        other: (c.header.clone(), r.clone()),
+                        why: format!("two anchored catalogs {k} of this publisher"),
+                    }));
+                }
+            }
+            if !x.withdrawn {
+                return Err(taken);
+            }
+        }
+        let gone: Vec<(u64, Hash32, Hash32)> = held
+            .iter()
+            .map(|h| (h.0, h.1, h.2.payload.digest()))
+            .collect();
+        let plan = self.plan_cut(c, &gone, at).await?;
+        self.set_aside(c, r, signer, &anchor, &gone, &plan)?;
+        Ok(Settle::Done(anchor))
+    }
+
+    /// The status of held catalog `n` of `publisher` (an answer of 200).
+    fn catalog_status_of(&self, publisher: &str, n: u64) -> Result<Value, ApiError> {
+        let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+        Ok(cs
+            .get(publisher)
+            .and_then(|m| m.get(&n))
+            .map(|h| catalog_status(&h.header))
+            .unwrap_or(Value::Null))
+    }
+
+    /// Catalog `c` is not the append-only successor of the newest held one
+    /// (`broken`). A fork (THREATS CAT-6) only when both are anchored at one
+    /// finalized block, `c`'s own anchor read first (review CAT-FIX-R1 L3);
+    /// otherwise the answer is `broken`.
+    async fn broken_fork(
+        &self,
+        c: &Catalog,
+        r: &SignedReport,
+        signer: &[u8; 20],
+        broken: ApiError,
+    ) -> Result<Fork, ApiError> {
+        let at = decision_block(self.rpc.as_ref(), self.pin.chain_id)
+            .await
+            .map_err(chain_unavailable)?;
+        let own = self.read_at(r, signer, at).await?;
+        if !matches!(own.state, AnchorState::Anchored(_)) {
+            if own.withdrawn {
+                self.remember_withdrawn(r.payload.digest());
+            }
+            return Err(broken);
+        }
+        let publisher = &c.header.publisher.0;
+        let newest = self
+            .catalogs
+            .read()
+            .map_err(|_| internal("lock"))?
+            .get(publisher)
+            .and_then(|m| m.last_key_value())
+            .map(|(_, h)| {
+                (
+                    h.header.clone(),
+                    h.report.clone(),
+                    h.signer,
+                    h.anchor.block_number,
+                )
+            });
+        let Some((header, report, held_signer, block)) = newest else {
+            return Err(broken);
+        };
+        if block > at.0 {
+            return Err(behind(at, block));
+        }
+        if !matches!(
+            self.read_at(&report, &held_signer, at).await?.state,
+            AnchorState::Anchored(_)
+        ) {
+            return Err(broken);
+        }
+        Ok(Fork {
+            why: format!(
+                "catalog {} is anchored but not the append-only successor of anchored catalog {}: {}",
+                c.header.number, header.number, broken.message
+            ),
+            held: (header, report),
+            other: (c.header.clone(), r.clone()),
+        })
+    }
+
+    /// Record fork `f` (file first, then memory).
+    fn mark_fork(&self, f: &Fork) -> Result<(), ApiError> {
+        let publisher = &f.held.0.publisher.0;
+        let bytes = borsh::to_vec(f).map_err(|_| internal("encode"))?;
+        write_durable(&self.catalogs_dir().join(publisher).join(FORK_FILE), &bytes)
+            .map_err(|e| internal(format!("bulk store: {e}")))?;
+        self.forks
+            .write()
+            .map_err(|_| internal("lock"))?
+            .insert(publisher.clone(), f.clone());
+        if let Ok(mut t) = self.fork_read.lock() {
+            t.insert(publisher.clone(), (self.now)());
+        }
+        eprintln!(
+            "bulk: catalog fork of {publisher}: {} (THREATS CAT-6)",
+            f.why
+        );
+        Ok(())
+    }
+
+    /// The publisher's catalog fork, if it still stands: both sides are read
+    /// again at one finalized block at most every [`ANCHOR_RECHECK_SECS`];
+    /// when the book withdrew either side for good, the record moves to
+    /// `withdrawn/` and the mark clears.
+    async fn fork_stands(&self, publisher: &str) -> Result<Option<Fork>, ApiError> {
+        let Some(f) = self
+            .forks
+            .read()
+            .map_err(|_| internal("lock"))?
+            .get(publisher)
+            .cloned()
+        else {
+            return Ok(None);
+        };
+        let now = (self.now)();
+        let fresh = self
+            .fork_read
+            .lock()
+            .ok()
+            .and_then(|t| t.get(publisher).copied())
+            .is_some_and(|t| now.saturating_sub(t) < ANCHOR_RECHECK_SECS);
+        if fresh {
+            return Ok(Some(f));
+        }
+        // One read per publisher per window, claimed before it starts: the
+        // requests meanwhile, and after a failed read, keep the mark without
+        // reading (review of CAT-6, L3; a failed read delays a clear, never
+        // makes one).
+        if let Ok(mut t) = self.fork_read.lock() {
+            t.insert(publisher.to_string(), now);
+        }
+        let at = decision_block(self.rpc.as_ref(), self.pin.chain_id)
+            .await
+            .map_err(chain_unavailable)?;
+        let mut cleared = false;
+        for (h, r) in [&f.held, &f.other] {
+            let signer = cat::verify(h, r).map_err(|e| internal(format!("fork record: {e}")))?;
+            if self.read_at(r, &signer, at).await?.withdrawn {
+                cleared = true;
+                break;
+            }
+        }
+        if !cleared {
+            return Ok(Some(f));
+        }
+        let mut forks = self.forks.write().map_err(|_| internal("lock"))?;
+        if forks.get(publisher) == Some(&f) {
+            let dir = self.catalogs_dir().join(publisher);
+            let to = dir.join("withdrawn").join(format!(
+                "fork-{}-{}.bin",
+                f.held.0.root().to_hex(),
+                f.other.0.root().to_hex()
+            ));
+            move_aside(&dir.join(FORK_FILE), &to)
+                .map_err(|e| internal(format!("bulk store: {e}")))?;
+            forks.remove(publisher);
+            eprintln!(
+                "bulk: catalog fork of {publisher} cleared: one side withdrawn (THREATS CAT-6)"
+            );
+        }
+        // Another fork marked meanwhile stands (review of CAT-6, L2).
+        Ok(forks.get(publisher).cloned())
+    }
+
+    /// `GET /v1/bulk/{publisher}/{dataset}`, after re-reading a catalog fork
+    /// of its publisher.
+    pub async fn info_checked(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
+        self.fork_stands(publisher).await?;
+        self.info(publisher, dataset)
+    }
+
+    /// Whether `publisher` has a catalog fork mark now (no chain read).
+    fn fork_marked(&self, publisher: &str) -> Option<Fork> {
+        self.forks.read().ok()?.get(publisher).cloned()
+    }
+
+    /// What setting aside the catalogs `gone` (number, root, digest) does to
+    /// `c`'s publisher's versions, decided before anything moves. Per
+    /// dataset, the first version that goes: the first one a set-aside
+    /// catalog anchors, or an earlier one `c` names another root for whose
+    /// report the book withdrew for good, read at `at` (review of CAT-5, M3;
+    /// one still holding refuses `c`, nothing moved). Every later version
+    /// goes with it. When `c` lists that first version unchanged, it stays,
+    /// anchored by `c` (M4). Then `c` must fit what stays: the successor of
+    /// the catalog before it, every leaf agreeing.
+    async fn plan_cut(
+        &self,
+        c: &Catalog,
+        gone: &[(u64, Hash32, Hash32)],
+        at: At,
+    ) -> Result<Vec<Cut>, ApiError> {
+        let publisher = &c.header.publisher.0;
+        let roots: Vec<Hash32> = gone.iter().map(|g| g.1).collect();
+        // Per dataset: (version, root) of every held version, the first index
+        // that goes, and the reports of versions `c` contradicts.
+        let mut vs: BTreeMap<String, (Vec<(u32, Hash32)>, usize)> = BTreeMap::new();
+        let mut contradicted: Vec<(String, usize, SignedReport, [u8; 20], u64)> = Vec::new();
+        {
+            let ds = self.datasets.read().map_err(|_| internal("lock"))?;
+            for ((_, d), set) in ds
+                .range((publisher.clone(), String::new())..)
+                .take_while(|((p, _), _)| p == publisher)
+            {
+                let from = set
+                    .versions
+                    .iter()
+                    .position(|h| {
+                        h.catalog
+                            .as_ref()
+                            .is_some_and(|x| roots.contains(&x.0.root()))
+                    })
+                    .unwrap_or(set.versions.len());
+                if let Some(l) = c.find(d).map(|i| &c.leaves[i]) {
+                    let i = l.version as usize - 1;
+                    if let Some(h) = set
+                        .versions
+                        .get(i)
+                        .filter(|h| i < from && h.manifest.header.root() != l.root)
+                    {
+                        contradicted.push((
+                            d.clone(),
+                            i,
+                            h.report.clone(),
+                            h.signer,
+                            h.anchor.block_number,
+                        ));
+                    }
+                }
+                let list = set
+                    .versions
+                    .iter()
+                    .map(|h| (h.manifest.header.version, h.manifest.header.root()))
+                    .collect();
+                vs.insert(d.clone(), (list, from));
+            }
+        }
+        let mut read: BTreeMap<Hash32, bool> = BTreeMap::new();
+        for (d, i, report, signer, block) in contradicted {
+            if block > at.0 {
+                return Err(behind(at, block));
+            }
+            let digest = report.payload.digest();
+            let withdrawn = match read.get(&digest) {
+                Some(w) => *w,
+                None => {
+                    let w = self.read_at(&report, &signer, at).await?.withdrawn;
+                    read.insert(digest, w);
+                    w
+                }
+            };
+            if !withdrawn {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_conflicting_anchor",
+                    format!(
+                        "{d}: version {} is held with another root whose report the book has not withdrawn",
+                        i + 1
+                    ),
+                ));
+            }
+            if let Some(x) = vs.get_mut(&d) {
+                x.1 = x.1.min(i);
+            }
+        }
+        let mut plan = Vec::new();
+        for (d, (list, from)) in &vs {
+            if *from >= list.len() {
+                continue;
+            }
+            let keep = c
+                .find(d)
+                .map(|i| &c.leaves[i])
+                .filter(|l| list[*from] == (l.version, l.root))
+                .map(|_| list[*from].0);
+            plan.push(Cut {
+                dataset: d.clone(),
+                from: *from,
+                versions: list[*from..].to_vec(),
+                keep,
+            });
+        }
+        // `c` against what stays.
+        let n = c.header.number;
+        let prev = match n.checked_sub(1) {
+            Some(k) => Some(self.held_body(publisher, k)?),
+            None => None,
+        };
+        if let Some(p) = &prev {
+            c.check_successor(&p.catalog).map_err(|e| {
+                ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_catalog_not_successor",
+                    e.to_string(),
+                )
+            })?;
+        }
+        check_catalog_leaves(c, prev.as_ref().map(|p| &p.catalog), |d, v| {
+            let (list, from) = vs.get(d)?;
+            let stays = from + usize::from(plan.iter().any(|x| x.dataset == d && x.keep.is_some()));
+            let i = (v as usize).checked_sub(1)?;
+            (i < stays).then(|| list.get(i).map(|x| x.1)).flatten()
+        })?;
+        Ok(plan)
+    }
+
+    /// Do a planned set-aside ([`Self::plan_cut`]) for catalog `c` (report
+    /// `r`, anchor `anchor`): per dataset, its versions from the cut go to
+    /// `withdrawn/`, newest first, so a crash leaves versions 1..k on disk
+    /// (review of CAT-5, M2); a version `c` lists unchanged is then written
+    /// back under `c`'s anchor (a crash before that leaves it to be uploaded
+    /// again, never a record and proof that disagree). A dataset left with
+    /// no version leaves the list, its fork mark aside too (L3). Then the
+    /// catalogs `gone`, newest first, so the held ones on disk are always
+    /// 0..k and the next upload sets the rest aside again (CAT-FIX-R1 M3).
+    /// Their digests are refused from then on.
+    fn set_aside(
+        &self,
+        c: &Catalog,
+        r: &SignedReport,
+        signer: &[u8; 20],
+        anchor: &AnchorView,
+        gone: &[(u64, Hash32, Hash32)],
+        plan: &[Cut],
+    ) -> Result<(), ApiError> {
+        let io = |e: std::io::Error| internal(format!("bulk store: {e}"));
+        let publisher = &c.header.publisher.0;
+        let tree = plan
+            .iter()
+            .any(|x| x.keep.is_some())
+            .then(|| cat::leaves_tree(&c.leaves));
+        for cut in plan {
+            let dir = self.dataset_dir(publisher, &cut.dataset);
+            for (v, root) in cut.versions.iter().rev() {
+                move_version_aside(&dir, *v, root).map_err(io)?;
+            }
+            let key = (publisher.clone(), cut.dataset.clone());
+            let mut ds = self.datasets.write().map_err(|_| internal("lock"))?;
+            let Some(d) = ds.get_mut(&key) else { continue };
+            if d.versions.get(cut.from).map(|h| h.manifest.header.root())
+                != cut.versions.first().map(|v| v.1)
+            {
+                continue;
+            }
+            let kept = match (cut.keep, &tree) {
+                (Some(_), Some(tree)) => {
+                    let lp = c
+                        .find(&cut.dataset)
+                        .and_then(|i| c.leaf_proof_in(tree, i))
+                        .ok_or_else(|| internal("leaf proof"))?;
+                    let mut h = d.versions.swap_remove(cut.from);
+                    let proof = Box::new((c.header.clone(), lp));
+                    write_version(&dir, &h.manifest, r, anchor, Some(&*proof))?;
+                    h.report = r.clone();
+                    h.signer = *signer;
+                    h.anchor = anchor.clone();
+                    h.catalog = Some(proof);
+                    Some(h)
+                }
+                _ => None,
+            };
+            d.versions.truncate(cut.from);
+            d.versions.extend(kept);
+            if d.versions.is_empty() {
+                let f = dir.join("forked.txt");
+                if f.exists() {
+                    move_aside(&f, &dir.join("withdrawn").join("forked.txt")).map_err(io)?;
+                }
+                ds.remove(&key);
+            }
+        }
+        let dir = self.catalogs_dir().join(publisher);
+        if let Ok(mut c) = self.old_body.lock() {
+            c.remove(publisher);
+        }
+        for (k, root, digest) in gone {
+            // Whole or a diff; diffs above a set-aside one go first (newest
+            // first), so what stays is always a prefix 0..k.
+            let ext = if dir.join(format!("{k}.bin")).exists() {
+                "bin"
+            } else {
+                "diff"
+            };
+            let from = dir.join(format!("{k}.{ext}"));
+            let size = std::fs::metadata(&from).map_or(0, |m| m.len());
+            let to = dir
+                .join("withdrawn")
+                .join(format!("{k}-{}.{ext}", root.to_hex()));
+            move_aside(&from, &to).map_err(io)?;
+            if let Ok(mut b) = self.catalog_bytes.lock() {
+                if let Some(x) = b.get_mut(publisher) {
+                    *x = x.saturating_sub(size);
+                }
+            }
+            let mut cs = self.catalogs.write().map_err(|_| internal("lock"))?;
+            if let Some(m) = cs.get_mut(publisher) {
+                m.remove(k);
+                if m.is_empty() {
+                    cs.remove(publisher);
+                }
+            }
+            self.mark(*digest, false);
+            self.remember_withdrawn(*digest);
+        }
+        self.mark(r.payload.digest(), true);
+        eprintln!(
+            "bulk: set aside {} withdrawn catalog(s) of {publisher} from number {}; {} dataset(s) cut, {} kept under the new catalog (THREATS CAT-5)",
+            gone.len(),
+            gone.last().map_or(0, |g| g.0),
+            plan.len(),
+            plan.iter().filter(|x| x.keep.is_some()).count()
+        );
         Ok(())
     }
 
@@ -638,7 +1669,10 @@ impl BulkStore {
     /// newest held catalog of its publisher as its append-only successor (or
     /// number 0), each dataset entering at version 1 or after a held version
     /// its leaf names, no leaf disagreeing with a held version, and the report
-    /// recorded and accepted at the finalized block with the key active.
+    /// recorded and accepted at the finalized block with the key active. A
+    /// catalog whose number another held catalog has is taken only when the
+    /// book withdrew every held catalog from that number on: those are set
+    /// aside first (THREATS CAT-5).
     pub async fn accept_catalog(
         &self,
         catalog: &[u8],
@@ -681,107 +1715,107 @@ impl BulkStore {
         {
             return Err(not_anchored(reason::KEY));
         }
-        let conflict = |code: &'static str, s: String| ApiError::new(StatusCode::CONFLICT, code, s);
+        if self
+            .withdrawn
+            .lock()
+            .is_ok_and(|w| w.contains(&r.payload.digest()))
         {
-            let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
-            let held = cs.get(&publisher);
-            if let Some(same) = held.and_then(|m| m.get(&n)) {
-                if same.header.root() == c.header.root() && same.report == r {
-                    return Ok((StatusCode::OK, catalog_status(&same.header)));
-                }
-                return Err(conflict(
-                    "bulk_catalog_conflict",
-                    format!("this node holds another catalog {n} of this publisher"),
-                ));
-            }
-            let newest = held.and_then(|m| m.last_key_value());
-            let prev = match (n, newest) {
-                (0, None) => None,
-                (n, Some((k, p))) if Some(n) == k.checked_add(1) => {
-                    let p = p
-                        .body
-                        .clone()
-                        .ok_or_else(|| internal("the newest catalog is not held whole"))?;
-                    c.check_successor(&p.catalog)
-                        .map_err(|e| conflict("bulk_catalog_not_successor", e.to_string()))?;
-                    Some(p)
-                }
-                (_, newest) => {
-                    let need = newest.map_or(0, |(k, _)| k.saturating_add(1));
-                    return Err(conflict(
-                        "bulk_catalog_gap",
-                        format!("catalogs are taken in order: this node needs catalog {need} next"),
-                    )
-                    .with_field("need", json!(need)));
-                }
-            };
-            let ds = self.datasets.read().map_err(|_| internal("lock"))?;
-            for l in &c.leaves {
-                let d = ds.get(&(publisher.clone(), l.dataset.clone()));
-                let held_at = |v: u32| {
-                    d.and_then(|d| d.versions.get((v as usize).checked_sub(1)?))
-                        .map(|h| h.manifest.header.root())
-                };
-                if let Some(root) = held_at(l.version) {
-                    if root != l.root {
-                        return Err(conflict(
-                            "bulk_conflicting_anchor",
-                            format!(
-                                "{}: version {} is held with another root",
-                                l.dataset, l.version
-                            ),
-                        ));
-                    }
-                }
-                let listed_before = prev
-                    .as_ref()
-                    .is_some_and(|p| p.catalog.find(&l.dataset).is_some());
-                if !listed_before && l.version > 1 && held_at(l.version - 1) != Some(l.prev) {
-                    return Err(conflict(
-                        "bulk_catalog_entry",
-                        format!(
-                            "{} enters at version {}: upload version {} (its previous root) first",
-                            l.dataset,
-                            l.version,
-                            l.version - 1
-                        ),
-                    ));
-                }
-            }
+            return Err(not_anchored(reason::NOT_ACCEPTED));
         }
-        let anchor = match self.anchor_of(&r, &signer).await? {
-            AnchorState::Anchored(a) => a,
-            AnchorState::Not(why) => {
-                if why == reason::KEY {
-                    if let Ok(mut k) = self.refused_keys.lock() {
-                        k.insert(r.payload.key, now);
+        // One catalog upload of a publisher at a time, and no manifest upload
+        // of it meanwhile (review CAT-FIX-R1 M2, M3).
+        let _one = self.publisher_lock(&publisher).write().await;
+        if let Some(f) = self.fork_stands(&publisher).await? {
+            return Err(publisher_forked(&f));
+        }
+        let known = match self.fit_catalog(&c, &r)? {
+            Fit::Same(status) => return Ok((StatusCode::OK, status)),
+            Fit::Next => None,
+            Fit::Broken(e) => {
+                let f = self.broken_fork(&c, &r, &signer, e).await?;
+                self.mark_fork(&f)?;
+                return Err(publisher_forked(&f));
+            }
+            Fit::Taken(taken) => {
+                let held_n = self.catalog_status_of(&publisher, n)?;
+                match self.set_aside_withdrawn(&c, &r, &signer, taken).await? {
+                    Settle::Same => return Ok((StatusCode::OK, held_n)),
+                    Settle::Fork(f) => {
+                        self.mark_fork(&f)?;
+                        return Err(publisher_forked(&f));
                     }
+                    Settle::Done(a) => match self.fit_catalog(&c, &r)? {
+                        Fit::Next => Some(a),
+                        Fit::Same(status) => return Ok((StatusCode::OK, status)),
+                        Fit::Taken(e) | Fit::Broken(e) => return Err(e),
+                    },
                 }
-                return Err(not_anchored(why));
             }
         };
+        let anchor = match known {
+            Some(a) => a,
+            None => match self.anchor_of(&r, &signer).await? {
+                AnchorState::Anchored(a) => a,
+                AnchorState::Not(why) => {
+                    self.refuse_key(why, &r, now);
+                    return Err(not_anchored(why));
+                }
+            },
+        };
+        // Whole every `catalog_checkpoint`, else the leaves that differ from
+        // the one before (ADR-0059 amendment 2 draft 4), written durably
+        // before it counts; the diff is checked to rebuild this catalog.
+        let next = self
+            .catalogs
+            .read()
+            .map_err(|_| internal("lock"))?
+            .get(&publisher)
+            .and_then(|m| m.last_key_value())
+            .map_or(0, |(k, _)| k + 1);
+        if next != n {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "bulk_catalog_gap",
+                "another catalog was taken meanwhile; upload again",
+            ));
+        }
+        let report_bytes = borsh::to_vec(&r).map_err(|_| internal("encode"))?;
+        let (name, rec) = if n % self.limits.catalog_checkpoint.max(1) == 0 {
+            let rec = borsh::to_vec(&(catalog.to_vec(), report_bytes, anchor_to_bytes(&anchor)))
+                .map_err(|_| internal("encode"))?;
+            (format!("{n}.bin"), rec)
+        } else {
+            let before = self.held_body(&publisher, n - 1)?;
+            let leaves = diff_of(&before.catalog, &c);
+            if apply_diff(&before.catalog.leaves, &leaves) != c.leaves {
+                return Err(internal("a catalog diff does not rebuild its catalog"));
+            }
+            let d = CatalogDiff {
+                header: c.header.clone(),
+                report: report_bytes,
+                anchor: anchor_to_bytes(&anchor),
+                leaves,
+            };
+            (
+                format!("{n}.diff"),
+                borsh::to_vec(&d).map_err(|_| internal("encode"))?,
+            )
+        };
+        self.check_catalog_quota(&publisher, rec.len() as u64)?;
+        write_durable(&self.catalogs_dir().join(&publisher).join(name), &rec)
+            .map_err(|e| internal(format!("bulk store: {e}")))?;
+        if let Ok(mut b) = self.catalog_bytes.lock() {
+            *b.entry(publisher.clone()).or_default() += rec.len() as u64;
+        }
         let mut cs = self.catalogs.write().map_err(|_| internal("lock"))?;
         let held = cs.entry(publisher.clone()).or_default();
         if held.last_key_value().map_or(0, |(k, _)| k + 1) != n {
-            return Err(conflict(
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
                 "bulk_catalog_gap",
-                "another catalog was taken meanwhile; upload again".into(),
+                "another catalog was taken meanwhile; upload again",
             ));
         }
-        let rec = borsh::to_vec(&(
-            catalog.to_vec(),
-            borsh::to_vec(&r).unwrap_or_default(),
-            anchor_to_bytes(&anchor),
-        ))
-        .map_err(|_| internal("encode"))?;
-        write_atomic(
-            &self
-                .catalogs_dir()
-                .join(&publisher)
-                .join(format!("{n}.bin")),
-            &rec,
-        )
-        .map_err(|e| internal(format!("bulk store: {e}")))?;
         self.mark(r.payload.digest(), true);
         let status = catalog_status(&c.header);
         // The one before is no longer the newest: its body is read from its
@@ -802,54 +1836,136 @@ impl BulkStore {
         Ok((StatusCode::CREATED, status))
     }
 
-    /// A held catalog and its report (`GET /v1/bulk/catalogs/{publisher}/{n}`).
-    pub fn catalog_record(&self, publisher: &str, n: u64) -> Option<(Catalog, SignedReport)> {
-        let (body, report) = self.catalog_body(publisher, n).ok()??;
-        Some((body.catalog.clone(), report))
+    /// A held catalog and its report (`GET /v1/bulk/catalogs/{publisher}/{n}`);
+    /// `Err` when it is held but cannot be rebuilt (answered 500, never "not
+    /// held": review CAT-DIFF-R1 L1).
+    pub fn catalog_record(
+        &self,
+        publisher: &str,
+        n: u64,
+    ) -> Result<Option<(Catalog, SignedReport)>, String> {
+        Ok(self
+            .catalog_body(publisher, n)?
+            .map(|(body, report)| (body.catalog.clone(), report)))
+    }
+
+    /// Held catalog `n` without a rebuild (shared, not copied): the newest,
+    /// or the one rebuilt last for its publisher. `None` otherwise (also
+    /// when not held).
+    fn catalog_ready(&self, publisher: &str, n: u64) -> Option<(Arc<CatalogBody>, SignedReport)> {
+        let cs = self.catalogs.read().ok()?;
+        let h = cs.get(publisher)?.get(&n)?;
+        if let Some(b) = &h.body {
+            return Some((b.clone(), h.report.clone()));
+        }
+        let c = self.old_body.lock().ok()?;
+        let (k, b) = c.get(publisher)?;
+        (*k == n && b.catalog.header == h.header).then(|| (b.clone(), h.report.clone()))
     }
 
     /// Held catalog `n` of `publisher` whole, with its report: the newest
-    /// from memory, an older one from its file (checked against the header
-    /// taken at upload). `Ok(None)` when not held.
+    /// from memory, an older one rebuilt from its files (from the
+    /// publisher's last rebuilt catalog when that is below it and still the
+    /// held one) and checked against the header taken at upload. `Ok(None)`
+    /// when not held.
     fn catalog_body(
         &self,
         publisher: &str,
         n: u64,
     ) -> Result<Option<(Arc<CatalogBody>, SignedReport)>, String> {
-        let (header, report) = {
+        let cached = self
+            .old_body
+            .lock()
+            .ok()
+            .and_then(|c| c.get(publisher).cloned());
+        let (header, report, start) = {
             let cs = self.catalogs.read().map_err(|_| "lock")?;
-            let Some(h) = cs.get(publisher).and_then(|m| m.get(&n)) else {
+            let Some(m) = cs.get(publisher) else {
+                return Ok(None);
+            };
+            let Some(h) = m.get(&n) else {
                 return Ok(None);
             };
             if let Some(b) = &h.body {
                 return Ok(Some((b.clone(), h.report.clone())));
             }
-            (h.header.clone(), h.report.clone())
+            let start = cached
+                .filter(|(k, b)| *k <= n && m.get(k).is_some_and(|x| x.header == b.catalog.header));
+            (h.header.clone(), h.report.clone(), start)
         };
-        if let Ok(c) = self.old_body.lock() {
-            if let Some((p, k, b)) = c.as_ref() {
-                if p == publisher && *k == n && b.catalog.header == header {
-                    return Ok(Some((b.clone(), report)));
-                }
+        if let Some((k, b)) = &start {
+            if *k == n {
+                return Ok(Some((b.clone(), report)));
             }
         }
-        let f = self.catalogs_dir().join(publisher).join(format!("{n}.bin"));
-        let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
-        let (c, _, _): (Vec<u8>, Vec<u8>, Vec<u8>) = BorshDeserialize::try_from_slice(&bytes)
-            .map_err(|_| format!("{}: does not decode", f.display()))?;
-        let catalog = Catalog::try_from_slice(&c)
-            .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
+        let dir = self.catalogs_dir().join(publisher);
+        let catalog = rebuild_catalog(&dir, n, start.as_ref().map(|(_, b)| &b.catalog))?;
         if catalog.header != header {
-            return Err(format!("{}: not the catalog taken", f.display()));
+            return Err(format!(
+                "{}: catalog {n} is not the one taken",
+                dir.display()
+            ));
         }
-        catalog
-            .validate()
-            .map_err(|e| format!("{}: {e}", f.display()))?;
         let body = CatalogBody::new(catalog);
         if let Ok(mut c) = self.old_body.lock() {
-            *c = Some((publisher.to_string(), n, body.clone()));
+            c.insert(publisher.to_string(), (n, body.clone()));
         }
         Ok(Some((body, report)))
+    }
+
+    /// Stored catalog bytes of `publisher`.
+    fn catalog_bytes_of(&self, publisher: &str) -> u64 {
+        self.catalog_bytes
+            .lock()
+            .ok()
+            .and_then(|c| c.get(publisher).copied())
+            .unwrap_or(0)
+    }
+
+    /// Room for `add` more catalog bytes of `publisher`: its datasets'
+    /// latest versions and stored catalogs within its quota, and the node
+    /// within its total (ADR-0059 amendment 2 draft 4 item 7).
+    fn check_catalog_quota(&self, publisher: &str, add: u64) -> Result<(), ApiError> {
+        let (mine, all) = {
+            let ds = self.datasets.read().map_err(|_| internal("lock"))?;
+            ds.iter().fold((0u64, 0u64), |(mine, all), ((p, _), d)| {
+                let b = d.latest().map_or(0, |h| h.manifest.header.byte_count);
+                (
+                    if p == publisher {
+                        mine.saturating_add(b)
+                    } else {
+                        mine
+                    },
+                    all.saturating_add(b),
+                )
+            })
+        };
+        let cats: u64 = self
+            .catalog_bytes
+            .lock()
+            .map(|c| c.values().sum())
+            .unwrap_or(0);
+        let mine = mine
+            .saturating_add(self.catalog_bytes_of(publisher))
+            .saturating_add(add);
+        if mine > self.limits.quota_bytes {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bulk_quota_exceeded",
+                format!(
+                    "a publisher may hold at most {} bytes (datasets and catalogs) on this node",
+                    self.limits.quota_bytes
+                ),
+            ));
+        }
+        if all.saturating_add(cats).saturating_add(add) > self.limits.max_total_bytes {
+            return Err(ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "bulk_node_full",
+                "this node holds no more bulk data",
+            ));
+        }
+        Ok(())
     }
 
     fn manifests_dir(&self) -> PathBuf {
@@ -964,14 +2080,7 @@ impl BulkStore {
             signer,
         )
         .await
-        .map_err(|e| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "bulk_chain_unavailable",
-                format!("the chain could not be read ({e}); try again"),
-            )
-            .with_header("retry-after", "30".into())
-        })
+        .map_err(chain_unavailable)
     }
 
     /// Take a manifest and its signed report (see the module docs).
@@ -990,6 +2099,10 @@ impl BulkStore {
                 format!("signature: {e}"),
             )
         })?;
+        let _one = self.publisher_lock(&m.header.publisher.0).read().await;
+        if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
+            return Err(publisher_forked(&f));
+        }
         self.accept_held(m, r, signer, None, None).await
     }
 
@@ -1002,6 +2115,11 @@ impl BulkStore {
         number: u64,
     ) -> Result<(StatusCode, Value), ApiError> {
         let m = decode_manifest(manifest)?;
+        // Held until the version is written: no catalog is set aside meanwhile.
+        let _one = self.publisher_lock(&m.header.publisher.0).read().await;
+        if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
+            return Err(publisher_forked(&f));
+        }
         let h = &m.header;
         let (signer, anchor) = {
             let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
@@ -1017,8 +2135,19 @@ impl BulkStore {
                 })?;
             (c.signer, c.anchor.clone())
         };
-        // The newest catalog is in memory; an older one is one file read (rare:
-        // uploads follow the newest catalog).
+        // The newest catalog is in memory; an older one is rebuilt from its
+        // files, at most `MAX_REBUILDS` at a time (rare: uploads follow the
+        // newest catalog; review of the build, M1).
+        let _permit = if self.catalog_ready(&h.publisher.0, number).is_some() {
+            None
+        } else {
+            Some(
+                self.rebuilds
+                    .acquire()
+                    .await
+                    .map_err(|_| internal("rebuilds"))?,
+            )
+        };
         let (body, report) = self
             .catalog_body(&h.publisher.0, number)
             .map_err(|e| internal(format!("catalog: {e}")))?
@@ -1068,17 +2197,9 @@ impl BulkStore {
     /// The digest the book holds under `(key, sequence)` at the finalized
     /// block (zero: none).
     async fn sequence_used(&self, key: &Hash32, sequence: u64) -> Result<Hash32, ApiError> {
-        let unavailable = |e: String| {
-            ApiError::new(
-                StatusCode::SERVICE_UNAVAILABLE,
-                "bulk_chain_unavailable",
-                format!("the chain could not be read ({e}); try again"),
-            )
-            .with_header("retry-after", "30".into())
-        };
         read_sequence(self.rpc.as_ref(), &self.pin.book, key, sequence)
             .await
-            .map_err(unavailable)
+            .map_err(chain_unavailable)
     }
 
     async fn accept_held(
@@ -1139,40 +2260,96 @@ impl BulkStore {
             }
             self.check_quota(&ds, &key, h.byte_count)?;
         }
-        let anchor = match known {
-            Some(a) => a,
-            None => match self.anchor_of(&r, &signer).await? {
-                AnchorState::Anchored(a) => a,
-                AnchorState::Not(why) => {
-                    if why == reason::KEY {
-                        if let Ok(mut k) = self.refused_keys.lock() {
-                            k.insert(r.payload.key, now);
-                        }
-                    }
-                    return Err(not_anchored(why));
-                }
-            },
-        };
-        // A held manifest with another root for this version: if the book no
-        // longer holds it (its key was compromised from before it, review
-        // CL5-R4), it and every later version are withdrawn and this one
-        // takes its place; if it still holds, two anchored manifests exist
-        // for one version (a fork).
+        // A held manifest for this version under another report is read at
+        // the same finalized block as this one (review CAT-FIX-R1 M1).
         let held_other = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
             ds.get(&key)
                 .and_then(|d| d.versions.get(h.version as usize - 1))
-                .filter(|o| o.manifest.header.root() != root)
-                .map(|o| (o.manifest.header.root(), o.report.clone(), o.signer))
+                .filter(|o| o.report != r)
+                .map(|o| {
+                    let b = o.anchor.block_number;
+                    (o.manifest.header.root(), o.report.clone(), o.signer, b)
+                })
         };
-        let withdraw = match held_other {
-            Some((other_root, other_report, other_signer)) => {
-                match self.anchor_of(&other_report, &other_signer).await? {
-                    AnchorState::Not(_) => Some(other_root),
-                    AnchorState::Anchored(_) => None,
+        // Through a catalog, the same root whose held report was read as
+        // holding within the recheck window: nothing to change, no chain read
+        // (a refresh uploads every unchanged version again under its newest
+        // catalog). A manifest's own new report always reads the chain: it is
+        // how a publisher re-signs after a compromise the cache has not seen
+        // yet (CL5-6).
+        if let Some((other_root, report, _, _)) = held_other.as_ref().filter(|_| catalog.is_some())
+        {
+            let fresh = self
+                .rechecked
+                .lock()
+                .ok()
+                .and_then(|c| c.get(&report.payload.digest()).copied())
+                .is_some_and(|(t, held)| held && now.saturating_sub(t) < ANCHOR_RECHECK_SECS);
+            if *other_root == root && fresh {
+                let ds = self.datasets.read().map_err(|_| internal("lock"))?;
+                if let Some(o) = ds
+                    .get(&key)
+                    .and_then(|d| d.versions.get(h.version as usize - 1))
+                {
+                    return Ok((StatusCode::OK, self.missing_json(&o.manifest)));
                 }
             }
-            None => None,
+        }
+        let at = match (&known, &held_other) {
+            (Some(_), None) => None,
+            _ => Some(
+                decision_block(self.rpc.as_ref(), self.pin.chain_id)
+                    .await
+                    .map_err(chain_unavailable)?,
+            ),
+        };
+        let anchor = match (known, at) {
+            (Some(a), _) => a,
+            (None, Some(at)) => match self.read_at(&r, &signer, at).await?.state {
+                AnchorState::Anchored(a) => a,
+                AnchorState::Not(why) => {
+                    self.refuse_key(why, &r, now);
+                    return Err(not_anchored(why));
+                }
+            },
+            (None, None) => return Err(internal("no block read")),
+        };
+        // Another root for this version: withdrawn for good (its key
+        // compromised from before it, review CL5-R4), it and every later
+        // version go and this one takes its place; still anchored, two
+        // anchored manifests exist for one version (a fork, below); not
+        // decided yet (an open dispute, a suspended key), wait (CAT-FIX-R1
+        // H1). The same root under another report is re-anchored (CL5-6)
+        // only when the held report no longer holds, so nobody moves a
+        // version's anchor to another catalog that lists it while its own
+        // holds (review of CAT-5, M4).
+        let (withdraw, keep_anchor) = match (held_other, at) {
+            (Some((other_root, report, other_signer, block)), Some(at)) => {
+                if block > at.0 {
+                    return Err(behind(at, block));
+                }
+                let x = self.read_at(&report, &other_signer, at).await?;
+                let holds = matches!(x.state, AnchorState::Anchored(_));
+                self.mark(report.payload.digest(), holds);
+                match x.state {
+                    _ if other_root == root => (None, holds),
+                    AnchorState::Anchored(_) => (None, false),
+                    AnchorState::Not(_) if x.withdrawn => (Some(other_root), false),
+                    AnchorState::Not(why) => {
+                        return Err(ApiError::new(
+                            StatusCode::CONFLICT,
+                            "bulk_conflicting_anchor",
+                            format!(
+                                "version {} is held with another root whose report the book has not decided on ({why}); try again later",
+                                h.version
+                            ),
+                        )
+                        .with_header("retry-after", "60".into()))
+                    }
+                }
+            }
+            _ => (None, false),
         };
         let mut ds = self.datasets.write().map_err(|_| internal("lock"))?;
         self.check_quota(&ds, &key, h.byte_count)?;
@@ -1181,23 +2358,14 @@ impl BulkStore {
         if let Some(other_root) = withdraw {
             let i = h.version as usize - 1;
             if d.versions.get(i).map(|o| o.manifest.header.root()) == Some(other_root) {
-                for w in d.versions.drain(i..) {
-                    let v = w.manifest.header.version;
-                    let to = dir
-                        .join("withdrawn")
-                        .join(format!("v{v}-{}.bin", w.manifest.header.root().to_hex()));
-                    if let Some(parent) = to.parent() {
-                        std::fs::create_dir_all(parent)
-                            .map_err(|e| internal(format!("bulk store: {e}")))?;
-                    }
-                    std::fs::rename(dir.join(format!("v{v}.bin")), &to)
+                // Newest first, memory after the files: a crash leaves
+                // versions 1..k on disk (review of CAT-5, M2).
+                for w in d.versions[i..].iter().rev() {
+                    let h = &w.manifest.header;
+                    move_version_aside(&dir, h.version, &h.root())
                         .map_err(|e| internal(format!("bulk store: {e}")))?;
-                    let cf = dir.join(format!("v{v}.catalog.bin"));
-                    if cf.exists() {
-                        std::fs::rename(&cf, to.with_extension("catalog.bin"))
-                            .map_err(|e| internal(format!("bulk store: {e}")))?;
-                    }
                 }
+                d.versions.truncate(i);
                 if let Some(prev) = d.versions.last() {
                     m.check_successor(&prev.manifest).map_err(|e| {
                         ApiError::new(StatusCode::CONFLICT, "bulk_not_successor", e.to_string())
@@ -1207,6 +2375,9 @@ impl BulkStore {
         }
         if let Some(other) = d.versions.get_mut(h.version as usize - 1) {
             if other.manifest.header.root() == root && other.report != r {
+                if keep_anchor {
+                    return Ok((StatusCode::OK, self.missing_json(&other.manifest)));
+                }
                 write_version(&dir, &m, &r, &anchor, catalog.as_deref())?;
                 self.mark(r.payload.digest(), true);
                 other.report = r;
@@ -1259,8 +2430,13 @@ impl BulkStore {
         key: &Key,
         bytes: u64,
     ) -> Result<(), ApiError> {
-        let mut publisher_bytes = bytes;
-        let mut total = bytes;
+        let cats = self
+            .catalog_bytes
+            .lock()
+            .map(|c| c.clone())
+            .unwrap_or_default();
+        let mut publisher_bytes = bytes.saturating_add(cats.get(&key.0).copied().unwrap_or(0));
+        let mut total = bytes.saturating_add(cats.values().sum());
         let mut count = 1usize;
         for (k, d) in ds {
             let b = d.latest().map_or(0, |h| h.manifest.header.byte_count);
@@ -1592,18 +2768,25 @@ impl BulkStore {
     /// serving (review CL5-R4); none holding is a refusal.
     async fn serving(&self, key: &Key) -> Result<Held, ApiError> {
         type Version = (Hash32, SignedReport, [u8; 20]);
-        let versions: Vec<Version> = {
+        let (versions, in_catalog): (Vec<Version>, bool) = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
             let d = ds.get(key).ok_or_else(unknown_dataset)?;
             if d.forked.is_some() {
                 return Err(forked(d));
             }
-            d.versions
+            let v = d
+                .versions
                 .iter()
                 .rev()
                 .map(|h| (h.manifest.header.root(), h.report.clone(), h.signer))
-                .collect()
+                .collect();
+            (v, d.versions.iter().any(|h| h.catalog.is_some()))
         };
+        if in_catalog {
+            if let Some(f) = self.fork_stands(&key.0).await? {
+                return Err(catalog_forked(&f));
+            }
+        }
         let mut first_refusal = None;
         for (root, report, signer) in versions {
             let now = (self.now)();
@@ -1664,6 +2847,15 @@ impl BulkStore {
     /// in id order. `total` counts every match; `next` is the cursor of the
     /// page after (`null` on the last).
     pub fn list(&self, q: &ListQuery) -> Result<Value, ApiError> {
+        // Publishers with a catalog fork mark (taken before, never under, the
+        // datasets lock).
+        let forked_pubs: std::collections::BTreeSet<String> = self
+            .forks
+            .read()
+            .map_err(|_| internal("lock"))?
+            .keys()
+            .cloned()
+            .collect();
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
         let matches = |p: &str, d: &str| {
             let id = format!("{p}/{d}");
@@ -1688,7 +2880,9 @@ impl BulkStore {
                 more = true;
                 continue;
             }
-            page.push((p, d, (h, x.forked.is_some())));
+            let cat_fork =
+                forked_pubs.contains(p) && x.versions.iter().any(|h| h.catalog.is_some());
+            page.push((p, d, (h, x.forked.is_some() || cat_fork)));
         }
         let next = more
             .then(|| page.last().map(|(p, d, _)| format!("{p}/{d}")))
@@ -1718,12 +2912,17 @@ impl BulkStore {
 
     /// `GET /v1/bulk/{publisher}/{dataset}`.
     pub fn info(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
+        // The mark is read before, never under, the datasets lock.
+        let mark = self.fork_marked(publisher);
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
         let d = ds
             .get(&(publisher.to_string(), dataset.to_string()))
             .ok_or_else(unknown_dataset)?;
         if d.forked.is_some() {
             return Err(forked(d));
+        }
+        if let Some(f) = mark.filter(|_| d.versions.iter().any(|h| h.catalog.is_some())) {
+            return Err(catalog_forked(&f));
         }
         let h = d.latest().ok_or_else(unknown_dataset)?;
         let tree = shards_tree(&h.manifest.shards);
@@ -1953,6 +3152,45 @@ fn forked(d: &Dataset) -> ApiError {
                 .unwrap_or("two anchored manifests for one version")
         ),
     )
+}
+
+/// An upload refused while the publisher's catalogs are forked (THREATS CAT-6).
+fn publisher_forked(f: &Fork) -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "bulk_publisher_forked",
+        format!(
+            "this publisher's catalogs are forked ({}): nothing of it is taken until the book withdraws either side",
+            f.why
+        ),
+    )
+    .with_field("fork", fork_json(f))
+}
+
+/// A catalog dataset not served while its publisher's catalogs are forked.
+fn catalog_forked(f: &Fork) -> ApiError {
+    ApiError::new(
+        StatusCode::CONFLICT,
+        "bulk_dataset_forked",
+        format!(
+            "not served: this publisher's catalogs are forked ({}) until the book withdraws either side",
+            f.why
+        ),
+    )
+    .with_field("fork", fork_json(f))
+}
+
+/// The fork's two sides: both headers and reports, for anyone to check.
+fn fork_json(f: &Fork) -> Value {
+    let side = |(h, r): &(CatalogHeader, SignedReport)| {
+        json!({
+            "number": h.number,
+            "root": h.root().to_string(),
+            "header": hex0x(&borsh::to_vec(h).unwrap_or_default()),
+            "report": hex0x(&borsh::to_vec(r).unwrap_or_default()),
+        })
+    };
+    json!({"why": f.why, "held": side(&f.held), "other": side(&f.other)})
 }
 
 fn too_large(e: &ShardEntry) -> ApiError {
@@ -2293,11 +3531,12 @@ async fn info(
     client: Option<Extension<ClientKey>>,
     path: Result<Path<(String, String)>, PathRejection>,
 ) -> Response {
-    let r = (|| {
+    let r = async {
         limited(&store, client)?;
         let (p, d) = path_ids(path)?;
-        store.info(&p, &d)
-    })();
+        store.info_checked(&p, &d).await
+    }
+    .await;
     match r {
         Ok(v) => no_store(StatusCode::OK, v),
         Err(e) => e.into_response(),
@@ -2408,25 +3647,50 @@ async fn get_catalog(
     client: Option<Extension<ClientKey>>,
     path: Result<Path<(String, String)>, PathRejection>,
 ) -> Response {
-    let r = (|| -> Result<Value, ApiError> {
+    let r = async {
         limited(&store, client)?;
         let Path((p, n)) = path.map_err(|e| bad_request(e.body_text()))?;
         let n: u64 = n.parse().map_err(|_| bad_request("n: a catalog number"))?;
-        let (c, rep) = store.catalog_record(&p, n).ok_or_else(|| {
-            ApiError::new(
-                StatusCode::NOT_FOUND,
-                "bulk_unknown_catalog",
-                "this node holds no such catalog",
-            )
-        })?;
-        Ok(json!({
+        // The newest, or the one rebuilt last, at once; an older catalog is
+        // rebuilt from its files a few at a time, off the async threads, the
+        // permit held by the rebuild itself (review CAT-DIFF-R1 L3, review
+        // of the build M2).
+        let found = match store.catalog_ready(&p, n) {
+            Some((b, rep)) => Ok(Some((b.catalog.clone(), rep))),
+            None => {
+                let permit = store
+                    .rebuilds
+                    .clone()
+                    .acquire_owned()
+                    .await
+                    .map_err(|_| internal("rebuilds"))?;
+                let (s, q) = (store.clone(), p.clone());
+                tokio::task::spawn_blocking(move || {
+                    let _permit = permit;
+                    s.catalog_record(&q, n)
+                })
+                .await
+                .map_err(|_| internal("rebuild task"))?
+            }
+        };
+        let (c, rep) = found
+            .map_err(|e| internal(format!("catalog: {e}")))?
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "bulk_unknown_catalog",
+                    "this node holds no such catalog",
+                )
+            })?;
+        Ok::<Value, ApiError>(json!({
             "publisher": p,
             "number": n,
             "root": c.header.root().to_string(),
             "catalog": hex0x(&borsh::to_vec(&c).unwrap_or_default()),
             "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
         }))
-    })();
+    }
+    .await;
     match r {
         Ok(v) => no_store(StatusCode::OK, v),
         Err(e) => e.into_response(),

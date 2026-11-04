@@ -2,9 +2,10 @@
 
 ## Status
 Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) accepted
-2026-11-03 after review THREATS CAT-R1, built except item 3's withdrawn-catalog and fork-marking rules (THREATS
-CAT-5, CAT-6); amendment 2 (catalogs kept small on disk) draft 2 after review CAT-RET-R1,
-not built (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+2026-11-03 after review THREATS CAT-R1, built (item 3's withdrawn-catalog and fork-marking rules
+on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
+amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
+CAT-DIFF-R1, built 2026-11-04 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -126,7 +127,11 @@ to the newest manifest of each of its datasets.
    every dataset of n, and moves each by at most one version: the same leaf, or version v + 1
    whose leaf names version v's root as its previous root. A dataset enters a catalog at version
    1 (previous root zero), or, for a dataset whose versions so far have their own reports, at
-   the next version, naming the newest of those (CAT-R1 L2). A node that sees an anchored
+   the next version, naming the newest of those (CAT-R1 L2). A catalog counts as withdrawn
+   only on the book's final word, read at one finalized block: its fact holds no value or
+   another report, another signature holds its payload, or it is disputed with its key
+   compromised; never a suspended key, an open dispute or a lagging read (THREATS CAT-5).
+   A node that sees an anchored
    catalog break this, or an anchored catalog n that differs from the one it holds, marks the
    publisher's catalog datasets forked (served no more) until the other side reads withdrawn,
    when the mark clears by itself (CAT-R1 L4, as R-BULK-5).
@@ -181,28 +186,52 @@ catalog of a publisher start at any anchored catalog n. The review (THREATS CAT-
 one version), and that pruning blocks recovery from a stolen key and strands versions a slow node
 has not taken yet. Draft 1 is withdrawn.
 
-**Draft 2** (not built; to be reviewed again):
+**Draft 2** (2026-11-04): item 1, the missing parts of item 3, came first; every catalog kept but
+stored small; joining from catalog 0 as built. Review CAT-FIX-R1 asked three changes before it is
+built (a diff whose base is set aside, a diff route for joining, checkpoints for old rebuilds).
 
-1. **First, the missing parts of item 3** (THREATS CAT-5, CAT-6): a catalog the book withdrew is
-   set aside before a successor is checked, and a conflicting anchored catalog marks the
-   publisher's catalog datasets forked, with both headers, both reports and the leaf proofs kept as
-   the fork record (about 2 KiB).
-2. **Every catalog kept, but small on disk.** A node keeps the newest catalog whole and stores
-   each older one as the leaves that differ from the next catalog, rebuilt when asked
-   (`GET /v1/bulk/catalogs/{publisher}/{n}` answers the same bytes as today). Nothing a client or a
-   peer checks changes. With 483 of 9,044 datasets changed on the first refresh day, a day costs
-   about 60 KB instead of 1 MB. Catalog bytes count against the publisher's byte quota.
-3. **Joining stays as built:** a new node takes catalogs from 0 in order, so every node checks
-   every successor.
+**Draft 3** (2026-11-04) kept the newest catalog whole and rewrote each older one as a reverse
+diff against the next. Review THREATS CAT-DIFF-R1 ("build with changes") found that an
+interrupted set-aside could leave diffs whose base was gone (the node would not start), that
+joining nodes read catalogs upward while reverse diffs rebuild downward, and that rewriting
+files deletes a whole catalog before its diff is durable. It proposed forward diffs; draft 4
+takes them.
 
-Review CAT-FIX-R1 (2026-11-04) asks three changes before draft 2 is built: a catalog stored as a
-diff against the next must be written whole first when the next is set aside; joining gets cheaper
-only with a diff route beside the unchanged `GET`; and rebuilding an old catalog from a year of
-diffs needs periodic whole checkpoints and a cache. A first build of item 1 was reviewed (THREATS
-CAT-FIX-R1: it set catalogs aside on temporary refusals and its fork marks could not clear) and
-reverted before it shipped; item 1 is rebuilt with the review's rules (THREATS CAT-5, CAT-6).
+**Draft 4** (2026-11-04, after review CAT-DIFF-R1; built the same day, `catalog_checkpoint` 32):
 
-## Alternatives## Alternatives
+1. **Item 3 complete** (THREATS CAT-5, CAT-6, built 2026-11-04 after reviews CAT-FIX-R1,
+   CAT-FIX-R2 and CAT-6-R1).
+2. **Forward diffs, each file written once.** A catalog whose number is a multiple of 32 is
+   stored whole (`{n}.bin`, as today); any other is stored as `{n}.diff`: its header, report and
+   anchor read, and the leaves of n that differ from catalog n - 1 (a version moved or a dataset
+   added; item 3 lets nothing else change). Files are never rewritten or removed, except by a
+   set-aside, which moves them newest first, so the files left are always a prefix 0..k. A whole
+   file may exist at any number (the catalogs taken before this change are whole).
+3. **Rebuild.** Catalog n is rebuilt from the nearest whole file at or below it plus every diff
+   after it, at most 31; each step is checked with `validate()` (leaf count, leaves root, order)
+   and against its stored header. The newest catalog is held whole in memory, as now; an older
+   one goes through a cache of one rebuilt catalog per publisher, so a node joining (reading 0, 1,
+   2, ...) pays one diff per step. Each step checks its leaf count and link; the catalog returned
+   is checked whole. A `GET` rebuilds off the async threads; an upload naming an older catalog
+   rebuilds in place; at most two rebuilds at a time (review of the build, CAT-DIFF-R2).
+4. **Durability.** A new diff or whole file is written to a temporary name, synced, renamed, and
+   the folder synced, before the catalog counts as taken. A failed write refuses the upload (the
+   publisher sends it again); nothing held is touched.
+5. **Start-up.** The newest catalog is rebuilt and checked whole (at most 31 diffs, about what
+   SCALE-5's two-catalog check costs); older ones are checked by header, signature and link, as
+   now. A diff that cannot be applied when asked answers 500, never "not held".
+6. **Unchanged for clients and peers.** `GET /v1/bulk/catalogs/{publisher}/{n}` answers the same
+   bytes (Borsh is canonical). A new node still takes catalogs from 0 in order.
+7. **Quota.** Catalog bytes (whole and diffs) count against the publisher's byte quota.
+
+**Cost.** The first refresh changed 483 of 9,044 leaves: a diff of about 55 KB plus a whole 1 MB
+catalog every 32 days, about 86 KB a day instead of 1 MB (live 2026-11-04: `0.bin` 1,016,139
+bytes, `1.bin` 1,018,286 bytes). At the 50,000-leaf cap with 5 % of leaves changing a day: about
+0.46 MB a day instead of 6 MB. At 100 % change a diff is about a whole catalog (3 % worse than
+today). Storing a moved leaf as its index and new root only would make diffs about 3 times
+smaller; left for later.
+
+## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and
   replay book `OnyxSignedBook` already has, and needs its own review; rejected.
 - One Merkle tree over all rows of a dataset: an append would rebuild it, and a node would need

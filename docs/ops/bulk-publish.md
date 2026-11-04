@@ -133,6 +133,7 @@ catalog anchors cannot back a storage deal yet (ADR-0059 amendment 1 item 7).
 | `bulk_not_anchored` after the wait | The anchor is not final yet, or not in this node's book | Run upload again later; check `--book` is the node's book |
 | `bulk_quota_exceeded` | The node's limit for one publisher (16 GiB by default) | Ask the operator to raise `ONYX_BULK_QUOTA_GIB` |
 | `bulk_not_servable` when reading | Your key was marked compromised or suspended | See "Lost or stolen key" |
+| `bulk_publisher_forked` or `bulk_dataset_forked` with `fork` | Two anchored catalogs of yours cannot both stand (a stolen key, or two machines publishing) | See "Lost or stolen key"; the mark clears by itself once the book withdraws one side |
 
 **Lost or stolen key.** Tell the reviewer at once, with the time you think it was stolen. The
 reviewer marks the key compromised from that time: what it signed after that time stops counting
@@ -144,6 +145,24 @@ time can be signed again with the new key (`sign`, `anchor`, `upload` on its fol
 less than 7 days old. A lost (not stolen) key is only retired: what it signed keeps being served,
 and your next version is signed with the new key.
 
+**A stolen key and catalogs** (THREATS CAT-5, CAT-6), in this order:
+1. The reviewer marks the stolen key compromised (`markCompromised`) with `since` at or before the
+   time the book recorded the thief's first catalog (`report(digest)` gives `recordedAt`). Never
+   clear a dispute about your catalog with `resolveFact(fact, 0)` first: that withdraws your side,
+   and nodes holding the thief's catalog would keep it.
+2. Wait until that transaction is final (about 15 minutes on Base Sepolia).
+3. Build your replacement from your last good catalog (`catalog-build --prev` that catalog's
+   file), sign it with the new key, anchor it and upload it. Nodes set the thief's catalogs aside
+   and take yours; a dataset version yours lists unchanged keeps serving.
+4. Run `upload --catalog N` for your datasets again.
+
+Posted before step 2 is final, your replacement and the thief's catalog are both anchored: every
+node that holds the thief's catalog marks your catalog datasets forked (not served, uploads
+refused) until the compromise is final and read, at most 5 minutes later. While a fork stands
+the node serves none of your catalog datasets, even versions signed by another key; with an
+equivocation alone (one key, one number) the key is only suspended. Two machines publishing
+catalogs under two keys fork you the same way: publish from one place.
+
 ## For the operator
 
 - Run the node with `ONYX_BULK_DIR` (and the signed book pinned in its manifest; docs/ops/config.md
@@ -154,3 +173,9 @@ and your next version is signed with the new key.
   `cast send <book> 'registerKey(string,address,string,bytes32,string)' <publisher id> <address> <domain> <provenance hash> "bulk publisher reviewed"`
   (the reviewer key never goes on the node).
 - To stop serving a dataset, remove its folder under `ONYX_BULK_DIR/manifests/` and restart.
+- `ONYX_BULK_DIR/catalogs/<publisher>/` holds every 32nd catalog whole (`{n}.bin`) and the others
+  as diffs (`{n}.diff`); never delete one in the middle (every later diff up to the next whole one
+  needs it), and never roll the node back to a release from before diffs once a `.diff` exists
+  (it would not see them; a number with both files stops the start). Catalogs set aside go to
+  `withdrawn/`; `fork.bin` is a catalog fork record (THREATS
+  CAT-6). Catalog bytes count in the publisher's quota.

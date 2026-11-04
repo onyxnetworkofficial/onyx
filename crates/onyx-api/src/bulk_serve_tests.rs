@@ -17,6 +17,8 @@ use tower::ServiceExt;
 const BOOK: [u8; 20] = [0xB0; 20];
 const CHAIN: u64 = 31_337;
 const SECRET: [u8; 32] = [0x42; 32];
+/// The publisher's next key, after a theft of the first (THREATS CAT-5).
+const SECRET2: [u8; 32] = [0x43; 32];
 const FIN: [u8; 32] = [0xF1; 32];
 const T0: u64 = 1_800_000_000;
 
@@ -39,6 +41,8 @@ struct Book {
     seqs: BTreeMap<(Hash32, u64), Hash32>,
     down: bool,
     reads: u64,
+    /// The finalized block's number when not 0x64 (a lagging read).
+    fin: Option<u64>,
 }
 
 pub(crate) struct Node(Mutex<Book>);
@@ -61,7 +65,8 @@ impl JsonRpc for Node {
                 "eth_chainId" => json!(format!("0x{CHAIN:x}")),
                 "eth_getBlockByNumber" => {
                     assert_eq!(p[0], "finalized");
-                    json!({"number": "0x64", "hash": hex0x(&FIN), "timestamp": format!("0x{T0:x}")})
+                    let n = c.fin.unwrap_or(0x64);
+                    json!({"number": format!("0x{n:x}"), "hash": hex0x(&FIN), "timestamp": format!("0x{T0:x}")})
                 }
                 "eth_call" => {
                     assert_eq!(
@@ -128,6 +133,45 @@ impl Node {
         let mut c = self.0.lock().expect("ok");
         let fact = keccak256(&r.payload.digest().0);
         c.facts.insert(fact, (0, Hash32::ZERO, 0));
+    }
+
+    /// The fact of `r` is disputed (open: it may be resolved back).
+    fn dispute(&self, r: &SignedReport) {
+        let mut c = self.0.lock().expect("ok");
+        let fact = keccak256(&r.payload.digest().0);
+        c.facts.insert(fact, (2, Hash32::ZERO, 0));
+    }
+
+    /// The key of `r` is suspended (or reinstated).
+    fn suspend(&self, r: &SignedReport, on: bool) {
+        let mut c = self.0.lock().expect("ok");
+        if let Some(k) = c.keys.get_mut(&r.payload.key) {
+            k.1 = on;
+        }
+    }
+
+    /// The life of `r`'s key (1 active, 2 retired, 3 compromised).
+    fn life(&self, r: &SignedReport, l: u8) {
+        let mut c = self.0.lock().expect("ok");
+        if let Some(k) = c.keys.get_mut(&r.payload.key) {
+            k.0 = l;
+        }
+    }
+
+    fn reads(&self) -> u64 {
+        self.0.lock().expect("ok").reads
+    }
+
+    /// Record and accept `r`, signed with `secret`'s key.
+    fn anchor_by(&self, r: &SignedReport, secret: &[u8; 32]) {
+        let signer = onyx_bulk::anchor::address_of(secret).expect("ok");
+        self.0
+            .lock()
+            .expect("ok")
+            .keys
+            .entry(r.payload.key)
+            .or_insert((1, false, signer));
+        self.anchor(r);
     }
 
     /// Record and accept `r` in the book (a posted, final report).
@@ -1086,6 +1130,7 @@ async fn cat_r1_one_catalog_report_anchors_its_manifests() {
     assert_eq!(
         again
             .catalog_record("example.publisher", 0)
+            .expect("rebuilt")
             .map(|(c, _)| c.header.root()),
         Some(c0.header.root())
     );
@@ -1134,15 +1179,16 @@ async fn cat_r1_catalogs_are_taken_in_order_as_append_only_successors() {
     assert_eq!(w.post_in(&m2, 1).await.expect("v2").0, StatusCode::CREATED);
     // Another catalog 1: refused. A catalog 2 that drops a dataset: refused,
     // though signed and in the book (built by hand: `Catalog::build` refuses it).
+    // (Under one key the book takes no second catalog 1: an equivocation
+    // disputes both; two anchored ones fork, THREATS CAT-6.)
     let other1 = catalog_of(Some(&c0), T0 + 31, vec![CatalogLeaf::of(&m2.header)]);
-    w.node.anchor(&sign_catalog(&other1));
     assert_eq!(
         code(
             w.post_catalog(&other1, &sign_catalog(&other1))
                 .await
                 .expect_err("conflict")
         ),
-        "bulk_catalog_conflict"
+        "bulk_not_anchored"
     );
     let leaves = vec![CatalogLeaf::of(&m2.header)];
     let dropped = Catalog {
@@ -1157,7 +1203,7 @@ async fn cat_r1_catalogs_are_taken_in_order_as_append_only_successors() {
         },
         leaves,
     };
-    w.node.anchor(&sign_catalog(&dropped));
+    // Not anchored: refused as it is (anchored, it forks: THREATS CAT-6).
     assert_eq!(
         code(
             w.post_catalog(&dropped, &sign_catalog(&dropped))
@@ -1389,7 +1435,8 @@ async fn the_dataset_list_searches_and_pages() {
 /// keeps the same view.
 #[tokio::test]
 async fn scale_3_older_catalogs_are_read_from_their_files() {
-    let w = world();
+    // Every catalog whole (the files these checks change by hand).
+    let w = world_every(1);
     let m = manifest(&shard_files(0..30, 10), None, T0);
     let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
     let c1 = catalog_of(
@@ -1415,11 +1462,17 @@ async fn scale_3_older_catalogs_are_read_from_their_files() {
     // A manifest uploaded against the older catalog 0 is taken (catalog read from its file).
     assert_eq!(w.post_in(&m, 0).await.expect("in 0").0, StatusCode::CREATED);
     assert_eq!(
-        w.store.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        w.store
+            .catalog_record(&publisher().0, 0)
+            .expect("rebuilt")
+            .map(|(c, _)| c),
         Some(c0.clone())
     );
     assert_eq!(
-        w.store.catalog_record(&publisher().0, 1).map(|(c, _)| c),
+        w.store
+            .catalog_record(&publisher().0, 1)
+            .expect("rebuilt")
+            .map(|(c, _)| c),
         Some(c1.clone())
     );
     // After a restart: the same view, and still one catalog whole.
@@ -1434,7 +1487,10 @@ async fn scale_3_older_catalogs_are_read_from_their_files() {
     .expect("reopen");
     assert_eq!(whole(&again), vec![1]);
     assert_eq!(
-        again.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        again
+            .catalog_record(&publisher().0, 0)
+            .expect("rebuilt")
+            .map(|(c, _)| c),
         Some(c0.clone())
     );
     // A file changed after it was taken is never served as that catalog.
@@ -1449,11 +1505,14 @@ async fn scale_3_older_catalogs_are_read_from_their_files() {
     // The body read before stays served (it was checked); read afresh, the
     // changed file is refused, and a restart refuses it (its signature).
     assert_eq!(
-        again.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        again
+            .catalog_record(&publisher().0, 0)
+            .expect("rebuilt")
+            .map(|(c, _)| c),
         Some(c0.clone())
     );
-    *again.old_body.lock().expect("lock") = None;
-    assert_eq!(again.catalog_record(&publisher().0, 0), None);
+    again.old_body.lock().expect("lock").clear();
+    assert!(again.catalog_record(&publisher().0, 0).is_err());
     assert!(BulkStore::open(
         pin(),
         w.node.clone(),
@@ -1472,7 +1531,8 @@ async fn scale_3_older_catalogs_are_read_from_their_files() {
 /// or a broken link stops the start.
 #[tokio::test]
 async fn scale_5_older_catalogs_are_checked_by_header_at_start() {
-    let w = world();
+    // Every catalog whole (the files these checks change by hand).
+    let w = world_every(1);
     let m = manifest(&shard_files(0..30, 10), None, T0);
     let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
     let c1 = catalog_of(
@@ -1514,7 +1574,9 @@ async fn scale_5_older_catalogs_are_checked_by_header_at_start() {
     };
     let s = reopen().expect("start");
     assert_eq!(
-        s.catalog_record(&publisher().0, 1).map(|(c, _)| c),
+        s.catalog_record(&publisher().0, 1)
+            .expect("rebuilt")
+            .map(|(c, _)| c),
         Some(c1.clone())
     );
     // Catalog 1 (older): one leaf changed, header intact. The start passes;
@@ -1524,7 +1586,7 @@ async fn scale_5_older_catalogs_are_checked_by_header_at_start() {
     bad.leaves[1].version = 9;
     write(1, &bad, r1.clone(), a1.clone());
     let s = reopen().expect("start: the header still holds");
-    assert_eq!(s.catalog_record(&publisher().0, 1), None);
+    assert!(s.catalog_record(&publisher().0, 1).is_err());
     // Its header changed: the signature fails, the start stops.
     let mut bad = c1.clone();
     bad.header.created_unix += 1;
@@ -1539,5 +1601,1038 @@ async fn scale_5_older_catalogs_are_checked_by_header_at_start() {
     assert!(e.contains("does not follow catalog 0"), "{e}");
     write(1, &c1, r1, a1);
     assert!(reopen().is_ok());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- A stolen key's catalogs (THREATS CAT-5, rules of review CAT-FIX-R1) -----------------------
+
+/// Catalog 0 (version 1 of `synthetic.metrics`, uploaded) and a thief's
+/// catalog 1 under the same key (its own version 2, uploaded, and a new
+/// dataset), both anchored and held.
+struct Theft {
+    w: World,
+    m: Manifest,
+    c0: Catalog,
+    c1: Catalog,
+    r1: SignedReport,
+    bad: Manifest,
+}
+
+async fn theft() -> Theft {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    w.upload_all(&m, &files).await;
+    let bad_files = shard_files(30..40, 10);
+    let bad = manifest(&bad_files, Some(&m), T0 + 20);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 30,
+        vec![CatalogLeaf::of(&bad.header), other_leaf("synthetic.thief")],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    w.post_in(&bad, 1).await.expect("the thief's version 2");
+    w.upload_all(&bad, &bad_files).await;
+    Theft {
+        w,
+        m,
+        c0,
+        c1,
+        r1,
+        bad,
+    }
+}
+
+/// The publisher's replacement catalog 1 under its new key, anchored, with
+/// its own version 2.
+fn replacement(t: &Theft) -> (Catalog, SignedReport, Manifest, Vec<Vec<u8>>) {
+    let files = shard_files(30..45, 10);
+    let good = manifest(&files, Some(&t.m), T0 + 40);
+    let c = catalog_of(Some(&t.c0), T0 + 50, vec![CatalogLeaf::of(&good.header)]);
+    let r = cat::sign(&SECRET2, &c.header).expect("ok");
+    t.w.node.anchor_by(&r, &SECRET2);
+    (c, r, good, files)
+}
+
+fn held_root(w: &World, n: u64) -> Option<Hash32> {
+    w.store
+        .catalog_record("example.publisher", n)
+        .expect("rebuilt")
+        .map(|(c, _)| c.header.root())
+}
+
+fn served_versions(w: &World) -> Vec<u64> {
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    info["versions"]
+        .as_array()
+        .expect("ok")
+        .iter()
+        .map(|v| v["version"].as_u64().expect("ok"))
+        .collect()
+}
+
+#[tokio::test]
+async fn cat_5_a_withdrawn_catalog_is_set_aside_for_the_publishers_replacement() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, good, files) = replacement(&t);
+    // While the book still holds the thief's catalog, two anchored catalogs
+    // 1 are a fork (THREATS CAT-6): the publisher's catalog datasets stop.
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("held")),
+        "bulk_publisher_forked"
+    );
+    assert_eq!(held_root(w, 1), Some(t.c1.header.root()));
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("forked")),
+        "bulk_dataset_forked"
+    );
+    // The reviewer marks the stolen key compromised from before catalog 1:
+    // the book withdraws it, the fork clears at the next read, and the
+    // replacement takes its place.
+    w.node.withdraw(&t.r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(held_root(w, 1), Some(c1b.header.root()));
+    assert_eq!(held_root(w, 0), Some(t.c0.header.root()));
+    // The thief's version 2 is gone (and its files kept aside); version 1 serves.
+    assert_eq!(served_versions(w), vec![1]);
+    let ds = w.dir.join("manifests/example.publisher/synthetic.metrics");
+    let aside = |f: String| ds.join("withdrawn").join(f);
+    assert!(aside(format!("v2-{}.bin", t.bad.header.root().to_hex())).exists());
+    assert!(aside(format!("v2-{}.catalog.bin", t.bad.header.root().to_hex())).exists());
+    assert!(!ds.join("v2.bin").exists() && !ds.join("v2.catalog.bin").exists());
+    assert!(w
+        .dir
+        .join(format!(
+            "catalogs/example.publisher/withdrawn/1-{}.diff",
+            t.c1.header.root().to_hex()
+        ))
+        .exists());
+    let a = w.rows("from=0&to=3").await.expect("v1 serves");
+    assert_eq!(
+        onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(3))
+            .expect("client check")
+            .catalog
+            .map(|h| h.number),
+        Some(0)
+    );
+    // The thief's version can no longer come back through the replacement;
+    // the publisher's own version 2 enters through it.
+    assert_eq!(
+        code(w.post_in(&t.bad, 1).await.expect_err("not listed")),
+        "bulk_not_in_catalog"
+    );
+    assert_eq!(
+        w.post_in(&good, 1).await.expect("v2").0,
+        StatusCode::CREATED
+    );
+    w.upload_all(&good, &files).await;
+    assert_eq!(served_versions(w), vec![1, 2]);
+    // The thief's catalog again: the book no longer holds it, known
+    // without a chain read (review of CAT-5, L1).
+    let before = w.node.reads();
+    assert_eq!(
+        code(w.post_catalog(&t.c1, &t.r1).await.expect_err("withdrawn")),
+        "bulk_not_anchored"
+    );
+    assert_eq!(w.node.reads(), before);
+    // A restart loads the same state.
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("reopen");
+    assert_eq!(
+        again
+            .catalog_record("example.publisher", 1)
+            .expect("rebuilt")
+            .map(|(c, _)| c.header.root()),
+        Some(c1b.header.root())
+    );
+    let info = again
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    assert_eq!(
+        info["manifest"]["root"],
+        json!(good.header.root().to_string())
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_temporary_refusals_set_nothing_aside() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, _, _) = replacement(&t);
+    let still_held = |w: &World| {
+        assert_eq!(held_root(w, 1), Some(t.c1.header.root()));
+        assert_eq!(served_versions(w), vec![1, 2]);
+    };
+    // An open dispute can be resolved back (review CAT-FIX-R1 H1).
+    w.node.dispute(&t.r1);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("disputed")),
+        "bulk_catalog_conflict"
+    );
+    still_held(w);
+    // A suspended key can be reinstated.
+    w.node.anchor(&t.r1);
+    w.node.suspend(&t.r1, true);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("suspended")),
+        "bulk_catalog_conflict"
+    );
+    still_held(w);
+    w.node.suspend(&t.r1, false);
+    // A finalized block behind the one catalog 1 was taken at: try again.
+    w.node.withdraw(&t.r1);
+    w.node.0.lock().expect("ok").fin = Some(0x63);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("lagging")),
+        "bulk_chain_unavailable"
+    );
+    still_held(w);
+    w.node.0.lock().expect("ok").fin = None;
+    // A replacement the book does not hold costs one read of its own report
+    // (chain id, finalized block, `report`), none of the held catalog.
+    let files = shard_files(30..41, 10);
+    let other = manifest(&files, Some(&t.m), T0 + 60);
+    let c1c = catalog_of(Some(&t.c0), T0 + 70, vec![CatalogLeaf::of(&other.header)]);
+    let r1c = cat::sign(&SECRET2, &c1c.header).expect("ok");
+    let before = w.node.reads();
+    assert_eq!(
+        code(w.post_catalog(&c1c, &r1c).await.expect_err("unanchored")),
+        "bulk_not_anchored"
+    );
+    assert_eq!(w.node.reads() - before, 3);
+    still_held(w);
+    // The book's final word: set aside.
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(served_versions(w), vec![1]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_every_catalog_from_the_number_must_be_withdrawn() {
+    let t = theft().await;
+    let w = &t.w;
+    // The thief also took catalog 2.
+    let c2 = catalog_of(Some(&t.c1), T0 + 35, t.c1.leaves.clone());
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    w.post_catalog(&c2, &r2).await.expect("c2");
+    let (c1b, r1b, _, _) = replacement(&t);
+    // Catalog 1 withdrawn, catalog 2 only disputed: nothing moves.
+    w.node.withdraw(&t.r1);
+    w.node.dispute(&r2);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("2 holds")),
+        "bulk_catalog_conflict"
+    );
+    assert_eq!(held_root(w, 2), Some(c2.header.root()));
+    assert_eq!(served_versions(w), vec![1, 2]);
+    // Both withdrawn: both set aside, newest first, and the replacement is
+    // catalog 1.
+    w.node.withdraw(&r2);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(held_root(w, 1), Some(c1b.header.root()));
+    assert_eq!(held_root(w, 2), None);
+    assert_eq!(served_versions(w), vec![1]);
+    // The publisher's next catalog takes number 2 again.
+    let c3 = catalog_of(Some(&c1b), T0 + 90, c1b.leaves.clone());
+    let r3 = cat::sign(&SECRET2, &c3.header).expect("ok");
+    w.node.anchor_by(&r3, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&c3, &r3).await.expect("next").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(held_root(w, 2), Some(c3.header.root()));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_only_the_books_final_word_counts_as_withdrawn() {
+    let w = world();
+    let c = catalog_of(None, T0 + 10, vec![other_leaf("synthetic.a")]);
+    let r = sign_catalog(&c);
+    let signer = onyx_bulk::anchor::address_of(&SECRET).expect("ok");
+    let read = || async {
+        let at = decision_block(w.node.as_ref(), CHAIN).await.expect("block");
+        let x = read_anchor_at(w.node.as_ref(), CHAIN, &BOOK, &r, &signer, at)
+            .await
+            .expect("read");
+        let why = match x.state {
+            AnchorState::Anchored(_) => "anchored",
+            AnchorState::Not(why) => why,
+        };
+        (why, x.withdrawn)
+    };
+    // Not recorded yet (or a lagging node): not final.
+    assert_eq!(read().await, (reason::NOT_FINAL, false));
+    w.node.anchor(&r);
+    assert_eq!(read().await, ("anchored", false));
+    let fact = keccak256(&r.payload.digest().0);
+    let set_fact = |state: u8, accepted: Hash32| {
+        w.node
+            .0
+            .lock()
+            .expect("ok")
+            .facts
+            .insert(fact, (state, accepted, T0));
+    };
+    // Withdrawn (key retired or compromised) or a dispute cleared: final.
+    set_fact(0, Hash32::ZERO);
+    assert_eq!(read().await, (reason::NOT_ACCEPTED, true));
+    // Accepted on another report: final.
+    set_fact(1, Hash32([7; 32]));
+    assert_eq!(read().await, (reason::NOT_ACCEPTED, true));
+    // An open dispute: not final, unless the key is compromised (the book
+    // never keeps a compromised key's report, review of CAT-5 M1).
+    set_fact(2, Hash32::ZERO);
+    assert_eq!(read().await, (reason::NOT_ACCEPTED, false));
+    w.node.life(&r, 3);
+    assert_eq!(read().await, (reason::NOT_ACCEPTED, true));
+    w.node.life(&r, 1);
+    // A suspended key: not final.
+    set_fact(1, r.hash());
+    w.node.suspend(&r, true);
+    assert_eq!(read().await, (reason::KEY, false));
+    w.node.suspend(&r, false);
+    // Another signature over the same payload: final.
+    w.node
+        .0
+        .lock()
+        .expect("ok")
+        .reports
+        .get_mut(&r.payload.digest())
+        .expect("recorded")
+        .2 = Hash32([9; 32]);
+    assert_eq!(read().await, (reason::OTHER_SIGNATURE, true));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+fn manifest_of(dataset: &str, files: &[Vec<u8>], created: u64) -> Manifest {
+    let entries = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ShardEntry::new(i as u32, &check_shard(&schema(), f).expect("ok").summary))
+        .collect();
+    Manifest::build(
+        NewVersion {
+            dataset: dataset.into(),
+            publisher: publisher(),
+            created_unix: created,
+            schema: schema(),
+            rights: rights(),
+        },
+        None,
+        entries,
+    )
+    .expect("ok")
+}
+
+#[tokio::test]
+async fn cat_5_review_m1_an_equivocation_then_a_compromise_is_final() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, _, _) = replacement(&t);
+    // The publisher, unaware of the theft, signs its own catalog 1 under the
+    // same key: the book disputes the fact and suspends the key.
+    w.node.dispute(&t.r1);
+    w.node.suspend(&t.r1, true);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("open")),
+        "bulk_catalog_conflict"
+    );
+    // The reviewer marks the key compromised: no dispute can keep its report.
+    w.node.life(&t.r1, 3);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(served_versions(w), vec![1]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_review_m2_a_failed_set_aside_leaves_versions_one_to_k() {
+    let t = theft().await;
+    let w = &t.w;
+    // The thief's own report for version 3, on its catalog's version 2.
+    let bad3 = manifest(&shard_files(40..50, 10), Some(&t.bad), T0 + 36);
+    let r3 = sign(&bad3);
+    w.node.anchor(&r3);
+    w.post(&bad3, &r3).await.expect("v3");
+    assert_eq!(served_versions(w), vec![1, 2, 3]);
+    let (c1b, r1b, _, _) = replacement(&t);
+    w.node.withdraw(&t.r1);
+    w.node.withdraw(&r3);
+    // Version 3 cannot move (a directory where its file goes): the upload
+    // fails with nothing moved, never a gap before version 3.
+    let ds = w.dir.join("manifests/example.publisher/synthetic.metrics");
+    let block = ds
+        .join("withdrawn")
+        .join(format!("v3-{}.bin", bad3.header.root().to_hex()));
+    std::fs::create_dir_all(&block).expect("ok");
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("blocked")),
+        "internal"
+    );
+    for v in 1..=3 {
+        assert!(ds.join(format!("v{v}.bin")).exists(), "v{v}");
+    }
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("starts");
+    assert_eq!(
+        again
+            .info("example.publisher", "synthetic.metrics")
+            .expect("ok")["versions"]
+            .as_array()
+            .map(Vec::len),
+        Some(3)
+    );
+    drop(again);
+    // Unblocked: the upload again finishes the set-aside.
+    std::fs::remove_dir(&block).expect("ok");
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(served_versions(w), vec![1]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_review_m3_a_thiefs_own_report_version_goes_only_when_withdrawn() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    // The thief's version 2 under its own report, then its catalog 1.
+    let bad = manifest(&shard_files(30..40, 10), Some(&m), T0 + 20);
+    let rb = sign(&bad);
+    w.node.anchor(&rb);
+    w.post(&bad, &rb).await.expect("v2");
+    let c1 = catalog_of(Some(&c0), T0 + 30, vec![CatalogLeaf::of(&bad.header)]);
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    let good = manifest(&shard_files(30..45, 10), Some(&m), T0 + 40);
+    let c1b = catalog_of(Some(&c0), T0 + 50, vec![CatalogLeaf::of(&good.header)]);
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    w.node.anchor_by(&r1b, &SECRET2);
+    // Only the catalog withdrawn: version 2's own report still holds, so
+    // the replacement is refused before anything moves.
+    w.node.withdraw(&r1);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("v2 holds")),
+        "bulk_conflicting_anchor"
+    );
+    assert_eq!(held_root(&w, 1), Some(c1.header.root()));
+    assert_eq!(served_versions(&w), vec![1, 2]);
+    // Both withdrawn: both go, and the replacement fits.
+    w.node.withdraw(&rb);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(served_versions(&w), vec![1]);
+    assert_eq!(
+        w.post_in(&good, 1).await.expect("v2").0,
+        StatusCode::CREATED
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_5_review_m4_versions_a_catalog_lists_unchanged_keep_an_anchor() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let e = manifest_of("synthetic.even", &shard_files(100..110, 10), T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), CatalogLeaf::of(&e.header)],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("m v1");
+    w.post_in(&e, 0).await.expect("e v1");
+    let anchored_by = |w: &World| {
+        w.store
+            .info("example.publisher", "synthetic.even")
+            .expect("ok")["anchor"]["catalog"]["number"]
+            .as_u64()
+    };
+    // The thief's catalog 1 must list `e` unchanged (append only). Anyone may
+    // post `e` under it: while catalog 0's report holds, nothing moves.
+    let bad = manifest(&shard_files(30..40, 10), Some(&m), T0 + 20);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 30,
+        vec![CatalogLeaf::of(&bad.header), CatalogLeaf::of(&e.header)],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    w.post_in(&bad, 1).await.expect("the thief's v2");
+    assert_eq!(w.post_in(&e, 1).await.expect("same").0, StatusCode::OK);
+    assert_eq!(anchored_by(&w), Some(0));
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(w.post_in(&e, 1).await.expect("same").0, StatusCode::OK);
+    assert_eq!(anchored_by(&w), Some(0));
+    // The publisher re-signs catalog 1 unchanged under its new key (the
+    // reviewer's compromise point fell before it): what catalog 1 anchors
+    // stays, now under the new report, and survives a restart.
+    let r1b = cat::sign(&SECRET2, &c1.header).expect("ok");
+    w.node.anchor_by(&r1b, &SECRET2);
+    w.node.withdraw(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1b).await.expect("re-signed").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(served_versions(&w), vec![1, 2]);
+    assert_eq!(anchored_by(&w), Some(0));
+    let new_signer = hex0x(&onyx_bulk::anchor::address_of(&SECRET2).expect("ok"));
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    assert_eq!(info["anchor"]["signer"], json!(new_signer));
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("starts");
+    let info = again
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    assert_eq!(info["anchor"]["signer"], json!(new_signer));
+    assert_eq!(info["versions"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// CL5-6 right after a compromise: the node's cached read of the old report
+/// still says it holds, yet the publisher's re-signed manifest re-anchors
+/// the version (a manifest's own new report always reads the chain).
+#[tokio::test]
+async fn a_resigned_manifest_reanchors_inside_the_recheck_window() {
+    let w = world();
+    let (m, _) = published(&w).await;
+    assert!(w.rows("from=0&to=1").await.is_ok());
+    w.node.life(&sign(&m), 3);
+    w.node.withdraw(&sign(&m));
+    let r2 = onyx_bulk::anchor::sign(&SECRET2, &m.header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    let (s, v) = w.post(&m, &r2).await.expect("ok");
+    assert_eq!((s, v["reanchored"].clone()), (StatusCode::OK, json!(true)));
+    // While the held report holds, a second report changes nothing.
+    let r3 = onyx_bulk::anchor::sign(&[0x44; 32], &m.header).expect("ok");
+    w.node.anchor_by(&r3, &[0x44; 32]);
+    let (s, v) = w.post(&m, &r3).await.expect("ok");
+    assert_eq!((s, v.get("reanchored").cloned()), (StatusCode::OK, None));
+    let a = w.rows("from=0&to=1").await.expect("ok");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(1)).expect("ok");
+    assert_eq!(
+        c.signer,
+        onyx_bulk::anchor::address_of(&SECRET2).expect("ok")
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Catalog forks (THREATS CAT-6) --------------------------------------------------------------
+
+fn fork_file(w: &World) -> PathBuf {
+    w.dir.join("catalogs/example.publisher").join(FORK_FILE)
+}
+
+#[tokio::test]
+async fn cat_6_two_anchored_catalogs_with_one_number_fork_until_one_is_withdrawn() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, good, _) = replacement(&t);
+    // The same catalog 1 re-signed under the new key while the old report
+    // holds: nothing to change.
+    let r1s = cat::sign(&SECRET2, &t.c1.header).expect("ok");
+    w.node.anchor_by(&r1s, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&t.c1, &r1s).await.expect("same").0,
+        StatusCode::OK
+    );
+    assert!(!fork_file(w).exists());
+    // Another root under catalog 1, both anchored: a fork.
+    let e = w.post_catalog(&c1b, &r1b).await.expect_err("fork");
+    assert_eq!(code(e), "bulk_publisher_forked");
+    assert!(fork_file(w).exists());
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("forked")),
+        "bulk_dataset_forked"
+    );
+    assert_eq!(
+        code(
+            w.store
+                .info_checked("example.publisher", "synthetic.metrics")
+                .await
+                .expect_err("forked")
+        ),
+        "bulk_dataset_forked"
+    );
+    let list = w
+        .store
+        .list(&parse_list_query(None).expect("ok"))
+        .expect("ok");
+    assert_eq!(list["datasets"][0]["forked"], json!(true));
+    // Uploads of the publisher are refused, catalogs and manifests.
+    assert_eq!(
+        code(w.post_in(&good, 1).await.expect_err("forked")),
+        "bulk_publisher_forked"
+    );
+    assert_eq!(
+        code(w.post_catalog(&t.c1, &t.r1).await.expect_err("forked")),
+        "bulk_publisher_forked"
+    );
+    // A restart keeps the mark (its record is checked again).
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("starts");
+    assert_eq!(
+        code(
+            again
+                .rows(
+                    "example.publisher",
+                    "synthetic.metrics",
+                    &parse_rows_query(Some("from=0&to=3")).expect("ok")
+                )
+                .await
+                .expect_err("forked")
+        ),
+        "bulk_dataset_forked"
+    );
+    drop(again);
+    // An open dispute on one side changes nothing; a withdrawal clears it at
+    // the next read past the recheck time.
+    w.node.dispute(&r1b);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("still")),
+        "bulk_dataset_forked"
+    );
+    w.node.withdraw(&r1b);
+    // Within the recheck time the last read stands.
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("cached")),
+        "bulk_dataset_forked"
+    );
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert!(w.rows("from=0&to=3").await.is_ok());
+    assert!(!fork_file(w).exists());
+    assert!(w
+        .dir
+        .join("catalogs/example.publisher/withdrawn")
+        .join(format!(
+            "fork-{}-{}.bin",
+            t.c1.header.root().to_hex(),
+            c1b.header.root().to_hex()
+        ))
+        .exists());
+    assert_eq!(served_versions(w), vec![1, 2]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_6_an_anchored_catalog_that_breaks_the_chain_forks() {
+    let t = theft().await;
+    let w = &t.w;
+    // Catalog 2 that drops `synthetic.metrics` (built by hand).
+    let leaves = vec![other_leaf("synthetic.thief")];
+    let dropped = Catalog {
+        header: cat::CatalogHeader {
+            format: cat::FORMAT,
+            publisher: publisher(),
+            number: 2,
+            prev: t.c1.header.root(),
+            created_unix: T0 + 60,
+            leaf_count: 1,
+            leaves_root: cat::leaves_tree(&leaves).root(),
+        },
+        leaves,
+    };
+    let rd = sign_catalog(&dropped);
+    // Not in the book: refused as it is, one read of its own report.
+    let before = w.node.reads();
+    assert_eq!(
+        code(w.post_catalog(&dropped, &rd).await.expect_err("broken")),
+        "bulk_catalog_not_successor"
+    );
+    assert_eq!(w.node.reads() - before, 3);
+    assert!(!fork_file(w).exists());
+    // Anchored, with catalog 1 anchored: a fork.
+    w.node.anchor(&rd);
+    let e = w.post_catalog(&dropped, &rd).await.expect_err("fork");
+    assert_eq!(code(e), "bulk_publisher_forked");
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("forked")),
+        "bulk_dataset_forked"
+    );
+    // The held side withdrawn (the reviewer's compromise point fell before
+    // catalog 1): the mark clears, and catalog 1 can then be replaced.
+    w.node.withdraw(&t.r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert!(w.rows("from=0&to=3").await.is_ok());
+    let (c1b, r1b, _, _) = replacement(&t);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_6_review_one_read_per_window_and_an_unreadable_mark_stops_the_start() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, _, _) = replacement(&t);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    // Past the window with the chain down: the first read fails (503) and
+    // claims the window; the reads meanwhile keep the mark with no chain read.
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    w.node.0.lock().expect("ok").down = true;
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("down")),
+        "bulk_chain_unavailable"
+    );
+    w.node.0.lock().expect("ok").down = false;
+    let before = w.node.reads();
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("marked")),
+        "bulk_dataset_forked"
+    );
+    assert_eq!(w.node.reads(), before);
+    // A fork file that cannot be read stops the start (never taken as no fork).
+    std::fs::remove_file(fork_file(w)).expect("ok");
+    std::fs::create_dir(fork_file(w)).expect("ok");
+    assert!(BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .is_err());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Catalogs stored as diffs (ADR-0059 amendment 2 draft 4; THREATS CAT-DIFF-R1) --------------
+
+fn world_every(k: u64) -> World {
+    world_with(BulkLimits {
+        catalog_checkpoint: k,
+        ..BulkLimits::default()
+    })
+}
+
+/// Catalogs 0..=n of 40 datasets: each moves `synthetic.d00` by one version
+/// and every second one adds a dataset.
+fn chain(n: u64) -> Vec<Catalog> {
+    let mut out: Vec<Catalog> = Vec::new();
+    for i in 0..=n {
+        let leaves = match out.last() {
+            None => (0..40)
+                .map(|d| other_leaf(&format!("synthetic.d{d:02}")))
+                .collect(),
+            Some(prev) => {
+                let mut l = prev.leaves.clone();
+                if let Some(a) = l.iter_mut().find(|x| x.dataset == "synthetic.d00") {
+                    a.prev = a.root;
+                    a.version += 1;
+                    a.root = Hash32([10 + i as u8; 32]);
+                }
+                if i % 2 == 0 {
+                    l.push(other_leaf(&format!("synthetic.e{i:02}")));
+                }
+                l.sort_by(|x, y| x.dataset.cmp(&y.dataset));
+                l
+            }
+        };
+        let c = catalog_of(out.last(), T0 + 10 * (i + 1), leaves);
+        out.push(c);
+    }
+    out
+}
+
+impl World {
+    async fn take_all(&self, cs: &[Catalog]) {
+        for c in cs {
+            let r = sign_catalog(c);
+            self.node.anchor(&r);
+            assert_eq!(
+                self.post_catalog(c, &r).await.expect("taken").0,
+                StatusCode::CREATED
+            );
+        }
+    }
+
+    fn cat_dir(&self) -> PathBuf {
+        self.dir.join("catalogs").join(&publisher().0)
+    }
+
+    fn reopen(&self) -> Result<BulkStore, String> {
+        BulkStore::open(
+            pin(),
+            self.node.clone(),
+            Arc::new(|| T0 + 500),
+            &self.dir,
+            &self.dir.join("warm"),
+            BulkLimits::default(),
+        )
+    }
+}
+
+fn rebuilt(s: &BulkStore, n: u64) -> Result<Option<Catalog>, String> {
+    Ok(s.catalog_record(&publisher().0, n)?.map(|(c, _)| c))
+}
+
+#[tokio::test]
+async fn cat_diff_catalogs_between_checkpoints_are_diffs_rebuilt_byte_for_byte() {
+    let w = world_every(4);
+    let cs = chain(9);
+    w.take_all(&cs).await;
+    let dir = w.cat_dir();
+    for n in 0..=9u64 {
+        let whole = n % 4 == 0;
+        assert_eq!(dir.join(format!("{n}.bin")).exists(), whole, "{n}.bin");
+        assert_eq!(dir.join(format!("{n}.diff")).exists(), !whole, "{n}.diff");
+    }
+    let size = |f: &str| std::fs::metadata(dir.join(f)).expect("file").len();
+    assert!(
+        size("1.diff") * 5 < size("0.bin"),
+        "a diff holds only what changed"
+    );
+    // Every catalog, in any order (the cache starts a rebuild only from
+    // below), equal to the one taken: the same Borsh bytes the route serves.
+    for n in [9u64, 3, 0, 5, 6, 7, 1, 2, 8, 4] {
+        let c = rebuilt(&w.store, n).expect("rebuilt").expect("held");
+        assert_eq!(
+            borsh::to_vec(&c).expect("enc"),
+            borsh::to_vec(&cs[n as usize]).expect("enc")
+        );
+    }
+    // After a restart (the newest rebuilt whole at start).
+    let again = w.reopen().expect("starts");
+    for n in 0..=9u64 {
+        assert_eq!(
+            rebuilt(&again, n).expect("rebuilt"),
+            Some(cs[n as usize].clone())
+        );
+    }
+    // The next catalog follows the rebuilt newest.
+    let more = chain(10);
+    let r = sign_catalog(&more[10]);
+    w.node.anchor(&r);
+    assert_eq!(
+        w.post_catalog(&more[10], &r).await.expect("10").0,
+        StatusCode::CREATED
+    );
+    assert!(dir.join("10.diff").exists());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_diff_a_damaged_diff_is_an_error_never_not_held() {
+    let w = world_every(4);
+    let cs = chain(9);
+    w.take_all(&cs).await;
+    let dir = w.cat_dir();
+    let damage = |n: u64| {
+        let f = dir.join(format!("{n}.diff"));
+        let mut d = CatalogDiff::try_from_slice(&std::fs::read(&f).expect("read")).expect("diff");
+        // The last leaf: in 2.diff the dataset it adds, which every later
+        // catalog keeps (a leaf a later diff moves again would be replaced).
+        if let Some(l) = d.leaves.last_mut() {
+            l.root = Hash32([0xEE; 32]);
+        }
+        std::fs::write(&f, borsh::to_vec(&d).expect("enc")).expect("write");
+    };
+    // An older diff, header intact: the start passes; it and the diffs built
+    // on it answer an error (500), the next whole catalog and above serve.
+    damage(2);
+    let again = w.reopen().expect("starts: the header still holds");
+    assert!(rebuilt(&again, 2).is_err());
+    assert!(rebuilt(&again, 3).is_err());
+    assert_eq!(rebuilt(&again, 1).expect("ok"), Some(cs[1].clone()));
+    assert_eq!(rebuilt(&again, 5).expect("ok"), Some(cs[5].clone()));
+    assert_eq!(rebuilt(&again, 42).expect("ok"), None);
+    // The newest diff damaged: the start stops (the newest is rebuilt whole).
+    damage(9);
+    assert!(w.reopen().is_err());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_diff_a_set_aside_leaves_a_prefix_and_the_replacement_follows_it() {
+    let w = world_every(4);
+    let cs = chain(5);
+    w.take_all(&cs).await;
+    // Catalogs 3 (a diff), 4 (whole) and 5 (a diff) withdrawn; the
+    // publisher's replacement 3 under its new key follows catalog 2.
+    for c in &cs[3..] {
+        w.node.withdraw(&sign_catalog(c));
+    }
+    let mut leaves = cs[2].leaves.clone();
+    leaves.push(other_leaf("synthetic.f00"));
+    leaves.sort_by(|x, y| x.dataset.cmp(&y.dataset));
+    let c3 = catalog_of(Some(&cs[2]), T0 + 100, leaves);
+    let r3 = cat::sign(&SECRET2, &c3.header).expect("ok");
+    w.node.anchor_by(&r3, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&c3, &r3).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    let dir = w.cat_dir();
+    let aside = dir.join("withdrawn");
+    assert!(aside
+        .join(format!("3-{}.diff", cs[3].header.root().to_hex()))
+        .exists());
+    assert!(aside
+        .join(format!("4-{}.bin", cs[4].header.root().to_hex()))
+        .exists());
+    assert!(aside
+        .join(format!("5-{}.diff", cs[5].header.root().to_hex()))
+        .exists());
+    assert!(
+        dir.join("3.diff").exists() && !dir.join("4.bin").exists() && !dir.join("5.diff").exists()
+    );
+    assert_eq!(rebuilt(&w.store, 3).expect("ok"), Some(c3.clone()));
+    let again = w.reopen().expect("starts");
+    for (n, c) in [(0u64, &cs[0]), (2, &cs[2]), (3, &c3)] {
+        assert_eq!(rebuilt(&again, n).expect("ok").as_ref(), Some(c));
+    }
+    assert_eq!(rebuilt(&again, 4).expect("ok"), None);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_diff_catalog_bytes_count_in_the_quota() {
+    let cs = chain(0);
+    let w = world_with(BulkLimits {
+        quota_bytes: 1_000,
+        ..BulkLimits::default()
+    });
+    let r = sign_catalog(&cs[0]);
+    w.node.anchor(&r);
+    assert_eq!(
+        code(w.post_catalog(&cs[0], &r).await.expect_err("quota")),
+        "bulk_quota_exceeded"
+    );
+    assert!(!w.cat_dir().join("0.bin").exists());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// The hosted node's layout: catalogs taken before diffs existed are whole
+/// (`0.bin`, `1.bin`); after the change the next ones are diffs on them.
+#[tokio::test]
+async fn cat_diff_the_live_layout_whole_files_then_diffs() {
+    let w = world_every(1);
+    let cs = chain(3);
+    w.take_all(&cs[..2]).await;
+    let s = Arc::new(w.reopen().expect("starts with the default checkpoint"));
+    for c in &cs[2..] {
+        let r = sign_catalog(c);
+        w.node.anchor(&r);
+        let (st, _) = s
+            .accept_catalog(
+                &borsh::to_vec(c).expect("enc"),
+                &borsh::to_vec(&r).expect("enc"),
+            )
+            .await
+            .expect("taken");
+        assert_eq!(st, StatusCode::CREATED);
+    }
+    let dir = w.cat_dir();
+    for f in ["0.bin", "1.bin", "2.diff", "3.diff"] {
+        assert!(dir.join(f).exists(), "{f}");
+    }
+    drop(s);
+    let again = Arc::new(w.reopen().expect("starts"));
+    for n in 0..=3u64 {
+        assert_eq!(
+            rebuilt(&again, n).expect("ok"),
+            Some(cs[n as usize].clone())
+        );
+    }
+    // Through the route: the newest at once, an older one rebuilt, and a
+    // damaged diff a 500, never "no such catalog".
+    let app = peer_routes(again.clone());
+    let get = |n: u64| {
+        Request::get(format!("/v1/bulk/catalogs/example.publisher/{n}"))
+            .body(Body::empty())
+            .expect("ok")
+    };
+    for n in [3u64, 2] {
+        let r = app.clone().oneshot(get(n)).await.expect("ok");
+        assert_eq!(r.status(), StatusCode::OK, "catalog {n}");
+    }
+    let f = dir.join("2.diff");
+    let mut d = CatalogDiff::try_from_slice(&std::fs::read(&f).expect("read")).expect("diff");
+    if let Some(l) = d.leaves.last_mut() {
+        l.root = Hash32([0xEE; 32]);
+    }
+    std::fs::write(&f, borsh::to_vec(&d).expect("enc")).expect("write");
+    again.old_body.lock().expect("lock").clear();
+    let r = app.clone().oneshot(get(2)).await.expect("ok");
+    assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
+    let r = app.clone().oneshot(get(9)).await.expect("ok");
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let _ = std::fs::remove_dir_all(&w.dir);
 }

@@ -1685,7 +1685,7 @@
       "get": {
         "operationId": "getBulkDataset",
         "summary": "A bulk dataset's latest manifest, anchor, versions and shards",
-        "description": "Every shard entry comes with its proof under the manifest's `shards_root`, and its tier (hot, warm, or null when not uploaded yet).",
+        "description": "Every shard entry comes with its proof under the manifest's `shards_root`, and its tier (hot, warm, or null when not uploaded yet). A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6).",
         "tags": [
           "Bulk"
         ],
@@ -1738,7 +1738,7 @@
       "get": {
         "operationId": "getBulkRows",
         "summary": "Rows in a key range, each with its proofs",
-        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows.",
+        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6).",
         "tags": [
           "Bulk"
         ],
@@ -1836,7 +1836,7 @@
       "post": {
         "operationId": "postBulkManifest",
         "summary": "Hand a node an anchored manifest",
-        "description": "Taken only when the node's finalized block shows the signed report recorded in the pinned OnyxSignedBook, the fact accepted on exactly that report and the key active. Version 1 opens a dataset; later versions must keep every earlier shard and add at least one. Returns the shards the node still needs. Outside the 12 s request deadline (300 s, two uploads at a time). Instead of its own report, a manifest may name a held catalog that lists it (`catalog`, ADR-0059 amendment 1): then the book must hold no other report under the manifest's own sequence.",
+        "description": "Taken only when the node's finalized block shows the signed report recorded in the pinned OnyxSignedBook, the fact accepted on exactly that report and the key active. Version 1 opens a dataset; later versions must keep every earlier shard and add at least one. Returns the shards the node still needs. Outside the 12 s request deadline (300 s, two uploads at a time). Instead of its own report, a manifest may name a held catalog that lists it (`catalog`, ADR-0059 amendment 1): then the book must hold no other report under the manifest's own sequence. Refused (`bulk_publisher_forked`) while the publisher's catalogs are forked (THREATS CAT-6).",
         "tags": [
           "Bulk"
         ],
@@ -2303,7 +2303,7 @@
       "post": {
         "operationId": "postBulkCatalog",
         "summary": "Hand a node an anchored catalog",
-        "description": "One signed report for the newest manifest of each of a publisher's datasets (ADR-0059 amendment 1). Taken only when the report is recorded and accepted at the node's finalized block with the key active, after the publisher's newest held catalog as its append-only successor (or as number 0), with no leaf disagreeing with a held version and each dataset entering at version 1 or after a held version its leaf names. Outside the 12 s request deadline (300 s, two uploads at a time).",
+        "description": "One signed report for the newest manifest of each of a publisher's datasets (ADR-0059 amendment 1). Taken only when the report is recorded and accepted at the node's finalized block with the key active, after the publisher's newest held catalog as its append-only successor (or as number 0), with no leaf disagreeing with a held version and each dataset entering at version 1 or after a held version its leaf names. A catalog whose number another held catalog has is taken only when the book withdrew every held catalog from that number on (key compromised or retired from before them, a dispute cleared, or the fact accepted on another report; never a suspended key or an open dispute): those are set aside with the versions they anchor (THREATS CAT-5). Two anchored catalogs that cannot both stand (another root under a held number that still holds, or an anchored catalog that is not the successor of the anchored newest) mark the publisher forked: its catalog datasets are not served and its uploads refused until the book withdraws either side (THREATS CAT-6). Outside the 12 s request deadline (300 s, two uploads at a time).",
         "tags": [
           "Bulk"
         ],
@@ -5915,7 +5915,11 @@
     },
     "bulk_dataset_forked": {
       "status": 409,
-      "description": "Two anchored manifests exist for one version of the dataset (the publisher key equivocated or was stolen): not served until reviewed."
+      "description": "Two anchored manifests exist for one version of the dataset (the publisher key equivocated or was stolen): not served until reviewed. Also a catalog dataset while its publisher's catalogs are forked (`fork`: both sides' headers and reports, THREATS CAT-6), until the book withdraws either side."
+    },
+    "bulk_publisher_forked": {
+      "status": 409,
+      "description": "Two anchored catalogs of this publisher cannot both stand (one number with two roots, or one that is not the append-only successor of the one before): nothing of the publisher is taken until the book withdraws either side (`fork`: both sides' headers and reports, THREATS CAT-6)."
     },
     "bulk_encoded_body": {
       "status": 400,

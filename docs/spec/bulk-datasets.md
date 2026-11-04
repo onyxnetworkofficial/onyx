@@ -51,7 +51,12 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   with a body of exactly `entry.bytes` and no content encoding, that checks against the schema
   (framing caps read first) and hashes to the root with the entry's rows and key range.
 - R-BULK-5 (forks): a second anchored manifest for a held version marks the dataset forked; it is
-  not served until an operator reviews it (the file `forked.txt` in its folder).
+  not served until an operator reviews it (the file `forked.txt` in its folder). Two anchored
+  catalogs of one publisher that cannot both stand (another root under a held number that still
+  holds, or an anchored catalog that is not the successor of the anchored newest) mark the
+  publisher forked (`catalogs/<publisher>/fork.bin`: both headers and reports): its catalog
+  datasets are not served and its uploads refused; both sides are read again at most every
+  300 s, and the mark clears when the book withdraws either side for good (THREATS CAT-6).
 - R-BULK-6 (quotas): per publisher at most `ONYX_BULK_QUOTA_GIB` over its datasets' latest
   versions and `ONYX_BULK_MAX_DATASETS` datasets; per node `ONYX_BULK_MAX_GIB`.
 - R-BULK-7 (tiers): shards hot; warm after `ONYX_BULK_WARM_AFTER_DAYS` unread (copied and read
@@ -59,8 +64,11 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
 - R-BULK-9 (sequence): a manifest's anchor uses `sequence_for(dataset, version)`, never another
   number; two manifests for one version under one key are therefore a book equivocation.
 - R-BULK-10 (serving version): the node serves the newest version whose anchor holds (R-BULK-3);
-  a held version the book no longer holds may be replaced by another anchored manifest for that
-  version, which moves it and every later version to `withdrawn/`.
+  a held version the book withdrew for good (read at the same finalized block as the newcomer)
+  may be replaced by another anchored manifest for that version, which moves it and every later
+  version to `withdrawn/`, newest first; one the book has not decided on (an open dispute, a
+  suspended key) is waited for. The same manifest under another report is re-anchored only when
+  the held report no longer holds.
 - R-BULK-8 (client): the answer must name the publisher and dataset asked (and at least the
   version asked); a row is accepted only if it is proven to its shard root, the shard entry to
   `shards_root`, the header to the root, the root to the publisher's signature over the anchor
@@ -78,7 +86,12 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   other report under the manifest's own sequence. An answer carries the catalog header and the
   leaf with its path and both neighbours; the client checks the leaf names exactly the manifest,
   is the only one for its dataset in that catalog, and that the catalog's report and the
-  manifest's own sequence hold at its finalized block.
+  manifest's own sequence hold at its finalized block. A catalog whose number a held one has is
+  taken only when the book withdrew every held catalog from that number on for good (THREATS
+  CAT-5): those are set aside with the versions they anchor, except a version the new catalog
+  lists unchanged, which it then anchors. A node stores every 32nd catalog whole (`{n}.bin`) and
+  the others as the leaves that differ from the one before (`{n}.diff`), rebuilt and checked when
+  read; the bytes served are the same (ADR-0059 amendment 2).
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
