@@ -67,14 +67,29 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   payload, the row fits the schema and the asked range, the page's rows are one run, and the
   caller's own node shows R-BULK-3 at its finalized block.
 
+- R-BULK-11 (catalogs, ADR-0059 amendment 1): a catalog commits to one leaf per dataset
+  (publisher, dataset, version, previous root, root), sorted strictly by dataset, under the
+  ADR-0003 tree; its report (metric `bulk.catalog`, subject `Aggregate("catalog")`, sequence fixed
+  by the catalog number, observed time strictly later than the previous catalog's) anchors every
+  manifest it lists. A node takes catalogs in number order, each the append-only successor of the
+  one before (every dataset kept, each moved by at most one version naming the previous root), a
+  dataset entering at version 1 or after a held version its leaf names, no leaf disagreeing with
+  a held version; a listed manifest is then taken without its own report when the book holds no
+  other report under the manifest's own sequence. An answer carries the catalog header and the
+  leaf with its path and both neighbours; the client checks the leaf names exactly the manifest,
+  is the only one for its dataset in that catalog, and that the catalog's report and the
+  manifest's own sequence hold at its finalized block.
+
 ### Routes
 `GET /v1/bulk`, `GET /v1/bulk/{publisher}/{dataset}`,
 `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`, `POST /v1/bulk/manifests`,
+`POST /v1/bulk/catalogs`, `GET /v1/bulk/catalogs/{publisher}/{n}`,
 `PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`: docs/api/openapi.json and
 docs/spec/delivery.md "Bulk datasets".
 
 ### Tools
-`onyx-publish keygen | address | keys-doc | synth | build | sign | anchor | upload`;
+`onyx-publish keygen | address | keys-doc | synth | build | sign | anchor | upload | catalog-build |
+catalog-sign | catalog-anchor | catalog-upload`;
 `onyx-check --bulk answer.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N]
 --rpc URL --chain-id N --book 0x…`.
 

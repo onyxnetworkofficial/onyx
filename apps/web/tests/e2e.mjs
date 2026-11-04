@@ -29,6 +29,7 @@ import { pp1Parser } from './pp1.mjs';
 import { pp6 } from './pp6.mjs';
 import { pp3 } from './pp3.mjs';
 import { pp4 } from './pp4.mjs';
+import { datasets } from './datasets.mjs';
 import { attr, capWaits, checksDone, quietDom, settled, WAIT_CAP } from './wait.mjs';
 
 const root = new URL('../build/', import.meta.url).pathname;
@@ -116,7 +117,9 @@ const runSuites = () =>
 			// Pre-public loop PP3: a salted label row checked in the browser (ROADMAP D30).
 			() => pp3(browser, base, expect),
 			// Pre-public loop PP4: Browse data opens with the datasets (U5).
-			() => pp4(browser, base, expect, FB)
+			() => pp4(browser, base, expect, FB),
+			// ROADMAP S22: All datasets (search and pages against a fake node).
+			() => datasets(browser, base, expect)
 		])
 	]);
 let suites = Promise.resolve();
@@ -1224,15 +1227,19 @@ try {
 		// loaded late above the slot moved it 2.5 px between the two readings on a loaded machine
 		// (2026-11-02, with the suites in lanes), which is not the shift this check is about.
 		await quietDom(pg, { quiet: 1500, timeout: WAIT_CAP });
-		const before = await slot.boundingBox();
+		// The slot's place inside its own section: content that loads late above the section
+		// (2.5 px twice on a loaded machine, 2026-11-02 and 2026-11-04) moves both alike and is
+		// not the shift this check is about; the decoded set moving the slot still shows here.
+		const place = () => slot.evaluate((e) => ({ y: e.getBoundingClientRect().top - e.closest('section').getBoundingClientRect().top }));
+		const before = await place().catch(() => null);
 		expect(
 			(await slot.locator('h2').allInnerTexts()).join('|') === 'Label set' && (await slot.locator('.pill').count()) === 0 && (await slot.getByRole('status', { name: 'Decoding the label set' }).count()) === 1,
 			'labels (decoding): the placeholder shows the Label set heading, no pill, and says it is decoding'
 		);
 		release();
 		const decoded = await slot.locator('.pill').first().waitFor({ timeout: WAIT_CAP }).then(() => true, () => false);
-		const after = await slot.boundingBox();
-		expect(decoded && before && after && before.y === after.y, `labels: the label set slot stays put when the set decodes (y ${before?.y} -> ${after?.y})`);
+		const after = await place().catch(() => null);
+		expect(decoded && before && after && before.y === after.y, `labels: the label set slot stays put when the set decodes (y in its section ${before?.y} -> ${after?.y})`);
 		await pg.close();
 	}
 	// W9 follow-up (LCP): app.html preloads data/demo.json on the pages that read it at once; the
@@ -1470,7 +1477,7 @@ try {
 	// right edge, the menu reaches every page, primary controls are 44 x 44 px tap targets,
 	// no text under 12 px, and a skip link comes first.
 	const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets']];
+	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets'], ['#/datasets', 'All datasets']];
 	// CL10: Download (the desktop app) is the fifth primary destination.
 	const PRIMARY = [['#/data', 'Browse data'], ['#/markets', 'Markets'], ['#/how-it-works', 'How it works'], ['#/submit', 'Add data'], ['#/download', 'Download']];
 	// Each page is measured once settled (tests/wait.mjs): drawn, no placeholder or running

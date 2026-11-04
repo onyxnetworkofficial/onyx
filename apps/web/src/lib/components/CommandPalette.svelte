@@ -19,6 +19,7 @@
 	const items: Item[] = [
 		{ label: 'Home', hint: 'Page', run: () => goto(resolve('/')) },
 		{ label: 'Browse data', hint: 'Page', run: () => goto(resolve('/data')) },
+		{ label: 'All datasets', hint: 'Page', run: () => goto(resolve('/datasets')) },
 		{ label: 'Markets preview', hint: 'Page', run: () => goto(resolve('/markets')) },
 		{ label: 'How it works', hint: 'Page', run: () => goto(resolve('/how-it-works')) },
 		{ label: 'Reserves', hint: 'Page', run: () => goto(resolve('/reserves')) },

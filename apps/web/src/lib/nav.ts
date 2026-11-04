@@ -5,6 +5,7 @@ import { resolve } from '$app/paths';
 export const NAV = [
 	{ href: resolve('/how-it-works'), path: '/how-it-works', label: 'How it works' },
 	{ href: resolve('/data'), path: '/data', label: 'Browse data' },
+	{ href: resolve('/datasets'), path: '/datasets', label: 'All datasets' },
 	{ href: resolve('/reserves'), path: '/reserves', label: 'Reserves' },
 	{ href: resolve('/run'), path: '/run', label: 'Run' },
 	{ href: resolve('/explorer'), path: '/explorer', label: 'Explorer' },
@@ -20,4 +21,4 @@ export const NAV = [
 // bitcoin.org's menu links its download) ends the header row.
 export const PRIMARY_NAV = ['/data', '/markets', '/how-it-works', '/submit', '/download'].map((path) => NAV.find((n) => n.path === path)!);
 
-export const FOOTER_NAV = ['/', '/submit', '/download', '/data', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);
+export const FOOTER_NAV = ['/', '/submit', '/download', '/data', '/datasets', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);

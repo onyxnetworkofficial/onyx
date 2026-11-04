@@ -201,8 +201,8 @@ export async function w12(browser, base, root, expect) {
 			// 4. Footer: every page in nav order (same links as the header), the current one marked,
 			//    the network's state, one nav landmark per page (W3), 44 px links on phones (W2).
 			expect(
-				S.flinks.length === 11 && S.hlinks.length === 5 && S.hlinks.every(([t, h]) => S.flinks.some(([ft, fh]) => ft === t && fh === h)) && S.flinks.filter((l) => l[2] === 'page').map((l) => l[0]).join() === label && S.landmarks === 1,
-				`${at} ${name}: the footer lists all 11 pages and includes the five primary destinations, ${label} current, without a second nav landmark`
+				S.flinks.length === 12 && S.hlinks.length === 5 && S.hlinks.every(([t, h]) => S.flinks.some(([ft, fh]) => ft === t && fh === h)) && S.flinks.filter((l) => l[2] === 'page').map((l) => l[0]).join() === label && S.landmarks === 1,
+				`${at} ${name}: the footer lists all 12 pages and includes the five primary destinations, ${label} current, without a second nav landmark`
 			);
 			expect(S.fstate === `Testnet only · ${PUB ? 'early preview' : 'private preview'}`, `${at} ${name}: the footer states "Testnet only · ${PUB ? 'early preview' : 'private preview'}" (${S.fstate})`);
 			if (width < 500) expect(S.ftaps.every(([w, h]) => w >= 43.5 && h >= 43.5), `${at} ${name}: every footer link is a 44 x 44 px tap target`);

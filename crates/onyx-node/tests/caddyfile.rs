@@ -280,12 +280,15 @@ fn bulk_upload_group_matches_the_node() {
         routes_of(API_BULK, "pub fn upload_routes("),
         [
             "/v1/bulk/manifests",
+            "/v1/bulk/catalogs",
             "/v1/bulk/{publisher}/{dataset}/shards/{root}"
         ]
     );
     // rustfmt may break a long `.route(` call over lines: compare without whitespace.
     let flat: String = API_BULK.split_whitespace().collect();
     assert!(flat.contains(".route(\"/v1/bulk/manifests\",post(post_manifest))"));
+    // ADR-0059 amendment 1: catalogs go up through the same group.
+    assert!(flat.contains(".route(\"/v1/bulk/catalogs\",post(post_catalog))"));
     assert!(
         flat.contains(".route(\"/v1/bulk/{publisher}/{dataset}/shards/{root}\",put(put_shard),)")
     );
@@ -298,6 +301,7 @@ fn bulk_upload_group_matches_the_node() {
         .expect("MiB");
     assert!(mib << 20 > onyx_bulk::shard::MAX_SHARD_BYTES);
     assert!((mib << 20) as usize > onyx_api::bulk_serve::MAX_MANIFEST_BODY);
+    assert!((mib << 20) as usize > onyx_api::bulk_serve::MAX_CATALOG_BODY);
     assert!(
         secs(block_args("handle @bulk_upload", "response_header_timeout")[0])
             >= onyx_api::bulk_serve::UPLOAD_TIMEOUT.as_secs()
@@ -308,4 +312,51 @@ fn bulk_upload_group_matches_the_node() {
     );
     let app = include_str!("../src/app.rs");
     assert!(app.contains("router_with(state, extra).merge(bulk_uploads)"));
+}
+
+/// The hosted node's config (deploy/caddy/onyx-web.Caddyfile).
+const WEB_CADDYFILE: &str = include_str!("../../../deploy/caddy/onyx-web.Caddyfile");
+
+/// THREATS SCALE-1 (and NS17-8): of the API, only the bulk answers are
+/// compressed, and they send no ETag, so a compressed answer never breaks a
+/// 304; the site's files are the only other `encode`.
+#[test]
+fn scale_1_only_bulk_answers_are_compressed_in_the_api() {
+    let ls: Vec<&str> = WEB_CADDYFILE
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    assert!(
+        ls.contains(&"@bulk_json path /v1/bulk /v1/bulk/*"),
+        "the bulk matcher names exactly the bulk read routes"
+    );
+    let encodes: Vec<usize> = (0..ls.len())
+        .filter(|i| ls[*i].split_whitespace().next() == Some("encode"))
+        .collect();
+    assert_eq!(
+        encodes.len(),
+        2,
+        "two encode lines: the bulk answers and the site"
+    );
+    let bulk = encodes
+        .iter()
+        .filter(|i| ls[**i] == "encode @bulk_json zstd gzip")
+        .count();
+    assert_eq!(bulk, 1, "one encode for the bulk answers");
+    let site = encodes
+        .iter()
+        .find(|i| ls[**i] == "encode zstd gzip")
+        .expect("the site's encode");
+    assert_eq!(
+        ls.get(site + 1).copied(),
+        Some("root * /srv/onyx/current"),
+        "the unmatched encode is the static site's"
+    );
+    for etag in ["header::ETAG", "\"etag\"", "\"ETag\""] {
+        assert!(
+            !API_BULK.contains(etag),
+            "bulk answers send no ETag ({etag} in bulk_serve.rs): compressing them would break 304s"
+        );
+    }
 }

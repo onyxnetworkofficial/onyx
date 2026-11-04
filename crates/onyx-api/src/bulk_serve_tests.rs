@@ -35,6 +35,8 @@ struct Book {
     facts: BTreeMap<Hash32, (u8, Hash32, u64)>,
     /// key -> (life, suspended, signer)
     keys: BTreeMap<Hash32, (u8, bool, [u8; 20])>,
+    /// (key, sequence) -> digest (`sequenceOf`)
+    seqs: BTreeMap<(Hash32, u64), Hash32>,
     down: bool,
     reads: u64,
 }
@@ -91,6 +93,14 @@ impl JsonRpc for Node {
                         out.extend(w(&at.to_be_bytes()));
                         out.extend(w(&[0x80]));
                         out.extend(w(&[0]));
+                    } else if sel == selector("sequenceOf(bytes32,uint64)") {
+                        let s: [u8; 8] = data[60..68].try_into().map_err(|_| "seq")?;
+                        let d = c
+                            .seqs
+                            .get(&(arg, u64::from_be_bytes(s)))
+                            .copied()
+                            .unwrap_or(Hash32::ZERO);
+                        out.extend(w(&d.0));
                     } else if sel == selector("keyState(bytes32)") {
                         let (l, s, signer) = c.keys.get(&arg).copied().unwrap_or_default();
                         out.extend(w(&[l]));
@@ -127,6 +137,9 @@ impl Node {
         c.reports
             .insert(r.payload.digest(), (r.payload.key, fact, r.hash(), T0));
         c.facts.insert(fact, (1, r.hash(), T0));
+        c.seqs
+            .entry((r.payload.key, r.payload.sequence))
+            .or_insert(r.payload.digest());
         let signer = onyx_bulk::anchor::address_of(&SECRET).expect("ok");
         c.keys.entry(r.payload.key).or_insert((1, false, signer));
     }
@@ -948,5 +961,474 @@ async fn a_shared_root_under_another_schema_does_not_disturb_the_owner() {
             .len(),
         10
     );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Catalogs (ADR-0059 amendment 1; THREATS CAT-R1) -------------------------------------------
+
+use onyx_bulk::catalog::{self as cat, Catalog, CatalogLeaf};
+
+fn publisher() -> SourceId {
+    SourceId("example.publisher".into())
+}
+
+fn other_leaf(dataset: &str) -> CatalogLeaf {
+    CatalogLeaf {
+        publisher: publisher(),
+        dataset: dataset.into(),
+        version: 1,
+        prev: Hash32::ZERO,
+        root: Hash32([5; 32]),
+    }
+}
+
+fn catalog_of(prev: Option<&Catalog>, created: u64, leaves: Vec<CatalogLeaf>) -> Catalog {
+    Catalog::build(publisher(), prev, created, leaves).expect("catalog")
+}
+
+fn sign_catalog(c: &Catalog) -> SignedReport {
+    cat::sign(&SECRET, &c.header).expect("ok")
+}
+
+impl World {
+    async fn post_catalog(
+        &self,
+        c: &Catalog,
+        r: &SignedReport,
+    ) -> Result<(StatusCode, Value), ApiError> {
+        self.store
+            .accept_catalog(
+                &borsh::to_vec(c).expect("ok"),
+                &borsh::to_vec(r).expect("ok"),
+            )
+            .await
+    }
+
+    async fn post_in(&self, m: &Manifest, n: u64) -> Result<(StatusCode, Value), ApiError> {
+        self.store
+            .accept_manifest_in_catalog(&m.to_bytes(), n)
+            .await
+    }
+
+    async fn upload_all(&self, m: &Manifest, files: &[Vec<u8>]) {
+        for (f, e) in files.iter().zip(&m.shards) {
+            if !self.store.holds_shard(&e.root) {
+                assert_eq!(
+                    self.put(&e.root, f.clone()).await.expect("ok").0,
+                    StatusCode::CREATED
+                );
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn cat_r1_one_catalog_report_anchors_its_manifests() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), other_leaf("synthetic.other")],
+    );
+    let r0 = sign_catalog(&c0);
+    // Not in the book yet.
+    assert_eq!(
+        code(w.post_catalog(&c0, &r0).await.expect_err("refused")),
+        "bulk_not_anchored"
+    );
+    w.node.anchor(&r0);
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("ok").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("ok").0,
+        StatusCode::OK
+    );
+    // The manifest, with no report of its own.
+    assert_eq!(w.post_in(&m, 0).await.expect("ok").0, StatusCode::CREATED);
+    w.upload_all(&m, &files).await;
+    let a = w.rows("from=8&to=12").await.expect("ok");
+    let ck = onyx_bulk::wire::check_rows_answer(&a, Some(8), Some(12)).expect("client check");
+    assert_eq!(
+        ck.catalog.as_ref().map(cat::CatalogHeader::root),
+        Some(c0.header.root())
+    );
+    assert_eq!(ck.digest, r0.payload.digest());
+    // Its own report was never posted: the catalog's report is the only one.
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    assert_eq!(info["anchor"]["catalog"]["number"], json!(0));
+    // A version the catalog does not list, a catalog this node does not hold.
+    let m2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 20);
+    assert_eq!(
+        code(w.post_in(&m2, 0).await.expect_err("refused")),
+        "bulk_not_in_catalog"
+    );
+    assert_eq!(
+        code(w.post_in(&m2, 4).await.expect_err("refused")),
+        "bulk_catalog_unknown"
+    );
+    // Both survive a restart, with the catalog served back.
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("reopen");
+    assert_eq!(
+        again
+            .catalog_record("example.publisher", 0)
+            .map(|(c, _)| c.header.root()),
+        Some(c0.header.root())
+    );
+    let a = again
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=0&to=3")).expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert!(onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(3)).is_ok());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_r1_catalogs_are_taken_in_order_as_append_only_successors() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let m2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 20);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 30,
+        vec![CatalogLeaf::of(&m2.header), other_leaf("synthetic.new")],
+    );
+    let c2 = catalog_of(Some(&c1), T0 + 40, c1.leaves.clone());
+    for c in [&c0, &c1, &c2] {
+        w.node.anchor(&sign_catalog(c));
+    }
+    // Number 2 before 0 and 1: refused, naming the one needed.
+    let e = w
+        .post_catalog(&c2, &sign_catalog(&c2))
+        .await
+        .expect_err("gap");
+    assert_eq!(code(e), "bulk_catalog_gap");
+    w.post_catalog(&c0, &sign_catalog(&c0)).await.expect("c0");
+    w.post_catalog(&c1, &sign_catalog(&c1)).await.expect("c1");
+    // Version 2 is taken through catalog 1 once version 1 is held.
+    assert_eq!(
+        code(w.post_in(&m2, 1).await.expect_err("order")),
+        "bulk_not_successor"
+    );
+    w.post_in(&m, 0).await.expect("v1");
+    assert_eq!(w.post_in(&m2, 1).await.expect("v2").0, StatusCode::CREATED);
+    // Another catalog 1: refused. A catalog 2 that drops a dataset: refused,
+    // though signed and in the book (built by hand: `Catalog::build` refuses it).
+    let other1 = catalog_of(Some(&c0), T0 + 31, vec![CatalogLeaf::of(&m2.header)]);
+    w.node.anchor(&sign_catalog(&other1));
+    assert_eq!(
+        code(
+            w.post_catalog(&other1, &sign_catalog(&other1))
+                .await
+                .expect_err("conflict")
+        ),
+        "bulk_catalog_conflict"
+    );
+    let leaves = vec![CatalogLeaf::of(&m2.header)];
+    let dropped = Catalog {
+        header: cat::CatalogHeader {
+            format: cat::FORMAT,
+            publisher: publisher(),
+            number: 2,
+            prev: c1.header.root(),
+            created_unix: T0 + 50,
+            leaf_count: 1,
+            leaves_root: cat::leaves_tree(&leaves).root(),
+        },
+        leaves,
+    };
+    w.node.anchor(&sign_catalog(&dropped));
+    assert_eq!(
+        code(
+            w.post_catalog(&dropped, &sign_catalog(&dropped))
+                .await
+                .expect_err("dropped")
+        ),
+        "bulk_catalog_not_successor"
+    );
+    assert_eq!(
+        w.post_catalog(&c2, &sign_catalog(&c2)).await.expect("c2").0,
+        StatusCode::CREATED
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_r1_m1_no_second_root_for_one_version() {
+    // The book holds the manifest's own report for version 1 with root A; a
+    // catalog lists root B for version 1: the node refuses B's manifest.
+    let w = world();
+    let a = manifest(&shard_files(0..30, 10), None, T0);
+    w.node.anchor(&sign(&a));
+    let b = manifest(&shard_files(100..130, 10), None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&b.header)]);
+    w.node.anchor(&sign_catalog(&c0));
+    w.post_catalog(&c0, &sign_catalog(&c0))
+        .await
+        .expect("catalog");
+    assert_eq!(
+        code(w.post_in(&b, 0).await.expect_err("refused")),
+        "bulk_conflicting_anchor"
+    );
+    // A node that holds A refuses the catalog itself.
+    let w2 = world();
+    published(&w2).await;
+    let held = w2
+        .store
+        .info("example.publisher", "synthetic.metrics")
+        .expect("ok");
+    assert_eq!(held["versions"][0]["version"], json!(1));
+    let c = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&b.header)]);
+    w2.node.anchor(&sign_catalog(&c));
+    assert_eq!(
+        code(
+            w2.post_catalog(&c, &sign_catalog(&c))
+                .await
+                .expect_err("refused")
+        ),
+        "bulk_conflicting_anchor"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+    let _ = std::fs::remove_dir_all(&w2.dir);
+}
+
+#[tokio::test]
+async fn cat_r1_l2_a_dataset_enters_after_its_own_versions() {
+    // The refresh path of the first publisher: version 1 has its own report;
+    // catalog 0 lists version 2, naming version 1's root.
+    let w = world();
+    let (m1, _) = published(&w).await;
+    let files2 = shard_files(30..40, 10);
+    let m2 = manifest(&files2, Some(&m1), T0 + 20);
+    let c0 = catalog_of(None, T0 + 30, vec![CatalogLeaf::of(&m2.header)]);
+    w.node.anchor(&sign_catalog(&c0));
+    w.post_catalog(&c0, &sign_catalog(&c0))
+        .await
+        .expect("catalog");
+    assert_eq!(w.post_in(&m2, 0).await.expect("v2").0, StatusCode::CREATED);
+    for (f, e) in files2.iter().zip(&m2.shards[m1.shards.len()..]) {
+        assert_eq!(
+            w.put(&e.root, f.clone()).await.expect("ok").0,
+            StatusCode::CREATED
+        );
+    }
+    let a = w.rows("from=28&to=33").await.expect("ok");
+    let ck = onyx_bulk::wire::check_rows_answer(&a, Some(28), Some(33)).expect("client check");
+    assert_eq!(ck.header.version, 2);
+    assert!(ck.catalog.is_some());
+    // A dataset entering at version 2 that this node does not hold version 1 of.
+    let w2 = world();
+    let c = catalog_of(None, T0 + 30, vec![CatalogLeaf::of(&m2.header)]);
+    w2.node.anchor(&sign_catalog(&c));
+    assert_eq!(
+        code(
+            w2.post_catalog(&c, &sign_catalog(&c))
+                .await
+                .expect_err("refused")
+        ),
+        "bulk_catalog_entry"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+    let _ = std::fs::remove_dir_all(&w2.dir);
+}
+
+/// `GET /v1/bulk` search and pages: every word must be in
+/// `publisher/dataset` (any case), pages follow id order through `next`,
+/// `total` counts every match, and a bad query is a 400.
+#[tokio::test]
+async fn the_dataset_list_searches_and_pages() {
+    let w = world();
+    let (m, _) = published(&w).await;
+    for name in ["synthetic.alpha", "synthetic.copy2"] {
+        let b = Manifest::build(
+            NewVersion {
+                dataset: name.into(),
+                publisher: SourceId("example.publisher".into()),
+                created_unix: T0,
+                schema: schema(),
+                rights: rights(),
+            },
+            None,
+            m.shards.clone(),
+        )
+        .expect("ok");
+        let rb = sign(&b);
+        w.node.anchor(&rb);
+        w.post(&b, &rb).await.expect("ok");
+    }
+    let list = |q: &str| {
+        w.store
+            .list(&parse_list_query(Some(q)).expect("ok"))
+            .expect("ok")
+    };
+    let ids = |v: &Value| -> Vec<String> {
+        v["datasets"]
+            .as_array()
+            .expect("ok")
+            .iter()
+            .map(|d| d["dataset"].as_str().expect("ok").to_string())
+            .collect()
+    };
+    let all = list("");
+    assert_eq!(
+        ids(&all),
+        ["synthetic.alpha", "synthetic.copy2", "synthetic.metrics"]
+    );
+    assert_eq!(
+        (all["total"].clone(), all["next"].clone()),
+        (json!(3), Value::Null)
+    );
+    assert_eq!(all["datasets"][2]["stored_shards"], json!(3));
+    assert_eq!(all["datasets"][2]["created_unix"], json!(T0));
+    assert_eq!(ids(&list("q=alpha")), ["synthetic.alpha"]);
+    assert_eq!(ids(&list("q=SYNTHETIC+met")), ["synthetic.metrics"]);
+    assert_eq!(
+        ids(&list("q=example.publisher%2Fsynthetic.c")),
+        ["synthetic.copy2"]
+    );
+    assert_eq!(list("q=nothing")["total"], json!(0));
+    let p1 = list("limit=2");
+    assert_eq!(ids(&p1), ["synthetic.alpha", "synthetic.copy2"]);
+    assert_eq!(p1["total"], json!(3));
+    assert_eq!(p1["next"], json!("example.publisher/synthetic.copy2"));
+    let p2 = list("limit=2&after=example.publisher%2Fsynthetic.copy2");
+    assert_eq!(ids(&p2), ["synthetic.metrics"]);
+    assert_eq!(
+        (p2["total"].clone(), p2["next"].clone()),
+        (json!(3), Value::Null)
+    );
+    assert_eq!(list("q=synthetic&limit=3")["next"], Value::Null);
+    let too_long = format!("q={}", "a".repeat(MAX_SEARCH_CHARS + 1));
+    for bad in [
+        "q=a<b",
+        too_long.as_str(),
+        "limit=0",
+        "limit=501",
+        "after=nope",
+        "after=a/b/c",
+        "q=a&q=b",
+        "sort=rows",
+        "q=%zz",
+        "q=%ff",
+    ] {
+        let e = parse_list_query(Some(bad)).expect_err(bad);
+        assert_eq!(e.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let app = routes(w.store.clone());
+    let r = app
+        .oneshot(
+            Request::get("/v1/bulk?q=alpha&limit=1")
+                .body(Body::empty())
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value =
+        serde_json::from_slice(&r.into_body().collect().await.expect("ok").to_bytes()).expect("ok");
+    assert_eq!(ids(&v), ["synthetic.alpha"]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// SCALE-3: only the newest catalog of a publisher is held whole; an older
+/// one is read from its file when asked (a manifest uploaded against it, the
+/// peer route), checked against the header taken at upload, and a restart
+/// keeps the same view.
+#[tokio::test]
+async fn scale_3_older_catalogs_are_read_from_their_files() {
+    let w = world();
+    let m = manifest(&shard_files(0..30, 10), None, T0);
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![CatalogLeaf::of(&m.header), other_leaf("synthetic.new")],
+    );
+    for c in [&c0, &c1] {
+        w.node.anchor(&sign_catalog(c));
+        w.post_catalog(c, &sign_catalog(c)).await.expect("catalog");
+    }
+    let whole = |s: &BulkStore| -> Vec<u64> {
+        let cs = s.catalogs.read().expect("lock");
+        cs.values()
+            .flat_map(|m| m.iter().filter(|(_, h)| h.body.is_some()).map(|(n, _)| *n))
+            .collect()
+    };
+    assert_eq!(
+        whole(&w.store),
+        vec![1],
+        "only the newest catalog is held whole"
+    );
+    // A manifest uploaded against the older catalog 0 is taken (catalog read from its file).
+    assert_eq!(w.post_in(&m, 0).await.expect("in 0").0, StatusCode::CREATED);
+    assert_eq!(
+        w.store.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        Some(c0.clone())
+    );
+    assert_eq!(
+        w.store.catalog_record(&publisher().0, 1).map(|(c, _)| c),
+        Some(c1.clone())
+    );
+    // After a restart: the same view, and still one catalog whole.
+    let again = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0 + 30),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("reopen");
+    assert_eq!(whole(&again), vec![1]);
+    assert_eq!(
+        again.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        Some(c0.clone())
+    );
+    // A file changed after it was taken is never served as that catalog.
+    let f = w.dir.join("catalogs").join(&publisher().0).join("0.bin");
+    let mut bytes = std::fs::read(&f).expect("read");
+    let (c, r, a): (Vec<u8>, Vec<u8>, Vec<u8>) =
+        BorshDeserialize::try_from_slice(&bytes).expect("rec");
+    let mut other = Catalog::try_from_slice(&c).expect("catalog");
+    other.header.created_unix += 1;
+    bytes = borsh::to_vec(&(borsh::to_vec(&other).expect("enc"), r, a)).expect("enc");
+    std::fs::write(&f, bytes).expect("write");
+    // The body read before stays served (it was checked); read afresh, the
+    // changed file is refused, and a restart refuses it (its signature).
+    assert_eq!(
+        again.catalog_record(&publisher().0, 0).map(|(c, _)| c),
+        Some(c0.clone())
+    );
+    *again.old_body.lock().expect("lock") = None;
+    assert_eq!(again.catalog_record(&publisher().0, 0), None);
+    assert!(BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(|| T0 + 30),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default()
+    )
+    .is_err());
     let _ = std::fs::remove_dir_all(&w.dir);
 }

@@ -10,8 +10,19 @@
 //!                       --license CC0-1.0 [--attribution TEXT] --out DIR [--prev DIR] [--shard-mib 8]
 //! onyx-publish sign     --key publisher.key --dir DIR
 //! onyx-publish anchor   --dir DIR --rpc URL --chain-id N --book 0x… --gas-key FILE
-//! onyx-publish upload   --dir DIR --node URL [--wait-secs N]
+//! onyx-publish upload   --dir DIR --node URL [--wait-secs N] [--catalog N]
+//!
+//! # One anchor for many manifests (ADR-0059 amendment 1):
+//! onyx-publish catalog-build  --publisher <source id> --dirs LIST --out FILE [--prev FILE]
+//! onyx-publish catalog-sign   --key publisher.key --catalog FILE
+//! onyx-publish catalog-anchor --catalog FILE --rpc URL --chain-id N --book 0x… --gas-key FILE
+//! onyx-publish catalog-upload --catalog FILE --node URL [--wait-secs N]
 //! ```
+//!
+//! `catalog-build` lists the manifest of every version folder in LIST (one path a
+//! line) and carries over every other dataset of `--prev`, the catalog it
+//! follows; `upload --catalog N` then hands a node each manifest without its
+//! own report. The catalog's report goes next to it as `FILE.report`.
 //!
 //! Keys are read from files that only their owner can read and are never
 //! printed. Exit 0 done, 1 refused or failed, 2 usage.
@@ -35,7 +46,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str =
-    "usage: onyx-publish <keygen|address|keys-doc|synth|build|sign|anchor|upload> [options]\n\
+    "usage: onyx-publish <keygen|address|keys-doc|synth|build|sign|anchor|upload|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
 see the header of crates/onyx-publish/src/main.rs or docs/ops/bulk-publish.md";
 
 type Res<T> = Result<T, String>;
@@ -72,6 +83,10 @@ fn main() -> ExitCode {
         "sign" => sign_cmd(&opts),
         "anchor" => rt.block_on(anchor_cmd(&opts)),
         "upload" => rt.block_on(upload_cmd(&opts)),
+        "catalog-build" => catalog_build_cmd(&opts),
+        "catalog-sign" => catalog_sign_cmd(&opts),
+        "catalog-anchor" => rt.block_on(catalog_anchor_cmd(&opts)),
+        "catalog-upload" => rt.block_on(catalog_upload_cmd(&opts)),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -587,6 +602,24 @@ async fn anchor_cmd(o: &Opts) -> Res<()> {
     {
         return Err(format!("the node at --rpc is not chain {chain_id}"));
     }
+    let conflict = format!(
+        "this key already anchored another manifest for version {} of {} (sequence {}): a second one would get the key suspended. Publish the next version instead",
+        m.header.version, m.header.dataset, r.payload.sequence
+    );
+    post_report(rpc, chain_id, &book, gas, &r, &conflict).await
+}
+
+/// Send `r` to the book with `postReport` unless it is recorded already;
+/// refuse when the key used its sequence for another payload (`conflict`).
+async fn post_report(
+    rpc: HttpJsonRpc<HyperPost>,
+    chain_id: u64,
+    book: &[u8; 20],
+    gas: [u8; 32],
+    r: &SignedReport,
+    conflict: &str,
+) -> Res<()> {
+    let book = *book;
     let digest = r.payload.digest();
     // Already recorded (a re-run): nothing to send.
     let mut d = keccak256(b"report(bytes32)").0[..4].to_vec();
@@ -605,10 +638,7 @@ async fn anchor_cmd(o: &Opts) -> Res<()> {
     d.extend_from_slice(&w);
     let used = eth_call(&rpc, &book, &d).await?;
     if used.len() >= 32 && used[..32] != [0u8; 32] && used[..32] != digest.0 {
-        return Err(format!(
-            "this key already anchored another manifest for version {} of {} (sequence {}): a second one would get the key suspended. Publish the next version instead",
-            m.header.version, m.header.dataset, r.payload.sequence
-        ));
+        return Err(conflict.to_string());
     }
     let payload = borsh::to_vec(&r.payload).map_err(|e| e.to_string())?;
     let sender = Sender::new(rpc, chain_id, gas).ok_or("--gas-key holds no valid key")?;
@@ -686,15 +716,27 @@ async fn send(
     Ok((status, serde_json::from_slice(&b).unwrap_or(Value::Null)))
 }
 
+/// Rounds of shard uploads before `upload` gives up: after each round the
+/// manifest is posted again and the node lists what it still misses.
+const UPLOAD_ROUNDS: u32 = 3;
+
 async fn upload_cmd(o: &Opts) -> Res<()> {
-    o.only(&["dir", "node", "wait-secs"])?;
+    o.only(&["dir", "node", "wait-secs", "catalog"])?;
     let dir = PathBuf::from(o.req("dir")?);
     let m = read_manifest(&dir)?;
-    let r = read_report(&dir)?;
     let node = o.req("node")?.trim_end_matches('/').to_string();
     let wait = Duration::from_secs(o.num("wait-secs", 0)?);
     let c = client();
-    let body = json!({"manifest": hx(&m.to_bytes()), "report": hx(&borsh::to_vec(&r).map_err(|e| e.to_string())?)});
+    let body = match o.opt("catalog") {
+        Some(n) => {
+            let n: u64 = n.parse().map_err(|_| "--catalog: a catalog number")?;
+            json!({"manifest": hx(&m.to_bytes()), "catalog": n})
+        }
+        None => {
+            let r = read_report(&dir)?;
+            json!({"manifest": hx(&m.to_bytes()), "report": hx(&borsh::to_vec(&r).map_err(|e| e.to_string())?)})
+        }
+    };
     let t = Instant::now();
     let answer = loop {
         let (s, v) = send(
@@ -718,44 +760,256 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
             _ => return Err(format!("manifest refused ({s}): {v}")),
         }
     };
-    let missing = answer["missing"].as_array().cloned().unwrap_or_default();
-    let (mut sent, mut bytes) = (0u64, 0u64);
+    let mut missing = answer["missing"].as_array().cloned().unwrap_or_default();
+    let (mut sent, mut bytes, mut rounds) = (0u64, 0u64, 0u32);
     let manifest_time = t.elapsed();
     let tu = Instant::now();
-    for e in &missing {
-        let root = e["root"].as_str().ok_or("node answer: missing[].root")?;
-        let h = onyx_bulk::wire::hash_field(&e["root"], "root").map_err(|e| e.to_string())?;
-        let p = shard_path(&dir, &h);
-        let file = std::fs::read(&p).map_err(|err| {
-            format!("shard {root} is not in {} ({err}); upload it from the folder of the version that added it", p.display())
-        })?;
-        let url = format!(
-            "{node}/v1/bulk/{}/{}/shards/{root}",
-            m.header.publisher.0, m.header.dataset
-        );
-        let n = file.len() as u64;
+    while !missing.is_empty() {
+        if rounds == UPLOAD_ROUNDS {
+            return Err(format!(
+                "the node still misses {} shard(s) after {rounds} rounds",
+                missing.len()
+            ));
+        }
+        rounds += 1;
+        for e in &missing {
+            let root = e["root"].as_str().ok_or("node answer: missing[].root")?;
+            let h = onyx_bulk::wire::hash_field(&e["root"], "root").map_err(|e| e.to_string())?;
+            let p = shard_path(&dir, &h);
+            let file = std::fs::read(&p).map_err(|err| {
+                format!("shard {root} is not in {} ({err}); upload it from the folder of the version that added it", p.display())
+            })?;
+            let url = format!(
+                "{node}/v1/bulk/{}/{}/shards/{root}",
+                m.header.publisher.0, m.header.dataset
+            );
+            let n = file.len() as u64;
+            let (s, v) = send(
+                &c,
+                hyper::Method::PUT,
+                &url,
+                "application/octet-stream",
+                file,
+            )
+            .await?;
+            if s != 200 && s != 201 {
+                return Err(format!("shard {root} refused ({s}): {v}"));
+            }
+            sent += 1;
+            bytes += n;
+        }
+        // Ask again: a shard the node answered "stored" for must no longer be
+        // missing (review BULK-LOSS-1: two of 8,849 were not, once).
         let (s, v) = send(
             &c,
-            hyper::Method::PUT,
-            &url,
-            "application/octet-stream",
-            file,
+            hyper::Method::POST,
+            &format!("{node}/v1/bulk/manifests"),
+            "application/json",
+            body.to_string().into_bytes(),
         )
         .await?;
         if s != 200 && s != 201 {
-            return Err(format!("shard {root} refused ({s}): {v}"));
+            return Err(format!("manifest recheck refused ({s}): {v}"));
         }
-        sent += 1;
-        bytes += n;
+        missing = v["missing"].as_array().cloned().unwrap_or_default();
+        if !missing.is_empty() {
+            eprintln!(
+                "the node still misses {} shard(s) after round {rounds}: sending them again",
+                missing.len()
+            );
+        }
     }
     println!(
-        "UPLOADED version={} shards_sent={sent} bytes_sent={bytes} manifest_secs={:.1} shard_secs={:.1} root={}",
+        "UPLOADED version={} shards_sent={sent} bytes_sent={bytes} manifest_secs={:.1} shard_secs={:.1} rounds={rounds} root={}",
         m.header.version,
         manifest_time.as_secs_f64(),
         tu.elapsed().as_secs_f64(),
         m.header.root()
     );
     Ok(())
+}
+
+// ------------------------------------------------------------------ catalogs
+
+fn read_catalog(path: &Path) -> Res<onyx_bulk::Catalog> {
+    let b = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let c = <onyx_bulk::Catalog as BorshDeserialize>::try_from_slice(&b)
+        .map_err(|_| format!("{}: not a Borsh catalog", path.display()))?;
+    c.validate()
+        .map_err(|e| format!("{}: {e}", path.display()))?;
+    Ok(c)
+}
+
+fn report_path(catalog: &Path) -> PathBuf {
+    let mut s = catalog.as_os_str().to_owned();
+    s.push(".report");
+    PathBuf::from(s)
+}
+
+/// The catalog of every manifest in the version folders listed in `--dirs`,
+/// plus every other dataset of `--prev`, written to `--out` (never over an
+/// existing file: a catalog is kept before it is signed, review CAT-R1 M3).
+fn catalog_build_cmd(o: &Opts) -> Res<()> {
+    o.only(&["publisher", "dirs", "out", "prev"])?;
+    let publisher = SourceId(o.req("publisher")?.to_string());
+    let out = PathBuf::from(o.req("out")?);
+    if out.exists() {
+        return Err(format!(
+            "{} exists: a catalog is never rebuilt in place",
+            out.display()
+        ));
+    }
+    let prev = o
+        .opt("prev")
+        .map(|p| read_catalog(Path::new(p)))
+        .transpose()?;
+    let list = std::fs::read_to_string(o.req("dirs")?).map_err(|e| format!("--dirs: {e}"))?;
+    let mut leaves: BTreeMap<String, onyx_bulk::CatalogLeaf> = prev
+        .iter()
+        .flat_map(|p| p.leaves.iter().cloned())
+        .map(|l| (l.dataset.clone(), l))
+        .collect();
+    let mut listed = 0usize;
+    for d in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let m = read_manifest(Path::new(d))?;
+        if m.header.publisher != publisher {
+            return Err(format!("{d}: another publisher ({})", m.header.publisher.0));
+        }
+        leaves.insert(
+            m.header.dataset.clone(),
+            onyx_bulk::CatalogLeaf::of(&m.header),
+        );
+        listed += 1;
+    }
+    // Strictly later than the catalog it follows (the book files a fact by its time).
+    let created = prev
+        .as_ref()
+        .map_or(now_unix(), |p| now_unix().max(p.header.created_unix + 1));
+    let c = onyx_bulk::Catalog::build(
+        publisher,
+        prev.as_ref(),
+        created,
+        leaves.into_values().collect(),
+    )
+    .map_err(|e| e.to_string())?;
+    std::fs::write(&out, borsh::to_vec(&c).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("{}: {e}", out.display()))?;
+    println!(
+        "CATALOG number={} leaves={} listed={listed} root={} out={}",
+        c.header.number,
+        c.header.leaf_count,
+        c.header.root(),
+        out.display()
+    );
+    Ok(())
+}
+
+fn catalog_sign_cmd(o: &Opts) -> Res<()> {
+    o.only(&["key", "catalog"])?;
+    let path = PathBuf::from(o.req("catalog")?);
+    let c = read_catalog(&path)?;
+    let k = read_key(o.req("key")?)?;
+    let r = onyx_bulk::catalog::sign(&k, &c.header).map_err(|e| e.to_string())?;
+    let rp = report_path(&path);
+    if let Ok(old) = std::fs::read(&rp) {
+        if old != borsh::to_vec(&r).map_err(|e| e.to_string())? {
+            return Err(format!(
+                "{} holds another report: never sign two catalogs under one number",
+                rp.display()
+            ));
+        }
+    }
+    std::fs::write(&rp, borsh::to_vec(&r).map_err(|e| e.to_string())?)
+        .map_err(|e| format!("{}: {e}", rp.display()))?;
+    println!(
+        "SIGNED catalog={} sequence={} digest={}",
+        c.header.number,
+        r.payload.sequence,
+        r.payload.digest()
+    );
+    Ok(())
+}
+
+async fn catalog_anchor_cmd(o: &Opts) -> Res<()> {
+    o.only(&["catalog", "rpc", "chain-id", "book", "gas-key"])?;
+    let path = PathBuf::from(o.req("catalog")?);
+    let c = read_catalog(&path)?;
+    let rp = report_path(&path);
+    let r = SignedReport::try_from_slice(
+        &std::fs::read(&rp).map_err(|e| format!("{}: {e}", rp.display()))?,
+    )
+    .map_err(|_| format!("{}: not a Borsh SignedReport", rp.display()))?;
+    onyx_bulk::catalog::verify(&c.header, &r)
+        .map_err(|e| format!("the report does not sign this catalog: {e}"))?;
+    let url = o.req("rpc")?;
+    check_facilitator_url(url).map_err(|e| e.replacen("facilitator", "chain node", 1))?;
+    let chain_id: u64 = o
+        .req("chain-id")?
+        .parse()
+        .map_err(|_| "--chain-id: not a number")?;
+    if chain_id != 84_532 && chain_id != 31_337 {
+        return Err(
+            "test networks only: --chain-id 84532 (Base Sepolia) or 31337 (local anvil)".into(),
+        );
+    }
+    let book = parse_address(o.req("book")?)?;
+    let gas = read_key(o.req("gas-key")?)?;
+    let rpc = HttpJsonRpc::new(url.to_string(), HyperPost::for_rpc(Duration::from_secs(30)));
+    let id = rpc.call("eth_chainId", json!([])).await?;
+    if u64::from_str_radix(id.as_str().unwrap_or("").trim_start_matches("0x"), 16).ok()
+        != Some(chain_id)
+    {
+        return Err(format!("the node at --rpc is not chain {chain_id}"));
+    }
+    let conflict = format!(
+        "this key already anchored another catalog {} (sequence {}): a second one would get the key suspended. Build the next number instead",
+        c.header.number, r.payload.sequence
+    );
+    post_report(rpc, chain_id, &book, gas, &r, &conflict).await
+}
+
+async fn catalog_upload_cmd(o: &Opts) -> Res<()> {
+    o.only(&["catalog", "node", "wait-secs"])?;
+    let path = PathBuf::from(o.req("catalog")?);
+    let c = read_catalog(&path)?;
+    let rp = report_path(&path);
+    let r = std::fs::read(&rp).map_err(|e| format!("{}: {e}", rp.display()))?;
+    let node = o.req("node")?.trim_end_matches('/').to_string();
+    let wait = Duration::from_secs(o.num("wait-secs", 0)?);
+    let body =
+        json!({"catalog": hx(&borsh::to_vec(&c).map_err(|e| e.to_string())?), "report": hx(&r)});
+    let cl = client();
+    let t = Instant::now();
+    loop {
+        let (s, v) = send(
+            &cl,
+            hyper::Method::POST,
+            &format!("{node}/v1/bulk/catalogs"),
+            "application/json",
+            body.to_string().into_bytes(),
+        )
+        .await?;
+        match s {
+            200 | 201 => {
+                println!(
+                    "UPLOADED catalog={} leaves={} root={}",
+                    c.header.number,
+                    c.header.leaf_count,
+                    c.header.root()
+                );
+                return Ok(());
+            }
+            409 if v["error"]["code"] == "bulk_not_anchored" && t.elapsed() < wait => {
+                eprintln!(
+                    "waiting for the catalog's anchor to be final ({}; {:.0} s so far)",
+                    v["reason"].as_str().unwrap_or("?"),
+                    t.elapsed().as_secs_f64()
+                );
+                tokio::time::sleep(Duration::from_secs(15).min(wait)).await;
+            }
+            _ => return Err(format!("catalog refused ({s}): {v}")),
+        }
+    }
 }
 
 #[cfg(test)]

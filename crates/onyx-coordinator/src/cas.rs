@@ -136,6 +136,13 @@ pub trait Cas {
     fn has(&self, kind: Kind, key: &Hash32) -> bool {
         self.get(kind, key).is_some()
     }
+    /// True if an object is stored under `key`, without reading it back: a
+    /// regular file of a size the kind allows. For a start-up inventory of
+    /// many large objects (SCALE-2); a damaged one is still caught by `get`
+    /// when it is read. Defaults to `has`.
+    fn present(&self, kind: Kind, key: &Hash32) -> bool {
+        self.has(kind, key)
+    }
 }
 
 /// Typed helpers on any store.
@@ -241,6 +248,12 @@ impl FsCas {
 }
 
 impl Cas for FsCas {
+    fn present(&self, kind: Kind, key: &Hash32) -> bool {
+        // Not followed: a link is not an object (as in `get`).
+        std::fs::symlink_metadata(self.path(kind, key))
+            .is_ok_and(|m| m.is_file() && m.len() > 0 && m.len() <= max_bytes(kind) as u64)
+    }
+
     fn put(&self, kind: Kind, bytes: &[u8]) -> Result<Hash32, CasError> {
         let key = key_of(kind, bytes).ok_or(CasError::BadObject(kind))?;
         let p = self.path(kind, &key);
@@ -442,6 +455,47 @@ mod tests {
         assert_eq!(cas.get(Kind::Recipe, &k), Some(b"\0asm".to_vec()));
         std::fs::write(dir.join("recipe").join(hex::encode(k.0)), b"tampered").expect("write");
         assert_eq!(cas.get(Kind::Recipe, &k), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// SCALE-2: `present` answers from the file's metadata alone (a regular,
+    /// non-empty file within the kind's cap; never a link), so a start-up
+    /// inventory reads no object; `get` still refuses a damaged one.
+    #[test]
+    fn scale_2_present_reads_no_object() {
+        let dir = std::env::temp_dir().join(format!("onyx-cas-present-{}", std::process::id()));
+        let cas = FsCas::new(&dir);
+        let rows = vec![b"a".to_vec(), b"bc".to_vec()];
+        let k = cas
+            .put(Kind::Shard, &onyx_bulk::shard::encode_shard(&rows))
+            .expect("put");
+        assert!(cas.present(Kind::Shard, &k) && cas.has(Kind::Shard, &k));
+        // Damaged in place: still present (found when read), never served.
+        std::fs::write(cas.path(Kind::Shard, &k), b"damaged").expect("write");
+        assert!(cas.present(Kind::Shard, &k));
+        assert!(!cas.has(Kind::Shard, &k));
+        // Missing, empty, over the cap, a directory or a link: not present.
+        let other = keccak256(b"other");
+        let p = cas.path(Kind::Shard, &other);
+        assert!(!cas.present(Kind::Shard, &other));
+        std::fs::write(&p, b"").expect("empty");
+        assert!(!cas.present(Kind::Shard, &other));
+        std::fs::File::create(&p)
+            .expect("big")
+            .set_len(max_bytes(Kind::Shard) as u64 + 1)
+            .expect("sparse");
+        assert!(!cas.present(Kind::Shard, &other));
+        std::fs::remove_file(&p).expect("rm");
+        std::fs::create_dir(&p).expect("dir");
+        assert!(!cas.present(Kind::Shard, &other));
+        std::fs::remove_dir(&p).expect("rmdir");
+        #[cfg(unix)]
+        {
+            std::os::unix::fs::symlink(cas.path(Kind::Shard, &k), &p).expect("link");
+            assert!(!cas.present(Kind::Shard, &other));
+        }
+        // Another kind's file under the same key is not this kind's object.
+        assert!(!cas.present(Kind::Rows, &k));
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

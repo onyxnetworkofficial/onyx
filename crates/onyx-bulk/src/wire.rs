@@ -5,7 +5,8 @@
 //! { "manifest": {"root": "0x…", "header": "0x<borsh ManifestHeader>", ...},
 //!   "anchor":   {"report": "0x<borsh SignedReport>", "digest": "0x…", "report_hash": "0x…",
 //!                "signer": "0x…", "chain_id": n, "book": "0x…", "fact": "0x…",
-//!                "checked_at": {"number": n, "hash": "0x…"}},
+//!                "checked_at": {"number": n, "hash": "0x…"},
+//!                "catalog": {"header": "0x<borsh CatalogHeader>", "leaf": "0x<borsh LeafProof>"}},
 //!   "shards": [ {"index": i, "entry": "0x<borsh ShardEntry>", "proof": {...}, ...} ],
 //!   "rows":   [ {"shard": i, "index": j, "key": "…", "row": "0x<borsh cells>",
 //!                "values": {...}, "proof": {"index": j, "leaf_count": n, "siblings": [...]}} ] }
@@ -17,8 +18,14 @@
 //! lies in the asked key range, and that the rows are one contiguous run (no
 //! row skipped inside a page). The chain read (the book recorded that report
 //! and accepts it) is left to the caller, who reads its own node.
+//!
+//! A manifest anchored through a catalog (ADR-0059 amendment 1) carries
+//! `anchor.catalog`: the report then signs the catalog root, and the check adds
+//! the catalog leaf (it names exactly this manifest) with its path and its two
+//! neighbours (the only leaf of its dataset in that catalog).
 
 use crate::anchor;
+use crate::catalog::{self, CatalogHeader, LeafProof};
 use crate::manifest::{ManifestHeader, ShardEntry};
 use crate::row::{cells_json, decode_row, key_of};
 use borsh::BorshDeserialize;
@@ -137,6 +144,9 @@ pub struct Checked {
     pub report_hash: Hash32,
     /// The recovered publisher key.
     pub signer: [u8; 20],
+    /// The catalog the report signs, when the manifest is anchored through
+    /// one (ADR-0059 amendment 1); `None` for the manifest's own report.
+    pub catalog: Option<CatalogHeader>,
     /// `(shard, index, key)` of every row, in order.
     pub rows: Vec<(u32, u64, i128)>,
 }
@@ -160,8 +170,29 @@ pub fn check_rows_answer(
     }
     let rb = hex_field(&answer["anchor"]["report"], "anchor.report")?;
     let report = SignedReport::try_from_slice(&rb).map_err(|_| field("anchor.report (borsh)"))?;
-    let signer = anchor::verify(&header, &report)
-        .map_err(|e| falsity(format!("publisher signature: {e}")))?;
+    let (signer, catalog) = match answer["anchor"].get("catalog") {
+        None | Some(Value::Null) => (
+            anchor::verify(&header, &report)
+                .map_err(|e| falsity(format!("publisher signature: {e}")))?,
+            None,
+        ),
+        Some(c) => {
+            let cb = hex_field(&c["header"], "anchor.catalog.header")?;
+            let ch = CatalogHeader::try_from_slice(&cb)
+                .map_err(|_| field("anchor.catalog.header (borsh)"))?;
+            let lb = hex_field(&c["leaf"], "anchor.catalog.leaf")?;
+            let lp =
+                LeafProof::try_from_slice(&lb).map_err(|_| field("anchor.catalog.leaf (borsh)"))?;
+            ch.proves(&lp)
+                .map_err(|e| falsity(format!("catalog leaf: {e}")))?;
+            if ch.publisher != header.publisher || !lp.leaf.names(&header) {
+                return Err(falsity("the catalog leaf does not name this manifest"));
+            }
+            let s = catalog::verify(&ch, &report)
+                .map_err(|e| falsity(format!("publisher signature over the catalog: {e}")))?;
+            (s, Some(ch))
+        }
+    };
     let digest = report.payload.digest();
     let report_hash = report.hash();
     if let Some(d) = answer["anchor"].get("digest") {
@@ -250,7 +281,19 @@ pub fn check_rows_answer(
         digest,
         report_hash,
         signer,
+        catalog,
         rows,
+    })
+}
+
+/// `anchor.catalog` of an answer whose manifest rests on catalog `header`
+/// with leaf proof `lp`.
+pub fn catalog_json(header: &CatalogHeader, lp: &LeafProof) -> Value {
+    json!({
+        "number": header.number,
+        "root": header.root().to_string(),
+        "header": hex0x(&borsh::to_vec(header).unwrap_or_default()),
+        "leaf": hex0x(&borsh::to_vec(lp).unwrap_or_default()),
     })
 }
 
@@ -330,6 +373,77 @@ mod tests {
         );
         assert_eq!(c.manifest_root, m.header.root());
         assert_eq!(c.signer, anchor::address_of(&SECRET).expect("ok"));
+    }
+
+    /// The fixture's manifest anchored through a catalog of three datasets
+    /// instead of its own report (ADR-0059 amendment 1).
+    fn catalog_fixture() -> (Value, Manifest, catalog::Catalog) {
+        use crate::catalog::{Catalog, CatalogLeaf};
+        let (mut a, m) = fixture();
+        let other = |d: &str| CatalogLeaf {
+            publisher: m.header.publisher.clone(),
+            dataset: d.into(),
+            version: 1,
+            prev: Hash32::ZERO,
+            root: Hash32([3; 32]),
+        };
+        let c = Catalog::build(
+            m.header.publisher.clone(),
+            None,
+            1_700_000_100,
+            vec![
+                other("a.first"),
+                CatalogLeaf::of(&m.header),
+                other("z.last"),
+            ],
+        )
+        .expect("ok");
+        let i = c.find(&m.header.dataset).expect("listed");
+        let report = catalog::sign(&SECRET, &c.header).expect("ok");
+        a["anchor"] = json!({
+            "report": hex0x(&borsh::to_vec(&report).expect("ok")),
+            "digest": report.payload.digest().to_string(),
+            "catalog": catalog_json(&c.header, &c.leaf_proof(i).expect("ok")),
+        });
+        (a, m, c)
+    }
+
+    #[test]
+    fn a_catalog_anchored_answer_checks_and_forgeries_fail() {
+        let (a, m, c) = catalog_fixture();
+        let ck = check_rows_answer(&a, Some(3), Some(6)).expect("ok");
+        assert_eq!(ck.catalog.as_ref(), Some(&c.header));
+        assert_eq!(ck.manifest_root, m.header.root());
+        // The manifest's own report with a catalog section, a leaf of another
+        // dataset, a dropped neighbour, a catalog signed for another root.
+        let own = anchor::sign(&SECRET, &m.header).expect("ok");
+        let mut wrong_report = a.clone();
+        wrong_report["anchor"]["report"] = json!(hex0x(&borsh::to_vec(&own).expect("ok")));
+        let mut other_leaf = a.clone();
+        other_leaf["anchor"]["catalog"] = catalog_json(&c.header, &c.leaf_proof(0).expect("ok"));
+        let mut no_neighbour = a.clone();
+        let mut lp = c.leaf_proof(1).expect("ok");
+        lp.right = None;
+        no_neighbour["anchor"]["catalog"] = catalog_json(&c.header, &lp);
+        let mut other_root = a.clone();
+        let mut h2 = c.header.clone();
+        h2.created_unix += 1;
+        other_root["anchor"]["catalog"] = catalog_json(&h2, &c.leaf_proof(1).expect("ok"));
+        for (name, bad) in [
+            ("manifest report", &wrong_report),
+            ("other leaf", &other_leaf),
+            ("neighbour", &no_neighbour),
+            ("other root", &other_root),
+        ] {
+            assert!(check_rows_answer(bad, Some(3), Some(6)).is_err(), "{name}");
+        }
+        // Without the catalog section the catalog's report signs nothing here.
+        let mut bare = a.clone();
+        bare["anchor"]
+            .as_object_mut()
+            .expect("object")
+            .remove("catalog");
+        assert!(check_rows_answer(&bare, Some(3), Some(6)).is_err());
     }
 
     #[test]

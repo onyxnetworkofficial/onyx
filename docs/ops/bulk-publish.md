@@ -80,7 +80,8 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
 9. **Upload (wait 20 to 40 minutes, then about 1 minute per GB on a fast line).**
    `onyx-publish upload --dir v1 --node <node address> --wait-secs 3600`
    The node takes your manifest only once Base Sepolia has made the anchor final, so the command
-   waits and says so every 15 seconds. Then it sends every shard and prints `UPLOADED ...`. If it
+   waits and says so every 15 seconds. Then it sends every shard, asks the node again which shards
+   it still misses, sends those again (at most 3 rounds), and prints `UPLOADED ... rounds=N`. If it
    stops halfway, run the same command again: it sends only what the node is still missing.
 10. **Check it like a buyer would (2 minutes).**
     `curl -s "<node address>/v1/bulk/<publisher id>/<dataset id>/rows?from=<a key>&to=<a later key>&limit=100" > rows.json`
@@ -99,6 +100,28 @@ Make a CSV with only the new rows (keys at or after the last key already publish
 
 Version 2 keeps every shard of version 1 and adds the new ones; only the new shards are uploaded.
 The schema, license and names stay the same across versions. Keep every version folder.
+
+## Many datasets with one anchor (catalogs)
+
+Each `anchor` above is one transaction. With many datasets, or a refresh of all of them, anchor
+one **catalog** instead (ADR-0059 amendment 1): it lists the newest manifest of each dataset, and
+one `postReport` covers them all.
+
+1. Build and sign nothing per dataset: run only `onyx-publish build` for each new version folder.
+2. List those folders, one per line, in a file (`dirs.txt`).
+3. `onyx-publish catalog-build --publisher <publisher id> --dirs dirs.txt --out catalog0.bin`
+   (the next time: `--prev catalog0.bin --out catalog1.bin`; datasets you do not list keep the
+   version the previous catalog had).
+4. `onyx-publish catalog-sign --key publisher.key --catalog catalog0.bin`
+5. `onyx-publish catalog-anchor --catalog catalog0.bin --rpc https://sepolia.base.org --chain-id 84532 --book <signed book address> --gas-key publisher.key`
+6. `onyx-publish catalog-upload --catalog catalog0.bin --node <node address> --wait-secs 3600`
+7. For each folder: `onyx-publish upload --dir <folder> --node <node address> --catalog 0`
+
+Rules: catalogs go to a node in number order; each lists every dataset of the one before and moves
+each by at most one version; a dataset enters at version 1, or at the version after the newest one
+it already has with its own anchor. Keep every catalog file and its `.report`: a catalog is never
+rebuilt or signed twice under one number (the book would suspend your key). A dataset that only a
+catalog anchors cannot back a storage deal yet (ADR-0059 amendment 1 item 7).
 
 ## If something goes wrong
 

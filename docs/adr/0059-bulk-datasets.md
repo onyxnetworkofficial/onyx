@@ -1,7 +1,8 @@
 # ADR-0059: Bulk datasets: bounded shards, a signed and anchored manifest, proven range reads
 
 ## Status
-Accepted, 2026-10-29 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) accepted
+2026-11-03 after review THREATS CAT-R1, being built (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -88,6 +89,83 @@ on-chain book whose `(key, sequence)` entries are never reused.
   publisher uploads), a storage deposit per GiB, availability strikes, archive/full/pruned node
   roles, and pricing. The owner's datasets are published under a neutral publisher name and
   domain (docs/ops/bulk-publish.md).
+
+## Amendment 1 (2026-11-03): one anchor for many manifests (catalogs)
+
+**Why.** Item 4 costs one `postReport` per manifest version: 247,695 gas, about 0.0000015 test ETH
+at Base Sepolia's 0.006 gwei (measured on the first-contributor publish, 2026-10-30; the base fee
+alone is 0.005 gwei). The first publisher's next 8,495 datasets and every refresh of its 549 would
+need one each, and its key has test ETH for about 124 (docs/TRACKER.md 2026-11-03; no faucet for
+the owner). The byte quota is not the limit: those 8,495 fit in 7 GiB. Reviewed before building
+(THREATS CAT-R1: "build with the listed changes"); every finding is taken below.
+
+**Decision.** Beside item 4, a publisher may anchor a **catalog**: one signed report that commits
+to the newest manifest of each of its datasets.
+
+1. **Catalog format** (`onyx-bulk`). A leaf is the row `"onyx-bulk-catalog-leaf-v1" ‖
+   borsh(publisher, dataset, version, previous manifest root, manifest root)` (CAT-R1 H1, H2: the
+   publisher and the previous root are in the leaf); leaves are sorted strictly by dataset id (one
+   per dataset) and committed by the ADR-0003 Merkle root over rows (`from_rows`, so a path binds
+   its index and the leaf count). Header (Borsh): format, publisher source id, catalog number n,
+   the root of catalog n - 1 (zero for n = 0), creation time, leaf count, leaves root. Catalog
+   root = `keccak256("onyx-bulk-catalog-v1" ‖ borsh(header))`. At most `MAX_CATALOG_LEAVES`
+   (10,000) leaves.
+2. **Signature and anchor: the same scheme and the same book.** `SignedPayload {source:
+   publisher, key, metric: "bulk.catalog", subject: Aggregate("catalog"), value: Bytes(catalog
+   root), observed_unix: creation time, sequence}`, the sequence fixed by n
+   (`keccak256("onyx-bulk-catalog-sequence-v1" ‖ borsh(n))`, first 8 bytes). Two catalogs with one
+   number under one key share `(key, sequence)`: the book records the equivocation and suspends the
+   key. The creation time must be strictly later than catalog n - 1's (CAT-R1 M3: the book files a
+   fact by source, metric, subject and observed time, so two catalogs with one time would be a fact
+   equivocation that suspends the key and takes every dataset offline); the tool keeps each catalog
+   on disk before signing and checks `sequenceOf` before it posts. One `postReport` per catalog.
+3. **Between catalogs, append only.** Catalog n + 1 names the root of catalog n (the newest one
+   still anchored: a catalog the book withdrew is set aside and never counts, CAT-R1 H3), keeps
+   every dataset of n, and moves each by at most one version: the same leaf, or version v + 1
+   whose leaf names version v's root as its previous root. A dataset enters a catalog at version
+   1 (previous root zero), or, for a dataset whose versions so far have their own reports, at
+   the next version, naming the newest of those (CAT-R1 L2). A node that sees an anchored
+   catalog break this, or an anchored catalog n that differs from the one it holds, marks the
+   publisher's catalog datasets forked (served no more) until the other side reads withdrawn,
+   when the mark clears by itself (CAT-R1 L4, as R-BULK-5).
+4. **No second root for one version, whichever anchor** (CAT-R1 M1). A leaf `(dataset, v,
+   root)` is accepted only when the book's `sequenceOf(key, sequence_for(dataset, v))` is zero or
+   holds a report of that same root, and a held manifest of that version has that root. A
+   manifest report posted later for a catalog-anchored version with another root forks the
+   dataset, as item 5.
+5. **Node.** `POST /v1/bulk/catalogs` takes the header, every leaf and the signed report (at most
+   `MAX_CATALOG_LEAVES` leaves and 4 MiB; catalogs count against the publisher's dataset quota
+   by leaf, CAT-R1 L1), keeps it only when its report is final in the pinned book with the key
+   active (or retired) and not suspended, its predecessor is held (or n = 0), and items 3 and 4
+   hold. `GET /v1/bulk/catalogs/{publisher}/{n}` serves a held catalog, so a node that missed one
+   can fetch it; a refusal for a missing predecessor names the number needed (CAT-R1 L3). `POST
+   /v1/bulk/manifests` then takes a manifest without its own report when a held catalog has its
+   leaf, with the manifest's publisher, dataset, version, previous root and root equal to the
+   leaf's (CAT-R1 H2). From there it is held exactly as an individually anchored manifest
+   (quotas, shards, tiers, reads), anchored by the first held catalog that lists it; the anchor
+   check is cached by report digest, so one chain read covers every manifest of a catalog.
+6. **Answers and the client check.** Rows of a catalog-anchored version carry the catalog header,
+   the leaf with its path, the two neighbouring leaves with their paths (or the first or last
+   position), and the catalog's report. `check_rows_answer` checks the leaf against the catalog
+   root and that the neighbours' dataset ids bracket it, so the leaf is the only one for its
+   dataset in that catalog (CAT-R1 M2 a). `onyx-check --bulk` reads the catalog's report on the
+   caller's node at its finalized block (`report`, `factView`, `keyState`) and item 4's
+   `sequenceOf`.
+7. **Unchanged, and what does not work yet.** Per-manifest anchors stay valid (the first 549
+   datasets keep theirs). A storage deal (ADR-0060) checks one manifest's own report on chain
+   (`OnyxStorage._checkAnchor`): a dataset anchored only through a catalog cannot back a deal,
+   and since the book refuses reports observed more than 7 days ago, a manifest older than that
+   can no longer get its own (CAT-R1 M4); a catalog path in the planned OnyxStorage v2
+   `createDeal` would lift it. No dataset can be taken down (no tombstone leaf; CAT-R1 L5).
+
+**What it costs in trust.** With one report per manifest the book itself refuses a second manifest
+for one version. With catalogs it refuses a second catalog with one number under one key; a
+publisher who rewrites a dataset across catalogs, or across keys after a rotation, is caught by
+every node that holds both catalogs (items 3 and 4) and by anyone comparing them, then by the
+reviewer, not by the book alone. A client that sees one catalog knows its leaf is the only one for
+its dataset in that catalog (item 6), not that later catalogs kept it; walking the catalog chain
+back (an opt-in `onyx-check --bulk --history`, about 0.6 KiB per catalog) is not built yet (THREATS
+CAT-2). Both catalogs are signed by the publisher's key, so the publisher cannot deny either.
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and

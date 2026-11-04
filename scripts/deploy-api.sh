@@ -33,8 +33,8 @@
 #   ONYX_API_MCP       the agent connector at https://<domain>/mcp: apps/agent in /opt/onyx-mcp
 #                      run by deploy/systemd/onyx-mcp.service (proposals on; skipped with a note when
 #                      the host has no Node 20 or later)
-#   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 16 GiB in all,
-#                      8 GiB per publisher, when the export's deployment.json pins a signed book
+#   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 20 GiB in all,
+#                      12 GiB per publisher (SCALE-4), when the export's deployment.json pins a signed book
 #   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (32 connections per address on 443),
 #                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
@@ -80,10 +80,11 @@ conn_cap=${ONYX_API_CONN_CAP:-1}
 # Publishers' large datasets (contributor loop CL5, ADR-0059, docs/ops/bulk-publish.md): on when the
 # export's manifest pins a signed book (the node takes only manifests anchored there), off with
 # ONYX_API_BULK=0. The limits fit the host's disk (about 34 GB free on 2026-10-30): 16 GiB for every
-# publisher together, 8 GiB for one; up to 1,000 datasets per publisher (one per chain and metric).
+# publisher together, 8 GiB for one; up to 10,000 datasets per publisher (one per chain and metric; the first publisher's next phase
+# brings it to about 9,050, ADR-0059 amendment 1).
 bulk=${ONYX_API_BULK:-1}
 if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
-  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=16 ONYX_BULK_QUOTA_GIB=8 ONYX_BULK_MAX_DATASETS=1000 >>"$stage/node.env"
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=20 ONYX_BULK_QUOTA_GIB=12 ONYX_BULK_MAX_DATASETS=10000 >>"$stage/node.env"
 fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
 # pinned by <export>/observations/pins (metric=0x<template id>, one per line); the node checks

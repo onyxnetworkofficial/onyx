@@ -19,6 +19,7 @@
 //! that signed report) is the caller's (`onyx-check --bulk`).
 
 pub mod anchor;
+pub mod catalog;
 pub mod input;
 pub mod manifest;
 pub mod row;
@@ -27,6 +28,7 @@ pub mod shard;
 pub mod wire;
 
 pub use anchor::{AnchorError, ANCHOR_METRIC};
+pub use catalog::{Catalog, CatalogError, CatalogHeader, CatalogLeaf, LeafProof, CATALOG_METRIC};
 pub use manifest::{Manifest, ManifestError, ManifestHeader, ShardEntry, RIGHTS_STATEMENT};
 pub use row::{Cell, RowError};
 pub use schema::{Column, ColumnKind, Schema, SchemaError};

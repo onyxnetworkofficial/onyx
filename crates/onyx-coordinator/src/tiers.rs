@@ -226,6 +226,10 @@ pub struct TieredStore<H: CasPrune, W: CasPrune> {
     tiers: Mutex<BTreeMap<Hash32, Tier>>,
     /// Tracked roots that are bulk shards (kind `Shard`), not row batches.
     bulk: Mutex<BTreeSet<Hash32>>,
+    /// Held across a save's snapshot, write and rename: two saves at once (two
+    /// uploads) never share the temp file, and the file renamed last is the
+    /// newest snapshot (review BULK-LOSS-1).
+    saving: Mutex<()>,
 }
 
 impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
@@ -236,6 +240,7 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             warm,
             tiers: Mutex::new(BTreeMap::new()),
             bulk: Mutex::new(BTreeSet::new()),
+            saving: Mutex::new(()),
         }
     }
 
@@ -392,8 +397,14 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
     }
 
     /// Write the tier of every tracked shard to `path` (one JSON object,
-    /// root hex to tier), through a new file renamed into place.
+    /// root hex to tier), through a new file synced and renamed into place.
+    /// Saves run one at a time, each from a snapshot taken under the lock, so
+    /// a slower save never renames an older map over a newer one.
     pub fn save(&self, path: &Path) -> Result<(), TierError> {
+        let _one = self
+            .saving
+            .lock()
+            .map_err(|e| TierError::File(e.to_string()))?;
         let map: serde_json::Map<String, serde_json::Value> = self
             .tiers
             .lock()
@@ -410,13 +421,24 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             .collect();
         let text = serde_json::Value::Object(map).to_string();
         let tmp = path.with_extension("tmp");
-        std::fs::write(&tmp, text)
-            .and_then(|()| std::fs::rename(&tmp, path))
-            .map_err(|e| TierError::File(e.to_string()))
+        let write = || -> std::io::Result<()> {
+            use std::io::Write;
+            let mut f = std::fs::File::create(&tmp)?;
+            f.write_all(text.as_bytes())?;
+            f.sync_all()?;
+            std::fs::rename(&tmp, path)?;
+            // The rename itself outlives a power cut (best effort).
+            if let Some(d) = path.parent().and_then(|d| std::fs::File::open(d).ok()) {
+                let _ = d.sync_all();
+            }
+            Ok(())
+        };
+        write().map_err(|e| TierError::File(e.to_string()))
     }
 
     /// Read the tiers saved by [`Self::save`]. A tier whose rows are not where
-    /// it says (hot or warm) is refused, so a lost copy is found at start.
+    /// it says (hot or warm) is refused, so a lost copy is found at start; a
+    /// damaged one is found when it is read.
     pub fn load(&self, path: &Path) -> Result<(), TierError> {
         let text = std::fs::read_to_string(path).map_err(|e| TierError::File(e.to_string()))?;
         let v: serde_json::Value =
@@ -440,9 +462,12 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
             let tier = Tier::parse(text)
                 .filter(|t| kind == Kind::Rows || *t != Tier::Cold)
                 .ok_or_else(|| TierError::File(format!("bad tier for {k}")))?;
+            // Present, not read back: reading every shard at start took 76 s for
+            // 7.2 GB on the testnet node (SCALE-2); a damaged copy is still
+            // refused when it is read (`get` rechecks the hash).
             let present = match tier {
-                Tier::Hot => self.hot.has(kind, &key),
-                Tier::Warm => self.warm.has(kind, &key),
+                Tier::Hot => self.hot.present(kind, &key),
+                Tier::Warm => self.warm.present(kind, &key),
                 Tier::Cold => true,
             };
             if kind == Kind::Shard {
@@ -981,6 +1006,48 @@ mod tests {
         )
         .expect("w");
         assert!(t2.load(&path).is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// BULK-LOSS-1: saves from many threads at once (the node's two upload
+    /// slots) all succeed, and the file left is the newest map: every root
+    /// stored before the last save loads back.
+    #[test]
+    fn bulk_loss_1_concurrent_saves_keep_every_root() {
+        let t = std::sync::Arc::new(store());
+        let dir = std::env::temp_dir().join(format!("onyx-tiers-race-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).expect("dir");
+        let path = std::sync::Arc::new(dir.join("tiers.json"));
+        let threads: Vec<_> = (0..8u8)
+            .map(|i| {
+                let (t, path) = (t.clone(), path.clone());
+                std::thread::spawn(move || {
+                    let mut roots = Vec::new();
+                    for j in 0..25u8 {
+                        let root = t.put_rows(&[vec![i, j, 0, 0, 0, 0, 0, 0]]).expect("put");
+                        t.save(&path).expect("every save succeeds");
+                        roots.push(root);
+                    }
+                    roots
+                })
+            })
+            .collect();
+        let roots: Vec<Hash32> = threads
+            .into_iter()
+            .flat_map(|h| h.join().expect("thread"))
+            .collect();
+        // No save after the threads: the file the last save renamed must
+        // already hold every root.
+        let t2 = TieredStore::new(MemCas::new(), MemCas::new());
+        for i in 0..8u8 {
+            for j in 0..25u8 {
+                t2.put_rows(&[vec![i, j, 0, 0, 0, 0, 0, 0]]).expect("put");
+            }
+        }
+        t2.load(&path).expect("load");
+        assert_eq!(roots.len(), 200);
+        assert!(roots.iter().all(|r| t2.tier(r) == Some(Tier::Hot)));
+        assert!(!dir.join("tiers.tmp").exists(), "no temp file left");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

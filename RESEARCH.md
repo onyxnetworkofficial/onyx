@@ -2010,3 +2010,39 @@ Onyx's v0 differs.
 - `blockhash` reaches only the 256 most recent blocks
   ([Solidity docs](https://docs.soliditylang.org/en/latest/units-and-global-variables.html#block-and-transaction-properties)):
   hence the seed and activation windows of 256 blocks.
+
+## Answers checked only when disputed (ROADMAP S17 "aggregated proofs", 2026-11-03)
+
+Why: at 128 nodes one `answer` costs about 471,000 gas of execution plus 4 KiB of node list in
+calldata (docs/STORAGE-NETWORK.md section 10). Most of it is ranking every node for the shard
+(`_challenged`: a weight per node and a heap). Sending many answers in one call shares only the
+list and the transaction base, roughly 15% at 128 nodes. Checking fewer answers on chain is the
+larger lever.
+
+- **Filecoin, optimistic Window PoSt** ([FIP-0010](https://github.com/filecoin-project/FIPs/blob/master/FIPS/fip-0010.md),
+  read 2026-11-03): most Window PoSt proofs are "accepted without on-chain verification"; the
+  proof is kept with a snapshot of the partition, and it "may be 'disputed' by anyone" for 1,800
+  epochs ("2x finality"). A successful dispute fines the miner per sector in the partition plus a
+  flat fee, marks the sectors faulty, and pays the disputer a fixed reward; the fine above the
+  reward is burned. Stated aim: remove "nearly all of the burden of checking SubmitWindowedPoSt
+  proofs from the chain". Proofs that recover faulty power are still checked at once.
+- **Filecoin Window PoSt** ([spec](https://spec.filecoin.io/algorithms/pos/post/)): sectors are
+  "proven in partitions - not individually"; one partition is at most 2,349 sectors "with 10
+  challenges each", one SNARK per partition: one answer covers many sectors. A missed proof is a
+  fault and costs collateral.
+- **Sia** ([file contracts](https://sia.tech/learn/file-contracts)): one storage proof per
+  contract per proof window, a segment of the file plus its Merkle path against the contract's
+  root; no proof in the window resolves the contract as missed. One proof per contract, checked
+  by every node of the chain: the cost Onyx has today.
+- **Optimistic rollups** ([ethereum.org](https://ethereum.org/developers/docs/scaling/optimistic-rollups/)):
+  results are assumed right unless a fraud proof shows otherwise within a challenge window; the
+  safety needs one honest watcher who has the data and is online within the window.
+
+For Onyx: (1) one call per node per epoch, posting a hash of all its answers and the list of
+(deal, slot) pairs it answers; (2) pay held until a dispute window ends; (3) anyone may dispute
+one answer by sending it with a path into the posted hash, and the contract then runs today's full
+check on that one answer; a wrong answer slashes the node and pays the disputer; (4) the answers
+themselves stay in the posting call's calldata, so watchers can read them from the chain. Open
+questions for the ADR: who watches (the other holders are paid to), how long the window must be
+on Base, what an unanswered slot costs when the posted list leaves it out, and whether ranking
+can be skipped at posting (the node could post slots it is not challenged on).

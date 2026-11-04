@@ -1,4 +1,4 @@
-Latest: 2026-11-03: every benchmark rerun (L5), results rebuild byte for byte; the live API now limits each visitor to 1,200 requests a minute (L19); testnet live at https://onyx.cryptagraph.com
+Latest: 2026-11-04: 9,044 on-chain-metric datasets live, refreshed daily under one anchor a day (catalogs, S22), searchable on the All datasets page; testnet live at https://onyx.cryptagraph.com
 - Website: browse checked data, run the checks in your browser, add data (form, API or AI connector)
 - Markets on Base Sepolia: two U.S. debt futures (one settled from observed data, one open)
 - Test insurance: frost and earthquake cover, backed by a 1,000 tONYX pool

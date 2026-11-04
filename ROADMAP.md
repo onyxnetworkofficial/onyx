@@ -1097,6 +1097,20 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       until the first paid read
 - [ ] S19 Read payments (THREATS STORAGE-8): nodes paid per read or with retrieval receipts, so
       serving is rewarded and refusing to serve is visible
+- [ ] S22 Catalogs for bulk datasets (ADR-0059 amendment 1, review THREATS CAT-R1): one anchor for
+      the newest manifest of each of a publisher's datasets, so thousands of datasets and their
+      refreshes need one `postReport` each time, not one per dataset (the first publisher has test
+      ETH for about 124 anchors). Built 2026-11-03: `onyx_bulk::catalog`, the node's catalog routes,
+      `onyx-publish catalog-*`, `onyx-check` (rehearsed in `scripts/bulk-demo.sh` step 13: 3
+      datasets on 1 postReport). Live 2026-11-04: catalog 0 (1 postReport, 247,456 gas) lists all
+      9,026 datasets of the first publisher (8,477 new, 24 refreshed, 525 kept; 22.1 M rows, 7.2 GB),
+      every one proven by `onyx-check` on a sample of 12, every shard stored (audit after publish,
+      THREATS BULK-LOSS-1). Catalog 1, the first daily refresh (1 postReport): 483 new versions,
+      the 18 widest datasets among them (9,044 in all). Search: `GET /v1/bulk?q=&limit=&after=` (every word in the id, pages in
+      id order, `total` and `next`; the AI connector's `onyx_list_bulk_datasets` takes the same) and
+      the site's All datasets page (#/datasets: search, 50 a page, a dataset opens to its newest rows
+      and the two commands that check them). Left: CAT-1 (a history check), CAT-2 (deals), CAT-3
+      (takedown), CAT-4 (catalog lines past 10,000 datasets a publisher)
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);

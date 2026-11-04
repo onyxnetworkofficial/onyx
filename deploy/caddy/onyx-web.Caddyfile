@@ -39,10 +39,15 @@ onyx.cryptagraph.com {
 		method GET HEAD
 		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants /v1/bulk /v1/bulk/*
 	}
+	# Bulk answers send no ETag (every one is no-store), so compressing them breaks no 304 (THREATS
+	# NS17-8, SCALE-1): a 100-row answer goes from 197 KB to 26 KB, the dataset list from 2.6 MB to
+	# 0.5 MB. Shard files (application/octet-stream) are not in encode's types and pass as they are.
+	@bulk_json path /v1/bulk /v1/bulk/*
 	handle @api {
 		request_body {
 			max_size 1KiB
 		}
+		encode @bulk_json zstd gzip
 		reverse_proxy 127.0.0.1:8080 {
 			transport http {
 				dial_timeout 3s
@@ -225,7 +230,8 @@ onyx.cryptagraph.com {
 	}
 
 	handle {
-		# Compression for the site only: the API's answers keep their own ETags (304s).
+		# The site's files; of the API only the bulk answers are compressed (above), the rest keep
+		# their own ETags (304s).
 		encode zstd gzip
 		root * /srv/onyx/current
 		@immutable path /app/immutable/*

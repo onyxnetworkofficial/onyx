@@ -832,10 +832,24 @@ pub async fn check_bulk(
             anchor: None,
         };
     };
+    // A manifest anchored through a catalog: the book must hold no report of
+    // another root under the manifest's own sequence (ADR-0059 amendment 1
+    // item 4).
+    if checked.catalog.is_some() {
+        let own = onyx_bulk::anchor::payload(&checked.header, &checked.signer);
+        match onyx_api::bulk_serve::read_sequence(rpc, &book, &own.key, own.sequence).await {
+            Err(e) => return BulkOutcome::Undecided(e),
+            Ok(d) if d != Hash32::ZERO && d != own.digest() => return BulkOutcome::Refused(
+                "the book holds another report for this dataset version: two roots for one version"
+                    .into(),
+            ),
+            Ok(_) => {}
+        }
+    }
     match onyx_api::bulk_serve::read_anchor(rpc, chain_id, &book, &checked.report, &checked.signer).await {
         Err(e) => BulkOutcome::Undecided(e),
         Ok(onyx_api::bulk_serve::AnchorState::Not(why)) => BulkOutcome::Refused(format!(
-            "the manifest's signed report is not anchored in your book at your finalized block: {why}"
+            "the signed report (the manifest's, or its catalog's) is not anchored in your book at your finalized block: {why}"
         )),
         Ok(onyx_api::bulk_serve::AnchorState::Anchored(a)) => BulkOutcome::Verified {
             checked,

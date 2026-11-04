@@ -25,6 +25,14 @@
 //!   at a finalized block (rechecked at most [`ANCHOR_RECHECK_SECS`] apart:
 //!   a key marked compromised stops serving, CL5-6).
 //!
+//! - Catalogs (ADR-0059 amendment 1): `POST /v1/bulk/catalogs` takes a
+//!   catalog (one signed report for the newest manifest of each of a
+//!   publisher's datasets) under the same anchor rule, after its predecessor
+//!   and only as its append-only successor; `POST /v1/bulk/manifests` with
+//!   `{manifest, catalog: n}` then takes a manifest that catalog n lists, as if
+//!   it had its own report. `GET /v1/bulk/catalogs/{publisher}/{n}` serves a
+//!   held catalog.
+//!
 //! The upload routes are mounted outside the server guard's 12 s deadline
 //! (a 64 MiB body may take longer): they have their own concurrency limit
 //! and deadline ([`MAX_UPLOADS`], [`UPLOAD_TIMEOUT`]).
@@ -40,9 +48,10 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Extension, Json, Router};
 use borsh::BorshDeserialize;
+use onyx_bulk::catalog::{self as cat, Catalog, CatalogHeader, LeafProof};
 use onyx_bulk::manifest::{shards_tree, Manifest, ShardEntry};
 use onyx_bulk::shard::check_shard;
-use onyx_bulk::wire::{hex0x, row_json, shard_json};
+use onyx_bulk::wire::{catalog_json, hex0x, row_json, shard_json};
 use onyx_coordinator::cas::{Cas, FsCas, Kind};
 use onyx_coordinator::tiers::{Tier, TieredStore};
 use onyx_core::{keccak256, Hash32, SignedReport};
@@ -53,6 +62,8 @@ use std::path::{Path as FsPath, PathBuf};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
+/// Largest `POST /v1/bulk/catalogs` body (hex doubles the Borsh catalog).
+pub const MAX_CATALOG_BODY: usize = 2 * cat::MAX_CATALOG_BYTES + 64 * 1024;
 /// Largest `POST /v1/bulk/manifests` body (hex doubles the 8 MiB manifest).
 pub const MAX_MANIFEST_BODY: usize = 2 * onyx_bulk::manifest::MAX_MANIFEST_BYTES + 64 * 1024;
 /// Uploads (manifests and shards) handled at once; more wait.
@@ -301,12 +312,66 @@ pub async fn read_anchor(
     }))
 }
 
-/// One held version.
+/// The digest `book` holds under `(key, sequence)` (`sequenceOf`) at the
+/// finalized block of `rpc`'s chain; zero when none (ADR-0059 amendment 1
+/// item 4: a catalog-anchored version must have no other report under its
+/// own sequence).
+pub async fn read_sequence(
+    rpc: &dyn JsonRpc,
+    book: &[u8; 20],
+    key: &Hash32,
+    sequence: u64,
+) -> Result<Hash32, String> {
+    let (_, at) = finalized(rpc).await?;
+    let mut d = selector("sequenceOf(bytes32,uint64)").to_vec();
+    d.extend_from_slice(&key.0);
+    d.extend_from_slice(&[0u8; 24]);
+    d.extend_from_slice(&sequence.to_be_bytes());
+    let r = rpc
+        .call(
+            "eth_call",
+            json!([{"to": hex0x(book), "data": hex0x(&d)}, {"blockHash": at.to_string()}]),
+        )
+        .await?;
+    let b = hex_of(&r)?;
+    Ok(Hash32(word(&b, 0).unwrap_or([0u8; 32])))
+}
+
+/// One held version. `report` and `anchor` are the manifest's own, or, with
+/// `catalog`, those of the catalog that lists it (ADR-0059 amendment 1).
 struct Held {
     manifest: Manifest,
     report: SignedReport,
     signer: [u8; 20],
     anchor: AnchorView,
+    catalog: Option<Box<(CatalogHeader, LeafProof)>>,
+}
+
+/// One held catalog.
+struct HeldCatalog {
+    header: CatalogHeader,
+    /// The whole catalog with its leaves' tree: kept only for the newest
+    /// catalog of a publisher (the next successor check needs it). An older
+    /// one is read from its file when asked (review SCALE-3: a catalog a day
+    /// of about 9,000 leaves held every body, about 1 MB a day).
+    body: Option<Arc<CatalogBody>>,
+    report: SignedReport,
+    signer: [u8; 20],
+    anchor: AnchorView,
+}
+
+/// A catalog and its leaves' tree, built once (a leaf proof per upload
+/// rebuilt the tree: about 18,000 hashes for 9,000 leaves; SCALE-3).
+struct CatalogBody {
+    catalog: Catalog,
+    tree: MerkleTree,
+}
+
+impl CatalogBody {
+    fn new(catalog: Catalog) -> Arc<Self> {
+        let tree = cat::leaves_tree(&catalog.leaves);
+        Arc::new(CatalogBody { catalog, tree })
+    }
 }
 
 #[derive(Default)]
@@ -357,13 +422,61 @@ pub struct BulkStore {
     loads: tokio::sync::Semaphore,
     uploads: tokio::sync::Semaphore,
     touched: Mutex<BTreeMap<Hash32, u64>>,
-    /// Manifest root -> (host time of the last chain read, whether it held).
+    /// Report digest -> (host time of the last chain read, whether it held):
+    /// one read covers every manifest a catalog anchors.
     rechecked: Mutex<BTreeMap<Hash32, (u64, bool)>>,
+    /// Held catalogs by publisher and number.
+    catalogs: RwLock<BTreeMap<String, BTreeMap<u64, HeldCatalog>>>,
+    /// The older catalog body read last (uploads against one catalog come
+    /// in runs).
+    old_body: Mutex<Option<(String, u64, Arc<CatalogBody>)>>,
     /// Keys the book did not know or had suspended, by host time: a POST
     /// under one is refused without a chain read for [`KEY_REFUSAL_SECS`].
     refused_keys: Mutex<BTreeMap<Hash32, u64>>,
     free_per_minute: u32,
     rate: Caches,
+}
+
+fn decode_manifest(b: &[u8]) -> Result<Manifest, ApiError> {
+    Manifest::from_bytes(b).map_err(|e| {
+        ApiError::new(
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "bulk_bad_manifest",
+            e.to_string(),
+        )
+    })
+}
+
+/// Store a held version: `v{n}.bin` (manifest, report, anchor) and, for a
+/// catalog anchor, `v{n}.catalog.bin` (catalog header and leaf proof),
+/// written first; an own report removes a stale catalog file first.
+fn write_version(
+    dir: &FsPath,
+    m: &Manifest,
+    r: &SignedReport,
+    anchor: &AnchorView,
+    catalog: Option<&(CatalogHeader, LeafProof)>,
+) -> Result<(), ApiError> {
+    let v = m.header.version;
+    let io = |e: std::io::Error| internal(format!("bulk store: {e}"));
+    let cf = dir.join(format!("v{v}.catalog.bin"));
+    match catalog {
+        Some(c) => {
+            write_atomic(&cf, &borsh::to_vec(c).map_err(|_| internal("encode"))?).map_err(io)?
+        }
+        None => {
+            if cf.exists() {
+                std::fs::remove_file(&cf).map_err(io)?;
+            }
+        }
+    }
+    let rec = borsh::to_vec(&(
+        m.to_bytes(),
+        borsh::to_vec(r).unwrap_or_default(),
+        anchor_to_bytes(anchor),
+    ))
+    .map_err(|_| internal("encode"))?;
+    write_atomic(&dir.join(format!("v{v}.bin")), &rec).map_err(io)
 }
 
 fn write_atomic(path: &FsPath, bytes: &[u8]) -> std::io::Result<()> {
@@ -403,6 +516,8 @@ impl BulkStore {
             uploads: tokio::sync::Semaphore::new(MAX_UPLOADS),
             touched: Mutex::new(BTreeMap::new()),
             rechecked: Mutex::new(BTreeMap::new()),
+            catalogs: RwLock::new(BTreeMap::new()),
+            old_body: Mutex::new(None),
             refused_keys: Mutex::new(BTreeMap::new()),
             free_per_minute: FREE_PER_MINUTE,
             rate: Caches::new(1, 1),
@@ -414,6 +529,7 @@ impl BulkStore {
                 .load(&tiers)
                 .map_err(|e| format!("bulk tiers: {e}"))?;
         }
+        s.load_catalogs()?;
         s.load_manifests()?;
         let now = (s.now)();
         if let Ok(mut t) = s.touched.lock() {
@@ -428,6 +544,294 @@ impl BulkStore {
     pub fn with_free_per_minute(mut self, n: u32) -> Self {
         self.free_per_minute = n.max(1);
         self
+    }
+
+    fn catalogs_dir(&self) -> PathBuf {
+        self.dir.join("catalogs")
+    }
+
+    /// Every held catalog, checked again: decodes, shape, signature, and each
+    /// the successor of the one before.
+    fn load_catalogs(&self) -> Result<(), String> {
+        let Ok(pubs) = std::fs::read_dir(self.catalogs_dir()) else {
+            return Ok(());
+        };
+        let mut all: BTreeMap<String, BTreeMap<u64, HeldCatalog>> = BTreeMap::new();
+        for p in pubs.flatten() {
+            let mut held: BTreeMap<u64, HeldCatalog> = BTreeMap::new();
+            // Only the catalog before is kept whole while the files are read.
+            let mut before: Option<Catalog> = None;
+            let mut n = 0u64;
+            loop {
+                let f = p.path().join(format!("{n}.bin"));
+                let Ok(bytes) = std::fs::read(&f) else { break };
+                let (c, r, a): (Vec<u8>, Vec<u8>, Vec<u8>) =
+                    BorshDeserialize::try_from_slice(&bytes)
+                        .map_err(|_| format!("{}: does not decode", f.display()))?;
+                let catalog = Catalog::try_from_slice(&c)
+                    .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
+                catalog
+                    .validate()
+                    .map_err(|e| format!("{}: {e}", f.display()))?;
+                let report = SignedReport::try_from_slice(&r)
+                    .map_err(|_| format!("{}: report does not decode", f.display()))?;
+                let signer = cat::verify(&catalog.header, &report)
+                    .map_err(|e| format!("{}: {e}", f.display()))?;
+                let anchor =
+                    anchor_from_bytes(&a).ok_or_else(|| format!("{}: anchor", f.display()))?;
+                if catalog.header.number != n {
+                    return Err(format!(
+                        "{}: holds number {}",
+                        f.display(),
+                        catalog.header.number
+                    ));
+                }
+                if let Some(prev) = &before {
+                    catalog
+                        .check_successor(prev)
+                        .map_err(|e| format!("{}: {e}", f.display()))?;
+                }
+                held.insert(
+                    n,
+                    HeldCatalog {
+                        header: catalog.header.clone(),
+                        body: None,
+                        report,
+                        signer,
+                        anchor,
+                    },
+                );
+                before = Some(catalog);
+                n += 1;
+            }
+            if let (Some(last), Some(c)) = (held.values_mut().next_back(), before) {
+                last.body = Some(CatalogBody::new(c));
+            }
+            if let Some(first) = held.values().next() {
+                all.insert(first.header.publisher.0.clone(), held);
+            }
+        }
+        *self.catalogs.write().map_err(|_| "lock")? = all;
+        Ok(())
+    }
+
+    /// Take a catalog and its signed report (ADR-0059 amendment 1 items 3-5):
+    /// its shape and signature, at most `max_datasets` leaves, after the
+    /// newest held catalog of its publisher as its append-only successor (or
+    /// number 0), each dataset entering at version 1 or after a held version
+    /// its leaf names, no leaf disagreeing with a held version, and the report
+    /// recorded and accepted at the finalized block with the key active.
+    pub async fn accept_catalog(
+        &self,
+        catalog: &[u8],
+        report: &[u8],
+    ) -> Result<(StatusCode, Value), ApiError> {
+        let bad =
+            |s: String| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "bulk_bad_catalog", s);
+        if catalog.len() > cat::MAX_CATALOG_BYTES {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "body_too_large",
+                "catalog over its cap",
+            ));
+        }
+        let c = Catalog::try_from_slice(catalog)
+            .map_err(|_| bad("catalog: not a Borsh catalog".into()))?;
+        c.validate().map_err(|e| bad(e.to_string()))?;
+        let r = SignedReport::try_from_slice(report)
+            .map_err(|_| bad_request("report: not a Borsh SignedReport"))?;
+        let signer = cat::verify(&c.header, &r).map_err(|e| bad(format!("signature: {e}")))?;
+        if c.leaves.len() > self.limits.max_datasets {
+            return Err(ApiError::new(
+                StatusCode::PAYLOAD_TOO_LARGE,
+                "bulk_quota_exceeded",
+                format!(
+                    "a publisher may hold at most {} datasets on this node",
+                    self.limits.max_datasets
+                ),
+            ));
+        }
+        let publisher = c.header.publisher.0.clone();
+        let n = c.header.number;
+        let now = (self.now)();
+        if self
+            .refused_keys
+            .lock()
+            .ok()
+            .and_then(|k| k.get(&r.payload.key).copied())
+            .is_some_and(|t| now.saturating_sub(t) < KEY_REFUSAL_SECS)
+        {
+            return Err(not_anchored(reason::KEY));
+        }
+        let conflict = |code: &'static str, s: String| ApiError::new(StatusCode::CONFLICT, code, s);
+        {
+            let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+            let held = cs.get(&publisher);
+            if let Some(same) = held.and_then(|m| m.get(&n)) {
+                if same.header.root() == c.header.root() && same.report == r {
+                    return Ok((StatusCode::OK, catalog_status(&same.header)));
+                }
+                return Err(conflict(
+                    "bulk_catalog_conflict",
+                    format!("this node holds another catalog {n} of this publisher"),
+                ));
+            }
+            let newest = held.and_then(|m| m.last_key_value());
+            let prev = match (n, newest) {
+                (0, None) => None,
+                (n, Some((k, p))) if Some(n) == k.checked_add(1) => {
+                    let p = p
+                        .body
+                        .clone()
+                        .ok_or_else(|| internal("the newest catalog is not held whole"))?;
+                    c.check_successor(&p.catalog)
+                        .map_err(|e| conflict("bulk_catalog_not_successor", e.to_string()))?;
+                    Some(p)
+                }
+                (_, newest) => {
+                    let need = newest.map_or(0, |(k, _)| k.saturating_add(1));
+                    return Err(conflict(
+                        "bulk_catalog_gap",
+                        format!("catalogs are taken in order: this node needs catalog {need} next"),
+                    )
+                    .with_field("need", json!(need)));
+                }
+            };
+            let ds = self.datasets.read().map_err(|_| internal("lock"))?;
+            for l in &c.leaves {
+                let d = ds.get(&(publisher.clone(), l.dataset.clone()));
+                let held_at = |v: u32| {
+                    d.and_then(|d| d.versions.get((v as usize).checked_sub(1)?))
+                        .map(|h| h.manifest.header.root())
+                };
+                if let Some(root) = held_at(l.version) {
+                    if root != l.root {
+                        return Err(conflict(
+                            "bulk_conflicting_anchor",
+                            format!(
+                                "{}: version {} is held with another root",
+                                l.dataset, l.version
+                            ),
+                        ));
+                    }
+                }
+                let listed_before = prev
+                    .as_ref()
+                    .is_some_and(|p| p.catalog.find(&l.dataset).is_some());
+                if !listed_before && l.version > 1 && held_at(l.version - 1) != Some(l.prev) {
+                    return Err(conflict(
+                        "bulk_catalog_entry",
+                        format!(
+                            "{} enters at version {}: upload version {} (its previous root) first",
+                            l.dataset,
+                            l.version,
+                            l.version - 1
+                        ),
+                    ));
+                }
+            }
+        }
+        let anchor = match self.anchor_of(&r, &signer).await? {
+            AnchorState::Anchored(a) => a,
+            AnchorState::Not(why) => {
+                if why == reason::KEY {
+                    if let Ok(mut k) = self.refused_keys.lock() {
+                        k.insert(r.payload.key, now);
+                    }
+                }
+                return Err(not_anchored(why));
+            }
+        };
+        let mut cs = self.catalogs.write().map_err(|_| internal("lock"))?;
+        let held = cs.entry(publisher.clone()).or_default();
+        if held.last_key_value().map_or(0, |(k, _)| k + 1) != n {
+            return Err(conflict(
+                "bulk_catalog_gap",
+                "another catalog was taken meanwhile; upload again".into(),
+            ));
+        }
+        let rec = borsh::to_vec(&(
+            catalog.to_vec(),
+            borsh::to_vec(&r).unwrap_or_default(),
+            anchor_to_bytes(&anchor),
+        ))
+        .map_err(|_| internal("encode"))?;
+        write_atomic(
+            &self
+                .catalogs_dir()
+                .join(&publisher)
+                .join(format!("{n}.bin")),
+            &rec,
+        )
+        .map_err(|e| internal(format!("bulk store: {e}")))?;
+        self.mark(r.payload.digest(), true);
+        let status = catalog_status(&c.header);
+        // The one before is no longer the newest: its body is read from its
+        // file when asked.
+        if let Some(mut before) = held.last_entry() {
+            before.get_mut().body = None;
+        }
+        held.insert(
+            n,
+            HeldCatalog {
+                header: c.header.clone(),
+                body: Some(CatalogBody::new(c)),
+                report: r,
+                signer,
+                anchor,
+            },
+        );
+        Ok((StatusCode::CREATED, status))
+    }
+
+    /// A held catalog and its report (`GET /v1/bulk/catalogs/{publisher}/{n}`).
+    pub fn catalog_record(&self, publisher: &str, n: u64) -> Option<(Catalog, SignedReport)> {
+        let (body, report) = self.catalog_body(publisher, n).ok()??;
+        Some((body.catalog.clone(), report))
+    }
+
+    /// Held catalog `n` of `publisher` whole, with its report: the newest
+    /// from memory, an older one from its file (checked against the header
+    /// taken at upload). `Ok(None)` when not held.
+    fn catalog_body(
+        &self,
+        publisher: &str,
+        n: u64,
+    ) -> Result<Option<(Arc<CatalogBody>, SignedReport)>, String> {
+        let (header, report) = {
+            let cs = self.catalogs.read().map_err(|_| "lock")?;
+            let Some(h) = cs.get(publisher).and_then(|m| m.get(&n)) else {
+                return Ok(None);
+            };
+            if let Some(b) = &h.body {
+                return Ok(Some((b.clone(), h.report.clone())));
+            }
+            (h.header.clone(), h.report.clone())
+        };
+        if let Ok(c) = self.old_body.lock() {
+            if let Some((p, k, b)) = c.as_ref() {
+                if p == publisher && *k == n && b.catalog.header == header {
+                    return Ok(Some((b.clone(), report)));
+                }
+            }
+        }
+        let f = self.catalogs_dir().join(publisher).join(format!("{n}.bin"));
+        let bytes = std::fs::read(&f).map_err(|e| format!("{}: {e}", f.display()))?;
+        let (c, _, _): (Vec<u8>, Vec<u8>, Vec<u8>) = BorshDeserialize::try_from_slice(&bytes)
+            .map_err(|_| format!("{}: does not decode", f.display()))?;
+        let catalog = Catalog::try_from_slice(&c)
+            .map_err(|_| format!("{}: catalog does not decode", f.display()))?;
+        if catalog.header != header {
+            return Err(format!("{}: not the catalog taken", f.display()));
+        }
+        catalog
+            .validate()
+            .map_err(|e| format!("{}: {e}", f.display()))?;
+        let body = CatalogBody::new(catalog);
+        if let Ok(mut c) = self.old_body.lock() {
+            *c = Some((publisher.to_string(), n, body.clone()));
+        }
+        Ok(Some((body, report)))
     }
 
     fn manifests_dir(&self) -> PathBuf {
@@ -457,8 +861,28 @@ impl BulkStore {
                         Manifest::from_bytes(&m).map_err(|e| format!("{}: {e}", f.display()))?;
                     let report = SignedReport::try_from_slice(&r)
                         .map_err(|_| format!("{}: report does not decode", f.display()))?;
-                    let signer = onyx_bulk::anchor::verify(&manifest.header, &report)
-                        .map_err(|e| format!("{}: {e}", f.display()))?;
+                    let cf = d.path().join(format!("v{v}.catalog.bin"));
+                    let catalog: Option<Box<(CatalogHeader, LeafProof)>> = match std::fs::read(&cf)
+                    {
+                        Ok(b) => Some(Box::new(
+                            BorshDeserialize::try_from_slice(&b)
+                                .map_err(|_| format!("{}: does not decode", cf.display()))?,
+                        )),
+                        Err(_) => None,
+                    };
+                    let signer = match &catalog {
+                        None => onyx_bulk::anchor::verify(&manifest.header, &report)
+                            .map_err(|e| format!("{}: {e}", f.display()))?,
+                        Some(c) => {
+                            c.0.proves(&c.1)
+                                .map_err(|e| format!("{}: {e}", cf.display()))?;
+                            if !c.1.leaf.names(&manifest.header) {
+                                return Err(format!("{}: leaf of another manifest", cf.display()));
+                            }
+                            cat::verify(&c.0, &report)
+                                .map_err(|e| format!("{}: {e}", f.display()))?
+                        }
+                    };
                     let anchor =
                         anchor_from_bytes(&a).ok_or_else(|| format!("{}: anchor", f.display()))?;
                     if manifest.header.version != v {
@@ -478,6 +902,7 @@ impl BulkStore {
                         report,
                         signer,
                         anchor,
+                        catalog,
                     });
                     v += 1;
                 }
@@ -537,13 +962,7 @@ impl BulkStore {
         manifest: &[u8],
         report: &[u8],
     ) -> Result<(StatusCode, Value), ApiError> {
-        let m = Manifest::from_bytes(manifest).map_err(|e| {
-            ApiError::new(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "bulk_bad_manifest",
-                e.to_string(),
-            )
-        })?;
+        let m = decode_manifest(manifest)?;
         let r = SignedReport::try_from_slice(report)
             .map_err(|_| bad_request("report: not a Borsh SignedReport"))?;
         let signer = onyx_bulk::anchor::verify(&m.header, &r).map_err(|e| {
@@ -553,6 +972,105 @@ impl BulkStore {
                 format!("signature: {e}"),
             )
         })?;
+        self.accept_held(m, r, signer, None, None).await
+    }
+
+    /// Take a manifest that held catalog `number` of its publisher lists
+    /// (ADR-0059 amendment 1 item 5): the leaf names exactly this manifest,
+    /// and no report of another root uses the manifest's own sequence (item 4).
+    pub async fn accept_manifest_in_catalog(
+        &self,
+        manifest: &[u8],
+        number: u64,
+    ) -> Result<(StatusCode, Value), ApiError> {
+        let m = decode_manifest(manifest)?;
+        let h = &m.header;
+        let (signer, anchor) = {
+            let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+            let c = cs
+                .get(&h.publisher.0)
+                .and_then(|n| n.get(&number))
+                .ok_or_else(|| {
+                    ApiError::new(
+                        StatusCode::CONFLICT,
+                        "bulk_catalog_unknown",
+                        format!("this node holds no catalog {number} of this publisher: upload it first"),
+                    )
+                })?;
+            (c.signer, c.anchor.clone())
+        };
+        // The newest catalog is in memory; an older one is one file read (rare:
+        // uploads follow the newest catalog).
+        let (body, report) = self
+            .catalog_body(&h.publisher.0, number)
+            .map_err(|e| internal(format!("catalog: {e}")))?
+            .ok_or_else(|| internal("catalog gone"))?;
+        let i = body
+            .catalog
+            .find(&h.dataset)
+            .filter(|i| body.catalog.leaves[*i].names(h))
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::UNPROCESSABLE_ENTITY,
+                    "bulk_not_in_catalog",
+                    format!("catalog {number} does not list this manifest"),
+                )
+            })?;
+        let lp = body
+            .catalog
+            .leaf_proof_in(&body.tree, i)
+            .ok_or_else(|| internal("leaf proof"))?;
+        let header = body.catalog.header.clone();
+        let own = onyx_bulk::anchor::payload(h, &signer);
+        let used = self.sequence_used(&own.key, own.sequence).await?;
+        if used != Hash32::ZERO && used != own.digest() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "bulk_conflicting_anchor",
+                "the signed book holds another report under this manifest's own sequence (another root for this version)",
+            ));
+        }
+        let digest = report.payload.digest();
+        let fresh = self
+            .rechecked
+            .lock()
+            .ok()
+            .and_then(|c| c.get(&digest).copied())
+            .is_some_and(|(t, held)| held && (self.now)().saturating_sub(t) < ANCHOR_RECHECK_SECS);
+        self.accept_held(
+            m,
+            report,
+            signer,
+            Some(Box::new((header, lp))),
+            fresh.then_some(anchor),
+        )
+        .await
+    }
+
+    /// The digest the book holds under `(key, sequence)` at the finalized
+    /// block (zero: none).
+    async fn sequence_used(&self, key: &Hash32, sequence: u64) -> Result<Hash32, ApiError> {
+        let unavailable = |e: String| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "bulk_chain_unavailable",
+                format!("the chain could not be read ({e}); try again"),
+            )
+            .with_header("retry-after", "30".into())
+        };
+        read_sequence(self.rpc.as_ref(), &self.pin.book, key, sequence)
+            .await
+            .map_err(unavailable)
+    }
+
+    async fn accept_held(
+        &self,
+        m: Manifest,
+        r: SignedReport,
+        signer: [u8; 20],
+        catalog: Option<Box<(CatalogHeader, LeafProof)>>,
+        known: Option<AnchorView>,
+    ) -> Result<(StatusCode, Value), ApiError> {
         let h = &m.header;
         let key = (h.publisher.0.clone(), h.dataset.clone());
         let root = h.root();
@@ -603,16 +1121,19 @@ impl BulkStore {
             }
             self.check_quota(&ds, &key, h.byte_count)?;
         }
-        let anchor = match self.anchor_of(&r, &signer).await? {
-            AnchorState::Anchored(a) => a,
-            AnchorState::Not(why) => {
-                if why == reason::KEY {
-                    if let Ok(mut k) = self.refused_keys.lock() {
-                        k.insert(r.payload.key, now);
+        let anchor = match known {
+            Some(a) => a,
+            None => match self.anchor_of(&r, &signer).await? {
+                AnchorState::Anchored(a) => a,
+                AnchorState::Not(why) => {
+                    if why == reason::KEY {
+                        if let Ok(mut k) = self.refused_keys.lock() {
+                            k.insert(r.payload.key, now);
+                        }
                     }
+                    return Err(not_anchored(why));
                 }
-                return Err(not_anchored(why));
-            }
+            },
         };
         // A held manifest with another root for this version: if the book no
         // longer holds it (its key was compromised from before it, review
@@ -653,6 +1174,11 @@ impl BulkStore {
                     }
                     std::fs::rename(dir.join(format!("v{v}.bin")), &to)
                         .map_err(|e| internal(format!("bulk store: {e}")))?;
+                    let cf = dir.join(format!("v{v}.catalog.bin"));
+                    if cf.exists() {
+                        std::fs::rename(&cf, to.with_extension("catalog.bin"))
+                            .map_err(|e| internal(format!("bulk store: {e}")))?;
+                    }
                 }
                 if let Some(prev) = d.versions.last() {
                     m.check_successor(&prev.manifest).map_err(|e| {
@@ -663,18 +1189,12 @@ impl BulkStore {
         }
         if let Some(other) = d.versions.get_mut(h.version as usize - 1) {
             if other.manifest.header.root() == root && other.report != r {
-                let rec = borsh::to_vec(&(
-                    m.to_bytes(),
-                    borsh::to_vec(&r).unwrap_or_default(),
-                    anchor_to_bytes(&anchor),
-                ))
-                .map_err(|_| internal("encode"))?;
-                write_atomic(&dir.join(format!("v{}.bin", h.version)), &rec)
-                    .map_err(|e| internal(format!("bulk store: {e}")))?;
+                write_version(&dir, &m, &r, &anchor, catalog.as_deref())?;
+                self.mark(r.payload.digest(), true);
                 other.report = r;
                 other.signer = signer;
                 other.anchor = anchor;
-                self.mark(root, true);
+                other.catalog = catalog;
                 let mut body = self.missing_json(&other.manifest);
                 body["reanchored"] = json!(true);
                 return Ok((StatusCode::OK, body));
@@ -702,21 +1222,15 @@ impl BulkStore {
                 "another version was taken meanwhile; upload again",
             ));
         }
-        let rec = borsh::to_vec(&(
-            m.to_bytes(),
-            borsh::to_vec(&r).unwrap_or_default(),
-            anchor_to_bytes(&anchor),
-        ))
-        .map_err(|_| internal("encode"))?;
-        write_atomic(&dir.join(format!("v{}.bin", h.version)), &rec)
-            .map_err(|e| internal(format!("bulk store: {e}")))?;
+        write_version(&dir, &m, &r, &anchor, catalog.as_deref())?;
         let body = self.missing_json(&m);
-        self.mark(root, true);
+        self.mark(r.payload.digest(), true);
         d.versions.push(Held {
             manifest: m,
             report: r,
             signer,
             anchor,
+            catalog,
         });
         Ok((StatusCode::CREATED, body))
     }
@@ -864,10 +1378,16 @@ impl BulkStore {
         // Stored even when the root is held already: every upload is checked
         // against this dataset's entry and schema (review CL5-R3), and the
         // put of identical bytes changes nothing.
+        // The answer says "stored" only when the file is in the hot store under
+        // this root and the tier is tracked (review BULK-LOSS-1).
         let tiers = self.tiers.clone();
         let tiers_file = self.dir.join("tiers.json");
+        let want = *root;
         tokio::task::spawn_blocking(move || -> Result<(), String> {
-            tiers.put(Kind::Shard, &bytes).map_err(|e| e.to_string())?;
+            let key = tiers.put(Kind::Shard, &bytes).map_err(|e| e.to_string())?;
+            if key != want || !tiers.hot().has(Kind::Shard, &want) || tiers.tier(&want).is_none() {
+                return Err(format!("the shard did not read back under {want}"));
+            }
             tiers.save(&tiers_file).map_err(|e| e.to_string())
         })
         .await
@@ -876,6 +1396,11 @@ impl BulkStore {
         if let Ok(mut t) = self.touched.lock() {
             t.insert(*root, (self.now)());
         }
+        eprintln!(
+            "onyx-node: bulk: stored shard {root} of {publisher}/{dataset} ({} bytes{})",
+            e.bytes,
+            if already { ", held already" } else { "" }
+        );
         Ok((
             if already {
                 StatusCode::OK
@@ -1035,9 +1560,10 @@ impl BulkStore {
         c.iter().find(|(k, _)| k == ck).map(|(_, l)| l.clone())
     }
 
-    fn mark(&self, root: Hash32, held: bool) {
+    /// Record a chain read of the report with this digest.
+    fn mark(&self, digest: Hash32, held: bool) {
         if let Ok(mut c) = self.rechecked.lock() {
-            c.insert(root, ((self.now)(), held));
+            c.insert(digest, ((self.now)(), held));
         }
     }
 
@@ -1047,7 +1573,8 @@ impl BulkStore {
     /// or its fact disputed) is skipped, so the honest earlier versions keep
     /// serving (review CL5-R4); none holding is a refusal.
     async fn serving(&self, key: &Key) -> Result<Held, ApiError> {
-        let versions: Vec<(Hash32, SignedReport, [u8; 20])> = {
+        type Version = (Hash32, SignedReport, [u8; 20]);
+        let versions: Vec<Version> = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
             let d = ds.get(key).ok_or_else(unknown_dataset)?;
             if d.forked.is_some() {
@@ -1062,11 +1589,12 @@ impl BulkStore {
         let mut first_refusal = None;
         for (root, report, signer) in versions {
             let now = (self.now)();
+            let digest = report.payload.digest();
             let last = self
                 .rechecked
                 .lock()
                 .ok()
-                .and_then(|c| c.get(&root).copied());
+                .and_then(|c| c.get(&digest).copied());
             let held = match last {
                 Some((t, held)) if now.saturating_sub(t) < ANCHOR_RECHECK_SECS => held,
                 _ => match self.anchor_of(&report, &signer).await? {
@@ -1079,12 +1607,12 @@ impl BulkStore {
                         }) {
                             h.anchor = a;
                         }
-                        self.mark(root, true);
+                        self.mark(digest, true);
                         true
                     }
                     AnchorState::Not(why) => {
                         first_refusal.get_or_insert(why);
-                        self.mark(root, false);
+                        self.mark(digest, false);
                         false
                     }
                 },
@@ -1100,6 +1628,7 @@ impl BulkStore {
                         report: h.report.clone(),
                         signer: h.signer,
                         anchor: h.anchor.clone(),
+                        catalog: h.catalog.clone(),
                     });
                 }
             }
@@ -1112,13 +1641,39 @@ impl BulkStore {
         .with_field("reason", json!(first_refusal.unwrap_or(reason::NOT_ACCEPTED))))
     }
 
-    /// `GET /v1/bulk`.
-    pub fn list(&self) -> Result<Value, ApiError> {
+    /// `GET /v1/bulk`: every dataset, or with a [`ListQuery`] the datasets
+    /// whose `publisher/dataset` holds every search word, one page at a time
+    /// in id order. `total` counts every match; `next` is the cursor of the
+    /// page after (`null` on the last).
+    pub fn list(&self, q: &ListQuery) -> Result<Value, ApiError> {
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
-        let items: Vec<Value> = ds
-            .iter()
-            .filter_map(|((p, d), x)| {
-                let h = x.latest()?;
+        let matches = |p: &str, d: &str| {
+            let id = format!("{p}/{d}");
+            q.words.iter().all(|w| id.contains(w.as_str()))
+        };
+        let (mut total, mut more) = (0usize, false);
+        let mut page = Vec::new();
+        for ((p, d), x) in ds.iter() {
+            let Some(h) = x.latest() else { continue };
+            if !matches(p, d) {
+                continue;
+            }
+            total += 1;
+            if q.after.as_ref().is_some_and(|a| (p, d) <= (&a.0, &a.1)) {
+                continue;
+            }
+            if q.limit.is_some_and(|n| page.len() >= n) {
+                more = true;
+                continue;
+            }
+            page.push((p, d, (h, x.forked.is_some())));
+        }
+        let next = more
+            .then(|| page.last().map(|(p, d, _)| format!("{p}/{d}")))
+            .flatten();
+        let items: Vec<Value> = page
+            .into_iter()
+            .map(|(p, d, (h, forked))| {
                 let hd = &h.manifest.header;
                 let stored = h
                     .manifest
@@ -1126,16 +1681,17 @@ impl BulkStore {
                     .iter()
                     .filter(|e| self.tiers.tier(&e.root).is_some())
                     .count();
-                Some(json!({
+                json!({
                     "publisher": p, "dataset": d, "version": hd.version,
                     "root": hd.root().to_string(), "rows": hd.row_count, "bytes": hd.byte_count,
                     "shards": hd.shard_count, "stored_shards": stored,
                     "key_min": hd.key_min.to_string(), "key_max": hd.key_max.to_string(),
-                    "license": hd.rights.license, "forked": x.forked.is_some(),
-                }))
+                    "license": hd.rights.license, "forked": forked,
+                    "created_unix": hd.created_unix,
+                })
             })
             .collect();
-        Ok(json!({"datasets": items}))
+        Ok(json!({"datasets": items, "total": total, "next": next}))
     }
 
     /// `GET /v1/bulk/{publisher}/{dataset}`.
@@ -1180,7 +1736,7 @@ impl BulkStore {
             "publisher": publisher,
             "dataset": dataset,
             "manifest": header_json(&h.manifest),
-            "anchor": h.anchor.to_json(&h.report),
+            "anchor": anchor_json(h),
             "versions": versions,
             "shards": shards,
         }))
@@ -1194,12 +1750,9 @@ impl BulkStore {
         q: &RowsQuery,
     ) -> Result<Value, ApiError> {
         let key = (publisher.to_string(), dataset.to_string());
-        let Held {
-            manifest,
-            report,
-            anchor,
-            ..
-        } = self.serving(&key).await?;
+        let held = self.serving(&key).await?;
+        let anchor = anchor_json(&held);
+        let manifest = held.manifest;
         let from = q.from.unwrap_or(i128::MIN);
         let to = q.to.unwrap_or(i128::MAX);
         let mut skip = q.page.saturating_mul(q.limit);
@@ -1254,7 +1807,7 @@ impl BulkStore {
             "publisher": publisher,
             "dataset": dataset,
             "manifest": header_json(&manifest),
-            "anchor": anchor.to_json(&report),
+            "anchor": anchor,
             "query": {
                 "from": q.from.map(|f| f.to_string()),
                 "to": q.to.map(|t| t.to_string()),
@@ -1267,6 +1820,15 @@ impl BulkStore {
             "proof": "each row: Merkle proof to its shard root; each shard: proof to the manifest's shards_root; the manifest root: signed by the publisher (EIP-191, ADR-0028) and recorded in OnyxSignedBook at the finalized block named in anchor.checked_at",
         }))
     }
+}
+
+fn catalog_status(h: &CatalogHeader) -> Value {
+    json!({
+        "publisher": h.publisher.0,
+        "number": h.number,
+        "root": h.root().to_string(),
+        "leaves": h.leaf_count,
+    })
 }
 
 fn header_json(m: &Manifest) -> Value {
@@ -1290,6 +1852,16 @@ fn header_json(m: &Manifest) -> Value {
         "key_max": h.key_max.to_string(),
         "shards_root": h.shards_root.to_string(),
     })
+}
+
+/// The answer's `anchor`: the report's anchor view and, for a version a
+/// catalog lists, `catalog` (its header and the leaf proof).
+fn anchor_json(h: &Held) -> Value {
+    let mut a = h.anchor.to_json(&h.report);
+    if let Some(c) = &h.catalog {
+        a["catalog"] = catalog_json(&c.0, &c.1);
+    }
+    a
 }
 
 fn anchor_to_bytes(a: &AnchorView) -> Vec<u8> {
@@ -1400,6 +1972,93 @@ pub struct RowsQuery {
     pub limit: u64,
 }
 
+/// Datasets per `GET /v1/bulk` page at most.
+pub const MAX_LIST_PAGE: usize = 500;
+/// Characters of a `GET /v1/bulk` search at most.
+pub const MAX_SEARCH_CHARS: usize = 64;
+
+/// `GET /v1/bulk` query: `q` (search words, each must be in
+/// `publisher/dataset`; letters, digits, `.`, `-`, `_`, `/` and spaces),
+/// `limit` (1..=[`MAX_LIST_PAGE`]) and `after` (the `next` cursor of the page
+/// before). None given: every dataset, as before.
+#[derive(Debug, Default, PartialEq, Eq)]
+pub struct ListQuery {
+    /// Lowercase search words.
+    pub words: Vec<String>,
+    /// Page size; `None` lists every match.
+    pub limit: Option<usize>,
+    /// Only ids after this `(publisher, dataset)`.
+    pub after: Option<(String, String)>,
+}
+
+/// `+` as a space and `%XX` escapes; `None` for a broken escape or non-UTF-8.
+fn url_decode(v: &str) -> Option<String> {
+    let b = v.as_bytes();
+    let mut out = Vec::with_capacity(b.len());
+    let mut i = 0;
+    while i < b.len() {
+        match b[i] {
+            b'+' => out.push(b' '),
+            b'%' => {
+                let h = std::str::from_utf8(b.get(i + 1..i + 3)?).ok()?;
+                out.push(u8::from_str_radix(h, 16).ok()?);
+                i += 2;
+            }
+            c => out.push(c),
+        }
+        i += 1;
+    }
+    String::from_utf8(out).ok()
+}
+
+/// Parse the `GET /v1/bulk` query (see [`ListQuery`]).
+pub fn parse_list_query(q: Option<&str>) -> Result<ListQuery, ApiError> {
+    let mut out = ListQuery::default();
+    let mut seen: Vec<&str> = Vec::new();
+    for pair in q.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
+        let (k, v) = pair.split_once('=').unwrap_or((pair, ""));
+        if seen.contains(&k) {
+            return Err(bad_request(format!("{k} given twice")));
+        }
+        seen.push(k);
+        let v = url_decode(v).ok_or_else(|| bad_request(format!("{k}: a broken % escape")))?;
+        match k {
+            "q" => {
+                let ok = |c: char| c.is_ascii_alphanumeric() || " .-_/".contains(c);
+                if v.chars().count() > MAX_SEARCH_CHARS || !v.chars().all(ok) {
+                    return Err(bad_request(format!(
+                        "q: at most {MAX_SEARCH_CHARS} letters, digits, spaces and . - _ /"
+                    )));
+                }
+                out.words = v
+                    .split(' ')
+                    .filter(|w| !w.is_empty())
+                    .map(str::to_ascii_lowercase)
+                    .collect();
+            }
+            "limit" => {
+                out.limit = Some(
+                    v.parse::<usize>()
+                        .ok()
+                        .filter(|n| (1..=MAX_LIST_PAGE).contains(n))
+                        .ok_or_else(|| bad_request(format!("limit must be 1..={MAX_LIST_PAGE}")))?,
+                )
+            }
+            "after" => {
+                let (p, d) = v
+                    .split_once('/')
+                    .filter(|(p, d)| {
+                        onyx_core::ids::is_dotted_id(p) && onyx_core::ids::is_dotted_id(d)
+                    })
+                    .ok_or_else(|| bad_request("after: publisher/dataset, from the page's next"))?;
+                out.after = Some((p.to_string(), d.to_string()));
+            }
+            _ => return Err(bad_request(format!("unknown query parameter {k}"))),
+        }
+    }
+    Ok(out)
+}
+
 /// Parse `from`, `to` (decimal integers), `page` and `limit`.
 pub fn parse_rows_query(q: Option<&str>) -> Result<RowsQuery, ApiError> {
     let mut out = RowsQuery {
@@ -1460,6 +2119,7 @@ pub fn routes(store: Arc<BulkStore>) -> Router {
 pub fn peer_routes(store: Arc<BulkStore>) -> Router {
     Router::new()
         .route("/v1/bulk/manifests/{root}", get(get_manifest))
+        .route("/v1/bulk/catalogs/{publisher}/{n}", get(get_catalog))
         .route("/v1/bulk/shards/{root}", get(get_shard))
         .with_state(store)
 }
@@ -1468,6 +2128,7 @@ pub fn peer_routes(store: Arc<BulkStore>) -> Router {
 pub fn upload_routes(store: Arc<BulkStore>) -> Router {
     Router::new()
         .route("/v1/bulk/manifests", post(post_manifest))
+        .route("/v1/bulk/catalogs", post(post_catalog))
         .route(
             "/v1/bulk/{publisher}/{dataset}/shards/{root}",
             put(put_shard),
@@ -1517,10 +2178,7 @@ async fn list(
 ) -> Response {
     let r = (|| {
         limited(&store, client)?;
-        if q.is_some_and(|q| !q.is_empty()) {
-            return Err(bad_request("GET /v1/bulk takes no query parameters"));
-        }
-        store.list()
+        store.list(&parse_list_query(q.as_deref())?)
     })();
     match r {
         Ok(v) => no_store(StatusCode::OK, v),
@@ -1601,15 +2259,76 @@ async fn post_manifest(State(store): State<Arc<BulkStore>>, body: Body) -> Respo
                     "manifest body over its cap",
                 )
             })?;
-        let v: Value =
-            serde_json::from_slice(&b).map_err(|_| bad_request("body: JSON {manifest, report}"))?;
+        let v: Value = serde_json::from_slice(&b)
+            .map_err(|_| bad_request("body: JSON {manifest, report} or {manifest, catalog}"))?;
         let m = onyx_bulk::wire::hex_field(&v["manifest"], "manifest")
             .map_err(|e| bad_request(e.to_string()))?;
+        if let Some(n) = v.get("catalog").filter(|c| !c.is_null()) {
+            let n = n
+                .as_u64()
+                .ok_or_else(|| bad_request("catalog: the number of a held catalog"))?;
+            return s.accept_manifest_in_catalog(&m, n).await;
+        }
         let r = onyx_bulk::wire::hex_field(&v["report"], "report")
             .map_err(|e| bad_request(e.to_string()))?;
         s.accept_manifest(&m, &r).await
     })
     .await
+}
+
+async fn post_catalog(State(store): State<Arc<BulkStore>>, body: Body) -> Response {
+    let s = store.clone();
+    upload(&store, || async move {
+        let b = axum::body::to_bytes(body, MAX_CATALOG_BODY)
+            .await
+            .map_err(|_| {
+                ApiError::new(
+                    StatusCode::PAYLOAD_TOO_LARGE,
+                    "body_too_large",
+                    "catalog body over its cap",
+                )
+            })?;
+        let v: Value =
+            serde_json::from_slice(&b).map_err(|_| bad_request("body: JSON {catalog, report}"))?;
+        let c = onyx_bulk::wire::hex_field(&v["catalog"], "catalog")
+            .map_err(|e| bad_request(e.to_string()))?;
+        let r = onyx_bulk::wire::hex_field(&v["report"], "report")
+            .map_err(|e| bad_request(e.to_string()))?;
+        s.accept_catalog(&c, &r).await
+    })
+    .await
+}
+
+/// `GET /v1/bulk/catalogs/{publisher}/{n}`: `{publisher, number, root,
+/// catalog, report}` (Borsh hex), the body `POST /v1/bulk/catalogs` takes.
+async fn get_catalog(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<(String, String)>, PathRejection>,
+) -> Response {
+    let r = (|| -> Result<Value, ApiError> {
+        limited(&store, client)?;
+        let Path((p, n)) = path.map_err(|e| bad_request(e.body_text()))?;
+        let n: u64 = n.parse().map_err(|_| bad_request("n: a catalog number"))?;
+        let (c, rep) = store.catalog_record(&p, n).ok_or_else(|| {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "bulk_unknown_catalog",
+                "this node holds no such catalog",
+            )
+        })?;
+        Ok(json!({
+            "publisher": p,
+            "number": n,
+            "root": c.header.root().to_string(),
+            "catalog": hex0x(&borsh::to_vec(&c).unwrap_or_default()),
+            "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
+        }))
+    })();
+    match r {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    }
 }
 
 async fn put_shard(

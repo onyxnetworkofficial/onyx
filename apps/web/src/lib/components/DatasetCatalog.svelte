@@ -5,6 +5,7 @@
 	import { FALLBACK } from '#lib/mode.ts';
 	import LevelBadge from './LevelBadge.svelte';
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	let note = $state('');
 	// PP11: each card's newest date, from the shipped data files (scripts/gen-freshness.py).
 	let fresh = $state<Freshness>({});
@@ -35,7 +36,7 @@
 
 <section class="section" data-testid="catalog" aria-labelledby="catalog-heading">
 	<h2 id="catalog-heading">Datasets</h2>
-	<p class="lede" data-testid="catalog-lede">Every dataset on this site, with the proof level it states. Open one to see its values and check them in your browser.</p>
+	<p class="lede" data-testid="catalog-lede">Every dataset on this site, with the proof level it states. Open one to see its values and check them in your browser. Thousands more, published in bulk, are on <a href={resolve('/datasets')} data-testid="catalog-all">All datasets</a>.</p>
 	<ul class="cards">
 		{#each DATASETS as d (d.id)}
 			{@const held = FALLBACK && d.labelDerived}

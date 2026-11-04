@@ -11,7 +11,8 @@
 # anvil's finalized lag; start onyx-node with ONYX_BULK_DIR; upload; query ranges and check every
 # row with onyx-check --bulk against the book at the client's own finalized block; then the
 # attacks (THREATS CL5-1..7): a forged row, a forged shard, an unanchored swapped manifest, a key
-# the book does not know, a compromised key and its recovery; an appended version 2; a node restart.
+# the book does not know, a compromised key and its recovery; an appended version 2; a node restart;
+# three more datasets anchored by one catalog (ADR-0059 amendment 1), checked by onyx-check.
 # Prints measured sizes and times, then BULK DEMO LOCAL PASSED.
 # Env: BULK_DEMO_MIB (100), BULK_DEMO_SHARD_MIB (8), FOUNDRY_BIN (~/.foundry/bin), CARGO_TARGET_DIR.
 set -euo pipefail
@@ -273,12 +274,46 @@ curl -sf "$NODE/v1/bulk/$publisher/synthetic.chain-metrics/rows?from=$from&to=$(
 python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["signer"] == sys.argv[2], r' "$work/check-new.json" "$signer2"
 pass "served again under the new key $signer2"
 
+echo "13. catalogs (ADR-0059 amendment 1): three more datasets anchored by one postReport"
+"$pub_bin" synth --out "$work/small.csv" --schema-out "$work/small.json" --mib 1 >/dev/null
+: >"$work/catalog-dirs.txt"
+for d in a b c; do
+  "$pub_bin" build --schema "$work/small.json" --input "$work/small.csv" --dataset "synthetic.catalog-$d" \
+    --publisher "$publisher" --license CC0-1.0 --out "$work/cat-$d" --created "$(date +%s)" --shard-mib "$shard_mib" >/dev/null
+  echo "$work/cat-$d" >>"$work/catalog-dirs.txt"
+done
+"$pub_bin" catalog-build --publisher "$publisher" --dirs "$work/catalog-dirs.txt" --out "$work/catalog0.bin" | tee "$work/catalog.log"
+grep -q 'number=0 leaves=3' "$work/catalog.log" || fail "catalog 0 of three datasets"
+"$pub_bin" catalog-sign --key "$work/publisher2.key" --catalog "$work/catalog0.bin" >/dev/null
+"$pub_bin" catalog-anchor --catalog "$work/catalog0.bin" --rpc "$RPC" --chain-id 31337 --book "$book" \
+  --gas-key "$work/publisher2.key" | tee "$work/catalog-anchor.log"
+catalog_gas=$(grep -oE 'gas=[0-9]+' "$work/catalog-anchor.log" | cut -d= -f2)
+[ -n "$catalog_gas" ] || fail "catalog anchor"
+castw rpc anvil_mine 70 >/dev/null
+"$pub_bin" catalog-upload --catalog "$work/catalog0.bin" --node "$NODE" >/dev/null || fail "catalog upload"
+for d in a b c; do
+  "$pub_bin" upload --dir "$work/cat-$d" --node "$NODE" --catalog 0 >/dev/null || fail "upload synthetic.catalog-$d through catalog 0"
+done
+curl -sf "$NODE/v1/bulk/$publisher/synthetic.catalog-b/rows?limit=50" >"$work/rows-cat.json"
+python3 -I -c 'import json,sys; a=json.load(open(sys.argv[1]))["anchor"]; assert a["catalog"]["number"] == 0, a' "$work/rows-cat.json" \
+  || fail "the answer names no catalog"
+"$check_bin" --publisher "$publisher" --dataset synthetic.catalog-b --bulk "$work/rows-cat.json" --rpc "$RPC" --chain-id 31337 --book "$book" \
+  >"$work/check-cat.json" || { cat "$work/check-cat.json"; fail "onyx-check refused a catalog-anchored page"; }
+python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); assert r["ok"] and r["chainChecked"] and r["rows"] == 50, r' "$work/check-cat.json"
+stop "$node_pid"; node_pid=""
+start_node
+curl -sf "$NODE/v1/bulk/$publisher/synthetic.catalog-c/rows?limit=5" >"$work/rows-cat2.json"
+"$check_bin" --publisher "$publisher" --dataset synthetic.catalog-c --bulk "$work/rows-cat2.json" --rpc "$RPC" --chain-id 31337 --book "$book" >/dev/null \
+  || fail "catalog-anchored rows after a restart"
+pass "3 datasets on 1 postReport (gas $catalog_gas); rows proven by onyx-check, also after a restart"
+
 echo
 echo "MEASURED (local anvil, debug build)"
 echo "  input CSV:        $csv_bytes bytes ($mib MiB asked), synthetic in ${synth_secs}s"
 echo "  rows:             $rows in $shards shards, $shard_bytes shard bytes (target $shard_mib MiB each)"
 echo "  build (check, shard, Merkle, manifest): ${build_secs}s"
 echo "  anchor:           1 postReport, gas $anchor_gas, ${anchor_secs}s"
+echo "  catalog anchor:   1 postReport for 3 datasets, gas $catalog_gas"
 echo "  upload:           ${upload_secs}s ($(grep -oE 'bytes_sent=[0-9]+' "$work/upload.log"))"
 echo "  range queries:    2 pages of 1000 rows in${query_secs} s; $checked rows proven by onyx-check"
 echo "BULK DEMO LOCAL PASSED"

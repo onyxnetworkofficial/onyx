@@ -103,6 +103,8 @@ The node serves these routes (OpenAPI 3.1: [docs/api/openapi.json](docs/api/open
 | `POST` | `/v1/relay` | Send a self-signed action, its gas paid from credits | free |
 | `GET` | `/v1/bulk/manifests/{root}` | A held manifest by its root (storage network peers) | free |
 | `GET` | `/v1/bulk/shards/{root}` | A held shard file by its root (storage network peers) | free |
+| `POST` | `/v1/bulk/catalogs` | Hand a node an anchored catalog | free |
+| `GET` | `/v1/bulk/catalogs/{publisher}/{n}` | A held catalog by publisher and number | free |
 <!-- /generated:routes -->
 
 ## Quickstart
