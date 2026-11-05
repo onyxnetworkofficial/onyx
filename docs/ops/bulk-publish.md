@@ -101,6 +101,12 @@ Make a CSV with only the new rows (keys at or after the last key already publish
 Version 2 keeps every shard of version 1 and adds the new ones; only the new shards are uploaded.
 The schema, license and names stay the same across versions. Keep every version folder.
 
+Write the new CSV with every column of version 1, and a value in every cell the source has. An
+exporter that picks its columns again from only the new rows can lose one: over a day or two, two
+columns often hold the same values by chance, or one is empty. `build` publishes an empty cell of a
+nullable column as empty, and a published version never changes (THREATS BULK-COL-1). Decide which
+columns to drop (duplicates, all-empty) over the whole history, as for version 1.
+
 ## Many datasets with one anchor (catalogs)
 
 Each `anchor` above is one transaction. With many datasets, or a refresh of all of them, anchor
