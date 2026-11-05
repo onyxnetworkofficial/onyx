@@ -88,6 +88,10 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
     then
     `onyx-check --bulk rows.json --publisher <publisher id> --dataset <dataset id> --from <a key> --to <a later key> --rpc https://sepolia.base.org --chain-id 84532 --book <signed book address>`
     It prints `"ok": true` with your publisher, dataset and row count when every row is proven.
+    Add `--history <node address>` to check every catalog of the publisher from 0 as well (catalogs
+    only; about 12 requests and 31 MB for a year of daily catalogs). It reports `"fault"`
+    `publisher` or `node` when it refuses, and says what it cannot catch without
+    `--scan-keys-from` (ADR-0059 amendment 3).
 
 ## Add more data later
 

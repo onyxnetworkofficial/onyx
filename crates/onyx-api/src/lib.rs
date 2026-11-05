@@ -17,6 +17,7 @@
 //! deadline cannot drop a payment that lands on chain (M7-L39-F1).
 
 pub mod arrival;
+pub mod bulk_history;
 pub mod bulk_serve;
 pub mod cache;
 pub mod catalog;

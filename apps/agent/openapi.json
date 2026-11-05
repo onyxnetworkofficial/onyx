@@ -2372,6 +2372,70 @@
         }
       }
     },
+    "/v1/bulk/catalogs/{publisher}/files": {
+      "get": {
+        "operationId": "getBulkCatalogFiles",
+        "summary": "A publisher's stored catalogs from a number on (history check)",
+        "description": "The held catalogs from `from` on as the node stores them, as Borsh `CatalogFiles` (`onyx_bulk::catalog`): the node's newest catalog number, then each catalog's header, signed report and either every leaf (a whole file) or the leaves that differ from the catalog before (a diff). It answers up to the end of `from`'s block of 32 (the stored checkpoints) or the newest, at most 16 MiB (always at least one catalog). A client rebuilds and checks every catalog itself from 0 (`onyx-check --bulk ... --history`, ADR-0059 amendment 3). The node rebuilds nothing and decodes no leaf; two answers at a time, each sent in 256 KiB frames and holding its slot until its last frame or its deadline (60 s, longer for a large answer) (503 `bulk_busy` with `retry-after` when busy). Free; rate-limited like the other bulk reads.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "name": "publisher",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Publisher source id (a dotted id)."
+          },
+          {
+            "name": "from",
+            "in": "query",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{1,20}$"
+            },
+            "description": "The first catalog number."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The stored catalogs (Borsh `CatalogFiles`)",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "string",
+                  "contentMediaType": "application/octet-stream"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
     "/v1/bulk/catalogs/{publisher}/{n}": {
       "get": {
         "operationId": "getBulkCatalog",
@@ -6432,6 +6496,10 @@
     "bulk_unknown_catalog": {
       "status": 404,
       "description": "This node holds no such bulk catalog."
+    },
+    "bulk_busy": {
+      "status": 503,
+      "description": "`GET /v1/bulk/catalogs/{publisher}/files`: two answers are being sent already; try again after `retry-after` (10 s)."
     }
   }
 }

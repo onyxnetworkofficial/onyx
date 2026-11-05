@@ -96,6 +96,10 @@ const MAX_WITHDRAWN: usize = 100_000;
 pub const CATALOG_CHECKPOINT: u64 = 32;
 /// Old-catalog rebuilds at once (`GET /v1/bulk/catalogs/...`).
 const MAX_REBUILDS: usize = 2;
+/// Catalog file reads at once (`GET /v1/bulk/catalogs/{publisher}/files`,
+/// at most `MAX_FILES_BYTES` each; ADR-0059 amendment 3, review CAT-HIST-R1
+/// finding 6: apart from the rebuilds uploads need).
+const MAX_FILE_READS: usize = 2;
 /// A publisher's catalog fork record (THREATS CAT-6).
 const FORK_FILE: &str = "fork.bin";
 
@@ -210,7 +214,7 @@ pub mod reason {
     pub const KEY: &str = "key_not_active";
 }
 
-fn word(b: &[u8], i: usize) -> Option<[u8; 32]> {
+pub(crate) fn word(b: &[u8], i: usize) -> Option<[u8; 32]> {
     b.get(i * 32..i * 32 + 32)?.try_into().ok()
 }
 
@@ -231,7 +235,7 @@ fn qty(v: &Value) -> Result<u64, String> {
     u64::from_str_radix(s.trim_start_matches("0x"), 16).map_err(|e| e.to_string())
 }
 
-fn hex_of(v: &Value) -> Result<Vec<u8>, String> {
+pub(crate) fn hex_of(v: &Value) -> Result<Vec<u8>, String> {
     let s = v.as_str().ok_or("not a string")?;
     hex::decode(s.strip_prefix("0x").ok_or("no 0x")?).map_err(|e| e.to_string())
 }
@@ -251,7 +255,7 @@ pub async fn finalized(rpc: &dyn JsonRpc) -> Result<(u64, Hash32), String> {
     Ok((n, Hash32(h)))
 }
 
-async fn call_at(
+pub(crate) async fn call_at(
     rpc: &dyn JsonRpc,
     book: &[u8; 20],
     sig: &str,
@@ -399,7 +403,18 @@ pub async fn read_sequence(
     key: &Hash32,
     sequence: u64,
 ) -> Result<Hash32, String> {
-    let (_, at) = finalized(rpc).await?;
+    read_sequence_at(rpc, book, key, sequence, finalized(rpc).await?).await
+}
+
+/// [`read_sequence`] at block `at` (a history check reads everything at one
+/// block; ADR-0059 amendment 3, review CAT-HIST-R1 finding 5).
+pub async fn read_sequence_at(
+    rpc: &dyn JsonRpc,
+    book: &[u8; 20],
+    key: &Hash32,
+    sequence: u64,
+    (_, at): At,
+) -> Result<Hash32, String> {
     let mut d = selector("sequenceOf(bytes32,uint64)").to_vec();
     d.extend_from_slice(&key.0);
     d.extend_from_slice(&[0u8; 24]);
@@ -411,7 +426,84 @@ pub async fn read_sequence(
         )
         .await?;
     let b = hex_of(&r)?;
-    Ok(Hash32(word(&b, 0).unwrap_or([0u8; 32])))
+    // An empty answer (no contract there) is no answer, never "no report"
+    // (review of the CAT-1 build, finding 9).
+    Ok(Hash32(
+        word(&b, 0).ok_or("the signed book's sequenceOf answer is empty")?,
+    ))
+}
+
+/// A report the book recorded (`report(digest)`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Recorded {
+    /// Its key.
+    pub key: Hash32,
+    /// Its fact.
+    pub fact: Hash32,
+    /// `keccak256(borsh(value))`.
+    pub value_hash: Hash32,
+    /// `SignedReport::hash`.
+    pub report_hash: Hash32,
+    /// Its observation time.
+    pub observed: u64,
+}
+
+/// Where a recorded digest stands at one block (ADR-0059 amendment 3 item 3,
+/// the CAT-5 rule; review CAT-HIST-R1 finding 1).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Standing {
+    /// Nothing recorded under the digest.
+    Unrecorded,
+    /// Accepted, its key registered and not suspended.
+    Holds(Recorded),
+    /// The book's final word withdrew it: its fact holds no value or another
+    /// report, or is disputed with the key compromised.
+    Withdrawn(Recorded),
+    /// Can still change: an open dispute, a suspended key.
+    Open(Recorded, &'static str),
+}
+
+/// [`Standing`] of `digest` in `book` at block `at`.
+pub async fn read_digest_at(
+    rpc: &dyn JsonRpc,
+    book: &[u8; 20],
+    digest: &Hash32,
+    (_, block_hash): At,
+) -> Result<Standing, String> {
+    let bad = || "the signed book's answer does not decode".to_string();
+    let r = call_at(rpc, book, "report(bytes32)", digest, &block_hash).await?;
+    if r.is_empty() || word(&r, 0).ok_or_else(bad)? == [0u8; 32] {
+        return Ok(Standing::Unrecorded);
+    }
+    let rec = Recorded {
+        key: Hash32(word(&r, 0).ok_or_else(bad)?),
+        fact: Hash32(word(&r, 1).ok_or_else(bad)?),
+        value_hash: Hash32(word(&r, 2).ok_or_else(bad)?),
+        report_hash: Hash32(word(&r, 3).ok_or_else(bad)?),
+        observed: word_u64(&word(&r, 4).ok_or_else(bad)?).ok_or_else(bad)?,
+    };
+    let f = call_at(rpc, book, "factView(bytes32)", &rec.fact, &block_hash).await?;
+    let state = word_u64(&word(&f, 0).ok_or_else(bad)?).ok_or_else(bad)?;
+    let accepted = Hash32(word(&f, 1).ok_or_else(bad)?);
+    let k = call_at(rpc, book, "keyState(bytes32)", &rec.key, &block_hash).await?;
+    let life = word_u64(&word(&k, 0).ok_or_else(bad)?).ok_or_else(bad)?;
+    let suspended = word_u64(&word(&k, 1).ok_or_else(bad)?).ok_or_else(bad)?;
+    if state != 1 || accepted != rec.report_hash {
+        // As `read_anchor_at`: no value or another report is final; a dispute
+        // is final only with the key compromised.
+        return Ok(if state != 2 || life == 3 {
+            Standing::Withdrawn(rec)
+        } else {
+            Standing::Open(rec, "its fact is disputed")
+        });
+    }
+    if life == 0 {
+        return Ok(Standing::Open(rec, "its key is not registered"));
+    }
+    if suspended != 0 {
+        return Ok(Standing::Open(rec, "its key is suspended"));
+    }
+    Ok(Standing::Holds(rec))
 }
 
 /// One held version. `report` and `anchor` are the manifest's own, or, with
@@ -519,35 +611,6 @@ fn read_stored(dir: &FsPath, n: u64) -> Result<Option<StoredCatalog>, String> {
     }
 }
 
-/// The leaves before with `changed` merged in by dataset (both sorted).
-fn apply_diff(before: &[CatalogLeaf], changed: &[CatalogLeaf]) -> Vec<CatalogLeaf> {
-    let mut out = Vec::with_capacity(before.len() + changed.len());
-    let (mut i, mut j) = (0, 0);
-    while i < before.len() || j < changed.len() {
-        match (before.get(i), changed.get(j)) {
-            (Some(a), Some(b)) if a.dataset == b.dataset => {
-                out.push(b.clone());
-                i += 1;
-                j += 1;
-            }
-            (Some(a), Some(b)) if a.dataset < b.dataset => {
-                out.push(a.clone());
-                i += 1;
-            }
-            (Some(a), None) => {
-                out.push(a.clone());
-                i += 1;
-            }
-            (_, Some(b)) => {
-                out.push(b.clone());
-                j += 1;
-            }
-            (None, None) => break,
-        }
-    }
-    out
-}
-
 /// The leaves of `c` that differ from `before` (a version moved or a
 /// dataset added).
 fn diff_of(before: &Catalog, c: &Catalog) -> Vec<CatalogLeaf> {
@@ -590,7 +653,7 @@ fn rebuild_catalog(dir: &FsPath, n: u64, start: Option<&Catalog>) -> Result<Cata
             Stored::Whole(c) => Catalog::try_from_slice(&c)
                 .map_err(|_| format!("{}: catalog {m} does not decode", dir.display()))?,
             Stored::Diff(changed) => Catalog {
-                leaves: apply_diff(&cur.leaves, &changed),
+                leaves: cat::apply_diff(&cur.leaves, &changed),
                 header,
             },
         };
@@ -725,6 +788,7 @@ pub struct BulkStore {
     /// a step; review CAT-DIFF-R1 M1, L3).
     old_body: Mutex<BTreeMap<String, (u64, Arc<CatalogBody>)>>,
     rebuilds: Arc<tokio::sync::Semaphore>,
+    file_reads: Arc<tokio::sync::Semaphore>,
     /// Bytes of stored catalogs per publisher (counted in its quota).
     catalog_bytes: Mutex<BTreeMap<String, u64>>,
     /// Keys the book did not know or had suspended, by host time: a POST
@@ -927,6 +991,7 @@ impl BulkStore {
             catalogs: RwLock::new(BTreeMap::new()),
             old_body: Mutex::new(BTreeMap::new()),
             rebuilds: Arc::new(tokio::sync::Semaphore::new(MAX_REBUILDS)),
+            file_reads: Arc::new(tokio::sync::Semaphore::new(MAX_FILE_READS)),
             catalog_bytes: Mutex::new(BTreeMap::new()),
             refused_keys: Mutex::new(BTreeMap::new()),
             publishers: (0..PUBLISHER_LOCKS)
@@ -1787,7 +1852,7 @@ impl BulkStore {
         } else {
             let before = self.held_body(&publisher, n - 1)?;
             let leaves = diff_of(&before.catalog, &c);
-            if apply_diff(&before.catalog.leaves, &leaves) != c.leaves {
+            if cat::apply_diff(&before.catalog.leaves, &leaves) != c.leaves {
                 return Err(internal("a catalog diff does not rebuild its catalog"));
             }
             let d = CatalogDiff {
@@ -1861,6 +1926,88 @@ impl BulkStore {
         let c = self.old_body.lock().ok()?;
         let (k, b) = c.get(publisher)?;
         (*k == n && b.catalog.header == h.header).then(|| (b.clone(), h.report.clone()))
+    }
+
+    /// Held catalogs of `publisher` from `from` on, as stored (ADR-0059
+    /// amendment 3 item 1), Borsh `CatalogFiles`: to the end of `from`'s
+    /// block of `catalog_checkpoint` or the newest, at most `cap` bytes (at
+    /// least one catalog). Each file's header must be the one taken at
+    /// upload; a file gone meanwhile (a set-aside) ends the answer there.
+    /// Written from the stored bytes: no leaf is decoded, nothing rebuilt
+    /// (review of the CAT-1 build, finding 5). `Ok(None)` when `from` is not
+    /// held.
+    fn catalog_files(
+        &self,
+        publisher: &str,
+        from: u64,
+        cap: usize,
+    ) -> Result<Option<Vec<u8>>, String> {
+        let (newest, headers) = {
+            let cs = self.catalogs.read().map_err(|_| "lock")?;
+            let Some(m) = cs.get(publisher) else {
+                return Ok(None);
+            };
+            let Some((&newest, _)) = m.last_key_value() else {
+                return Ok(None);
+            };
+            if !m.contains_key(&from) {
+                return Ok(None);
+            }
+            let step = self.limits.catalog_checkpoint.max(1);
+            let end = newest.min((from / step).saturating_add(1).saturating_mul(step) - 1);
+            let headers: Vec<(u64, CatalogHeader)> = m
+                .range(from..=end)
+                .map(|(k, h)| (*k, h.header.clone()))
+                .collect();
+            (newest, headers)
+        };
+        let dir = self.catalogs_dir().join(publisher);
+        // `CatalogFiles`: newest (u64), then a u32 count and each
+        // `CatalogFile` (header, report, `FileLeaves` variant and leaves).
+        let mut out = newest.to_le_bytes().to_vec();
+        out.extend_from_slice(&0u32.to_le_bytes());
+        let mut count = 0u32;
+        let mut want = from;
+        for (k, held) in headers {
+            if k != want {
+                break;
+            }
+            let Some((header, stored, report, _, _)) = read_stored(&dir, k)? else {
+                break;
+            };
+            if header != held {
+                break;
+            }
+            let head = borsh::to_vec(&header).map_err(|e| e.to_string())?;
+            let mut file = head.clone();
+            file.extend_from_slice(&report);
+            match stored {
+                // A whole file's catalog is borsh(header) then borsh(leaves).
+                Stored::Whole(c) => {
+                    let leaves = c
+                        .get(head.len()..)
+                        .filter(|_| c.starts_with(&head))
+                        .ok_or_else(|| format!("catalog {k}: whole file and header differ"))?;
+                    file.push(0);
+                    file.extend_from_slice(leaves);
+                }
+                Stored::Diff(l) => {
+                    file.push(1);
+                    file.extend_from_slice(&borsh::to_vec(&l).map_err(|e| e.to_string())?);
+                }
+            }
+            if count > 0 && out.len().saturating_add(file.len()) > cap {
+                break;
+            }
+            out.extend_from_slice(&file);
+            count += 1;
+            want = k + 1;
+        }
+        if count == 0 {
+            return Ok(None);
+        }
+        out[8..12].copy_from_slice(&count.to_le_bytes());
+        Ok(Some(out))
     }
 
     /// Held catalog `n` of `publisher` whole, with its report: the newest
@@ -3459,6 +3606,10 @@ pub fn routes(store: Arc<BulkStore>) -> Router {
 pub fn peer_routes(store: Arc<BulkStore>) -> Router {
     Router::new()
         .route("/v1/bulk/manifests/{root}", get(get_manifest))
+        .route(
+            "/v1/bulk/catalogs/{publisher}/files",
+            get(get_catalog_files),
+        )
         .route("/v1/bulk/catalogs/{publisher}/{n}", get(get_catalog))
         .route("/v1/bulk/shards/{root}", get(get_shard))
         .with_state(store)
@@ -3752,6 +3903,207 @@ async fn get_manifest(
     })();
     match r {
         Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    }
+}
+
+/// Bytes per frame of a files answer: hyper asks for the next frame only once
+/// its write buffer has room, so the answer's permit lasts until about the
+/// last frame is written (review of the CAT-1 fix, finding 1).
+const FILES_FRAME: usize = 256 << 10;
+/// Seconds a files answer may take to send at least: then its bytes and its
+/// permit are let go, and the body ends with an error when it is asked for
+/// another frame. A reader that never reads again still holds its connection
+/// slot, hyper's queued frames (about 0.7 MiB) and the kernel's send buffer
+/// until the connection closes: the server has no write timeout (THREATS
+/// SERVE-WRITE-1).
+pub const FILES_SEND_SECS: u64 = 60;
+/// Bytes a second an honest reader is given at least: a larger answer gets
+/// longer than [`FILES_SEND_SECS`] (review CAT-HIST-R4 finding 5).
+pub const FILES_MIN_RATE: usize = 128 << 10;
+
+/// How long an answer of `bytes` may take to send.
+fn files_deadline(bytes: usize) -> std::time::Duration {
+    std::time::Duration::from_secs(FILES_SEND_SECS.max((bytes / FILES_MIN_RATE) as u64 + 10))
+}
+
+/// A files answer being sent: its bytes, how far, and its permit.
+struct Sending {
+    data: Vec<u8>,
+    total: usize,
+    at: usize,
+    expired: bool,
+    permit: Option<tokio::sync::OwnedSemaphorePermit>,
+    /// Dropped on release: the deadline timer then ends early.
+    done: Option<tokio::sync::oneshot::Sender<()>>,
+}
+
+impl Sending {
+    fn release(&mut self) {
+        self.data = Vec::new();
+        self.permit = None;
+        self.done = None;
+    }
+}
+
+/// The files route's body: [`FILES_FRAME`] bytes a frame, each a copy (a
+/// frame hyper still queues never keeps the whole answer), the permit let go
+/// with the last frame, or after [`FILES_SEND_SECS`] by a timer.
+struct FilesBody(Arc<Mutex<Sending>>);
+
+/// A files answer that took longer than [`FILES_SEND_SECS`].
+#[derive(Debug)]
+struct SendExpired;
+
+impl std::fmt::Display for SendExpired {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "the answer took longer than {FILES_SEND_SECS} s to send")
+    }
+}
+
+impl std::error::Error for SendExpired {}
+
+impl FilesBody {
+    fn new(data: Vec<u8>, permit: tokio::sync::OwnedSemaphorePermit) -> Self {
+        let total = data.len();
+        let (done, sent) = tokio::sync::oneshot::channel::<()>();
+        let s = Arc::new(Mutex::new(Sending {
+            data,
+            total,
+            at: 0,
+            expired: false,
+            permit: Some(permit),
+            done: Some(done),
+        }));
+        let weak = Arc::downgrade(&s);
+        let deadline = files_deadline(total);
+        tokio::spawn(async move {
+            // Sent (or dropped) before the deadline: nothing to do.
+            if tokio::time::timeout(deadline, sent).await.is_ok() {
+                return;
+            }
+            if let Some(s) = weak.upgrade() {
+                if let Ok(mut s) = s.lock() {
+                    if s.at < s.total {
+                        s.expired = true;
+                    }
+                    s.release();
+                }
+            }
+        });
+        FilesBody(s)
+    }
+}
+
+impl http_body::Body for FilesBody {
+    type Data = axum::body::Bytes;
+    type Error = SendExpired;
+
+    fn poll_frame(
+        self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let Ok(mut s) = self.0.lock() else {
+            return std::task::Poll::Ready(Some(Err(SendExpired)));
+        };
+        if s.expired {
+            return std::task::Poll::Ready(Some(Err(SendExpired)));
+        }
+        if s.at >= s.total {
+            s.release();
+            return std::task::Poll::Ready(None);
+        }
+        let end = s.total.min(s.at.saturating_add(FILES_FRAME));
+        let chunk = axum::body::Bytes::copy_from_slice(&s.data[s.at..end]);
+        s.at = end;
+        if s.at >= s.total {
+            s.release();
+        }
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.0.lock().map_or(true, |s| s.at >= s.total)
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(
+            self.0
+                .lock()
+                .map_or(0, |s| s.total.saturating_sub(s.at) as u64),
+        )
+    }
+}
+
+/// `GET /v1/bulk/catalogs/{publisher}/files?from=n`: the held catalogs from
+/// n on as stored, Borsh `CatalogFiles` (ADR-0059 amendment 3 item 1), for a
+/// client that checks a publisher's whole catalog history itself. Two answers
+/// at a time, each holding its permit until its last frame or for at most
+/// [`FILES_SEND_SECS`]; busy: 503 with `retry-after`.
+async fn get_catalog_files(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<String>, PathRejection>,
+    RawQuery(q): RawQuery,
+) -> Response {
+    let r = async {
+        limited(&store, client)?;
+        let Path(p) = path.map_err(|e| bad_request(e.body_text()))?;
+        let mut from = None;
+        for kv in q
+            .as_deref()
+            .unwrap_or("")
+            .split('&')
+            .filter(|s| !s.is_empty())
+        {
+            match kv.split_once('=') {
+                Some(("from", v)) if from.is_none() => {
+                    from = Some(
+                        v.parse::<u64>()
+                            .map_err(|_| bad_request("from: a catalog number"))?,
+                    )
+                }
+                _ => return Err(bad_request("the only parameter is from (a catalog number)")),
+            }
+        }
+        let from = from.ok_or_else(|| bad_request("from: a catalog number"))?;
+        let permit = store.file_reads.clone().try_acquire_owned().map_err(|_| {
+            ApiError::new(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "bulk_busy",
+                "catalog files are being sent to others: try again",
+            )
+            .with_header("retry-after", "10".into())
+        })?;
+        let s = store.clone();
+        let (found, permit) = tokio::task::spawn_blocking(move || {
+            (s.catalog_files(&p, from, cat::MAX_FILES_BYTES), permit)
+        })
+        .await
+        .map_err(|_| internal("file read task"))?;
+        let bytes = found
+            .map_err(|e| internal(format!("catalog files: {e}")))?
+            .ok_or_else(|| {
+                ApiError::new(
+                    StatusCode::NOT_FOUND,
+                    "bulk_unknown_catalog",
+                    "this node holds no such catalog",
+                )
+            })?;
+        Ok::<_, ApiError>(FilesBody::new(bytes, permit))
+    }
+    .await;
+    match r {
+        Ok(body) => {
+            let mut resp = (StatusCode::OK, Body::new(body)).into_response();
+            let h = resp.headers_mut();
+            h.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"),
+            );
+            h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            resp
+        }
         Err(e) => e.into_response(),
     }
 }

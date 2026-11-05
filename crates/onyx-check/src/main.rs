@@ -7,7 +7,8 @@
 //! onyx-check --answer - --asked @asked.json --unchecked
 //! onyx-check --offer offer.json --manifest deploy.json --max-amount 10000 --rpc https://…
 //! onyx-check --bulk rows.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N] \
-//!            (--rpc https://sepolia.base.org --chain-id 84532 --book 0x… | --unchecked)
+//!            (--rpc https://sepolia.base.org --chain-id 84532 --book 0x… | --unchecked) \
+//!            [--history https://node [--keys 0x…,0x…] [--scan-keys-from N [--logs-range N]]]
 //! ```
 //! Writes one JSON report to stdout. Exit 0 verified (or payable), 1 refused,
 //! 2 usage error, 3 nothing decided (your node could not be read, or your
@@ -28,10 +29,14 @@ const USAGE: &str = "usage: onyx-check --answer <file|-> --asked <json|@file> \
 (--rpc <url> --chain-id <n> --contract <0x…> [--registry <0x…> [--ladder-state <dir>]] \
 | --unchecked)\n   or: onyx-check --offer <file|-> \
 --manifest <file> --max-amount <n> --rpc <url>\n   or: onyx-check --bulk <file|-> --publisher <id> --dataset <id> [--min-version <n>] [--from <n>] [--to <n>] \
-(--rpc <url> --chain-id <n> --book <0x…> | --unchecked)";
+(--rpc <url> --chain-id <n> --book <0x…> | --unchecked) \
+[--history <node url> [--keys <0x…,0x…>] [--scan-keys-from <block> [--logs-range <n>]]]";
 
 /// Each node call gives up after this long.
 const RPC_TIMEOUT: Duration = Duration::from_secs(20);
+/// Each catalog files or manifest GET of `--history` gives up after this long
+/// (an answer is at most about 24 MiB).
+const HISTORY_TIMEOUT: Duration = Duration::from_secs(120);
 
 enum Mode {
     Answer {
@@ -50,6 +55,7 @@ enum Mode {
         answer: String,
         asked: onyx_check::BulkAsked,
         node: Option<(String, u64, [u8; 20])>,
+        history: Option<onyx_api::bulk_history::HistoryOpts>,
     },
 }
 
@@ -71,6 +77,10 @@ const VALUED: &[&str] = &[
     "--publisher",
     "--dataset",
     "--min-version",
+    "--history",
+    "--keys",
+    "--scan-keys-from",
+    "--logs-range",
 ];
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> {
@@ -135,9 +145,45 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
                 )))
             }
         };
+        let history = match v.remove("--history") {
+            None => None,
+            Some(url) => {
+                if node.is_none() {
+                    return Err(UsageError(
+                        "--history reads the book: it needs --rpc, --chain-id and --book".into(),
+                    ));
+                }
+                check_facilitator_url(&url).map_err(|e| UsageError(format!("--history: {e}")))?;
+                let keys = v
+                    .remove("--keys")
+                    .map(|k| k.split(',').map(address).collect::<Result<Vec<_>, _>>())
+                    .transpose()?
+                    .unwrap_or_default();
+                let num = |k: &str, x: Option<String>| {
+                    x.map(|x| {
+                        x.parse::<u64>()
+                            .map_err(|_| UsageError(format!("{k}: not a number: {x}")))
+                    })
+                    .transpose()
+                };
+                let scan_from = num("--scan-keys-from", v.remove("--scan-keys-from"))?;
+                let logs_range = num("--logs-range", v.remove("--logs-range"))?.unwrap_or(200);
+                Some(onyx_api::bulk_history::HistoryOpts {
+                    node: url,
+                    keys,
+                    scan_from,
+                    logs_range,
+                })
+            }
+        };
         if let Some(k) = v.keys().next() {
             return Err(UsageError(format!(
-                "{k} is not an option of --bulk\n{USAGE}"
+                "{k} is not an option of --bulk{}\n{USAGE}",
+                if ["--keys", "--scan-keys-from", "--logs-range"].contains(&k.as_str()) {
+                    " without --history"
+                } else {
+                    ""
+                }
             )));
         }
         return Ok(Mode::Bulk {
@@ -150,6 +196,7 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
                 to,
             },
             node,
+            history,
         });
     }
     if let Some(offer) = v.remove("--offer") {
@@ -315,16 +362,32 @@ fn run() -> Result<(Value, i32), UsageError> {
             answer,
             asked,
             node,
+            history,
         } => {
             let answer = json_arg(&answer, "answer", false)?;
-            let o = match node {
-                None => runtime()?.block_on(check_bulk(&answer, &asked, None)),
-                Some((url, chain, book)) => {
-                    let rpc = HttpJsonRpc::new(url, HyperPost::for_rpc(RPC_TIMEOUT));
-                    runtime()?.block_on(check_bulk(&answer, &asked, Some((&rpc, chain, book))))
+            match (node, history) {
+                (None, _) => {
+                    let o = runtime()?.block_on(check_bulk(&answer, &asked, None));
+                    Ok((o.report(), o.code()))
                 }
-            };
-            Ok((o.report(), o.code()))
+                (Some((url, chain, book)), None) => {
+                    let rpc = HttpJsonRpc::new(url, HyperPost::for_rpc(RPC_TIMEOUT));
+                    let o =
+                        runtime()?.block_on(check_bulk(&answer, &asked, Some((&rpc, chain, book))));
+                    Ok((o.report(), o.code()))
+                }
+                (Some((url, chain, book)), Some(h)) => {
+                    let rpc = HttpJsonRpc::new(url, HyperPost::for_rpc(RPC_TIMEOUT));
+                    let get = onyx_api::storage::HyperGet::new(HISTORY_TIMEOUT);
+                    Ok(runtime()?.block_on(onyx_check::check_bulk_history(
+                        &answer,
+                        &asked,
+                        (&rpc, chain, book),
+                        &get,
+                        &h,
+                    )))
+                }
+            }
         }
         Mode::Offer {
             offer,

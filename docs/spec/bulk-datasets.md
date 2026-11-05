@@ -92,6 +92,27 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   lists unchanged, which it then anchors. A node stores every 32nd catalog whole (`{n}.bin`) and
   the others as the leaves that differ from the one before (`{n}.diff`), rebuilt and checked when
   read; the bytes served are the same (ADR-0059 amendment 2).
+- R-BULK-12 (history, ADR-0059 amendment 3): `GET /v1/bulk/catalogs/{publisher}/files?from=n`
+  answers the stored catalogs from n on as Borsh `CatalogFiles` (the newest number, then each
+  header, report, and every leaf or the changed leaves), to the end of n's block of 32, at most
+  16 MiB. `onyx-check --bulk ... --history <node>` rebuilds every catalog from 0 and checks each
+  as a node does before it takes it (`validate`, the report signs the header, the append-only
+  successor), the dataset's entry (version 1, or its own-report chain back to version 1) and that
+  the rows answer's catalog is in the chain; then, at one finalized block: every catalog's and own
+  report's anchor, and for every known key of the publisher (the walk's, the answer's, `--keys`, and with
+  `--scan-keys-from` every `KeyRegistered` key of the publisher) that no other live report holds
+  a catalog number, a version of the dataset, the catalog after the newest served (catalog 0 when
+  none is served) or the version after the newest seen; the rows answer's own key is always read,
+  and an own-report rows answer is followed down to a version the catalogs list. Refused with
+  `fault` "publisher" (two live signed reports or roots for one catalog number or version, or an
+  anchored signed catalog that breaks the rules) or "node" (bytes that do not make the signed
+  catalog or manifest); undecided when something can still change (open dispute, suspended key,
+  a report not yet final at the caller's block, a withdrawn report still served, a set-aside
+  during the walk, a history node behind the rows node). Without a key scan, a key that signed
+  nothing in the walk or the answer is not read; the report says so. The route writes its answer
+  from the stored bytes, two at a time, in 256 KiB frames, each answer holding its permit until its
+  last frame or its deadline (60 s, longer for a large answer at 128 KiB/s; 503 `bulk_busy`
+  otherwise).
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
@@ -99,6 +120,7 @@ word of `q`, `limit` at a time in id order, `after` the `next` of the page befor
 the matches), `GET /v1/bulk/{publisher}/{dataset}`,
 `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`, `POST /v1/bulk/manifests`,
 `POST /v1/bulk/catalogs`, `GET /v1/bulk/catalogs/{publisher}/{n}`,
+`GET /v1/bulk/catalogs/{publisher}/files?from=`,
 `PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`: docs/api/openapi.json and
 docs/spec/delivery.md "Bulk datasets".
 
@@ -106,7 +128,8 @@ docs/spec/delivery.md "Bulk datasets".
 `onyx-publish keygen | address | keys-doc | synth | build | sign | anchor | upload | catalog-build |
 catalog-sign | catalog-anchor | catalog-upload`;
 `onyx-check --bulk answer.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N]
---rpc URL --chain-id N --book 0x…`.
+--rpc URL --chain-id N --book 0x… [--history NODE [--keys 0x…,0x…] [--scan-keys-from BLOCK
+[--logs-range N]]]`.
 
 ## Assumptions
 - The publisher's domain and keys document are what the reviewer checks before registering the

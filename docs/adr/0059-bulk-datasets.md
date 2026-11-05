@@ -5,7 +5,8 @@ Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) acce
 2026-11-03 after review THREATS CAT-R1, built (item 3's withdrawn-catalog and fork-marking rules
 on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
 amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
-CAT-DIFF-R1, built 2026-11-04 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+CAT-DIFF-R1, built 2026-11-04; amendment 3 (a client check of a publisher's catalog history)
+draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -171,8 +172,8 @@ publisher who rewrites a dataset across catalogs, or across keys after a rotatio
 every node that holds both catalogs (items 3 and 4) and by anyone comparing them, then by the
 reviewer, not by the book alone. A client that sees one catalog knows its leaf is the only one for
 its dataset in that catalog (item 6), not that later catalogs kept it; walking the catalog chain
-back (an opt-in `onyx-check --bulk --history`, about 0.6 KiB per catalog) is not built yet (THREATS
-CAT-2). Both catalogs are signed by the publisher's key, so the publisher cannot deny either.
+back (an opt-in `onyx-check --bulk --history`) is amendment 3 (THREATS
+CAT-1). Both catalogs are signed by the publisher's key, so the publisher cannot deny either.
 
 ## Amendment 2 (2026-11-04, draft 2 after review CAT-RET-R1): catalogs that stay small as they repeat
 
@@ -230,6 +231,85 @@ bytes, `1.bin` 1,018,286 bytes). At the 50,000-leaf cap with 5 % of leaves chang
 0.46 MB a day instead of 6 MB. At 100 % change a diff is about a whole catalog (3 % worse than
 today). Storing a moved leaf as its index and new root only would make diffs about 3 times
 smaller; left for later.
+
+## Amendment 3 (2026-11-05, draft 2 after review CAT-HIST-R1): a client check of a publisher's catalog history
+
+**Why** (THREATS CAT-1). `onyx-check --bulk` proves rows against one catalog: the leaf is the only
+one for its dataset there (amendment 1 item 6). It does not prove that the catalogs before it
+moved the dataset append only. A node checks that for each catalog it takes (item 3), but a reader
+who trusts no node cannot see it, and a publisher who rewrote a dataset across catalogs (or under
+another key) is caught only by nodes that hold both chains.
+
+**Draft 1** walked leaf proofs, one catalog at a time. Review CAT-HIST-R1 ("build with changes")
+showed that a bracket proof assumes sorted leaves, which a client cannot check from three leaves
+(an anchored catalog listing one dataset twice is refused by honest nodes without a fork mark, and
+a colluding node could show each client one root), that the key check refused every honest
+history after a stolen-key recovery (CAT-5), that keys seen in the walk miss a fork under a third
+key, and that the route cost the node a rebuild and two tree builds for each 2 KB answer.
+
+**Draft 2** (built 2026-11-05; the build review CAT-HIST-R2, "not ready", found two High holes and
+eight smaller issues, the review of those fixes, CAT-HIST-R3, two more, and a third look,
+CAT-HIST-R4, test gaps and one wrong claim; all fixed before deploy and folded in below):
+
+1. **Route.** `GET /v1/bulk/catalogs/{publisher}/files?from=n` answers, as Borsh, the node's
+   newest catalog number and the stored catalogs from n on, each its header, its signed report and
+   either every leaf (a whole file) or the leaves that differ from the catalog before (a diff,
+   amendment 2): up to the end of n's block of 32, at most 16 MiB (at least one catalog). The node
+   writes the answer from its stored bytes: no rebuild, no tree, no leaf decoded. Two answers at a
+   time; each is sent in 256 KiB frames and holds its permit until its last frame, or until its
+   deadline (60 s, longer for a large answer at 128 KiB/s), when its bytes and permit are let go
+   (a reader that stalls then holds only its connection, about 0.7 MiB of queued frames and the
+   kernel's buffer, until the hosted proxy's 75 s write timeout closes it: THREATS SERVE-WRITE-1);
+   a third gets 503 `bulk_busy` with `retry-after`. A year of daily catalogs of the first publisher is about 12 requests and 31 MB
+   (a whole catalog every 32 days).
+2. **Walk** (`onyx-check --bulk <rows> --history <node url>`). From catalog 0 up to the newest
+   number of the first answer, the client rebuilds each catalog (a diff on the one before) and
+   checks it as a node does: the leaves make the signed leaves root, the report signs the header
+   (`catalog::verify`), `validate()` (sorted, unique, shape) and from 1 on `check_successor`
+   (every dataset, not only the asked one). The rows answer's catalog must be catalog m of the
+   walk (same header root) and list the rows' version. Own-report manifests are followed down
+   (`GET /v1/bulk/manifests/{root}`) from below the version the dataset entered the catalogs at,
+   and from a rows answer anchored by its own report (its first step taken from the checked
+   answer), until a version the catalogs list or another chain met (the roots must match) or
+   version 1; each must be that version of the dataset, with its own report. Every key is
+   collected before any anchor is read. A manifest the node does not serve leaves the check
+   undecided (the node may lag the rows node).
+3. **Chain reads, at one finalized block B** (read after the first answer; every read at B). Each
+   catalog's and each followed manifest's report as the node checks it (`read_anchor_at`). The
+   publisher's keys: every key that signed a catalog or an own-report manifest of the walk, the
+   rows answer's key, every key the caller adds (`--keys`), and, when the caller's RPC allows wide
+   log ranges, every `KeyRegistered` key of the publisher from `--scan-keys-from <block>` (a log
+   whose source is another publisher's is skipped; each key confirmed by `keyState(key).source`).
+   For every such key and every catalog number k: `sequenceOf(key, sequence_for_catalog(k))` is
+   zero or catalog k's digest; for every version v of the dataset seen: `sequenceOf(key,
+   sequence_for(dataset, v))` is zero or a report whose value hash is `keccak(borsh(Value::Bytes(root
+   of v)))`. A differing report counts only when it holds at B: withdrawn for good (the CAT-5 rule)
+   it is listed as set aside; live it is a rewrite with two signed reports; anything else (open
+   dispute, suspended key, not yet final) leaves the check undecided. Last, for every key, the
+   catalog after the newest served (catalog 0 when the node serves none) and the version after the
+   newest seen: a report there that holds means the node did not serve the newest (undecided).
+4. **Outcomes.** Verified (exit 0); refused (exit 1) with `fault` "publisher" (two live signed
+   reports, two anchored catalogs with one number, a signed manifest naming another root than the
+   catalogs, or an anchored signed catalog that breaks item 3) or "node" (an answer that does not
+   make the signed catalog or manifest, or a rule-breaking catalog that is not anchored);
+   undecided (exit 3) when something can still change: the caller's node lags, a dispute or
+   suspension is open, a report the book withdrew for good is still served (the node has not set
+   it aside yet), the history node lags the rows answer's node, a set-aside happened during the
+   walk. The report lists catalogs walked, the catalog the dataset entered, each version with its
+   root and first catalog, every key with how it was found and the first, last and count of its
+   catalogs, set-aside reports, the creation span, the block read and the key scan's range.
+5. **What it does not catch.** A key that signed nothing in the walk, that the rows answer did not
+   use, and that the caller neither names nor scans is not read: a second catalog, a second root
+   for a version, or a newer catalog under it passes; nodes holding the original chain still mark
+   a rewrite forked (item 3). The public test-network RPC allows 200 blocks a log query (about
+   13,700 queries since the book's deploy block 52,118,336), so the scan is for a local or paid
+   RPC. The check also trusts the caller's RPC and the book's reviewer actions, as every check
+   does.
+6. **Cost.** Chain reads, one at a time: about 3 per catalog, plus keys x (catalogs + versions +
+   2): about 2,500 for a year of daily catalogs with two keys. A busy node (429 or 503) is asked
+   again every 10 s, up to 7 times. Opt-in; the default check is unchanged.
+
+Not in this amendment: tombstones (CAT-3) and storage deals for catalog-anchored datasets (CAT-2).
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and

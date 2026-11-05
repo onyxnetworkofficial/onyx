@@ -43,6 +43,12 @@ struct Book {
     reads: u64,
     /// The finalized block's number when not 0x64 (a lagging read).
     fin: Option<u64>,
+    /// digest -> value hash (`report(digest).valueHash`).
+    values: BTreeMap<Hash32, Hash32>,
+    /// key -> keccak of its source (`keyState(key).source`).
+    sources: BTreeMap<Hash32, Hash32>,
+    /// `KeyRegistered` logs: (block, key).
+    logs: Vec<(u64, Hash32)>,
 }
 
 pub(crate) struct Node(Mutex<Book>);
@@ -85,7 +91,8 @@ impl JsonRpc for Node {
                             Hash32::ZERO,
                             0,
                         ));
-                        for x in [k.0.to_vec(), f.0.to_vec(), vec![0; 32], rh.0.to_vec()] {
+                        let vh = c.values.get(&arg).copied().unwrap_or(Hash32::ZERO);
+                        for x in [k.0.to_vec(), f.0.to_vec(), vh.0.to_vec(), rh.0.to_vec()] {
                             out.extend(w(&x));
                         }
                         out.extend(w(&at.to_be_bytes()));
@@ -111,13 +118,30 @@ impl JsonRpc for Node {
                         out.extend(w(&[l]));
                         out.extend(w(&[u8::from(s)]));
                         out.extend(w(&signer));
-                        out.extend(w(&[0]));
+                        out.extend(w(&c.sources.get(&arg).copied().unwrap_or(Hash32::ZERO).0));
                         out.extend(w(&[0]));
                         out.extend(w(&[0]));
                     } else {
                         return Err("unknown call".into());
                     }
                     json!(hex0x(&out))
+                }
+                "eth_getLogs" => {
+                    let n = |k: &str| {
+                        u64::from_str_radix(
+                            p[0][k].as_str().unwrap_or("0x0").trim_start_matches("0x"),
+                            16,
+                        )
+                        .unwrap_or(0)
+                    };
+                    let (lo, hi) = (n("fromBlock"), n("toBlock"));
+                    assert!(hi - lo < 200, "the public RPC's range limit");
+                    json!(c
+                        .logs
+                        .iter()
+                        .filter(|(b, _)| (lo..=hi).contains(b))
+                        .map(|(_, k)| json!({"topics": [Hash32::ZERO.to_string(), k.to_string()]}))
+                        .collect::<Vec<_>>())
                 }
                 _ => return Err(format!("unexpected {method}")),
             })
@@ -180,6 +204,10 @@ impl Node {
         let fact = keccak256(&r.payload.digest().0);
         c.reports
             .insert(r.payload.digest(), (r.payload.key, fact, r.hash(), T0));
+        c.values.insert(
+            r.payload.digest(),
+            keccak256(&borsh::to_vec(&r.payload.value).expect("value")),
+        );
         c.facts.insert(fact, (1, r.hash(), T0));
         c.seqs
             .entry((r.payload.key, r.payload.sequence))
@@ -2635,4 +2663,841 @@ async fn cat_diff_the_live_layout_whole_files_then_diffs() {
     let r = app.clone().oneshot(get(9)).await.expect("ok");
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// ---------------------------------------------------------------- history (CAT-1)
+
+/// A node reached through its peer routes (the history check's GETs).
+struct RouterGet(Router);
+
+impl crate::storage::HttpGet for RouterGet {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+        max: usize,
+    ) -> BoxFuture<'a, Result<(u16, Vec<u8>), String>> {
+        Box::pin(async move {
+            let path = url.strip_prefix("http://node").ok_or("another host")?;
+            let r = self
+                .0
+                .clone()
+                .oneshot(Request::get(path).body(Body::empty()).expect("ok"))
+                .await
+                .map_err(|e| e.to_string())?;
+            let status = r.status().as_u16();
+            let b = r
+                .into_body()
+                .collect()
+                .await
+                .map_err(|e| e.to_string())?
+                .to_bytes();
+            assert!(b.len() <= max, "answer over the client's cap");
+            Ok((status, b.to_vec()))
+        })
+    }
+}
+
+/// Catalogs 0..=n of a world: the 40 and more datasets of `chain(n)`, and
+/// `synthetic.metrics`, which moves a version at every third catalog; each
+/// catalog anchored and taken, each version posted in the catalog that first
+/// lists it, with its shards. The manifests by version.
+async fn walked(w: &World, n: u64) -> (Vec<(Catalog, SignedReport)>, Vec<Manifest>) {
+    let others = chain(n);
+    let files = shard_files(0..30, 10);
+    let mut ms = vec![(manifest(&files, None, T0), files)];
+    let mut out: Vec<(Catalog, SignedReport)> = Vec::new();
+    for i in 0..=n {
+        let moved = i > 0 && i % 3 == 0;
+        if moved {
+            let k = 30 + 10 * i as i128;
+            let f = shard_files(k..k + 10, 10);
+            let m = manifest(&f, Some(&ms.last().expect("v").0), T0 + 10 * i + 5);
+            ms.push((m, f));
+        }
+        let mut leaves = others[i as usize].leaves.clone();
+        leaves.push(CatalogLeaf::of(&ms.last().expect("v").0.header));
+        leaves.sort_by(|a, b| a.dataset.cmp(&b.dataset));
+        let c = catalog_of(out.last().map(|(c, _)| c), T0 + 10 * (i + 1), leaves);
+        let r = sign_catalog(&c);
+        w.node.anchor(&r);
+        assert_eq!(
+            w.post_catalog(&c, &r).await.expect("taken").0,
+            StatusCode::CREATED
+        );
+        if i == 0 || moved {
+            let (m, f) = ms.last().expect("v");
+            assert_eq!(
+                w.post_in(m, i).await.expect("version").0,
+                StatusCode::CREATED
+            );
+            w.upload_all(m, f).await;
+        }
+        out.push((c, r));
+    }
+    (out, ms.into_iter().map(|(m, _)| m).collect())
+}
+
+fn opts(keys: Vec<[u8; 20]>, scan_from: Option<u64>) -> crate::bulk_history::HistoryOpts {
+    crate::bulk_history::HistoryOpts {
+        node: "http://node".into(),
+        keys,
+        scan_from,
+        logs_range: 50,
+    }
+}
+
+async fn history(
+    w: &World,
+    o: &crate::bulk_history::HistoryOpts,
+) -> crate::bulk_history::HistoryOutcome {
+    let a = w.rows("from=0&to=3").await.expect("rows");
+    let ck = onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(3)).expect("client check");
+    let get = RouterGet(peer_routes(w.store.clone()));
+    crate::bulk_history::check_history(&get, w.node.as_ref(), CHAIN, BOOK, &ck, o).await
+}
+
+fn verified(o: crate::bulk_history::HistoryOutcome) -> Value {
+    match o {
+        crate::bulk_history::HistoryOutcome::Verified(v) => v,
+        other => panic!("not verified: {}", other.report()),
+    }
+}
+
+fn refused(o: crate::bulk_history::HistoryOutcome) -> (&'static str, String) {
+    match o {
+        crate::bulk_history::HistoryOutcome::Refused(f, w) => (f, w),
+        other => panic!("not refused: {}", other.report()),
+    }
+}
+
+fn undecided(o: crate::bulk_history::HistoryOutcome) -> String {
+    match o {
+        crate::bulk_history::HistoryOutcome::Undecided(w) => w,
+        other => panic!("not undecided: {}", other.report()),
+    }
+}
+
+#[tokio::test]
+async fn cat_1_the_files_route_answers_stored_catalogs_a_block_at_a_time() {
+    let w = world_every(4);
+    let (cs, _) = walked(&w, 9).await;
+    let app = peer_routes(w.store.clone());
+    let files = |q: &str| {
+        let app = app.clone();
+        let uri = format!("/v1/bulk/catalogs/example.publisher/files{q}");
+        async move {
+            let r = app
+                .oneshot(Request::get(uri).body(Body::empty()).expect("ok"))
+                .await
+                .expect("ok");
+            let s = r.status();
+            (
+                s,
+                r.into_body()
+                    .collect()
+                    .await
+                    .expect("ok")
+                    .to_bytes()
+                    .to_vec(),
+            )
+        }
+    };
+    let (s, b) = files("?from=0").await;
+    assert_eq!(s, StatusCode::OK);
+    let f = cat::CatalogFiles::try_from_slice(&b).expect("decodes");
+    assert_eq!(f.newest, 9);
+    let numbers =
+        |f: &cat::CatalogFiles| f.files.iter().map(|x| x.header.number).collect::<Vec<_>>();
+    assert_eq!(numbers(&f), vec![0, 1, 2, 3]);
+    assert!(matches!(f.files[0].leaves, cat::FileLeaves::Whole(_)));
+    assert!(matches!(f.files[1].leaves, cat::FileLeaves::Diff(_)));
+    assert_eq!(f.files[2].header, cs[2].0.header);
+    assert_eq!(f.files[2].report, cs[2].1);
+    let f = cat::CatalogFiles::try_from_slice(&files("?from=5").await.1).expect("decodes");
+    assert_eq!(numbers(&f), vec![5, 6, 7]);
+    let f = cat::CatalogFiles::try_from_slice(&files("?from=8").await.1).expect("decodes");
+    assert_eq!(numbers(&f), vec![8, 9]);
+    assert!(matches!(f.files[0].leaves, cat::FileLeaves::Whole(_)));
+    assert_eq!(files("?from=10").await.0, StatusCode::NOT_FOUND);
+    // The byte cap: always at least one catalog.
+    let one = w
+        .store
+        .catalog_files(&publisher().0, 0, 1)
+        .expect("ok")
+        .expect("held");
+    let f = cat::CatalogFiles::try_from_slice(&one).expect("decodes");
+    assert_eq!(numbers(&f), vec![0]);
+    for bad in ["", "?from=x", "?from=1&from=2", "?to=3"] {
+        assert_eq!(files(bad).await.0, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_an_honest_history_with_diffs_verifies() {
+    let w = world_every(4);
+    let (cs, ms) = walked(&w, 9).await;
+    let v = verified(history(&w, &opts(vec![], None)).await);
+    assert_eq!(v["catalogs"], json!(10));
+    assert_eq!(v["newest"], json!(9));
+    assert_eq!(v["entered"], json!(0));
+    assert_eq!(v["versions"].as_array().expect("v").len(), ms.len());
+    assert_eq!(v["versions"][3]["firstCatalog"], json!(9));
+    assert_eq!(v["keys"].as_array().expect("k").len(), 1);
+    assert_eq!(
+        v["keys"][0]["catalogs"],
+        json!({"count": 10, "first": 0, "last": 9})
+    );
+    assert_eq!(v["keys"][0]["found"], json!(["answer", "walk"]));
+    assert_eq!(v["created"]["last"], json!(cs[9].0.header.created_unix));
+    assert!(v["limit"].is_string(), "no scan: the limit is stated");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_a_node_that_serves_wrong_leaves_is_at_fault() {
+    let w = world_every(4);
+    walked(&w, 5).await;
+    // A leaf changed in a stored diff (a damaged or forged file).
+    let f = w.cat_dir().join("2.diff");
+    let mut d = CatalogDiff::try_from_slice(&std::fs::read(&f).expect("read")).expect("decodes");
+    d.leaves[0].root = Hash32([0xEE; 32]);
+    std::fs::write(&f, borsh::to_vec(&d).expect("ok")).expect("write");
+    let (fault, why) = refused(history(&w, &opts(vec![], None)).await);
+    assert_eq!(fault, "node");
+    assert!(why.contains("catalog 2"), "{why}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Catalog `n` with one leaf's root changed: another catalog `n` the
+/// publisher's other key signs (built by hand: no successor of anything).
+fn rewritten(c: &Catalog) -> Catalog {
+    let mut leaves = c.leaves.clone();
+    leaves[1].root = Hash32([0xAB; 32]);
+    let header = cat::CatalogHeader {
+        leaves_root: cat::leaves_tree(&leaves).root(),
+        created_unix: c.header.created_unix + 1,
+        ..c.header.clone()
+    };
+    Catalog { header, leaves }
+}
+
+#[tokio::test]
+async fn cat_1_review_f2_a_second_catalog_under_another_key_is_caught_once_the_key_is_known() {
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    let alt = rewritten(&cs[2].0);
+    let r = cat::sign(&SECRET2, &alt.header).expect("ok");
+    w.node.anchor_by(&r, &SECRET2);
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    // Unknown to the walk: the stated limit.
+    let v = verified(history(&w, &opts(vec![], None)).await);
+    assert_eq!(v["limit"], json!(crate::bulk_history::HISTORY_LIMIT));
+    // Named by the caller: two live catalogs 2.
+    let (fault, why) = refused(history(&w, &opts(vec![signer2], None)).await);
+    assert_eq!(fault, "publisher");
+    assert!(why.contains("catalog 2"), "{why}");
+    // Found by a key scan (200 blocks a query at most, as the public RPC).
+    {
+        let mut b = w.node.0.lock().expect("ok");
+        b.sources
+            .insert(r.payload.key, keccak256(publisher().0.as_bytes()));
+        b.logs.push((0x31, r.payload.key));
+        b.logs.push((0x32, Hash32([0x99; 32])));
+    }
+    let (fault, _) = refused(history(&w, &opts(vec![], Some(0))).await);
+    assert_eq!(fault, "publisher");
+    // While its fact is disputed, nothing is decided.
+    w.node.dispute(&r);
+    assert!(undecided(history(&w, &opts(vec![signer2], None)).await).contains("catalog 2"));
+    // Withdrawn for good, it is listed as set aside.
+    w.node.withdraw(&r);
+    let v = verified(history(&w, &opts(vec![signer2], None)).await);
+    assert_eq!(v["setAside"].as_array().expect("s").len(), 1);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_review_f1_a_stolen_key_recovery_verifies_with_the_thiefs_catalog_set_aside() {
+    let t = theft().await;
+    let w = &t.w;
+    let (c1b, r1b, good, files) = replacement(&t);
+    w.node.withdraw(&t.r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    w.post_catalog(&c1b, &r1b).await.expect("replaced");
+    w.post_in(&good, 1).await.expect("v2");
+    w.upload_all(&good, &files).await;
+    let v = verified(history(w, &opts(vec![], None)).await);
+    assert_eq!(v["catalogs"], json!(2));
+    assert_eq!(v["keys"].as_array().expect("k").len(), 2);
+    let aside = v["setAside"].as_array().expect("s");
+    assert_eq!(aside.len(), 1);
+    assert_eq!(aside[0]["digest"], json!(t.r1.payload.digest().to_string()));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_review_f4_a_catalog_the_book_holds_but_the_node_did_not_serve_is_undecided() {
+    let w = world();
+    let (cs, _) = walked(&w, 2).await;
+    let next = catalog_of(Some(&cs[2].0), T0 + 100, cs[2].0.leaves.clone());
+    w.node.anchor(&sign_catalog(&next));
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("catalog 3"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_a_withdrawn_or_unrecorded_catalog_on_the_chain_is_undecided() {
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    w.node.withdraw(&cs[1].1);
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("catalog 1"));
+    // Not yet recorded at the block read (the caller's node lags): undecided.
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    w.node
+        .0
+        .lock()
+        .expect("ok")
+        .reports
+        .remove(&cs[3].1.payload.digest());
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("catalog 3"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_review_f5_a_second_root_for_a_version_is_compared_by_value() {
+    let w = world();
+    let (_, ms) = walked(&w, 3).await;
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    // The other key's own report of version 2 with the same root: fine.
+    let same = onyx_bulk::anchor::sign(&SECRET2, &ms[1].header).expect("ok");
+    w.node.anchor_by(&same, &SECRET2);
+    verified(history(&w, &opts(vec![signer2], None)).await);
+    // Another root for version 2 under that key: a rewrite.
+    let w = world();
+    let (_, ms) = walked(&w, 3).await;
+    let other = manifest(&shard_files(500..510, 10), Some(&ms[0]), T0 + 33);
+    let r = onyx_bulk::anchor::sign(&SECRET2, &other.header).expect("ok");
+    w.node.anchor_by(&r, &SECRET2);
+    let (fault, why) = refused(history(&w, &opts(vec![signer2], None)).await);
+    assert_eq!(fault, "publisher");
+    assert!(why.contains("version 2"), "{why}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_a_dataset_that_entered_after_its_own_reports_is_followed_to_version_1() {
+    let w = world();
+    // Version 1 with its own report, then catalogs from version 2 on.
+    let (m1, _) = published(&w).await;
+    let f2 = shard_files(30..40, 10);
+    let m2 = manifest(&f2, Some(&m1), T0 + 5);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m2.header), other_leaf("synthetic.other")],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m2, 0).await.expect("v2");
+    w.upload_all(&m2, &f2).await;
+    let v = verified(history(&w, &opts(vec![], None)).await);
+    assert_eq!(v["versions"][0]["version"], json!(1));
+    assert_eq!(v["versions"][0]["firstCatalog"], Value::Null);
+    assert_eq!(v["versions"][1]["firstCatalog"], json!(0));
+    assert!(v["keys"][0]["found"]
+        .as_array()
+        .expect("f")
+        .contains(&json!("manifest")));
+    // Version 1's own report withdrawn for good, and still served: undecided;
+    // restated under the publisher's other key with the same root, it holds
+    // (review of the build, finding 8).
+    w.node.withdraw(&sign(&m1));
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("version 1"));
+    let again = onyx_bulk::anchor::sign(&SECRET2, &m1.header).expect("ok");
+    w.node.anchor_by(&again, &SECRET2);
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    verified(history(&w, &opts(vec![signer2], None)).await);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// A node whose answers a test may replace (`hook` gives the answer, or
+/// `None` for the node's own).
+struct HookGet<F: Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync> {
+    inner: RouterGet,
+    hook: F,
+}
+
+impl<F: Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync> crate::storage::HttpGet for HookGet<F> {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+        max: usize,
+    ) -> BoxFuture<'a, Result<(u16, Vec<u8>), String>> {
+        match (self.hook)(url) {
+            Some(r) => Box::pin(async move { Ok(r) }),
+            None => self.inner.get(url, max),
+        }
+    }
+}
+
+async fn checked_rows(w: &World) -> onyx_bulk::wire::Checked {
+    let a = w.rows("from=0&to=3").await.expect("rows");
+    onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(3)).expect("client check")
+}
+
+async fn history_with(
+    w: &World,
+    ck: &onyx_bulk::wire::Checked,
+    get: &dyn crate::storage::HttpGet,
+) -> crate::bulk_history::HistoryOutcome {
+    crate::bulk_history::check_history(get, w.node.as_ref(), CHAIN, BOOK, ck, &opts(vec![], None))
+        .await
+}
+
+fn files_of(cs: &[(Catalog, SignedReport)], newest: u64) -> Vec<u8> {
+    borsh::to_vec(&cat::CatalogFiles {
+        newest,
+        files: cs
+            .iter()
+            .map(|(c, r)| cat::CatalogFile {
+                header: c.header.clone(),
+                report: r.clone(),
+                leaves: cat::FileLeaves::Whole(c.leaves.clone()),
+            })
+            .collect(),
+    })
+    .expect("ok")
+}
+
+#[tokio::test]
+async fn cat_1_build_f1_with_no_catalog_served_the_book_is_asked_for_catalog_0() {
+    let w = world();
+    published(&w).await;
+    let v = verified(history(&w, &opts(vec![], None)).await);
+    assert_eq!(v["catalogs"], json!(0));
+    assert_eq!(v["versions"][0]["version"], json!(1));
+    // The book holds a catalog 0 under the same key that this node does not.
+    let c0 = catalog_of(None, T0 + 10, vec![other_leaf("synthetic.other")]);
+    w.node.anchor(&sign_catalog(&c0));
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("catalog 0"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_build_f2_an_own_report_answer_is_tied_to_the_catalogs() {
+    // Honest: an own-report version 3 after catalogs listing 1 and 2.
+    let w = world();
+    let (_, ms) = walked(&w, 3).await;
+    let f3 = shard_files(900..910, 10);
+    let m3 = manifest(&f3, Some(&ms[1]), T0 + 200);
+    let r3 = sign(&m3);
+    w.node.anchor(&r3);
+    w.post(&m3, &r3).await.expect("v3");
+    w.upload_all(&m3, &f3).await;
+    let ck = checked_rows(&w).await;
+    assert!(ck.catalog.is_none() && ck.header.version == 3);
+    let v = verified(history(&w, &opts(vec![], None)).await);
+    assert_eq!(v["versions"].as_array().expect("v").len(), 3);
+    // A rows answer with another version 2, under a key that signed nothing
+    // in the walk: refused, from the answer's own key.
+    let b = world();
+    let (m1, _) = published(&b).await;
+    let f2 = shard_files(700..710, 10);
+    let other = manifest(&f2, Some(&m1), T0 + 7);
+    let r2 = onyx_bulk::anchor::sign(&SECRET2, &other.header).expect("ok");
+    b.node.anchor_by(&r2, &SECRET2);
+    b.post(&other, &r2).await.expect("v2 under the other key");
+    b.upload_all(&other, &f2).await;
+    let ck = checked_rows(&b).await;
+    let a = world();
+    walked(&a, 3).await;
+    a.node.anchor_by(&r2, &SECRET2);
+    let get = RouterGet(peer_routes(a.store.clone()));
+    let (fault, why) = refused(history_with(&a, &ck, &get).await);
+    assert_eq!(fault, "publisher");
+    assert!(why.contains("version 2"), "{why}");
+    for d in [&w.dir, &a.dir, &b.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[tokio::test]
+async fn cat_1_build_f3_the_rows_answers_catalog_lagging_or_forked() {
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    let ck = checked_rows(&w).await;
+    assert_eq!(ck.catalog.as_ref().map(|h| h.number), Some(3));
+    // A history node that has catalogs 0..=2 only: it lags (undecided).
+    let short = files_of(&cs[..3], 2);
+    let get = HookGet {
+        inner: RouterGet(peer_routes(w.store.clone())),
+        hook: move |u: &str| u.contains("/files?from=0").then(|| (200, short.clone())),
+    };
+    assert!(undecided(history_with(&w, &ck, &get).await).contains("past the newest"));
+    // Another catalog 3, anchored under the publisher's other key: a fork.
+    let alt = catalog_of(
+        Some(&cs[2].0),
+        cs[3].0.header.created_unix + 1,
+        cs[3].0.leaves.clone(),
+    );
+    let ra = cat::sign(&SECRET2, &alt.header).expect("ok");
+    w.node.anchor_by(&ra, &SECRET2);
+    let mut forked = cs[..3].to_vec();
+    forked.push((alt, ra.clone()));
+    let forked = files_of(&forked, 3);
+    let get = HookGet {
+        inner: RouterGet(peer_routes(w.store.clone())),
+        hook: move |u: &str| u.contains("/files?from=0").then(|| (200, forked.clone())),
+    };
+    assert_eq!(refused(history_with(&w, &ck, &get).await).0, "publisher");
+    // Not anchored: undecided.
+    w.node.withdraw(&ra);
+    assert!(undecided(history_with(&w, &ck, &get).await).contains("catalog 3"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_build_f4_a_withdrawn_catalog_still_served_is_undecided_not_refused() {
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    w.node.withdraw(&cs[1].1);
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("not set it aside"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_build_f6_a_signed_rule_break_is_the_publishers_only_when_anchored() {
+    let w = world();
+    let (cs, _) = walked(&w, 1).await;
+    let ck = checked_rows(&w).await;
+    // A signed catalog 1 that drops every dataset but one.
+    let leaves = vec![cs[1].0.leaves[0].clone()];
+    let header = cat::CatalogHeader {
+        leaf_count: 1,
+        leaves_root: cat::leaves_tree(&leaves).root(),
+        ..cs[1].0.header.clone()
+    };
+    let bad = Catalog { header, leaves };
+    let rb = sign_catalog(&bad);
+    let served = files_of(&[cs[0].clone(), (bad, rb.clone())], 1);
+    let get = HookGet {
+        inner: RouterGet(peer_routes(w.store.clone())),
+        hook: move |u: &str| u.contains("/files?from=0").then(|| (200, served.clone())),
+    };
+    assert_eq!(refused(history_with(&w, &ck, &get).await).0, "node");
+    w.node.anchor(&rb);
+    assert_eq!(refused(history_with(&w, &ck, &get).await).0, "publisher");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cat_1_build_f6_a_busy_node_is_tried_again_and_a_set_aside_mid_walk_is_undecided() {
+    let w = world_every(4);
+    walked(&w, 9).await;
+    let ck = checked_rows(&w).await;
+    let busy = AtomicU64::new(0);
+    let get = HookGet {
+        inner: RouterGet(peer_routes(w.store.clone())),
+        hook: move |u: &str| {
+            (u.contains("/files?from=0") && busy.fetch_add(1, Ordering::Relaxed) < 2)
+                .then(|| (429, Vec::new()))
+        },
+    };
+    verified(history_with(&w, &ck, &get).await);
+    let get = HookGet {
+        inner: RouterGet(peer_routes(w.store.clone())),
+        hook: |u: &str| u.contains("/files?from=4").then(|| (404, Vec::new())),
+    };
+    assert!(undecided(history_with(&w, &ck, &get).await).contains("catalog 4"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_build_f6_a_scanned_key_counts_only_when_the_book_says_it_is_the_publishers() {
+    const SECRET3: [u8; 32] = [0x44; 32];
+    let w = world();
+    let (cs, _) = walked(&w, 3).await;
+    let alt = rewritten(&cs[1].0);
+    let r = cat::sign(&SECRET3, &alt.header).expect("ok");
+    w.node.anchor_by(&r, &SECRET3);
+    {
+        let mut b = w.node.0.lock().expect("ok");
+        b.sources
+            .insert(r.payload.key, keccak256(b"other.publisher"));
+        b.logs.push((0x40, r.payload.key));
+    }
+    let v = verified(history(&w, &opts(vec![], Some(0))).await);
+    assert_eq!(v["keysScanned"]["from"], json!(0));
+    assert!(v["limit"].is_null());
+    w.node
+        .0
+        .lock()
+        .expect("ok")
+        .sources
+        .insert(r.payload.key, keccak256(publisher().0.as_bytes()));
+    assert_eq!(
+        refused(history(&w, &opts(vec![], Some(0))).await).0,
+        "publisher"
+    );
+    // A scan that starts past the block read scans nothing and says so.
+    let v = verified(history(&w, &opts(vec![], Some(0x1000))).await);
+    assert!(v["keysScanned"].is_null() && v["limit"].is_string());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+async fn files_req(app: &Router) -> Response {
+    app.clone()
+        .oneshot(
+            Request::get("/v1/bulk/catalogs/example.publisher/files?from=0")
+                .body(Body::empty())
+                .expect("ok"),
+        )
+        .await
+        .expect("ok")
+}
+
+#[tokio::test]
+async fn cat_1_fix_f1_two_files_answers_at_a_time_each_held_until_its_last_frame() {
+    let w = world();
+    walked(&w, 3).await;
+    let app = peer_routes(w.store.clone());
+    let req = || files_req(&app);
+    let a = req().await;
+    let b = req().await;
+    assert_eq!((a.status(), b.status()), (StatusCode::OK, StatusCode::OK));
+    // Both unread: a third is told to come back.
+    let c = req().await;
+    assert_eq!(c.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(c.headers()["retry-after"], "10");
+    assert_eq!(w.store.file_reads.available_permits(), 0);
+    // One read to its end lets one more in; the bytes are the whole answer.
+    let bytes = a.into_body().collect().await.expect("sent").to_bytes();
+    assert_eq!(w.store.file_reads.available_permits(), 1);
+    let f = cat::CatalogFiles::try_from_slice(&bytes).expect("decodes");
+    assert_eq!(f.files.len(), 4);
+    assert_eq!(req().await.status(), StatusCode::OK);
+    drop(b);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test(start_paused = true)]
+async fn cat_1_fix_f1_a_reader_that_stalls_lets_go_of_the_permit_after_the_deadline() {
+    let w = world();
+    walked(&w, 3).await;
+    let app = peer_routes(w.store.clone());
+    let req = || files_req(&app);
+    let a = req().await;
+    let b = req().await;
+    assert_eq!(req().await.status(), StatusCode::SERVICE_UNAVAILABLE);
+    tokio::time::sleep(std::time::Duration::from_secs(FILES_SEND_SECS + 1)).await;
+    // The permits are free while both stalled answers still exist, and a
+    // stalled answer ends with an error when asked for more.
+    assert_eq!(w.store.file_reads.available_permits(), 2);
+    assert_eq!(req().await.status(), StatusCode::OK);
+    assert!(a.into_body().collect().await.is_err());
+    drop(b);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// A world with catalogs 0..=3 (versions 1 and 2 listed) and own-report
+/// versions after them, one manifest per extra version; their reports.
+async fn with_own_versions(extra: u32) -> (World, Vec<Manifest>, Vec<SignedReport>) {
+    let w = world();
+    let (_, mut ms) = walked(&w, 3).await;
+    let mut rs = Vec::new();
+    for i in 0..extra {
+        let k = 900 + 10 * i128::from(i);
+        let f = shard_files(k..k + 10, 10);
+        let m = manifest(&f, ms.last(), T0 + 200 + u64::from(i));
+        let r = sign(&m);
+        w.node.anchor(&r);
+        w.post(&m, &r).await.expect("own version");
+        w.upload_all(&m, &f).await;
+        ms.push(m);
+        rs.push(r);
+    }
+    (w, ms, rs)
+}
+
+#[tokio::test]
+async fn cat_1_fix_f2_a_history_node_without_the_answers_own_versions_is_undecided() {
+    let (b, _, rs) = with_own_versions(2).await;
+    let ck = checked_rows(&b).await;
+    assert_eq!(ck.header.version, 4);
+    // Another node with the same catalogs that does not hold versions 3, 4.
+    let a = world();
+    walked(&a, 3).await;
+    for r in &rs {
+        a.node.anchor(r);
+    }
+    let get = RouterGet(peer_routes(a.store.clone()));
+    assert!(undecided(history_with(&a, &ck, &get).await).contains("may lag"));
+    // On the node that holds them, it verifies.
+    verified(history(&b, &opts(vec![], None)).await);
+    for d in [&a.dir, &b.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[tokio::test]
+async fn cat_1_fix_f3_the_answers_key_is_read_for_every_catalog_number() {
+    // An own-report version 3 under a key that signed nothing in the walk,
+    // whose key also signed another catalog 1: caught only through the
+    // answer's key.
+    let b = world();
+    let (cs, ms) = walked(&b, 3).await;
+    let f = shard_files(900..910, 10);
+    let m3 = manifest(&f, Some(&ms[1]), T0 + 200);
+    let r3 = onyx_bulk::anchor::sign(&SECRET2, &m3.header).expect("ok");
+    b.node.anchor_by(&r3, &SECRET2);
+    b.post(&m3, &r3).await.expect("v3 under the other key");
+    b.upload_all(&m3, &f).await;
+    verified(history(&b, &opts(vec![], None)).await);
+    let alt = rewritten(&cs[1].0);
+    let ra = cat::sign(&SECRET2, &alt.header).expect("ok");
+    b.node.anchor_by(&ra, &SECRET2);
+    let (fault, why) = refused(history(&b, &opts(vec![], None)).await);
+    assert_eq!(fault, "publisher");
+    assert!(why.contains("catalog 1"), "{why}");
+    let _ = std::fs::remove_dir_all(&b.dir);
+}
+
+#[tokio::test]
+async fn cat_1_fix_f3_an_own_report_answer_whose_chain_leaves_the_catalogs_is_the_publishers() {
+    // Version 3 names a version 2 the catalogs never listed (its own report
+    // only in the other node's book): the chain meets the catalogs' version
+    // 2 with another root.
+    let b = world();
+    let (m1, _) = published(&b).await;
+    let f2 = shard_files(800..810, 10);
+    let v2 = manifest(&f2, Some(&m1), T0 + 6);
+    let r2 = sign(&v2);
+    b.node.anchor(&r2);
+    b.post(&v2, &r2).await.expect("v2");
+    b.upload_all(&v2, &f2).await;
+    let f3 = shard_files(810..820, 10);
+    let v3 = manifest(&f3, Some(&v2), T0 + 300);
+    let r3 = sign(&v3);
+    b.node.anchor(&r3);
+    b.post(&v3, &r3).await.expect("v3");
+    b.upload_all(&v3, &f3).await;
+    let ck = checked_rows(&b).await;
+    let a = world();
+    walked(&a, 3).await;
+    a.node.anchor(&r3);
+    let get = RouterGet(peer_routes(a.store.clone()));
+    let (fault, why) = refused(history_with(&a, &ck, &get).await);
+    assert_eq!(fault, "publisher");
+    assert!(why.contains("version 2"), "{why}");
+    // Its report not anchored where the history is read: undecided.
+    a.node.withdraw(&r3);
+    a.node.dispute(&r3);
+    assert!(undecided(history_with(&a, &ck, &get).await).contains("version 2"));
+    for d in [&a.dir, &b.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[tokio::test]
+async fn cat_1_fix_f3_a_version_the_book_holds_after_the_newest_seen_is_undecided() {
+    let w = world();
+    let (_, ms) = walked(&w, 3).await;
+    let m3 = manifest(&shard_files(900..910, 10), Some(&ms[1]), T0 + 200);
+    w.node.anchor(&sign(&m3));
+    assert!(undecided(history(&w, &opts(vec![], None)).await).contains("version 3"));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+struct EmptyCalls;
+
+impl JsonRpc for EmptyCalls {
+    fn call<'a>(&'a self, _: &'a str, _: Value) -> BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async { Ok(json!("0x")) })
+    }
+}
+
+#[tokio::test]
+async fn cat_1_fix_f3_an_empty_sequence_answer_is_no_answer() {
+    let at = (0x64, Hash32(FIN));
+    assert!(
+        read_sequence_at(&EmptyCalls, &BOOK, &Hash32([1; 32]), 7, at)
+            .await
+            .is_err()
+    );
+}
+
+#[tokio::test]
+async fn cat_1_fix_f1_the_permit_goes_with_the_last_frame_not_the_first() {
+    let sem = Arc::new(tokio::sync::Semaphore::new(1));
+    let permit = sem.clone().try_acquire_owned().expect("free");
+    let data: Vec<u8> = (0..(FILES_FRAME * 2 + 10)).map(|i| i as u8).collect();
+    let mut body = FilesBody::new(data.clone(), permit);
+    let mut got = Vec::new();
+    let mut frames = 0;
+    while let Some(f) = body.frame().await {
+        let f = f.expect("frame").into_data().expect("data");
+        assert!(f.len() <= FILES_FRAME);
+        got.extend_from_slice(&f);
+        frames += 1;
+        // As hyper does: a body that says it has ended is dropped.
+        if http_body::Body::is_end_stream(&body) {
+            break;
+        }
+        assert_eq!(sem.available_permits(), 0, "held while frames remain");
+    }
+    assert_eq!(frames, 3);
+    assert_eq!(got, data);
+    assert_eq!(sem.available_permits(), 1, "let go with the last frame");
+}
+
+#[tokio::test]
+async fn cat_1_fix_f4_an_answer_key_alone_is_read_even_when_its_version_is_listed() {
+    // A rows answer for version 2 (listed in the catalogs, same root) under
+    // the publisher's other key, which signed nothing in the walk and also
+    // signed another catalog 1: only the answer's own key finds it.
+    let w = world();
+    let (cs, ms) = walked(&w, 3).await;
+    let mut ck = checked_rows(&w).await;
+    assert_eq!(ck.header.version, 2);
+    let r2 = onyx_bulk::anchor::sign(&SECRET2, &ms[1].header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    ck.catalog = None;
+    ck.digest = r2.payload.digest();
+    ck.report_hash = r2.hash();
+    ck.signer = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    ck.report = r2;
+    let get = RouterGet(peer_routes(w.store.clone()));
+    verified(history_with(&w, &ck, &get).await);
+    let alt = rewritten(&cs[1].0);
+    let ra = cat::sign(&SECRET2, &alt.header).expect("ok");
+    w.node.anchor_by(&ra, &SECRET2);
+    assert_eq!(refused(history_with(&w, &ck, &get).await).0, "publisher");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_1_fix_f4_the_answers_own_version_is_never_fetched_from_the_history_node() {
+    // The history node does not hold the answer's own version 3, but holds
+    // every version below it: the check needs nothing more from it.
+    let (b, _, rs) = with_own_versions(1).await;
+    let ck = checked_rows(&b).await;
+    assert_eq!(ck.header.version, 3);
+    let a = world();
+    walked(&a, 3).await;
+    a.node.anchor(&rs[0]);
+    let get = RouterGet(peer_routes(a.store.clone()));
+    verified(history_with(&a, &ck, &get).await);
+    for d in [&a.dir, &b.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[test]
+fn cat_1_fix_f5_a_large_answer_gets_time_for_a_slow_honest_reader() {
+    assert_eq!(files_deadline(1 << 20).as_secs(), FILES_SEND_SECS);
+    let big = files_deadline(cat::MAX_FILES_BYTES + cat::MAX_CATALOG_BYTES);
+    assert!(big.as_secs() >= 190, "24 MiB at 128 KiB/s: {big:?}");
 }

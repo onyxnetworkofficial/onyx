@@ -857,3 +857,31 @@ pub async fn check_bulk(
         },
     }
 }
+
+/// [`check_bulk`] and then, when the rows check holds on the caller's chain
+/// node, the publisher's catalog history ([`onyx_api::bulk_history`],
+/// ADR-0059 amendment 3). The report's `ok` holds only when both do; its
+/// `history` part says what the history check found. Exit code: the rows
+/// check's when it did not hold, else the history check's.
+pub async fn check_bulk_history(
+    answer: &Value,
+    asked: &BulkAsked,
+    node: (&dyn JsonRpc, u64, [u8; 20]),
+    get: &dyn onyx_api::storage::HttpGet,
+    opts: &onyx_api::bulk_history::HistoryOpts,
+) -> (Value, i32) {
+    let o = check_bulk(answer, asked, Some(node)).await;
+    let BulkOutcome::Verified {
+        checked,
+        anchor: Some(_),
+    } = &o
+    else {
+        return (o.report(), o.code());
+    };
+    let (rpc, chain_id, book) = node;
+    let h = onyx_api::bulk_history::check_history(get, rpc, chain_id, book, checked, opts).await;
+    let mut r = o.report();
+    r["ok"] = json!(h.code() == 0);
+    r["history"] = h.report();
+    (r, h.code())
+}

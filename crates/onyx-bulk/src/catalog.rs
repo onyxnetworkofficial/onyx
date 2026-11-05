@@ -413,6 +413,195 @@ pub fn verify(header: &CatalogHeader, report: &SignedReport) -> Result<[u8; 20],
     Ok(signer)
 }
 
+/// The leaves before with `changed` merged in by dataset (both sorted): how a
+/// stored diff (ADR-0059 amendment 2) becomes the next catalog's leaves.
+pub fn apply_diff(before: &[CatalogLeaf], changed: &[CatalogLeaf]) -> Vec<CatalogLeaf> {
+    let mut out = Vec::with_capacity(before.len() + changed.len());
+    let (mut i, mut j) = (0, 0);
+    while i < before.len() || j < changed.len() {
+        match (before.get(i), changed.get(j)) {
+            (Some(a), Some(b)) if a.dataset == b.dataset => {
+                out.push(b.clone());
+                i += 1;
+                j += 1;
+            }
+            (Some(a), Some(b)) if a.dataset < b.dataset => {
+                out.push(a.clone());
+                i += 1;
+            }
+            (Some(a), None) => {
+                out.push(a.clone());
+                i += 1;
+            }
+            (_, Some(b)) => {
+                out.push(b.clone());
+                j += 1;
+            }
+            (None, None) => break,
+        }
+    }
+    out
+}
+
+/// Most bytes one `GET /v1/bulk/catalogs/{publisher}/files` answer holds
+/// (ADR-0059 amendment 3 item 1); it always holds at least one catalog.
+pub const MAX_FILES_BYTES: usize = 16 << 20;
+
+/// A stored catalog's leaves as a node keeps them (amendment 2).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub enum FileLeaves {
+    /// Every leaf.
+    Whole(Vec<CatalogLeaf>),
+    /// The leaves that differ from the catalog before, in dataset order.
+    Diff(Vec<CatalogLeaf>),
+}
+
+/// One stored catalog, as the files route answers it.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CatalogFile {
+    /// The signed header.
+    pub header: CatalogHeader,
+    /// Its signed report.
+    pub report: SignedReport,
+    /// Its leaves, whole or as a diff.
+    pub leaves: FileLeaves,
+}
+
+/// The files route's answer (ADR-0059 amendment 3 item 1).
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct CatalogFiles {
+    /// The node's newest held catalog number for the publisher.
+    pub newest: u64,
+    /// Consecutive catalogs from the number asked.
+    pub files: Vec<CatalogFile>,
+}
+
+impl CatalogFile {
+    /// The whole catalog, given the one before (`None` for a whole file or
+    /// number 0): a diff is merged into `prev`'s leaves. Nothing is checked
+    /// here; see [`Catalog::validate`] and [`Catalog::check_successor`].
+    pub fn rebuild(&self, prev: Option<&Catalog>) -> Result<Catalog, CatalogError> {
+        let leaves = match (&self.leaves, prev) {
+            (FileLeaves::Whole(l), _) => l.clone(),
+            (FileLeaves::Diff(changed), Some(p)) => apply_diff(&p.leaves, changed),
+            (FileLeaves::Diff(_), None) => {
+                return Err(bad(format!(
+                    "catalog {}: a diff with no catalog before it",
+                    self.header.number
+                )))
+            }
+        };
+        Ok(Catalog {
+            header: self.header.clone(),
+            leaves,
+        })
+    }
+}
+
+/// Why a history walk stopped (ADR-0059 amendment 3 item 4).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum WalkError {
+    /// The node's answer does not make the signed catalog.
+    Node(String),
+    /// A signed catalog breaks the catalog rules (amendment 1 item 3).
+    Rules(String),
+}
+
+/// One catalog of a history walk (ADR-0059 amendment 3 item 2).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WalkStep {
+    /// Its number.
+    pub number: u64,
+    /// Its header root.
+    pub root: Hash32,
+    /// Its creation time.
+    pub created_unix: u64,
+    /// Its signed report.
+    pub report: SignedReport,
+    /// The key that signed it, recovered.
+    pub signer: [u8; 20],
+    /// The followed dataset's leaf, when this catalog lists it.
+    pub leaf: Option<CatalogLeaf>,
+}
+
+/// A publisher's catalogs from 0, each checked as a node checks it before it
+/// takes it (`validate`, the report signs the header, the append-only
+/// successor of the one before), following one dataset (ADR-0059 amendment 3
+/// item 2). Only the last catalog is kept whole.
+pub struct Walker {
+    publisher: SourceId,
+    dataset: String,
+    prev: Option<Catalog>,
+    /// Every catalog taken, from 0.
+    pub steps: Vec<WalkStep>,
+}
+
+impl Walker {
+    /// A walk of `publisher`'s catalogs following `dataset`.
+    pub fn new(publisher: SourceId, dataset: String) -> Self {
+        Walker {
+            publisher,
+            dataset,
+            prev: None,
+            steps: Vec::new(),
+        }
+    }
+
+    /// The number the next catalog must have.
+    pub fn next_number(&self) -> u64 {
+        self.steps.len() as u64
+    }
+
+    /// Take the next catalog, or say why it does not hold. A diff is merged
+    /// into the catalog before it. [`WalkError::Node`]: the bytes served do
+    /// not make the signed catalog (wrong number, leaves that do not hash to
+    /// the signed leaves root, a report that does not sign the header);
+    /// [`WalkError::Rules`]: a catalog the publisher signed, served as
+    /// signed, that breaks `validate` or the successor rule.
+    pub fn take(&mut self, f: &CatalogFile) -> Result<(), WalkError> {
+        let n = self.next_number();
+        let node = |s: String| WalkError::Node(format!("catalog {n}: {s}"));
+        if f.header.number != n {
+            return Err(node(format!("the node sent number {}", f.header.number)));
+        }
+        if f.header.publisher != self.publisher {
+            return Err(node("another publisher's".into()));
+        }
+        let c = f
+            .rebuild(self.prev.as_ref())
+            .map_err(|e| node(e.to_string()))?;
+        if usize::try_from(c.header.leaf_count).ok() != Some(c.leaves.len())
+            || leaves_tree(&c.leaves).root() != c.header.leaves_root
+        {
+            return Err(node("its leaves do not make the signed leaves root".into()));
+        }
+        let signer = verify(&c.header, &f.report)
+            .map_err(|e| node(format!("the report does not sign it: {e}")))?;
+        let rules = |s: String| WalkError::Rules(format!("catalog {n}: {s}"));
+        c.validate().map_err(|e| rules(e.to_string()))?;
+        if let Some(p) = &self.prev {
+            c.check_successor(p).map_err(|e| rules(e.to_string()))?;
+        }
+        let leaf = c.find(&self.dataset).map(|i| c.leaves[i].clone());
+        self.steps.push(WalkStep {
+            number: n,
+            root: c.header.root(),
+            created_unix: c.header.created_unix,
+            report: f.report.clone(),
+            signer,
+            leaf,
+        });
+        self.prev = Some(c);
+        Ok(())
+    }
+
+    /// The first catalog that lists the dataset (from there every catalog
+    /// lists it: `check_successor` drops nothing).
+    pub fn entered(&self) -> Option<&WalkStep> {
+        self.steps.iter().find(|s| s.leaf.is_some())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -620,5 +809,128 @@ mod tests {
         let c = Catalog::build(src(), None, 1, vec![leaf("a.x", 1, 0, 1)]).expect("c");
         assert_eq!(c.leaves[0].row()[..LEAF_DOMAIN.len()], *LEAF_DOMAIN);
         assert_ne!(c.header.root(), c.header.leaves_root);
+    }
+
+    fn file(c: &Catalog, leaves: FileLeaves) -> CatalogFile {
+        CatalogFile {
+            header: c.header.clone(),
+            report: sign(&secret(), &c.header).expect("sign"),
+            leaves,
+        }
+    }
+
+    #[test]
+    fn cat_1_a_walk_rebuilds_diffs_and_follows_one_dataset() {
+        let c0 = Catalog::build(
+            src(),
+            None,
+            100,
+            vec![leaf("a.x", 1, 0, 1), leaf("b.x", 1, 0, 2)],
+        )
+        .expect("c0");
+        let c1 = Catalog::build(
+            src(),
+            Some(&c0),
+            110,
+            vec![
+                leaf("a.x", 2, 1, 3),
+                leaf("b.x", 1, 0, 2),
+                leaf("c.x", 1, 0, 4),
+            ],
+        )
+        .expect("c1");
+        let f0 = file(&c0, FileLeaves::Whole(c0.leaves.clone()));
+        let f1 = file(
+            &c1,
+            FileLeaves::Diff(vec![leaf("a.x", 2, 1, 3), leaf("c.x", 1, 0, 4)]),
+        );
+        let mut w = Walker::new(src(), "a.x".into());
+        w.take(&f0).expect("0");
+        w.take(&f1).expect("1");
+        assert_eq!(w.entered().map(|s| s.number), Some(0));
+        assert_eq!(w.steps[1].leaf.as_ref().map(|l| l.version), Some(2));
+        assert_eq!(w.steps[1].root, c1.header.root());
+        let mut w = Walker::new(src(), "c.x".into());
+        w.take(&f0).expect("0");
+        w.take(&f1).expect("1");
+        assert_eq!(w.entered().map(|s| s.number), Some(1));
+        // A whole file in place of the diff rebuilds the same catalog.
+        let mut w = Walker::new(src(), "a.x".into());
+        w.take(&f0).expect("0");
+        w.take(&file(&c1, FileLeaves::Whole(c1.leaves.clone())))
+            .expect("1 whole");
+    }
+
+    #[test]
+    fn cat_1_bytes_that_do_not_make_the_signed_catalog_are_the_nodes_and_signed_rule_breaks_the_publishers(
+    ) {
+        let c0 = Catalog::build(
+            src(),
+            None,
+            100,
+            vec![leaf("a.x", 1, 0, 1), leaf("b.x", 1, 0, 2)],
+        )
+        .expect("c0");
+        let f0 = file(&c0, FileLeaves::Whole(c0.leaves.clone()));
+        let node = |r: Result<(), WalkError>| matches!(r, Err(WalkError::Node(_)));
+        // A diff with nothing before it, a number out of order, a diff that
+        // leaves out a change, a report of another catalog.
+        let c1 = Catalog::build(
+            src(),
+            Some(&c0),
+            110,
+            vec![leaf("a.x", 2, 1, 3), leaf("b.x", 1, 0, 2)],
+        )
+        .expect("c1");
+        let mut w = Walker::new(src(), "a.x".into());
+        assert!(node(w.take(&file(&c1, FileLeaves::Diff(vec![])))));
+        let mut w = Walker::new(src(), "a.x".into());
+        w.take(&f0).expect("0");
+        assert!(node(w.take(&f0)));
+        assert!(node(w.take(&file(&c1, FileLeaves::Diff(vec![])))));
+        let mut forged = file(&c1, FileLeaves::Diff(vec![leaf("a.x", 2, 1, 3)]));
+        forged.report = f0.report.clone();
+        assert!(node(w.take(&forged)));
+        w.take(&file(&c1, FileLeaves::Diff(vec![leaf("a.x", 2, 1, 3)])))
+            .expect("1");
+        // A signed catalog 2 that drops b.x: served as signed, it breaks the
+        // successor rule, which is the publisher's.
+        let leaves = vec![leaf("a.x", 2, 1, 3)];
+        let dropped = Catalog {
+            header: CatalogHeader {
+                format: FORMAT,
+                publisher: src(),
+                number: 2,
+                prev: c1.header.root(),
+                created_unix: 120,
+                leaf_count: 1,
+                leaves_root: leaves_tree(&leaves).root(),
+            },
+            leaves: leaves.clone(),
+        };
+        assert!(matches!(
+            w.take(&file(&dropped, FileLeaves::Whole(leaves))),
+            Err(WalkError::Rules(e)) if e.contains("b.x")
+        ));
+        // One dataset listed twice, signed: the publisher's too (review
+        // CAT-HIST-R1 finding 3: a client checks the order itself).
+        let twice = vec![leaf("a.x", 1, 0, 1), leaf("a.x", 1, 0, 9)];
+        let c = Catalog {
+            header: CatalogHeader {
+                format: FORMAT,
+                publisher: src(),
+                number: 0,
+                prev: Hash32::ZERO,
+                created_unix: 100,
+                leaf_count: 2,
+                leaves_root: leaves_tree(&twice).root(),
+            },
+            leaves: twice.clone(),
+        };
+        let mut w = Walker::new(src(), "a.x".into());
+        assert!(matches!(
+            w.take(&file(&c, FileLeaves::Whole(twice))),
+            Err(WalkError::Rules(_))
+        ));
     }
 }
