@@ -68,7 +68,7 @@ for (const page of pages) {
 		});
 		for (const a of layout.anchors) if (!links.has(a)) links.set(a, `${name}@${w}`);
 		delete layout.anchors;
-		await p.addScriptTag({ content: axeSrc });
+		await p.evaluate(axeSrc);
 		const axe = await p.evaluate(async () => {
 			const r = await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa'] } });
 			return r.violations.map((v) => ({ id: v.id, impact: v.impact, n: v.nodes.length, help: v.help, targets: v.nodes.slice(0, 4).map((n) => n.target.join(' ')) }));

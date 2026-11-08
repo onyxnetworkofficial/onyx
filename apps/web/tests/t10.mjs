@@ -96,7 +96,7 @@ export async function t10(browser, base, expect) {
 		expect(requests.every((u) => new URL(u).origin === new URL(base).origin), `T10 ${width}: the simulators make no outside request`);
 		const overflow = await pg.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
 		expect(!overflow, `T10 ${width}: page fits the viewport`);
-		await pg.addScriptTag({ content: axe });
+		await pg.evaluate(axe);
 		{
 			const v = await pg.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa'] } })).violations.filter((x) => ['serious', 'critical'].includes(x.impact)).map((x) => x.id));
 			expect(v.length === 0, `T10 ${width}: the stake simulator passes axe (${v.join(',')})`);

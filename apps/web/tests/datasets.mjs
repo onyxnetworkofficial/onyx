@@ -87,6 +87,9 @@ export async function datasets(browser, base, expect) {
 		expect((await pg.getByTestId('datasets-count').innerText()).includes('2 of 4'), `${at}: "Showing 2 of 4"`);
 		expect((await pg.getByTestId('datasets-updated').first().innerText()).trim() === '2026-11-03', `${at}: each dataset shows the day its version was made`);
 		expect(!(await pg.content()).includes('onerror=__xss'), `${at}: an item out of shape is dropped, never printed`);
+		// The CSP would refuse the handler anyway, so the canary cannot fire: check the markup
+		// itself (review of WEB-CSP-1, finding 3).
+		expect(await pg.evaluate(() => document.querySelector('[onerror]') === null), `${at}: no element carries an onerror handler`);
 		await pg.getByTestId('datasets-more').click();
 		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 4, null, { timeout: 15000 }).catch(() => {});
 		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide']), `${at}: "Show more" follows next (${await names()})`);

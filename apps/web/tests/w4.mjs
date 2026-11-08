@@ -229,7 +229,7 @@ export async function w4(browser, base, root, expect) {
 			`W4 review: ${unfilled.length} placeholders before load each have a loading name (${unfilled.map(([, n]) => n).join('; ')}), ${FB ? 'no chart slot (fallback)' : 'the chart slot is aria-busy'}`
 		);
 		const axeSrc = await readFile(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
-		await p.addScriptTag({ content: axeSrc });
+		await p.evaluate(axeSrc);
 		const v = await p.evaluate(async () => {
 			const r = await window.axe.run({ include: [['.stats'], ['.market'], ['.preview'], ['.bento']] }, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'] } });
 			return r.violations.map((x) => `${x.id} (${x.nodes.length})`);

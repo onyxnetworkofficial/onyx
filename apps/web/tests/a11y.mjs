@@ -32,7 +32,7 @@ try {
 			await pg.goto(base + (p ? `#/${p}` : ''));
 			await pg.waitForFunction(() => !document.querySelector('.sk'), null, { timeout: 120000 }).catch(() => {});
 			await pg.waitForTimeout(1500);
-			await pg.addScriptTag({ content: axeSrc });
+			await pg.evaluate(axeSrc);
 			for (const state of ['loaded', 'details open']) {
 				if (state === 'details open') {
 					await pg.evaluate(() => document.querySelectorAll('details').forEach((d) => (d.open = true)));

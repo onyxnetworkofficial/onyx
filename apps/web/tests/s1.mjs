@@ -274,7 +274,7 @@ export async function s1(browser, base, root, expect) {
 		for (const viewport of [{ width: 1280, height: 900 }, { width: 390, height: 844 }]) {
 			const { ctx, pg } = await open(browser, base, viewport);
 			const run = async (at) => {
-				if (!(await pg.evaluate(() => 'axe' in window))) await pg.addScriptTag({ content: axeSrc });
+				if (!(await pg.evaluate(() => 'axe' in window))) await pg.evaluate(axeSrc);
 				await pg.evaluate(() => document.querySelectorAll('details').forEach((d) => (d.open = true)));
 				const v = await pg.evaluate((tags) => window.axe.run(document, { runOnly: { type: 'tag', values: tags }, resultTypes: ['violations'] }), TAGS);
 				runs++;

@@ -56,7 +56,7 @@ try {
 	for (const width of [390, 1280]) {
 		await page.setViewportSize({ width, height: 900 });
 		assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false, `fed receipt fits at ${width}px`);
-		await page.addScriptTag({ content: axeSrc });
+		await page.evaluate(axeSrc);
 		const fedA11y = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.filter((v) => ['serious', 'critical'].includes(v.impact)).map((v) => v.id));
 		assert.deepEqual(fedA11y, []);
 		await page.screenshot({ path: `/tmp/onyx-w1-fed-receipt-${width}.png`, fullPage: true });
@@ -143,7 +143,7 @@ try {
 		await page.setViewportSize({ width, height: 900 });
 		await page.getByTestId('receipt-section').scrollIntoViewIfNeeded();
 		assert.equal(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1), false);
-		await page.addScriptTag({ content: axeSrc });
+		await page.evaluate(axeSrc);
 		const a11y = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'wcag22aa', 'best-practice'] } })).violations.filter((v) => ['serious', 'critical'].includes(v.impact)).map((v) => v.id));
 		assert.deepEqual(a11y, []);
 		await page.screenshot({ path: `/tmp/onyx-u2-receipt-${width}.png`, fullPage: true });

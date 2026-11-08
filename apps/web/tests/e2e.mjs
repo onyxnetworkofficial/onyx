@@ -67,6 +67,22 @@ const base = `http://127.0.0.1:${server.address().port}/`;
 
 // E12: every wait without its own timeout is capped by wait.mjs, not Playwright's 30 s.
 const browser = capWaits(await chromium.launch({ channel: 'chrome' }));
+// THREATS WEB-CSP-1 (review finding 2): every context, every lane's included, reports what the
+// page's Content-Security-Policy refuses; a refusal anywhere fails the run (checked at the end).
+const cspViolations = [];
+const CSP_TAG = 'CSP-VIOLATION';
+const watchCsp = async (ctx) => {
+	await ctx.addInitScript((tag) => {
+		document.addEventListener('securitypolicyviolation', (e) => console.error(`${tag} ${e.violatedDirective} ${e.blockedURI} on ${location.hash || location.pathname}`));
+	}, CSP_TAG);
+	ctx.on('console', (m) => m.type() === 'error' && m.text().startsWith(CSP_TAG) && cspViolations.push(m.text()));
+	return ctx;
+};
+{
+	const newContext = browser.newContext.bind(browser);
+	browser.newContext = async (...a) => watchCsp(await newContext(...a));
+	browser.newPage = async (...a) => (await browser.newContext(...a)).newPage();
+}
 const failures = [];
 const expect = (ok, what) => (ok ? console.log(`ok   ${what}`) : (failures.push(what), console.log(`FAIL ${what}`)));
 // The suites in their own modules run beside the checks below, in three lanes (each opens its own
@@ -134,6 +150,31 @@ try {
 
 	await p.goto(base + '#/how-it-works');
 	await p.locator('header.top').waitFor();
+	{
+		// THREATS WEB-CSP-1: every page carries the Content-Security-Policy (vite.config.ts), and
+		// this whole run executes under it: a script, fetch or worker it blocks is a console error
+		// (checked at the end).
+		const csp = (await p.locator('meta[http-equiv="content-security-policy"]').getAttribute('content')) ?? '';
+		const want = /^default-src 'self'; worker-src 'self'; connect-src 'self' https: http:\/\/127\.0\.0\.1:\* http:\/\/localhost:\*; font-src 'self'; img-src 'self' data:; object-src 'none'; script-src 'self' 'wasm-unsafe-eval'( 'sha256-[A-Za-z0-9+\/=]+')+; style-src 'self' 'unsafe-inline'; base-uri 'self'; form-action 'self'$/;
+		expect(want.test(csp), `the page carries exactly the Content-Security-Policy: ${csp}`);
+		// A reader's own node over plain http is allowed; plain http elsewhere is refused, and the
+		// recorder sees it (a page of its own, so its expected refusal stays out of this run's).
+		const cc = await browser.newContext();
+		const cp = await cc.newPage();
+		await cp.goto(base + '#/how-it-works');
+		await cp.locator('header.top').waitFor();
+		const before = cspViolations.length;
+		await cp.evaluate(async () => {
+			for (const u of ['http://127.0.0.1:9/', 'http://localhost:9/']) await fetch(u).catch(() => {});
+		});
+		await cp.waitForTimeout(300);
+		expect(cspViolations.length === before, `a reader's own node over http (127.0.0.1, localhost) is allowed${cspViolations.length > before ? ': ' + cspViolations.slice(before).join('; ') : ''}`);
+		await cp.evaluate(() => fetch('http://example.invalid/').catch(() => {}));
+		for (let i = 0; i < 50 && cspViolations.length === before; i++) await cp.waitForTimeout(100);
+		expect(cspViolations.slice(before).some((v) => v.includes('connect-src') && v.includes('example.invalid')), 'plain http to another host is refused, and the recorder sees it');
+		cspViolations.splice(before);
+		await cc.close();
+	}
 	expect((await p.getByTestId('preview-banner').count()) === (PUB ? 0 : 1), PUB ? 'public: no preview banner' : 'preview: the private preview banner shows');
 	{
 		// ROADMAP L14: a fallback build says on every page why the company totals are missing.
@@ -1606,11 +1647,13 @@ try {
 	// stop with no trap, charts reachable by keyboard with a data table of the same numbers,
 	// the palette's contrast, and motion that stops.
 	{
+		// axe goes in through `evaluate`, as a devtools console would: an `addScriptTag` inline
+		// script is refused by the page's Content-Security-Policy (THREATS WEB-CSP-1).
 		const axeSrc = await readFile(createRequire(import.meta.url).resolve('axe-core/axe.min.js'), 'utf8');
 		const AXE_TAGS = ['wcag2a', 'wcag2aa', 'wcag21a', 'wcag21aa', 'wcag22aa', 'best-practice'];
 		// `only`: a CSS selector to limit the run to (axe then skips its page-level rules).
 		const axeRun = async (pg, only) => {
-			if (!(await pg.evaluate(() => 'axe' in window))) await pg.addScriptTag({ content: axeSrc });
+			if (!(await pg.evaluate(() => 'axe' in window))) await pg.evaluate(axeSrc);
 			const r = await pg.evaluate(([tags, only]) => window.axe.run(only ? { include: [only] } : document, { runOnly: { type: 'tag', values: tags }, resultTypes: ['violations'] }), [AXE_TAGS, only]);
 			return r.violations.filter((v) => v.impact === 'serious' || v.impact === 'critical');
 		};
@@ -1973,6 +2016,7 @@ try {
 	// The suites in their own modules, started at the top, run beside the checks above.
 	await suites;
 	expect(errors.length === 0, `no console errors${errors.length ? ': ' + errors.join('; ') : ''}`);
+	expect(cspViolations.length === 0, `no Content-Security-Policy refusal in any context${cspViolations.length ? ': ' + cspViolations.slice(0, 5).join('; ') : ''}`);
 } finally {
 	await browser.close();
 	server.close();

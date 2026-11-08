@@ -94,7 +94,7 @@ export async function markets(browser, base, expect) {
 
 		await page.getByTestId('arena-tab-markets').click();
 		expect(/your rank/i.test(await page.getByTestId('arena-overview').innerText()), `markets ${width}: the overview shows open markets, volume, traders and rank`);
-		await page.addScriptTag({ content: axe });
+		await page.evaluate(axe);
 		const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'] } })).violations.filter((v) => ['serious', 'critical'].includes(v.impact)).map((v) => v.id));
 		expect(violations.length === 0, `markets ${width}: no serious accessibility issue (${violations.join(',')})`);
 		expect(!(await page.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1)), `markets ${width}: page fits the viewport`);

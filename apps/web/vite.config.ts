@@ -34,7 +34,32 @@ export default defineConfig({
 			router: { type: 'hash' },
 			paths: { relative: true },
 			// Not `_app`: some hosts reserve names that start with an underscore.
-			appDir: 'app'
+			appDir: 'app',
+			// A Content-Security-Policy in a meta tag of every page (launch hardening, THREATS
+			// WEB-CSP-1): scripts only from this origin plus the hashes of SvelteKit's own inline
+			// bootstrap (computed at build), WebAssembly for the verifier, workers, images and fonts
+			// from this origin. Fetches may also go to any https origin: the Markets and insurance
+			// pages read the chain from an RPC the reader may pick (sepolia.base.org by default).
+			// Inline style attributes stay allowed (Svelte writes them); plugins, base and form
+			// targets are locked. frame-ancestors cannot be a meta directive: the server's
+			// X-Frame-Options DENY covers it.
+			csp: {
+				mode: 'hash',
+				directives: {
+					'default-src': ['self'],
+					'script-src': ['self', 'wasm-unsafe-eval'],
+					'style-src': ['self', 'unsafe-inline'],
+					'img-src': ['self', 'data:'],
+					'font-src': ['self'],
+					// A reader's own node on this machine over plain http too (the RPC fields
+					// offer http://127.0.0.1 and localhost; review of WEB-CSP-1, finding 1).
+					'connect-src': ['self', 'https:', 'http://127.0.0.1:*', 'http://localhost:*'],
+					'worker-src': ['self'],
+					'object-src': ['none'],
+					'base-uri': ['self'],
+					'form-action': ['self']
+				}
+			}
 		}),
 		pureTemplates()
 	],

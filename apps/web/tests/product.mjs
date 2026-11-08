@@ -32,7 +32,7 @@ export async function product(browser, base, root, expect) {
 		const unwanted = requests.filter((r) => r.method !== 'GET' || /\/data\/|\.wasm$|verifier\.worker|\/v1\//.test(r.path));
 		expect(unwanted.length === 0, `U1 ${width}: home makes no submissions and fetches no datasets, verifier or API (${JSON.stringify(unwanted)})`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth === innerWidth), `U1 ${width}: home fits the viewport`);
-		await pg.addScriptTag({ content: axeSrc });
+		await pg.evaluate(axeSrc);
 		const violations = await pg.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21aa','wcag22aa','best-practice'] } })).violations.filter((v) => ['serious','critical'].includes(v.impact)).map((v) => v.id));
 		expect(violations.length === 0, `U1 ${width}: no serious/critical accessibility violations (${violations.join(', ')})`);
 		await pg.screenshot({ path: `/tmp/onyx-product-home-${width}.png`, fullPage: true });
