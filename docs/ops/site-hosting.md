@@ -24,6 +24,11 @@ The script refuses a build that is not a public fallback build or that contains 
 partner's name, copies it to a new release folder, switches `current` in one step and checks the
 live page over HTTPS. Roll back: `ssh onyx-web 'ln -sfn /srv/onyx/releases/<older> /srv/onyx/current'`.
 
+Both deploy scripts end with `scripts/check-caddy-headers.py --live` (THREATS WEB-CSP-2): the page
+and a chunk must carry the site's Content-Security-Policy and every web worker file its own. The
+policies live in the Caddyfile, which `scripts/deploy-api.sh` installs, so after a Caddyfile change
+run `scripts/deploy-api.sh` first: until then a site deploy goes live and then exits 1 on the check.
+
 ## API (NS17)
 
 The query API (`onyx-node`, testnet) runs on the same server and answers under

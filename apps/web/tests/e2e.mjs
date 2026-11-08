@@ -52,18 +52,44 @@ const n = (x) => x.toLocaleString('en-US');
 // Satoshis (decimal string) as the site prints BTC (format.ts `btc`).
 const btcFmt = (s) => { const v = BigInt(s); const a = v < 0n ? -v : v; return `${v < 0n ? '−' : ''}${(a / 100000000n).toLocaleString('en-US')}.${(a % 100000000n).toString().padStart(8, '0')}`; };
 const types = { '.html': 'text/html', '.js': 'text/javascript', '.css': 'text/css', '.json': 'application/json', '.wasm': 'application/wasm', '.txt': 'text/plain' };
+// THREATS WEB-CSP-2: a web worker takes its policy from its own response, and the hosted server
+// gives the workers a strict one (deploy/caddy/onyx-web.Caddyfile, @workers). This server sends the
+// same policy, so every worker of this run (the verifier, the slab) runs under it; that the real
+// server sends it is scripts/check-caddy-headers.py's part.
+const caddyfile = await readFile(new URL('../../../deploy/caddy/onyx-web.Caddyfile', import.meta.url), 'utf8');
+const WORKER_CSP = /^\s*header @workers \{\n\s*Content-Security-Policy "([^"]+)"\n\s*defer\n\s*\}$/m.exec(caddyfile)?.[1];
+if (!WORKER_CSP) throw new Error('deploy/caddy/onyx-web.Caddyfile has no deferred worker Content-Security-Policy block');
+const WORKERS = '/app/immutable/workers/';
+// A worker of this test only (never in the build): it reports what its policy lets it do.
+const PROBE = `${WORKERS}__csp-probe.js`;
+const probeSrc = `const r = {};
+const go = (p) => p.then(() => 'allowed', () => 'refused');
+r.self = await go(fetch(${JSON.stringify(PROBE)}));
+r.other = await go(fetch(new URL(self.location.href).searchParams.get('other')));
+r.wasm = await go(WebAssembly.compile(new Uint8Array([0, 97, 115, 109, 1, 0, 0, 0])));
+try { (0, eval)('1'); r.eval = 'allowed'; } catch { r.eval = 'refused'; }
+r.dataImport = await go(import('data:text/javascript,export default 1'));
+postMessage(r);
+`;
 const server = createServer(async (req, res) => {
 	const path = normalize(decodeURIComponent(new URL(req.url, 'http://x').pathname)).replace(/^(\.\.[/\\])+/, '');
+	const headers = path.startsWith(WORKERS) ? { 'content-security-policy': WORKER_CSP } : {};
+	if (path === PROBE) return res.writeHead(200, { ...headers, 'content-type': 'text/javascript' }).end(probeSrc);
 	try {
 		const file = path === '/' ? 'index.html' : path;
 		const body = await readFile(join(root, file));
-		res.writeHead(200, { 'content-type': types[extname(file)] ?? 'application/octet-stream' }).end(body);
+		res.writeHead(200, { ...headers, 'content-type': types[extname(file)] ?? 'application/octet-stream' }).end(body);
 	} catch {
 		res.writeHead(404).end();
 	}
 }).listen(0, '127.0.0.1');
 await new Promise((r) => server.once('listening', r));
 const base = `http://127.0.0.1:${server.address().port}/`;
+// Another origin the page's policy allows (a reader's own node, http://127.0.0.1:*) and that
+// answers every fetch: only the worker's own policy can refuse it.
+const other = createServer((q, s) => s.writeHead(200, { 'access-control-allow-origin': '*' }).end('ok')).listen(0, '127.0.0.1');
+await new Promise((r) => other.once('listening', r));
+const otherPort = other.address().port;
 
 // E12: every wait without its own timeout is capped by wait.mjs, not Playwright's 30 s.
 const browser = capWaits(await chromium.launch({ channel: 'chrome' }));
@@ -163,17 +189,48 @@ try {
 		const cp = await cc.newPage();
 		await cp.goto(base + '#/how-it-works');
 		await cp.locator('header.top').waitFor();
-		const before = cspViolations.length;
+		// The other lanes run meanwhile: only this probe's own entries are read and taken out
+		// (review WEB-CSP-R3), so a refusal of theirs still fails the run at the end.
+		const local = (v) => /http:\/\/(127\.0\.0\.1|localhost):9\//.test(v);
+		const invalid = (v) => v.includes('example.invalid');
 		await cp.evaluate(async () => {
 			for (const u of ['http://127.0.0.1:9/', 'http://localhost:9/']) await fetch(u).catch(() => {});
 		});
 		await cp.waitForTimeout(300);
-		expect(cspViolations.length === before, `a reader's own node over http (127.0.0.1, localhost) is allowed${cspViolations.length > before ? ': ' + cspViolations.slice(before).join('; ') : ''}`);
+		const localRefused = cspViolations.filter(local);
+		expect(localRefused.length === 0, `a reader's own node over http (127.0.0.1, localhost) is allowed${localRefused.length ? ': ' + localRefused.join('; ') : ''}`);
 		await cp.evaluate(() => fetch('http://example.invalid/').catch(() => {}));
-		for (let i = 0; i < 50 && cspViolations.length === before; i++) await cp.waitForTimeout(100);
-		expect(cspViolations.slice(before).some((v) => v.includes('connect-src') && v.includes('example.invalid')), 'plain http to another host is refused, and the recorder sees it');
-		cspViolations.splice(before);
+		for (let i = 0; i < 50 && !cspViolations.some(invalid); i++) await cp.waitForTimeout(100);
+		expect(cspViolations.some((v) => v.includes('connect-src') && invalid(v)), 'plain http to another host is refused, and the recorder sees it');
+		for (let i = cspViolations.length - 1; i >= 0; i--) if (invalid(cspViolations[i])) cspViolations.splice(i, 1);
 		await cc.close();
+	}
+	{
+		// THREATS WEB-CSP-2: a worker runs under its own response's policy (the Caddyfile's @workers
+		// line), not the page's: the page may fetch another local origin and the worker may not; the
+		// worker may load its own code and WebAssembly, but nothing through eval or a data: URL.
+		const wc = await browser.newContext();
+		const wp = await wc.newPage();
+		await wp.goto(base + '#/how-it-works');
+		await wp.locator('header.top').waitFor();
+		const got = await wp
+			.evaluate(async ([probe, otherUrl]) => {
+				const page = await fetch(otherUrl).then(() => 'allowed', () => 'refused');
+				const w = new Worker(`${probe}?other=${encodeURIComponent(otherUrl)}`, { type: 'module' });
+				const worker = await new Promise((ok, no) => {
+					w.onmessage = (e) => ok(e.data);
+					w.onerror = (e) => no(new Error(e.message || 'the worker did not start'));
+					setTimeout(() => no(new Error('no answer in 10 s')), 10000);
+				});
+				w.terminate();
+				return { page, ...worker };
+			}, [PROBE, `http://127.0.0.1:${otherPort}/`])
+			.catch((e) => ({ error: String(e) }));
+		const want = { page: 'allowed', self: 'allowed', other: 'refused', wasm: 'allowed', eval: 'refused', dataImport: 'refused' };
+		expect(JSON.stringify(got) === JSON.stringify(want), `a worker runs under its own Content-Security-Policy, not the page's: ${JSON.stringify(got)}`);
+		// A worker's refusals are reported inside the worker, never to the page's recorder, so
+		// nothing is taken out of cspViolations here (the other lanes run meanwhile; review WEB-CSP-R2).
+		await wc.close();
 	}
 	expect((await p.getByTestId('preview-banner').count()) === (PUB ? 0 : 1), PUB ? 'public: no preview banner' : 'preview: the private preview banner shows');
 	{
@@ -2020,6 +2077,7 @@ try {
 } finally {
 	await browser.close();
 	server.close();
+	other.close();
 }
 if (failures.length) {
 	console.log(`${failures.length} failed`);

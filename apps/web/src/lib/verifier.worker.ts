@@ -1,7 +1,9 @@
 // Runs the Rust verifier (crates compiled to WebAssembly) off the main thread,
 // so a recipe rerun does not freeze the page.
 import init, * as verify from './pkg/onyx_web_verify.js';
+import { reportRefusals } from './csp-report.ts';
 
+reportRefusals();
 const ready = init();
 type Fn = (...args: unknown[]) => unknown;
 

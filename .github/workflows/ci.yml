@@ -31,5 +31,10 @@ jobs:
       # The dependency gate (scripts/check-deps.sh, deny.toml) needs cargo-deny; pinned version.
       - name: Install cargo-deny
         run: command -v cargo-deny || cargo install --locked cargo-deny@0.20.2
+      # The web server's header check (scripts/check-caddy-headers.py, THREATS WEB-CSP-2) runs real
+      # Caddy: Ubuntu's own package, the version the hosted server runs (2.6.2). Without it the
+      # check fails in CI. The service the package starts is stopped; the check uses its own ports.
+      - name: Install Caddy (Ubuntu package)
+        run: sudo apt-get update -q && sudo apt-get install -y -q caddy && sudo systemctl stop caddy && caddy version
       - name: check-all (recipes reproducible, fmt, clippy incl. unchecked-open, tests, onyx-node --help, boundaries, docs, deps, forge fmt/sizes/test)
         run: scripts/check-all.sh

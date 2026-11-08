@@ -28,6 +28,10 @@ python3 -I scripts/check-threats.py || fail=1
 # (ADR-0045).
 python3 -I scripts/check-openapi.py || fail=1
 [ "$fail" -eq 0 ] && { python3 -I scripts/check-openapi.py --self-test || fail=1; }
+# The web server's Content-Security-Policy headers (THREATS WEB-CSP-2): real Caddy on a loopback copy
+# of deploy/caddy/onyx-web.Caddyfile (ONYX_CADDY or caddy on PATH; skipped without one), and the
+# layout review WEB-CSP-R2 caught must fail.
+python3 -I scripts/check-caddy-headers.py --self-test || fail=1
 # README.md's layout and routes, scripts/README.md and docs/README.md are generated from the
 # repository and must be current (PP7; `scripts/check-readme.py --write` regenerates them).
 python3 -I scripts/check-readme.py || fail=1

@@ -40,4 +40,7 @@ ssh "$host" "ln -sfn /srv/onyx/releases/$rel /srv/onyx/current.new && mv -T /srv
 ip=$(dig +short "$domain" @1.1.1.1 | tail -1)
 code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' --resolve "$domain:443:$ip" "https://$domain/") || code=000
 [ "$code" = 200 ] || { echo "https://$domain/ answered $code" >&2; exit 1; }
+# THREATS WEB-CSP-2: the page and a chunk carry the site's Content-Security-Policy, every worker
+# file the workers' own (deploy/caddy/onyx-web.Caddyfile).
+python3 -I scripts/check-caddy-headers.py --live "https://$domain" apps/web/build || { echo "https://$domain/: wrong Content-Security-Policy headers" >&2; exit 1; }
 echo "SITE DEPLOYED: https://$domain/ ($rel)"

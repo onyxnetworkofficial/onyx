@@ -249,6 +249,14 @@ code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -A onyx-dev "https://$domai
 [ "$code" = 200 ] || { echo "https://$domain/v1/health answered $code" >&2; exit 1; }
 code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -A onyx-dev "https://$domain/") || code=000
 [ "$code" = 200 ] || { echo "https://$domain/ answered $code" >&2; exit 1; }
+# THREATS WEB-CSP-2: with this Caddyfile live, the page and a chunk carry the site's
+# Content-Security-Policy and every worker file of the release being served its own (the release's
+# file names, read on the server, stand in for a local build).
+live_tree=$(mktemp -d)
+ssh "$host" 'cd /srv/onyx/current && find app/immutable/chunks app/immutable/workers -type f' |
+  while read -r f; do mkdir -p "$live_tree/$(dirname "$f")" && : >"$live_tree/$f"; done
+python3 -I scripts/check-caddy-headers.py --live "https://$domain" "$live_tree" || { rm -rf "$live_tree"; echo "https://$domain/: wrong Content-Security-Policy headers" >&2; exit 1; }
+rm -rf "$live_tree"
 if [ "$mcp" != 0 ]; then
   code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' -A onyx-dev -X POST -H 'content-type: application/json' \
     -H 'accept: application/json, text/event-stream' \
