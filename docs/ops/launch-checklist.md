@@ -136,8 +136,10 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   `indexer.detail` false), `ONYX_TRUSTED_PROXIES=127.0.0.1` and the public `ONYX_RPC_URL`
   https://sepolia.base.org (no API key) are written by `scripts/deploy-api.sh`, the unit has
   `TimeoutStopSec=75s` and its state under `/var/lib/onyx` (local disk); payments off, so the state
-  dir holds no receipts yet. Open: `onyx-node --check-config` on the server and a state backup
-  before payments go on (a server session, at the final deploy). Needs: `onyx-node --check-config` exit 0; `ONYX_INDEX_HEALTH=summary`;
+  dir holds no receipts yet. 2026-11-08: `onyx-node --check-config` runs on the server before
+  every start (the unit's `ExecStartPre`, errors not ignored): "config ok: chain 84532, settlement
+  0xe4be...e8f, payments Off, indexer on" at the 17:35 UTC start. Open: a state backup before
+  payments go on (a server session, at the final deploy). Needs: `onyx-node --check-config` exit 0; `ONYX_INDEX_HEALTH=summary`;
   `ONYX_TRUSTED_PROXIES` set to the proxy only; `TimeoutStopSec=75s`; state dir on local disk with a
   backup; `ONYX_RPC_URL` a node we trust (or the URL as a 0600 file). Evidence:
   [deployment.md "Run with systemd"](deployment.md#run-with-systemd), [deployment.md "Backups"](deployment.md#backups),
@@ -236,7 +238,14 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
 ### D. Operations (blockers: LC-17 and LC-18)
 
 - [ ] **LC-17 A health watch with alerts runs against the public node.** Owner: loop (ROADMAP
-  L12). State: PARTIAL 2026-10-27: `scripts/health-watch.py --once` ran read-only against
+  L12). State: PARTIAL 2026-11-08: the watch also checks the data pipeline (`bulk.catalog_age`: a
+  watched publisher's newest catalog under 36 h; `storage.up`: each storage node; and
+  `balances.publisher_eth`: the publisher key's gas for its daily anchor), 96 tests; one pass ran
+  read-only from the dev box against the hosted node, its five storage nodes, the site and
+  sepolia.base.org: 31 ok, 2 skips, 1 alert (`balances.deployer_eth`: the deployer holds 0.000075
+  test ETH, below the 0.001 floor; no faucet for the owner). Open: the system units on the server
+  (runbook step 4: the owner runs the install, a standing timer on the server) and an alert channel
+  (LC-18). Before: PARTIAL 2026-10-27: `scripts/health-watch.py --once` ran read-only against
   https://onyx.cryptagraph.com and https://sepolia.base.org: every check ok or an explained skip
   (exit 0) after the block limits were fixed for 0.2 s blocks (THREATS NL5-2; the first run alerted
   `rpc.finalized_lag` on normal batching); the operator's gas is watched (NL5-1); 86 unit tests.
@@ -288,7 +297,11 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   cannot be told by reading the source. New THREATS DEP-3, accepted for testnet, mainnet H5.
   Evidence: [dependency audit](../audit/2026-10-13-dependencies.md#advisories-and-decisions),
   [foundry.toml](../../contracts/foundry.toml), THREATS DEP-1..3.
-- [ ] **LC-21 Fuzz smoke on the launch commit (FUZZ-5).** Owner: loop. State: PARTIAL 2026-10-28
+- [ ] **LC-21 Fuzz smoke on the launch commit (FUZZ-5).** Owner: loop. State: PARTIAL 2026-11-08
+  (on 1c6c2f5c plus the new `bulk_parsers` target, THREATS FUZZ-7): `FUZZ_SECS=30
+  scripts/fuzz-smoke.sh` exit 0, all 20 targets ran 30 s without a crash (between 10,732 and
+  6,672,144 executions each; `bulk_parsers` 4,595,969 at 2,037 edges), no file under
+  `fuzz/artifacts/`; build 4 min 23 s. Before: PARTIAL 2026-10-28
   (north-star loop NL12, main `ccbe553`): `FUZZ_SECS=30 scripts/fuzz-smoke.sh` exit 0, all 19 targets
   ran 30 s without a crash (between 7,637 and 3,853,988 executions each), no file under
   `fuzz/artifacts/`; build 7 min 49 s; `fuzz/target` 4.6 GB. `fuzz/Cargo.lock` was stale against
@@ -327,7 +340,12 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
 ### F. Only if the repository goes public (not needed for the site or API)
 
 - [ ] **LC-25 History secret scan (T-KEY-1 covers the tree only).** Owner: loop (ROADMAP L13),
-  lead or the project owner (the `.env` cross-check). State: PARTIAL 2026-10-16: gitleaks 8.30.1, trufflehog
+  lead or the project owner (the `.env` cross-check). State: PARTIAL 2026-11-08: rescanned
+  (`scripts/check-secrets.sh --history --list`, 1,125 commits, 859,262 added lines): 13 hits, all
+  reviewed as no secret (the tONYX contract address under `token=` and `ONYX_TOKEN=` in two files,
+  the intake vectors' synthetic key `0123...` twice); both are now in the reviewed allowlists by
+  exact path and value, and the rescan finds 0 (pattern and gitleaks); the self-test still fails
+  every planted form. Before: PARTIAL 2026-10-16: gitleaks 8.30.1, trufflehog
   3.97.9 and `scripts/check-secrets.sh --history` over all refs, 18 unreachable commits and the
   tree found no real secret (rescanned 2026-10-16 after merging main: gitleaks 0 with the reviewed
   allowlist, 9 reviewed without it), and no 64-hex string in history is the deployer's key (checked

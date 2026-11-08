@@ -93,6 +93,10 @@ class Fake:
         self.site_status = 200
         self.demo = {"public": True, "runs": [{"input": None}, {"input": None}]}
         self.demo_raw = None
+        # GET /v1/bulk catalogs (crates/onyx-api/src/bulk_serve.rs fn list) and storage nodes.
+        self.catalogs = [{"publisher": "example.publisher", "number": 5, "root": "0x" + "ab" * 32,
+                          "createdUnix": NOW - 3600, "leaves": 10, "removed": 0}]
+        self.storage_status = {"s1": 200, "s2": 200}
 
     def rpc(self, req):
         m, p = req.get("method"), req.get("params")
@@ -136,6 +140,12 @@ class Handler(BaseHTTPRequestHandler):
                 f.release.wait(REAL_TIMEOUT_S)
             body = f.health_raw if f.health_raw is not None else json.dumps(f.health).encode()
             return self.send(f.health_status, body)
+        if self.path == "/node/v1/bulk?limit=1":
+            return self.send(200, json.dumps({"datasets": [], "total": 0, "next": None,
+                                              "catalogs": f.catalogs}).encode())
+        for name, status in f.storage_status.items():
+            if self.path == f"/{name}/v1/health":
+                return self.send(status, b"{}")
         if self.path == "/site/":
             return self.send(f.site_status, b"<!doctype html>", "text/html")
         if self.path == "/site/data/demo.json":
@@ -298,11 +308,92 @@ class AllGreen(Base):
                       "node.reporter.stuck", "node.reporter.last_error", "node.level3", "node.level3.stopped",
                       "node.level3.breaker", "node.level3.pending_for", "node.level3.pending",
                       "node.level3.refused_new", "node.level3.retrying", "rpc.up", "rpc.chain", "rpc.head_age",
-                      "rpc.finalized_lag", "balances.deployer_eth", "balances.operator_eth", "balances.revenue", "site.up",
+                      "rpc.finalized_lag", "balances.deployer_eth", "balances.operator_eth", "balances.publisher_eth",
+                      "balances.revenue", "site.up",
                       "site.public", *[c for c, _ in hw.WRITE_ERRORS]]:
             self.assertEqual(by[check]["status"], "ok", by[check])
         self.assertEqual(self.alerts(), [])
         self.assertEqual(set(by) - hw.CHECKS, set(), "printed a check the config cannot name")
+
+
+class BulkAndStorage(Base):
+    """Launch checklist LC-17: a publisher's newest catalog older than bulk.catalog_max_age_s, a
+    publisher with no catalog and a storage node that does not answer 200 alert; unset, they skip."""
+
+    def test_not_configured_skips(self):
+        code, by = self.run_watch()
+        self.assertEqual(by["bulk.catalog_age"]["status"], "skip")
+        self.assertEqual(by["storage.up"]["status"], "skip")
+        self.assertEqual(code, 0)
+
+    def test_catalog_age_edge(self):
+        self.opts.bulk_publishers = ["example.publisher"]
+        self.cfg["after"]["bulk.catalog_age"] = 1
+        limit = self.cfg["bulk"]["catalog_max_age_s"]
+        self.assertEqual(limit, 129600)
+
+        def at(age):
+            self.fake.catalogs[0]["createdUnix"] = NOW - age
+        self.edge("bulk.catalog_age", at, limit)
+
+    def test_a_publisher_without_a_catalog_alerts(self):
+        self.opts.bulk_publishers = ["example.publisher", "other.publisher"]
+        self.cfg["after"]["bulk.catalog_age"] = 1
+        r = self.assert_alert("bulk.catalog_age")
+        self.assertIn("other.publisher: no catalog", r["detail"])
+        self.fake.catalogs = "not a list"
+        self.fresh()
+        self.assert_alert("bulk.catalog_age")
+
+    def test_a_storage_node_down_alerts(self):
+        self.opts.storage_nodes = [self.url + "/s1", self.url + "/s2"]
+        self.cfg["after"]["storage.up"] = 1
+        self.assert_ok("storage.up")
+        self.fake.storage_status["s2"] = 503
+        self.fresh()
+        r = self.assert_alert("storage.up")
+        self.assertIn("503", r["detail"])
+
+    def test_a_node_that_is_down_skips_the_catalog_check(self):
+        self.opts.bulk_publishers = ["example.publisher"]
+        self.fake.health_status = 503
+        code, by = self.run_watch()
+        self.assertEqual(by["bulk.catalog_age"]["status"], "skip", by["bulk.catalog_age"])
+
+    def test_a_catalog_in_the_future_alerts(self):
+        self.opts.bulk_publishers = ["example.publisher"]
+        skew = self.cfg["node"]["clock_skew_max_s"]
+        self.cfg["after"]["bulk.catalog_age"] = 1
+        self.fake.catalogs[0]["createdUnix"] = NOW + skew
+        self.assert_ok("bulk.catalog_age")
+        self.fresh()
+        self.fake.catalogs[0]["createdUnix"] = NOW + skew + 1
+        r = self.assert_alert("bulk.catalog_age")
+        self.assertIn("in the future", r["detail"])
+
+    def test_storage_and_catalog_wait_three_runs(self):
+        self.assertEqual(self.cfg["after"]["storage.up"], 3)
+        self.assertEqual(self.cfg["after"]["bulk.catalog_age"], 3)
+        self.opts.storage_nodes = [self.url + "/s1"]
+        self.fake.storage_status["s1"] = 502
+        for want in ["warn", "warn", "alert"]:
+            code, st, by = self.status("storage.up")
+            self.assertEqual(st, want, by["storage.up"])
+
+    def test_options_read_the_environment(self):
+        env = {"ONYX_WATCH_BULK_PUBLISHERS": "a.pub, b.pub", "ONYX_WATCH_STORAGE_NODES": "http://127.0.0.1:8201,http://127.0.0.1:8202"}
+        old = {k: os.environ.get(k) for k in env}
+        os.environ.update(env)
+        try:
+            a = hw.parse_args(["--once", "--node", "http://127.0.0.1:8080", "--state", self.opts.state])
+        finally:
+            for k, v in old.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
+        self.assertEqual(a.bulk_publishers, ["a.pub", "b.pub"])
+        self.assertEqual(a.storage_nodes, ["http://127.0.0.1:8201", "http://127.0.0.1:8202"])
 
 
 class NodeThresholds(Base):
@@ -646,6 +737,18 @@ class Balances(Base):
         self.assertEqual((line["value"], line["limit"]), (str(need - 1), str(need)))
         self.assertIn("operator", line["detail"])
 
+    def test_publisher_eth_edge(self):
+        """LC-17: the bulk publisher's key pays a catalog anchor a day."""
+        pub = self.cfg["addresses"]["publisher"]
+        need = int(self.cfg["balances"]["publisher_wei_min"])
+        self.fresh()
+        self.fake.eth_of[pub] = need
+        self.assert_ok("balances.publisher_eth")
+        self.fake.eth_of[pub] = need - 1
+        line = self.assert_alert("balances.publisher_eth")
+        self.assertEqual((line["value"], line["limit"]), (str(need - 1), str(need)))
+        self.assertIn("publisher", line["detail"])
+
     def test_operator_eth_is_read_from_the_operator_not_the_deployer(self):
         self.fake.eth_of[OPERATOR] = 0
         code, by = self.run_watch()
@@ -794,6 +897,8 @@ class Config(Base):
         self.assertEqual(rows.get("OnyxRevenue (x402 `payTo`)", "").lower(), a["revenue"])
         self.assertEqual(rows.get("API operator (OnyxRevenue reporter, self-settles x402 payments)", "").lower(), a["operator"])
         self.assertEqual(rows.get("USDC (Circle's Base Sepolia test token)", "").lower(), a["usdc"])
+        pub = [v for k, v in rows.items() if k.startswith("Bulk publisher `onchain-archive`")]
+        self.assertEqual([x.lower() for x in pub], [a["publisher"]])
 
     def test_launch_checklist_links_the_thresholds_file(self):
         text = (ROOT / "docs/ops/launch-checklist.md").read_text()
@@ -819,10 +924,12 @@ class Cli(Base):
 
     def test_exit_codes_and_output(self):
         st = os.path.join(self.tmp.name, "cli-state.json")
-        # A healthy head needs the real clock here.
+        # A healthy head and a fresh catalog need the real clock here.
         self.fake.head_ts = int(time.time())
+        self.fake.catalogs[0]["createdUnix"] = int(time.time()) - 60
         p = self.cli("--once", "--node", self.url + "/node", "--site", self.url + "/site", "--state", st,
-                     env={"ONYX_WATCH_RPC_URL": self.url + "/rpc"})
+                     env={"ONYX_WATCH_RPC_URL": self.url + "/rpc", "ONYX_WATCH_BULK_PUBLISHERS": "example.publisher",
+                          "ONYX_WATCH_STORAGE_NODES": f"{self.url}/s1,{self.url}/s2"})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         lines = [json.loads(x) for x in p.stdout.splitlines()]
         self.assertTrue(lines and all(x["status"] == "ok" for x in lines), p.stdout)

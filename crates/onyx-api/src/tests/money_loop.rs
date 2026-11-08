@@ -689,9 +689,14 @@ impl Facilitator for Concurrent {
 /// last request every one ends within the settle budget.
 ///
 /// E10: the clock is paused (time moves only when every task waits on a
-/// timer), so the 80 ms settle always fits its 100 ms timeout. On the real
-/// clock a loaded machine timed every settle out (2 of 10 suite runs at load
-/// ~40 on 2026-10-16 had no payment settled).
+/// timer), so the 80 ms settle fits its timeout. On the real clock a loaded
+/// machine timed every settle out (2 of 10 suite runs at load ~40 on
+/// 2026-10-16 had no payment settled). The paused clock still moves while a
+/// journal write runs on a blocking thread (`spawn_blocking` is not a task the
+/// clock waits for), a millisecond at a time through the payers' and the
+/// sampler's timers: under a full check-all on 2026-11-08 one settle of 48
+/// timed out that way. The timeouts are far above the 80 ms settle for that:
+/// the test is about slots, never about timeouts.
 ///
 /// E10 review: a payer told `503` retries 10 ms later (it used to spend all
 /// six nonces at once, so only two payers ever contended and a settle that
@@ -711,8 +716,8 @@ async fn settles_never_queue_for_a_facilitator_slot() {
         paid: true,
         facilitator: Some(fac.clone()),
         config: ApiConfig {
-            facilitator_timeout: Duration::from_millis(100),
-            request_timeout: Duration::from_millis(500),
+            facilitator_timeout: Duration::from_secs(60),
+            request_timeout: Duration::from_secs(150),
             max_facilitator_calls: slots,
             payment_attempts_per_minute: 1_000_000,
             unsettled_per_hour: 1_000_000,

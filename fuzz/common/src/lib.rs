@@ -513,3 +513,13 @@ pub fn chain_answer() -> onyx_api::client::ChainAnswer {
         finalized_at: 400,
     }
 }
+
+/// The bulk targets' schema (`t` the key, `v` a 2-decimal value), as the
+/// node's tests use.
+pub fn bulk_schema() -> onyx_bulk::Schema {
+    onyx_bulk::Schema::from_json(&json!({
+        "columns": [{"name": "t", "kind": "int"}, {"name": "v", "kind": "decimal", "scale": 2}],
+        "key": "t"
+    }))
+    .expect("the bulk test schema")
+}

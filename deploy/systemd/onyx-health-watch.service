@@ -10,6 +10,9 @@
 #   ONYX_WATCH_NODE=http://127.0.0.1:8080
 #   ONYX_WATCH_RPC_URL=https://sepolia.base.org     # never printed, never passed to the notify command
 #   ONYX_WATCH_SITE=https://onyx.cryptagraph.com
+#   ONYX_WATCH_BULK_PUBLISHERS=onchain-archive      # newest catalog under 36 h (bulk.catalog_age)
+#   ONYX_WATCH_STORAGE_NODES=http://127.0.0.1:8201,http://127.0.0.1:8202,http://127.0.0.1:8203,http://127.0.0.1:8204,http://127.0.0.1:8205
+#                                                   # each /v1/health 200 (8201 is onyx-storage@n1, ... 8205 n5)
 #   ONYX_WATCH_NOTIFY_CMD=/usr/local/bin/onyx-alert # the channel (LC-18) waits for the owner
 #
 # Exit 1 (any alert) marks this unit failed: `systemctl status onyx-health-watch` and

@@ -4925,7 +4925,7 @@
       },
       "BulkList": {
         "type": "object",
-        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last.",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it), whatever the query, so a watch sees a refresh that stopped.",
         "properties": {
           "datasets": {
             "type": "array",
@@ -4942,6 +4942,46 @@
               "string",
               "null"
             ]
+          },
+          "catalogs": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "publisher": {
+                  "type": "string"
+                },
+                "number": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "root": {
+                  "type": "string"
+                },
+                "createdUnix": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "leaves": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "removed": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0
+                }
+              },
+              "required": [
+                "publisher",
+                "number",
+                "root",
+                "createdUnix",
+                "leaves"
+              ]
+            }
           }
         }
       },

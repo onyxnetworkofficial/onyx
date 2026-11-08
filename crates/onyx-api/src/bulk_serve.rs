@@ -3312,6 +3312,25 @@ impl BulkStore {
             .collect();
         // Removed datasets are left out (ADR-0059 amendment 4 item 3).
         let removals = self.removals()?;
+        // Each publisher's newest held catalog, so a watch sees a refresh
+        // that stopped (launch checklist LC-17): small, one per publisher.
+        let catalogs: Vec<Value> = self
+            .catalogs
+            .read()
+            .map_err(|_| internal("lock"))?
+            .iter()
+            .filter_map(|(p, m)| {
+                let (n, h) = m.last_key_value()?;
+                Some(json!({
+                    "publisher": p,
+                    "number": n,
+                    "root": h.header.root().to_string(),
+                    "createdUnix": h.header.created_unix,
+                    "leaves": h.header.leaf_count,
+                    "removed": h.body.as_ref().map(|b| b.removed.len()),
+                }))
+            })
+            .collect();
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
         let matches = |p: &str, d: &str| {
             let id = format!("{p}/{d}");
@@ -3363,7 +3382,7 @@ impl BulkStore {
                 })
             })
             .collect();
-        Ok(json!({"datasets": items, "total": total, "next": next}))
+        Ok(json!({"datasets": items, "total": total, "next": next, "catalogs": catalogs}))
     }
 
     /// `GET /v1/bulk/{publisher}/{dataset}`.

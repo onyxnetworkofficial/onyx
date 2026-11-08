@@ -23,7 +23,9 @@ set -euo pipefail
 # and the "test test ... junk" mnemonic (both published by Foundry). Compared in the script only.
 # The key is account 0 of that mnemonic (`cast wallet private-key --mnemonic ... --mnemonic-index 0`);
 # until 2026-10-15 one digit was mistyped, so the real anvil key was not allowlisted (SCAN-1).
-ALLOW_RE='ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80|test test test test test test test test test test test junk'
+# The intake vectors' synthetic source key (the digits 0-f twice, fixtures/intake/vectors.json; reviewed
+# 2026-11-08): no credential can be that value.
+ALLOW_RE='ac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80|test test test test test test test test test test test junk|0123456789abcdef0123456789abcdef'
 # --history only: reviewed hits, by full commit:file:line (no value is written here). The one entry
 # is the mistyped copy of anvil's key that the pre-SCAN-1 self-test line held: a typo of a public
 # test key, not a credential; the L13 derivation check found no address in the repository for it.

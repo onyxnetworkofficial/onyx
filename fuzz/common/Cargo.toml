@@ -12,6 +12,7 @@ onyx-merkle = { path = "../../crates/onyx-merkle" }
 onyx-labels = { path = "../../crates/onyx-labels" }
 onyx-api = { path = "../../crates/onyx-api" }
 onyx-coordinator = { path = "../../crates/onyx-coordinator" }
+onyx-bulk = { path = "../../crates/onyx-bulk" }
 onyx-node = { path = "../../crates/onyx-node" }
 onyx-recipe-sdk = { path = "../../crates/onyx-recipe-sdk" }
 onyx-btc-schema = { path = "../../adapters/btc-schema" }

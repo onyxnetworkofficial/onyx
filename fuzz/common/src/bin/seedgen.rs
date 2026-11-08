@@ -855,6 +855,88 @@ fn text(o: &mut Out) {
     );
 }
 
+/// `bulk_parsers` seeds: a shard file, a manifest over it, a catalog listing
+/// it and a tombstone, its report, and a catalog files answer of both.
+fn bulk(o: &mut Out) {
+    use onyx_bulk::catalog::{self as cat, Catalog, CatalogFile, CatalogFiles, CatalogLeaf, FileLeaves};
+    use onyx_bulk::manifest::{Manifest, NewVersion, ShardEntry};
+    use onyx_bulk::row::{encode_row, Cell};
+    let schema = onyx_fuzz_common::bulk_schema();
+    let rows: Vec<Vec<u8>> = (0..20i128)
+        .filter_map(|t| encode_row(&schema, &[Cell::Int(t), Cell::Decimal(format!("{t}.25"))]).ok())
+        .collect();
+    let file = onyx_bulk::shard::encode_shard(&rows);
+    o.sel("bulk_parsers", "shard", 1, &file);
+    let Ok(c) = onyx_bulk::shard::check_shard(&schema, &file) else {
+        eprintln!("seedgen: bulk shard does not check");
+        return;
+    };
+    let rights = onyx_core::DataRights {
+        license: "CC0-1.0".into(),
+        redistribution: onyx_core::Redistribution::Allowed,
+        source: onyx_core::SourceId("example.publisher".into()),
+        attribution: None,
+        terms: String::new(),
+    };
+    let Ok(m) = Manifest::build(
+        NewVersion {
+            dataset: "synthetic.metrics".into(),
+            publisher: onyx_core::SourceId("example.publisher".into()),
+            created_unix: 1_700_000_000,
+            schema: schema.clone(),
+            rights,
+        },
+        None,
+        vec![ShardEntry::new(0, &c.summary)],
+    ) else {
+        eprintln!("seedgen: bulk manifest");
+        return;
+    };
+    o.sel("bulk_parsers", "manifest", 0, &m.to_bytes());
+    let secret = onyx_core::keccak256(b"onyx fuzz seed catalog key").0;
+    let leaf = CatalogLeaf::of(&m.header);
+    let other = CatalogLeaf {
+        dataset: "synthetic.other".into(),
+        ..leaf.clone()
+    };
+    let (Ok(c0), Some(gone)) = (
+        Catalog::build(onyx_core::SourceId("example.publisher".into()), None, 1_700_000_100, vec![leaf.clone(), other.clone()]),
+        leaf.tombstone(),
+    ) else {
+        eprintln!("seedgen: bulk catalog");
+        return;
+    };
+    let Ok(c1) = Catalog::build(onyx_core::SourceId("example.publisher".into()), Some(&c0), 1_700_000_200, vec![gone, other]) else {
+        eprintln!("seedgen: bulk catalog 1");
+        return;
+    };
+    let (Ok(r0), Ok(r1)) = (cat::sign(&secret, &c0.header), cat::sign(&secret, &c1.header)) else {
+        eprintln!("seedgen: bulk catalog signature");
+        return;
+    };
+    if let (Ok(b0), Ok(rb)) = (borsh::to_vec(&c0), borsh::to_vec(&r0)) {
+        o.sel("bulk_parsers", "catalog", 2, &b0);
+        o.sel("bulk_parsers", "report", 4, &rb);
+    }
+    let changed: Vec<CatalogLeaf> = c1
+        .leaves
+        .iter()
+        .filter(|l| c0.find(&l.dataset).map(|i| &c0.leaves[i]) != Some(*l))
+        .cloned()
+        .collect();
+    let files = CatalogFiles {
+        newest: 1,
+        files: vec![
+            CatalogFile { header: c0.header.clone(), report: r0, leaves: FileLeaves::Whole(c0.leaves.clone()) },
+            CatalogFile { header: c1.header.clone(), report: r1, leaves: FileLeaves::Diff(changed) },
+        ],
+    };
+    if let Ok(b) = borsh::to_vec(&files) {
+        o.sel("bulk_parsers", "files", 3, &b);
+    }
+    o.sel("bulk_parsers", "rows-answer", 5, br#"{"manifest":{"header":"0x00"},"rows":[]}"#);
+}
+
 fn main() {
     let Some(root) = std::env::args().nth(1).map(PathBuf::from) else {
         eprintln!("usage: seedgen <out-dir>");
@@ -866,6 +948,7 @@ fn main() {
     abi(&mut o);
     borsh_seeds(&mut o);
     catalog(&mut o);
+    bulk(&mut o);
     level2_seeds(&mut o);
     indexer_state(&mut o);
     journals(&mut o);

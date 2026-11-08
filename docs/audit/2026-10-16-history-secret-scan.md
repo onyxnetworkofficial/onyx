@@ -185,3 +185,16 @@ done
 
 Every count must be 0. A non-zero count for the deployer key means rotate the testnet deployer
 (new key, move test funds, update roles); for the CDP or RPC key, revoke it at the provider.
+
+## Rescan 2026-11-08
+
+`scripts/check-secrets.sh --history --list` over 1,125 commits (merges included) and 859,262 added
+lines found 13 hits, none a secret: gitleaks `generic-api-key` on the tONYX test token's contract
+address (`0x1cb5...4579`, public in docs/ops/deployment.md) assigned as `token=` in
+`scripts/storage-sepolia.sh` and `ONYX_TOKEN=` in `docs/ops/runbooks/corrections-base-sepolia.md`,
+and on the synthetic source key of `fixtures/intake/vectors.json` (the digits 0-f twice), which
+pattern 3 also matched four times. Each is in the reviewed allowlists by exact path and value
+(`.gitleaks.toml`; the synthetic key in `ALLOW_RE`), the rescan finds 0, and `--self-test` still
+fails every planted form. No value was printed during the review: lines were described by key name,
+length and shape only.
+

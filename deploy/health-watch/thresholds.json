@@ -14,7 +14,8 @@
     "deployer": "0x80c91f45b8353ff5c2b1e4c127a2a21746b37972",
     "operator": "0xf1b27c3f48e9972eb8050e6dff8594e05e3e488c",
     "revenue": "0xa32d520380362378d22a7a51993678c7fbbfe44d",
-    "usdc": "0x036cbd53842c5426634e7929541ec2318f3dcf7e"
+    "usdc": "0x036cbd53842c5426634e7929541ec2318f3dcf7e",
+    "publisher": "0xedff5b3070a2ecc6fa06ea7781ec90f6318bee5c"
   },
   "node": {
     "_about": "onyx-node GET /v1/health (crates/onyx-api/src/lib.rs fn health).",
@@ -54,19 +55,32 @@
     "_about": "Deployer gas (the A2 run used 0.000262 ETH; 0.001 ETH is about 4 runs) and OnyxRevenue's invariant USDC.balanceOf(revenue) >= allocated() - paidOut().",
     "deployer_wei_min": "1000000000000000",
     "_operator": "ROADMAP L19, THREATS NS17-4: the API operator's gas for self-settles and receipt posts. The NS17 run of 2026-10-27 spent 0.000211 ETH on 145 transactions (about 0.0000015 ETH each), so 0.00002 ETH is about 13 sends: enough lead time to top it up from the deployer. Skipped while the node reports payments off.",
-    "operator_wei_min": "20000000000000"
+    "operator_wei_min": "20000000000000",
+    "_publisher": "The bulk publisher's key (deployment.md 'Bulk publisher'): one catalog anchor a day at about 247,000 gas, about 0.0000015 ETH at Base Sepolia's fees, so 0.00003 ETH is about 20 days: three weeks to top it up. It held about 116 anchors on 2026-11-08.",
+    "publisher_wei_min": "30000000000000"
   },
   "site": {
     "_about": "The public website: GET <site>/ and <site>/data/demo.json, which must be a public build (public: true, every runs[].input null).",
     "timeout_s": 15
   },
+  "bulk": {
+    "_about": "Bulk catalogs (launch checklist LC-17): for each --bulk-publisher (ONYX_WATCH_BULK_PUBLISHERS), the newest catalog the node holds (GET /v1/bulk catalogs[].createdUnix) must be younger than this. A daily refresh makes one a day; 36 h leaves a late or rerun day room and still alerts the day after a refresh stops.",
+    "timeout_s": 15,
+    "catalog_max_age_s": 129600
+  },
+  "storage": {
+    "_about": "Storage nodes (--storage-node, ONYX_WATCH_STORAGE_NODES): each must answer GET /v1/health with 200. They run next to the watch, so a short timeout: five of them at 3 s fit the run's budget after everything else. One check for all of them: a second node down while one already alerts is in the detail, notified again after notify.realert_after_s.",
+    "timeout_s": 3
+  },
   "after": {
-    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures.",
+    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures. bulk.catalog_age and storage.up wait 3 too, so a node restart does not page.",
     "node.up": 3,
     "rpc.up": 2,
     "node.indexer.failing": 3,
     "node.reporter.last_error": 3,
-    "node.level3.retrying": 3
+    "node.level3.retrying": 3,
+    "bulk.catalog_age": 3,
+    "storage.up": 3
   },
   "notify": {
     "_about": "A check that stays in alert is sent again after realert_after_s; a recovery is sent once.",

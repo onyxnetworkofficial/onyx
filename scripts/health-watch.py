@@ -13,7 +13,10 @@
 #             node reports payments off), OnyxRevenue: USDC.balanceOf(revenue) >= allocated() -
 #             paidOut(), and revenue.token() is the configured USDC;
 #   site      the public website (when --site is given): / answers, data/demo.json is a public
-#             build.
+#             build;
+#   bulk      each --bulk-publisher's newest catalog on the node (GET /v1/bulk catalogs) is
+#             younger than bulk.catalog_max_age_s (skipped while node.up is not ok);
+#   storage   each --storage-node answers GET /v1/health with 200 (checked last, short timeout).
 # Thresholds: deploy/health-watch/thresholds.json (the only copy; --config overlays more files).
 # Output: one JSON line per check on stdout. Exit 0 when nothing alerts, 1 when any check alerts,
 # 2 on a usage, config or lock error. A check that cannot be read (unreachable, timeout, malformed
@@ -60,7 +63,7 @@ SCHEMA = {
     "deadline_s": INT,
     "require": {"node": bool, "rpc": bool, "site": bool},
     "addresses": {"deployer": (str, type(None)), "operator": (str, type(None)), "revenue": (str, type(None)),
-                  "usdc": (str, type(None))},
+                  "usdc": (str, type(None)), "publisher": (str, type(None))},
     "node": {
         "timeout_s": (int, float),
         "indexer_required": bool,
@@ -83,8 +86,10 @@ SCHEMA = {
         "level3_retrying_max": INT,
     },
     "rpc": {"timeout_s": (int, float), "tries": INT, "head_age_max_s": INT, "finalized_lag_max_blocks": INT},
-    "balances": {"deployer_wei_min": str, "operator_wei_min": str},
+    "balances": {"deployer_wei_min": str, "operator_wei_min": str, "publisher_wei_min": str},
     "site": {"timeout_s": (int, float)},
+    "bulk": {"timeout_s": (int, float), "catalog_max_age_s": INT},
+    "storage": {"timeout_s": (int, float)},
     "after": "checks",
     "notify": {"realert_after_s": INT, "command_timeout_s": (int, float)},
 }
@@ -106,8 +111,9 @@ CHECKS = {
     "node.level3", "node.level3.stopped", "node.level3.breaker", "node.level3.pending_for",
     "node.level3.pending", "node.level3.refused_new", "node.level3.retrying",
     "rpc.up", "rpc.chain", "rpc.head_age", "rpc.finalized_lag",
-    "balances.deployer_eth", "balances.operator_eth", "balances.revenue",
+    "balances.deployer_eth", "balances.operator_eth", "balances.publisher_eth", "balances.revenue",
     "site.up", "site.public",
+    "bulk.catalog_age", "storage.up",
     "watch.state",
 } | {name for name, _ in WRITE_ERRORS}
 
@@ -491,6 +497,9 @@ def balance_checks(cfg, rpc, out):
     # empty operator turns paid queries into 503s. gather() makes this a skip line while the node
     # reports payments off (no key on the server, nothing to send).
     out.append(gas_check(cfg, rpc, "operator"))
+    # The bulk publisher's key pays one catalog anchor a day: empty, the daily refresh stops at its
+    # anchor (LC-17).
+    out.append(gas_check(cfg, rpc, "publisher"))
     rev, usdc = a["revenue"], a["usdc"]
     if rev is None or usdc is None:
         out.append(skip("balances.revenue", "addresses.revenue or addresses.usdc not set"))
@@ -752,10 +761,62 @@ def site_checks(cfg, site, timeout, out):
     out.append(guarded("site.public", public))
 
 
+def bulk_checks(cfg, node, publishers, now, out):
+    """Each named publisher's newest catalog on the node is younger than bulk.catalog_max_age_s
+    (GET /v1/bulk `catalogs`): a daily refresh that stopped shows here (launch checklist LC-17)."""
+    def age():
+        d = get_json(node.rstrip("/") + "/v1/bulk?limit=1", cfg["bulk"]["timeout_s"])
+        heads = d.get("catalogs") if isinstance(d, dict) else None
+        if not isinstance(heads, list):
+            raise Fault("malformed /v1/bulk: no catalogs list (an older node?)")
+        by = {h.get("publisher"): h for h in heads if isinstance(h, dict)}
+        limit = cfg["bulk"]["catalog_max_age_s"]
+        worst, why = 0, []
+        for p in publishers:
+            h = by.get(p)
+            if h is None:
+                why.append(f"{p}: no catalog on the node")
+                worst = max(worst, limit + 1)
+                continue
+            t = h.get("createdUnix")
+            if not isinstance(t, int) or isinstance(t, bool):
+                raise Fault(f"malformed /v1/bulk: {p} createdUnix")
+            if t - int(now) > cfg["node"]["clock_skew_max_s"]:
+                why.append(f"{p}: newest catalog {h.get('number')} is {t - int(now)} s in the future (this box's clock?)")
+                worst = max(worst, limit + 1)
+                continue
+            a = max(0, int(now) - t)
+            if a > limit:
+                why.append(f"{p}: newest catalog {h.get('number')} is {a} s old")
+            worst = max(worst, a)
+        if why:
+            return bad("bulk.catalog_age", worst, limit, "; ".join(why))
+        return ok("bulk.catalog_age", worst, limit)
+    out.append(guarded("bulk.catalog_age", age))
+
+
+def storage_checks(cfg, nodes, out):
+    """Every listed storage node answers GET /v1/health with 200."""
+    down = []
+    for i, n in enumerate(nodes):
+        try:
+            status, _ = http(n.rstrip("/") + "/v1/health", cfg["storage"]["timeout_s"])
+            if status != 200:
+                down.append(f"{origin(n)} answered HTTP {status}")
+        except Fault as e:
+            down.append(f"{origin(n)}: {e}")
+        except DeadlineHit:
+            # Keep what was found; the run's budget is gone for the rest.
+            down.append(f"deadline before {', '.join(origin(m) for m in nodes[i:])}")
+            out.append(immediate(bad("storage.up", len(down), 0, "; ".join(down))))
+            raise
+    out.append(bad("storage.up", len(down), 0, "; ".join(down)) if down else ok("storage.up", 0, 0))
+
+
 # ---------------------------------------------------------------- one run
 
 RPC_NAMES = ["rpc.up", "rpc.chain", "rpc.head_age", "rpc.finalized_lag"]
-BALANCE_NAMES = ["balances.deployer_eth", "balances.operator_eth", "balances.revenue"]
+BALANCE_NAMES = ["balances.deployer_eth", "balances.operator_eth", "balances.publisher_eth", "balances.revenue"]
 SITE_NAMES = ["site.up", "site.public"]
 
 
@@ -809,6 +870,18 @@ def gather(cfg, opts, now, mem):
                 why = "payments off on the node: the operator sends no transaction"
                 results[:] = [skip(r["check"], why) if r["check"] == "balances.operator_eth" and not r.get("skip") else r
                               for r in results]
+    publishers = getattr(opts, "bulk_publishers", None) or []
+    node_up = any(r["check"] == "node.up" and not r["fault"] and not r.get("skip") for r in results)
+    if not publishers or not opts.node:
+        results.append(skip("bulk.catalog_age", "no publisher (--bulk-publisher or ONYX_WATCH_BULK_PUBLISHERS) or no node"))
+    elif not node_up:
+        # One cause, one alert (NL20-2): node.up carries a node that is down.
+        results.append(skip("bulk.catalog_age", "the node is not up this run (node.up)"))
+    else:
+        try:
+            bulk_checks(cfg, opts.node, publishers, now, results)
+        except DeadlineHit:
+            out_of_time(["bulk.catalog_age"])
     if not opts.site:
         results += missing(cfg, "site", SITE_NAMES, "site (--site or ONYX_WATCH_SITE)")
     else:
@@ -816,6 +889,16 @@ def gather(cfg, opts, now, mem):
             site_checks(cfg, opts.site, cfg["site"]["timeout_s"], results)
         except DeadlineHit:
             out_of_time(SITE_NAMES)
+    # Last: several local nodes, each with a short timeout, so a slow one cannot eat the
+    # site's budget (review of LC-17, finding 3).
+    storage = getattr(opts, "storage_nodes", None) or []
+    if not storage:
+        results.append(skip("storage.up", "no storage node (--storage-node or ONYX_WATCH_STORAGE_NODES)"))
+    else:
+        try:
+            storage_checks(cfg, storage, results)
+        except DeadlineHit:
+            out_of_time(["storage.up"])
     return results
 
 
@@ -1035,6 +1118,14 @@ def parse_args(argv):
     p.add_argument("--rpc-file", metavar="FILE", help="file holding the RPC URL (mode 0600)")
     p.add_argument("--site", metavar="URL", default=os.environ.get("ONYX_WATCH_SITE") or None,
                    help="public website base URL (default $ONYX_WATCH_SITE)")
+    p.add_argument("--bulk-publisher", dest="bulk_publishers", action="append", metavar="ID",
+                   default=[x for x in os.environ.get("ONYX_WATCH_BULK_PUBLISHERS", "").split(",") if x.strip()],
+                   help="a publisher whose newest catalog must be younger than bulk.catalog_max_age_s (repeatable; "
+                        "default $ONYX_WATCH_BULK_PUBLISHERS, comma-separated)")
+    p.add_argument("--storage-node", dest="storage_nodes", action="append", metavar="URL",
+                   default=[x for x in os.environ.get("ONYX_WATCH_STORAGE_NODES", "").split(",") if x.strip()],
+                   help="a storage node base URL whose /v1/health must answer 200 (repeatable; "
+                        "default $ONYX_WATCH_STORAGE_NODES, comma-separated)")
     p.add_argument("--state", metavar="FILE", help="state file (default $XDG_STATE_HOME/onyx-health-watch/state.json)")
     p.add_argument("--alert-log", metavar="FILE", help="alert events, one JSON line each (default: alerts.jsonl next to the state file)")
     p.add_argument("--notify-cmd", metavar="CMD", default=os.environ.get("ONYX_WATCH_NOTIFY_CMD") or None,
@@ -1063,6 +1154,11 @@ def parse_args(argv):
         v = getattr(a, name)
         if v and urllib.parse.urlsplit(v).scheme not in ("http", "https"):
             p.error(f"--{name} must be an http(s) URL (got {origin(v)})")
+    a.bulk_publishers = [x.strip() for x in a.bulk_publishers if x.strip()]
+    a.storage_nodes = [x.strip() for x in a.storage_nodes if x.strip()]
+    for v in a.storage_nodes:
+        if urllib.parse.urlsplit(v).scheme not in ("http", "https"):
+            p.error(f"--storage-node must be an http(s) URL (got {origin(v)})")
     if not a.state:
         base = Path(os.environ.get("XDG_STATE_HOME") or Path.home() / ".local" / "state")
         a.state = str(base / "onyx-health-watch" / "state.json")

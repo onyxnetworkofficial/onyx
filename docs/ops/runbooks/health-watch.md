@@ -79,6 +79,11 @@ restart or an RPC change.
    sudo systemctl enable --now onyx-health-watch.timer && rm -rf ~/onyx-watch-stage
    ```
 
+   On the hosted server the env file also names the publisher whose daily catalogs to watch and
+   the five storage nodes: `ONYX_WATCH_BULK_PUBLISHERS=onchain-archive` and
+   `ONYX_WATCH_STORAGE_NODES=http://127.0.0.1:8201,...,http://127.0.0.1:8205` (port 8201 is
+   `onyx-storage@n1`, through 8205 for `n5`). Deploy the node first: one older than the
+   `catalogs` field in `GET /v1/bulk` alerts `bulk.catalog_age` on every run.
    The first manual start must exit 0 before the timer goes on. Without a notify command the
    alerts go to the journal and `/var/lib/onyx-health-watch/alerts.jsonl` only, which nobody
    reads: the channel (LC-18) is the owner's choice. A watch on the same box cannot report the
@@ -137,7 +142,10 @@ restart or an RPC change.
 | `rpc.finalized_lag` | latest minus finalized above `rpc.finalized_lag_max_blocks` | Chain or provider finality stalled: the indexer waits for finality |
 | `balances.deployer_eth` | deployer below `balances.deployer_wei_min` wei | Ask the project owner to fund the deployer (faucet) |
 | `balances.operator_eth` | API operator below `balances.operator_wei_min` wei (skipped while the node reports payments off) | Send the operator test ETH from the deployer (`cast send`, testnet key only); paid queries answer 503 once it cannot pay a settle's gas (ROADMAP L19) |
+| `balances.publisher_eth` | the bulk publisher's key (`addresses.publisher`) below `balances.publisher_wei_min` wei (about 20 daily anchors) | Send the publisher key test ETH from the deployer before the daily refresh stops at its anchor |
 | `balances.revenue` | `USDC.balanceOf(revenue)` below `allocated() - paidOut()`, `paidOut` above `allocated`, `token()` not the configured USDC, or no contract | Contract bug or wrong address: incident "Contract bug" |
+| `bulk.catalog_age` | a `--bulk-publisher` (`ONYX_WATCH_BULK_PUBLISHERS`) has no catalog on the node, its newest (`GET /v1/bulk` `catalogs[].createdUnix`) is older than `bulk.catalog_max_age_s` (36 h) or more than `node.clock_skew_max_s` in the future, or the answer has no `catalogs` list (a node from before LC-17), `after."bulk.catalog_age"` runs in a row; skipped while `node.up` is not ok | The publisher's daily refresh stopped: read its log, run it again (bulk-publish.md); the node may also have refused the upload (its log); an old node: deploy it |
+| `storage.up` | a `--storage-node` (`ONYX_WATCH_STORAGE_NODES`) did not answer `GET /v1/health` with 200, `after."storage.up"` runs in a row (one check for all: the detail names each) | Port 8201 is `onyx-storage@n1`, through 8205 for `n5`: `systemctl status onyx-storage@<name>`, `journalctl -u onyx-storage@<name>`; restart |
 | `site.up`, `site.public` | site not 200; `data/demo.json` not `public: true` or a run carries `input` | A preview build is public: republish the `ONYX_PUBLIC=1` build (LC-6) |
 | `watch.state` | the state file could not be read or had the wrong shape (moved to `.bad`) | Alerts already sent may be sent again; nothing else to do |
 | any check, detail `deadline` | the run's `deadline_s` budget ran out first | A slow RPC or node: see `rpc.up` / `node.up`; raise `deadline_s` and the unit's `TimeoutStartSec` together |

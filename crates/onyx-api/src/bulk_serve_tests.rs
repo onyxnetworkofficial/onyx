@@ -2040,6 +2040,41 @@ async fn cat_3_a_replacement_may_remove_over_a_live_own_version() {
     let _ = std::fs::remove_dir_all(&w.dir);
 }
 
+/// Launch checklist LC-17: the listing names each publisher's newest held
+/// catalog (number, root, creation time, leaves, tombstones), whatever the
+/// query, so a watch sees a refresh that stopped.
+#[tokio::test]
+async fn lc_17_the_listing_names_each_publishers_newest_catalog() {
+    let w = world();
+    let (cs, _) = walked(&w, 2).await;
+    let (c2, _) = cs.last().expect("c2");
+    let r = routes(w.store.clone())
+        .oneshot(
+            Request::get("/v1/bulk?q=nothing.matches&limit=1")
+                .body(Body::empty())
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value =
+        serde_json::from_slice(&r.into_body().collect().await.expect("ok").to_bytes()).expect("ok");
+    crate::openapi_check::check("GET", "/v1/bulk", 200, &v);
+    assert_eq!(v["total"], json!(0));
+    assert_eq!(
+        v["catalogs"],
+        json!([{
+            "publisher": "example.publisher",
+            "number": 2,
+            "root": c2.header.root().to_string(),
+            "createdUnix": c2.header.created_unix,
+            "leaves": c2.header.leaf_count,
+            "removed": 0,
+        }])
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
 /// ADR-0059 amendment 4 item 4 (review CAT-TOMB-R1 M5): a tombstone is taken
 /// even when the node holds another root at its version; and item 2: a
 /// set-aside of the tombstone's catalog brings the dataset back.
