@@ -12,7 +12,9 @@
 //! ```
 //! Writes one JSON report to stdout. Exit 0 verified (or payable), 1 refused,
 //! 2 usage error, 3 nothing decided (your node could not be read, or your
-//! settings are wrong).
+//! settings are wrong), 4 (`--history` only) every check held but the
+//! publisher has since removed the dataset with a tombstone (ADR-0059
+//! amendment 4).
 
 use onyx_api::roots::HttpJsonRpc;
 use onyx_api::x402::{check_facilitator_url, HyperPost};

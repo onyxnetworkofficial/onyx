@@ -1725,6 +1725,9 @@
           "409": {
             "$ref": "#/components/responses/Error"
           },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
           "429": {
             "$ref": "#/components/responses/Error"
           },
@@ -1817,6 +1820,9 @@
           "409": {
             "$ref": "#/components/responses/Error"
           },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
           "429": {
             "$ref": "#/components/responses/Error"
           },
@@ -1888,6 +1894,9 @@
             "$ref": "#/components/responses/Error"
           },
           "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
@@ -1976,6 +1985,9 @@
             "$ref": "#/components/responses/Error"
           },
           "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
@@ -6500,6 +6512,10 @@
     "bulk_busy": {
       "status": 503,
       "description": "`GET /v1/bulk/catalogs/{publisher}/files`: two answers are being sent already; try again after `retry-after` (10 s)."
+    },
+    "bulk_dataset_removed": {
+      "status": 410,
+      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back; its files stay fetchable by root on the peer routes."
     }
   }
 }

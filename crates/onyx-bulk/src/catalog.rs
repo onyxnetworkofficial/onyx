@@ -71,6 +71,28 @@ impl CatalogLeaf {
         }
     }
 
+    /// A tombstone (ADR-0059 amendment 4): the dataset is removed from this
+    /// catalog on. Its root is zero; it names the version it ends as its
+    /// previous root, at the next version.
+    pub fn is_tombstone(&self) -> bool {
+        self.root == Hash32::ZERO
+    }
+
+    /// The tombstone that ends `self`'s line: the next version, naming
+    /// `self`'s root, with a zero root.
+    pub fn tombstone(&self) -> Option<Self> {
+        if self.is_tombstone() {
+            return None;
+        }
+        Some(CatalogLeaf {
+            publisher: self.publisher.clone(),
+            dataset: self.dataset.clone(),
+            version: self.version.checked_add(1)?,
+            prev: self.root,
+            root: Hash32::ZERO,
+        })
+    }
+
     /// Whether this leaf names exactly `h` (publisher, dataset, version,
     /// previous root and root).
     pub fn names(&self, h: &ManifestHeader) -> bool {
@@ -260,6 +282,12 @@ impl Catalog {
             }
             if l.version == 0 || (l.version == 1) != (l.prev == Hash32::ZERO) {
                 return Err(bad(format!("leaf {i}: version and previous root")));
+            }
+            // A tombstone ends a version (amendment 4 item 1); with the rule
+            // above, nothing can follow one (it would name a zero previous
+            // root past version 1).
+            if l.is_tombstone() && l.version < 2 {
+                return Err(bad(format!("leaf {i}: a tombstone at version 1")));
             }
             if i > 0 && self.leaves[i - 1].dataset >= l.dataset {
                 return Err(bad(format!("leaf {i}: not sorted strictly by dataset")));
@@ -600,6 +628,14 @@ impl Walker {
     pub fn entered(&self) -> Option<&WalkStep> {
         self.steps.iter().find(|s| s.leaf.is_some())
     }
+
+    /// The first catalog that lists the dataset as a tombstone (amendment 4:
+    /// from there every catalog does).
+    pub fn removed(&self) -> Option<&WalkStep> {
+        self.steps
+            .iter()
+            .find(|s| s.leaf.as_ref().is_some_and(CatalogLeaf::is_tombstone))
+    }
 }
 
 #[cfg(test)]
@@ -690,6 +726,46 @@ mod tests {
             .map(|i| leaf(&format!("d.n{i:05}"), 1, 0, 1))
             .collect();
         assert!(Catalog::build(src(), None, 1, too_many).is_err());
+    }
+
+    /// ADR-0059 amendment 4 (THREATS CAT-3): a tombstone ends a dataset's
+    /// line: never at version 1, taken as the next step, kept as it is by
+    /// every successor, and nothing can follow it.
+    #[test]
+    fn cat_3_a_tombstone_ends_a_line_and_nothing_follows_it() {
+        let a1 = leaf("a.x", 1, 0, 1);
+        let b2 = leaf("b.x", 2, 7, 2);
+        let c0 = Catalog::build(src(), None, 100, vec![a1.clone(), b2.clone()]).expect("ok");
+        let gone = a1.tombstone().expect("tombstone");
+        assert_eq!(
+            (gone.version, gone.prev, gone.root),
+            (2, a1.root, Hash32::ZERO)
+        );
+        assert!(gone.is_tombstone() && gone.tombstone().is_none());
+        let c1 = Catalog::build(src(), Some(&c0), 101, vec![gone.clone(), b2.clone()]).expect("ok");
+        assert_eq!(c1.check_successor(&c0), Ok(()));
+        // Kept as it is.
+        let c2 = Catalog::build(src(), Some(&c1), 102, vec![gone.clone(), b2.clone()]).expect("ok");
+        assert_eq!(c2.check_successor(&c1), Ok(()));
+        // Nothing after it: a next version would name a zero previous root.
+        let after = CatalogLeaf {
+            version: 3,
+            prev: Hash32::ZERO,
+            root: Hash32([5; 32]),
+            ..gone.clone()
+        };
+        assert!(Catalog::build(src(), Some(&c1), 102, vec![after, b2.clone()]).is_err());
+        // Nor dropped (`build` runs the successor check).
+        assert!(Catalog::build(src(), Some(&c1), 102, vec![b2.clone()]).is_err());
+        // Never at version 1.
+        let first = CatalogLeaf {
+            root: Hash32::ZERO,
+            ..leaf("z.x", 1, 0, 1)
+        };
+        assert!(Catalog::build(src(), None, 1, vec![first]).is_err());
+        // A tombstone is a leaf like any other: its catalog proves it.
+        let i = c1.find("a.x").expect("listed");
+        assert_eq!(c1.header.proves(&c1.leaf_proof(i).expect("proof")), Ok(()));
     }
 
     /// THREATS CAT-4: a full catalog (MAX_CATALOG_LEAVES leaves of the first

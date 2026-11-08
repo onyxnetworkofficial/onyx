@@ -847,12 +847,25 @@ impl Drop for AnswerTurn {
 struct CatalogBody {
     catalog: Catalog,
     tree: MerkleTree,
+    /// The datasets this catalog lists as tombstones (ADR-0059 amendment 4):
+    /// removed while it is the publisher's newest held catalog.
+    removed: std::collections::BTreeSet<String>,
 }
 
 impl CatalogBody {
     fn new(catalog: Catalog) -> Arc<Self> {
         let tree = cat::leaves_tree(&catalog.leaves);
-        Arc::new(CatalogBody { catalog, tree })
+        let removed = catalog
+            .leaves
+            .iter()
+            .filter(|l| l.is_tombstone())
+            .map(|l| l.dataset.clone())
+            .collect();
+        Arc::new(CatalogBody {
+            catalog,
+            tree,
+            removed,
+        })
     }
 }
 
@@ -1015,7 +1028,15 @@ fn check_catalog_leaves(
     held_at: impl Fn(&str, u32) -> Option<Hash32>,
 ) -> Result<(), ApiError> {
     for l in &c.leaves {
-        if let Some(root) = held_at(&l.dataset, l.version) {
+        // A tombstone is always taken (ADR-0059 amendment 4 item 4): a held
+        // version at its number does not stop the removal.
+        if l.is_tombstone() && held_at(&l.dataset, l.version).is_some() {
+            eprintln!(
+                "bulk: {}: a tombstone at version {} over a held version (taken; ADR-0059 amendment 4 item 4)",
+                l.dataset, l.version
+            );
+        }
+        if let Some(root) = held_at(&l.dataset, l.version).filter(|_| !l.is_tombstone()) {
             if root != l.root {
                 return Err(ApiError::new(
                     StatusCode::CONFLICT,
@@ -1611,6 +1632,9 @@ impl BulkStore {
     /// `GET /v1/bulk/{publisher}/{dataset}`, after re-reading a catalog fork
     /// of its publisher.
     pub async fn info_checked(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
+        if let Some(n) = self.removed(publisher, dataset)? {
+            return Err(dataset_removed(n));
+        }
         self.fork_stands(publisher).await?;
         self.info(publisher, dataset)
     }
@@ -1656,7 +1680,11 @@ impl BulkStore {
                             .is_some_and(|x| roots.contains(&x.0.root()))
                     })
                     .unwrap_or(set.versions.len());
-                if let Some(l) = c.find(d).map(|i| &c.leaves[i]) {
+                if let Some(l) = c
+                    .find(d)
+                    .map(|i| &c.leaves[i])
+                    .filter(|l| !l.is_tombstone())
+                {
                     let i = l.version as usize - 1;
                     if let Some(h) = set
                         .versions
@@ -1815,6 +1843,17 @@ impl BulkStore {
             }
         }
         let dir = self.catalogs_dir().join(publisher);
+        // The newest that stays, whole, read before anything moves: it is
+        // put in place under the same write lock that removes the last
+        // set-aside catalog, so removals (ADR-0059 amendment 4) read its
+        // tombstones from that moment (review of the CAT-3 build, finding 3).
+        let stays = gone
+            .iter()
+            .map(|g| g.0)
+            .min()
+            .and_then(|m| m.checked_sub(1))
+            .map(|k| self.held_body(publisher, k).map(|b| (k, b)))
+            .transpose()?;
         if let Ok(mut c) = self.old_body.lock() {
             c.remove(publisher);
         }
@@ -1840,6 +1879,14 @@ impl BulkStore {
             let mut cs = self.catalogs.write().map_err(|_| internal("lock"))?;
             if let Some(m) = cs.get_mut(publisher) {
                 m.remove(k);
+                if let Some((sk, body)) = &stays {
+                    if let Some(mut last) = m.last_entry().filter(|e| e.key() == sk) {
+                        let h = last.get_mut();
+                        if h.body.is_none() {
+                            h.body = Some(body.clone());
+                        }
+                    }
+                }
                 if m.is_empty() {
                     cs.remove(publisher);
                 }
@@ -2041,6 +2088,46 @@ impl BulkStore {
         Ok(self
             .catalog_body(publisher, n)?
             .map(|(body, report)| (body.catalog.clone(), report)))
+    }
+
+    /// The number of `publisher`'s newest held catalog when it lists
+    /// `dataset` as a tombstone (ADR-0059 amendment 4 item 3: removal is
+    /// this derived state, nothing held is deleted, and a set-aside of that
+    /// catalog ends it).
+    ///
+    /// Fails closed (review of the CAT-3 build, finding 3): a poisoned lock
+    /// or a newest catalog not held whole is an error, never "not removed".
+    pub fn removed(&self, publisher: &str, dataset: &str) -> Result<Option<u64>, ApiError> {
+        let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+        let Some((n, h)) = cs.get(publisher).and_then(|m| m.last_key_value()) else {
+            return Ok(None);
+        };
+        let b = h
+            .body
+            .as_ref()
+            .ok_or_else(|| internal("the newest catalog is not held whole: try again"))?;
+        Ok(b.removed.contains(dataset).then_some(*n))
+    }
+
+    /// The newest held catalog body of every publisher that removed a
+    /// dataset (for listings: one read of the catalogs, never under the
+    /// datasets lock).
+    fn removals(&self) -> Result<BTreeMap<String, Arc<CatalogBody>>, ApiError> {
+        let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
+        let mut out = BTreeMap::new();
+        for (p, m) in cs.iter() {
+            let Some((_, h)) = m.last_key_value() else {
+                continue;
+            };
+            let b = h
+                .body
+                .clone()
+                .ok_or_else(|| internal("a newest catalog is not held whole: try again"))?;
+            if !b.removed.is_empty() {
+                out.insert(p.clone(), b);
+            }
+        }
+        Ok(out)
     }
 
     /// The root and report hash of held catalog `n`: what a kept answer
@@ -2418,6 +2505,18 @@ impl BulkStore {
         manifest: &[u8],
         report: &[u8],
     ) -> Result<(StatusCode, Value), ApiError> {
+        self.accept_manifest_as(manifest, report, false).await
+    }
+
+    /// [`Self::accept_manifest`]; `public` (the upload route, not a storage
+    /// node's own fetch for a deal) also refuses a removed dataset, read
+    /// under the publisher lock (review of the CAT-3 build, finding 6).
+    async fn accept_manifest_as(
+        &self,
+        manifest: &[u8],
+        report: &[u8],
+        public: bool,
+    ) -> Result<(StatusCode, Value), ApiError> {
         let m = decode_manifest(manifest)?;
         let r = SignedReport::try_from_slice(report)
             .map_err(|_| bad_request("report: not a Borsh SignedReport"))?;
@@ -2429,6 +2528,11 @@ impl BulkStore {
             )
         })?;
         let _one = self.publisher_lock(&m.header.publisher.0).read().await;
+        if public {
+            if let Some(n) = self.removed(&m.header.publisher.0, &m.header.dataset)? {
+                return Err(dataset_removed(n));
+            }
+        }
         if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
             return Err(publisher_forked(&f));
         }
@@ -2446,6 +2550,11 @@ impl BulkStore {
         let m = decode_manifest(manifest)?;
         // Held until the version is written: no catalog is set aside meanwhile.
         let _one = self.publisher_lock(&m.header.publisher.0).read().await;
+        // No version of a removed dataset comes back through an older
+        // catalog (ADR-0059 amendment 4 item 3, review CAT-TOMB-R1 H1).
+        if let Some(n) = self.removed(&m.header.publisher.0, &m.header.dataset)? {
+            return Err(dataset_removed(n));
+        }
         if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
             return Err(publisher_forked(&f));
         }
@@ -3110,6 +3219,9 @@ impl BulkStore {
     /// serving (review CL5-R4); none holding is a refusal.
     async fn serving(&self, key: &Key) -> Result<Held, ApiError> {
         type Version = (Hash32, SignedReport, [u8; 20]);
+        if let Some(n) = self.removed(&key.0, &key.1)? {
+            return Err(dataset_removed(n));
+        }
         let (versions, in_catalog): (Vec<Version>, bool) = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
             let d = ds.get(key).ok_or_else(unknown_dataset)?;
@@ -3198,6 +3310,8 @@ impl BulkStore {
             .keys()
             .cloned()
             .collect();
+        // Removed datasets are left out (ADR-0059 amendment 4 item 3).
+        let removals = self.removals()?;
         let ds = self.datasets.read().map_err(|_| internal("lock"))?;
         let matches = |p: &str, d: &str| {
             let id = format!("{p}/{d}");
@@ -3211,7 +3325,7 @@ impl BulkStore {
         let mut page = Vec::new();
         for ((p, d), x) in ds.iter() {
             let Some(h) = x.latest() else { continue };
-            if !matches(p, d) {
+            if !matches(p, d) || removals.get(p).is_some_and(|b| b.removed.contains(d)) {
                 continue;
             }
             total += 1;
@@ -3473,6 +3587,17 @@ fn anchor_from_bytes(b: &[u8]) -> Option<AnchorView> {
         recorded_at: t.9,
         accepted_at: t.10,
     })
+}
+
+/// ADR-0059 amendment 4 item 3: the publisher removed the dataset with a
+/// tombstone in catalog `n`, its newest catalog this node holds.
+fn dataset_removed(n: u64) -> ApiError {
+    ApiError::new(
+        StatusCode::GONE,
+        "bulk_dataset_removed",
+        format!("the publisher removed this dataset in its catalog {n}"),
+    )
+    .with_field("catalog", json!(n))
 }
 
 fn unknown_dataset() -> ApiError {
@@ -3950,6 +4075,13 @@ async fn post_manifest(State(store): State<Arc<BulkStore>>, body: Body) -> Respo
             .map_err(|_| bad_request("body: JSON {manifest, report} or {manifest, catalog}"))?;
         let m = onyx_bulk::wire::hex_field(&v["manifest"], "manifest")
             .map_err(|e| bad_request(e.to_string()))?;
+        // A removed dataset takes no manifest on this route, old or new
+        // (ADR-0059 amendment 4 item 3); a storage node's own fetch of a
+        // deal's manifest does not come this way.
+        let h = decode_manifest(&m)?.header;
+        if let Some(n) = s.removed(&h.publisher.0, &h.dataset)? {
+            return Err(dataset_removed(n));
+        }
         if let Some(n) = v.get("catalog").filter(|c| !c.is_null()) {
             let n = n
                 .as_u64()
@@ -3958,7 +4090,7 @@ async fn post_manifest(State(store): State<Arc<BulkStore>>, body: Body) -> Respo
         }
         let r = onyx_bulk::wire::hex_field(&v["report"], "report")
             .map_err(|e| bad_request(e.to_string()))?;
-        s.accept_manifest(&m, &r).await
+        s.accept_manifest_as(&m, &r, true).await
     })
     .await
 }
@@ -4135,6 +4267,9 @@ async fn put_shard(
         let (root, canonical) = crate::parse_hash(&root, "root")?;
         if !canonical {
             return Err(bad_request("root must be 0x and 64 lowercase hex digits"));
+        }
+        if let Some(n) = s.removed(&p, &d)? {
+            return Err(dataset_removed(n));
         }
         s.accept_shard(&p, &d, &root, &headers, body).await
     })

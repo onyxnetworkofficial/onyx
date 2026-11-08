@@ -22,7 +22,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SPEC = os.path.join(ROOT, "docs/api/openapi.json")
 METHODS = {"get", "post", "put", "patch", "delete"}
 STATUS = {"BAD_REQUEST": 400, "PAYMENT_REQUIRED": 402, "FORBIDDEN": 403, "NOT_FOUND": 404, "METHOD_NOT_ALLOWED": 405,
-          "CONFLICT": 409, "PAYLOAD_TOO_LARGE": 413, "UNPROCESSABLE_ENTITY": 422, "TOO_MANY_REQUESTS": 429,
+          "CONFLICT": 409, "GONE": 410, "PAYLOAD_TOO_LARGE": 413, "UNPROCESSABLE_ENTITY": 422, "TOO_MANY_REQUESTS": 429,
           "UNAVAILABLE_FOR_LEGAL_REASONS": 451, "INTERNAL_SERVER_ERROR": 500, "SERVICE_UNAVAILABLE": 503,
           "GATEWAY_TIMEOUT": 504}
 

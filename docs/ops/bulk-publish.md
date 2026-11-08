@@ -177,6 +177,18 @@ the node serves none of your catalog datasets, even versions signed by another k
 equivocation alone (one key, one number) the key is only suspended. Two machines publishing
 catalogs under two keys fork you the same way: publish from one place.
 
+**Take a dataset down** (ADR-0059 amendment 4, THREATS CAT-3):
+1. Build the next catalog with `--remove <dataset id>` (several: comma-separated) besides your
+   usual `--dirs`: it ends each with a tombstone. Sign, anchor and upload it as usual.
+2. Nodes that take it stop serving the dataset: its rows, info and listing answer `410
+   bulk_dataset_removed`, and no upload brings it back. Later catalogs keep the tombstone; a
+   folder of that dataset in a later `--dirs` is skipped (`SKIPPED ... removed`).
+3. The id is gone for good: publish the data again under a new id if you need it back.
+
+Removal is not erasure: nodes still hold the files (they are fetched by root for storage deals
+and the history check), copies others made stay, and catalogs already signed keep the old
+leaves. A reader's `onyx-check --history` on rows read before the removal reports it (exit 4).
+
 ## For the operator
 
 - Run the node with `ONYX_BULK_DIR` (and the signed book pinned in its manifest; docs/ops/config.md

@@ -6,7 +6,7 @@ Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) acce
 on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
 amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
 CAT-DIFF-R1, built 2026-11-04; amendment 3 (a client check of a publisher's catalog history)
-draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -164,7 +164,8 @@ to the newest manifest of each of its datasets.
    (`OnyxStorage._checkAnchor`): a dataset anchored only through a catalog cannot back a deal,
    and since the book refuses reports observed more than 7 days ago, a manifest older than that
    can no longer get its own (CAT-R1 M4); a catalog path in the planned OnyxStorage v2
-   `createDeal` would lift it. No dataset can be taken down (no tombstone leaf; CAT-R1 L5).
+   `createDeal` would lift it. No dataset can be taken down (no tombstone leaf; CAT-R1 L5):
+   amendment 4 adds tombstones.
 
 **What it costs in trust.** With one report per manifest the book itself refuses a second manifest
 for one version. With catalogs it refuses a second catalog with one number under one key; a
@@ -311,6 +312,72 @@ CAT-HIST-R4, test gaps and one wrong claim; all fixed before deploy and folded i
    again every 10 s, up to 7 times. Opt-in; the default check is unchanged.
 
 Not in this amendment: tombstones (CAT-3) and storage deals for catalog-anchored datasets (CAT-2).
+
+## Amendment 4 (2026-11-08, draft 2 after review CAT-TOMB-R1, built without item 5's deletion): taking a dataset down (tombstones)
+
+**Why.** Amendment 1 item 7 and THREATS CAT-3: a catalog keeps every dataset of the one before,
+so a publisher cannot take a dataset down, not even one it must withdraw (a licence it lost, a
+column it should never have published, a dataset it no longer wants served). The one way out
+today is to stop publishing catalogs, which freezes every other dataset too. Draft 1 was
+reviewed before any code (THREATS CAT-TOMB-R1: "build with the listed changes"); every finding is
+taken below.
+
+**Decision.**
+
+1. **A tombstone leaf.** A catalog may list, for a dataset at version v with root r, the leaf
+   `(publisher, dataset, v + 1, prev = r, root = zero)`: the dataset is removed from that catalog
+   on. The leaf format and the successor rule do not change: `check_successor`'s one-step rule
+   already admits it, and `Catalog::validate` takes a zero root only at version 2 or more, so no
+   later leaf can follow a tombstone (it would need a zero previous root past version 1). A
+   dataset whose versions so far have their own reports may enter a catalog as a tombstone at
+   the next version, naming the newest held one, by amendment 1 item 3's entry rule (CAT-TOMB-R1
+   L8); never at version 1.
+2. **Final unless the book withdraws it.** A successor keeps a tombstone as it is, so the dataset
+   id cannot be used again by that publisher. Only the book's final word on the catalog itself
+   (amendment 1 item 3, THREATS CAT-5) undoes it: when the tombstone's catalog is set aside, the
+   dataset is back as it was (CAT-TOMB-R1 L9). The tombstone counts against the dataset cap like
+   any leaf.
+3. **Removal is a derived state** (CAT-TOMB-R1 H1). A dataset is removed on a node while the newest
+   catalog it holds for the publisher lists it with a zero root. Nothing held is deleted when the
+   catalog is taken: serving, the dataset's info, `GET /v1/bulk` and its search, the rows route,
+   and every upload path (`POST /v1/bulk/manifests` with or without `catalog`, shard `PUT`)
+   check the state and answer `410 bulk_dataset_removed` with the catalog number, so no re-upload
+   of the old manifests or a later own report brings the dataset back. A set-aside of the
+   tombstone's catalog ends the state with no other step.
+4. **The tombstone is always taken** (CAT-TOMB-R1 M5). A zero-root leaf skips the held-version
+   clash and the per-version chain read of amendment 1 item 4: a node that holds an own-report
+   version v + 1 still takes the catalog and removes the dataset (and logs the clash), so one
+   stray report can neither freeze a publisher's catalogs on a node nor make a dataset
+   impossible to remove. Every node then ends at what the publisher signed: removed.
+5. **Bytes are kept for now** (CAT-TOMB-R1 H2, M3). The book can withdraw a catalog later
+   (`markCompromised` takes any past time), so a thief's tombstones must not cost the owner its
+   bytes, and the content store is shared by root across publishers and storage deals. In this
+   first build a removed dataset's manifests and shards stay held and counted, and the peer
+   routes by root (`GET /v1/bulk/manifests/{root}`, `GET /v1/bulk/shards/{root}`) keep answering,
+   so storage deals keep their challenges and the history check can read own-report manifests
+   (CAT-TOMB-R1 L7). TODO: delete after a grace period with the key unchanged (30 days), counting
+   references by root across every publisher's held and set-aside manifests and every deal
+   placement, and file the ADR-0060 decline with notice for each deal on the removed manifests,
+   refusing new ones.
+6. **The history check** (amendment 3). The walk accepts a tombstone as a dataset step. When the
+   walk ends the answer's dataset in a tombstone, the outcome is `Removed` (exit 4): the rows
+   were the publisher's, and the publisher has withdrawn them; the report names the tombstone's
+   catalog number, its creation time and the version it takes. It ranks below every fault and below
+   undecided (CAT-TOMB-R1 M4: a publisher cannot turn a rewrite into "removed" by tombstoning
+   it). A live report under any key at the tombstone's version or the next one is the
+   publisher's fault (CAT-TOMB-R1 L7; the check reads those two, as it reads the version after
+   the newest for any dataset). The plain `onyx-check --bulk` does not walk catalogs and so does not
+   see a removal: only `--history` does.
+7. **The tool.** `onyx-publish catalog-build ... --remove <dataset>[,<dataset>...]` writes the
+   tombstones; it is refused for a dataset the previous catalog does not hold, holds as a
+   tombstone already, or that `--dirs` also lists; a folder `--dirs` lists for a dataset the
+   previous catalog holds as a tombstone is skipped with `SKIPPED ... removed` (CAT-TOMB-R1 M6), and
+   `upload` takes a `410 bulk_dataset_removed` as done.
+
+**What it does not do.** It cannot force any copy off another machine, and it does not remove the
+dataset from catalogs already signed (the history check needs them). Until item 5's TODO is built,
+a removed dataset's bytes stay on the nodes that held them and anyone can still fetch its files by
+root; only its rows, its info and its listing stop.
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and

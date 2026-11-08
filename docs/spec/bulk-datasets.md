@@ -112,7 +112,18 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   nothing in the walk or the answer is not read; the report says so. The route writes its answer
   from the stored bytes, two at a time, in 256 KiB frames, each answer holding its permit until its
   last frame or its deadline (60 s, longer for a large answer at 128 KiB/s; 503 `bulk_busy`
-  otherwise).
+  otherwise). When every check holds and the walk ends the dataset in a tombstone, the outcome is
+  `removed` (exit 4, `removed: {catalog, createdUnix, version}`), ranked below every fault and
+  undecided; a live report at the tombstone's version or the next one is the publisher's fault.
+- R-BULK-13 (removal, ADR-0059 amendment 4): a catalog may end a dataset at version v with the
+  tombstone leaf `(publisher, dataset, v + 1, prev = root of v, root = zero)`; never at version 1,
+  kept as it is by every successor, so the id is never used again by that publisher. While the
+  publisher's newest held catalog lists it, the dataset is removed on the node: its rows, info and
+  listing, and every upload of it (`POST /v1/bulk/manifests` either way, shard `PUT`), answer
+  `410 bulk_dataset_removed` naming the catalog. A tombstone is taken even over a held version at
+  its number. Nothing held is deleted yet: the manifests and shards stay, counted, and the peer
+  routes by root still answer (storage deals, the history check); a set-aside of the tombstone's
+  catalog (THREATS CAT-5) brings the dataset back.
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every

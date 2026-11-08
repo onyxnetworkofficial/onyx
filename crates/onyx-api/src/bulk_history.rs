@@ -52,22 +52,29 @@ pub enum HistoryOutcome {
     Refused(&'static str, String),
     /// Nothing decided yet (exit 3).
     Undecided(String),
+    /// Every check held, and the publisher removed the dataset later with a
+    /// tombstone (exit 4; ADR-0059 amendment 4 item 6): the rows were the
+    /// publisher's, and the publisher has withdrawn them. The report, with
+    /// `removed`. Only reached when nothing else stops the check, so a
+    /// publisher cannot turn a rewrite into a removal (review CAT-TOMB-R1 M4).
+    Removed(Value),
 }
 
 impl HistoryOutcome {
-    /// Exit code: 0 verified, 1 refused, 3 undecided.
+    /// Exit code: 0 verified, 1 refused, 3 undecided, 4 removed.
     pub fn code(&self) -> i32 {
         match self {
             HistoryOutcome::Verified(_) => 0,
             HistoryOutcome::Refused(..) => 1,
             HistoryOutcome::Undecided(_) => 3,
+            HistoryOutcome::Removed(_) => 4,
         }
     }
 
     /// The `history` part of the JSON report.
     pub fn report(&self) -> Value {
         match self {
-            HistoryOutcome::Verified(v) => v.clone(),
+            HistoryOutcome::Verified(v) | HistoryOutcome::Removed(v) => v.clone(),
             HistoryOutcome::Refused(fault, why) => json!({
                 "ok": false, "decided": true, "fault": fault, "error": why,
             }),
@@ -375,6 +382,7 @@ pub async fn check_history(
     opts: &HistoryOpts,
 ) -> HistoryOutcome {
     match run(get, rpc, chain_id, book, checked, opts).await {
+        Ok(v) if !v["removed"].is_null() => HistoryOutcome::Removed(v),
         Ok(v) => HistoryOutcome::Verified(v),
         Err(Stop::Refused(f, w)) => HistoryOutcome::Refused(f, w),
         Err(Stop::Undecided(w)) => HistoryOutcome::Undecided(w),
@@ -561,6 +569,14 @@ async fn run(
     }
     st.check_own(own).await?;
 
+    // The tombstone that ends the dataset, if any (ADR-0059 amendment 4).
+    let removed = walker.removed().map(|s| {
+        json!({
+            "catalog": s.number,
+            "createdUnix": s.created_unix,
+            "version": s.leaf.as_ref().map(|l| l.version),
+        })
+    });
     // No other live report under any known key.
     let mut set_aside: Vec<Value> = Vec::new();
     let keys: Vec<Hash32> = st.keys.keys().copied().collect();
@@ -592,9 +608,11 @@ async fn run(
             let r = read_digest_at(rpc, &book, &d, at)
                 .await
                 .map_err(undecided)?;
+            // A tombstone's version has no report of its own: any report
+            // there is another one (review CAT-TOMB-R1 L7).
             let same = match &r {
                 Standing::Holds(x) | Standing::Withdrawn(x) | Standing::Open(x, _) => {
-                    x.value_hash == value_hash_of(&v.root)
+                    v.root != Hash32::ZERO && x.value_hash == value_hash_of(&v.root)
                 }
                 Standing::Unrecorded => true,
             };
@@ -626,6 +644,13 @@ async fn run(
                 .map_err(undecided)?
             {
                 Standing::Withdrawn(_) | Standing::Unrecorded => {}
+                // After a tombstone no version may follow: a live report of
+                // one is the publisher's (review CAT-TOMB-R1 L7).
+                Standing::Holds(_) if removed.is_some() && what.starts_with("version") => {
+                    return Err(publisher_fault(format!(
+                        "the book holds {what} (key {k}) after the dataset's tombstone"
+                    )))
+                }
                 _ => {
                     return Err(undecided(format!(
                         "the book holds {what} (key {k}), which this node did not serve"
@@ -636,7 +661,8 @@ async fn run(
     }
 
     Ok(json!({
-        "ok": true,
+        "ok": removed.is_none(),
+        "removed": removed,
         "catalogs": steps.len(),
         "newest": newest,
         "entered": walker.entered().map(|s| s.number),

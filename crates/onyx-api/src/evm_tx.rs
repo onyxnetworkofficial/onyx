@@ -564,8 +564,26 @@ impl<T: JsonRpc> Sender<T> {
             .sign(&self.secret)
             .ok_or_else(|| SendError::Rpc("signing failed".into()))?;
         let hash = hex0x(&hash);
-        self.rpc_call("eth_sendRawTransaction", json!([hex0x(&raw)]))
-            .await?;
+        if let Err(e) = self
+            .rpc_call("eth_sendRawTransaction", json!([hex0x(&raw)]))
+            .await
+        {
+            // A refusal may come after an earlier send of these very bytes
+            // took (its answer lost, or a proxy that may pass a post on
+            // before answering 429, and the client tried again): the node
+            // then says "already known", or "nonce too low" once it is
+            // mined. Asked by the hash computed here, a node that knows the
+            // transaction (pooled or mined) makes it sent (review of the RPC
+            // retry, finding 3, and review of the fix, finding 1).
+            let known = self
+                .rpc
+                .call("eth_getTransactionByHash", json!([&hash]))
+                .await
+                .is_ok_and(|t| !t.is_null());
+            if !known {
+                return Err(e);
+            }
+        }
         Ok(Sent { hash, tx, raw })
     }
 
@@ -959,6 +977,10 @@ mod tests {
         head_fails: std::sync::atomic::AtomicU32,
         estimate: fn(&Value) -> Result<Value, String>,
         calls: std::sync::Mutex<Vec<(String, Value)>>,
+        /// The node's refusal of `eth_sendRawTransaction`, if any.
+        send_refusal: std::sync::Mutex<Option<String>>,
+        /// Its answer to `eth_getTransactionByHash` (null: not known).
+        by_hash: std::sync::Mutex<Value>,
     }
     impl Pinned {
         fn new(head: Option<&'static str>, estimate: fn(&Value) -> Result<Value, String>) -> Self {
@@ -967,6 +989,8 @@ mod tests {
                 head_fails: std::sync::atomic::AtomicU32::new(0),
                 estimate,
                 calls: std::sync::Mutex::new(Vec::new()),
+                send_refusal: std::sync::Mutex::new(None),
+                by_hash: std::sync::Mutex::new(Value::Null),
             }
         }
         fn estimates(&self) -> Vec<Value> {
@@ -1015,7 +1039,11 @@ mod tests {
                 "eth_getTransactionCount" => Ok(json!("0x0")),
                 "eth_getBlockByNumber" => Ok(json!({"baseFeePerGas": "0x1"})),
                 "eth_maxPriorityFeePerGas" => Ok(json!("0x1")),
-                "eth_sendRawTransaction" => Ok(json!(format!("0x{}", "11".repeat(32)))),
+                "eth_getTransactionByHash" => Ok(self.by_hash.lock().expect("lock").clone()),
+                "eth_sendRawTransaction" => match self.send_refusal.lock().expect("lock").clone() {
+                    Some(e) => Err(e),
+                    None => Ok(json!(format!("0x{}", "11".repeat(32)))),
+                },
                 _ => Err("unexpected".to_string()),
             };
             Box::pin(async move { r })
@@ -1040,6 +1068,55 @@ mod tests {
             .expect("mined")
             .expect("found");
         s
+    }
+
+    /// Review of the RPC retry, finding 3, and of its fix, finding 1: a send
+    /// the node refuses ("already known", or "nonce too low" once mined) but
+    /// knows by the locally computed hash counts as sent, under that hash; a
+    /// refusal of a transaction the node does not know stays an error,
+    /// whatever its words ("Unknown transaction type" included).
+    #[tokio::test]
+    async fn a_refused_send_the_node_knows_by_hash_counts_as_sent() {
+        let s = after_a_mined_tx(Pinned::new(Some("0x40"), |_| Ok(json!("0x5208")))).await;
+        let to = [0xaa; 20];
+        let refuse = |m: &str| {
+            *s.rpc.send_refusal.lock().expect("lock") = Some(format!(
+                "eth_sendRawTransaction: node error: {{\"code\":-32000,\"message\":\"{m}\"}}"
+            ));
+        };
+        for m in ["already known", "nonce too low"] {
+            refuse(m);
+            *s.rpc.by_hash.lock().expect("lock") = json!({"hash": "0x00", "blockNumber": null});
+            let sent = s
+                .broadcast(&to, &[1, 2], 0, Duration::from_secs(5))
+                .await
+                .unwrap_or_else(|e| panic!("{m}: known, so sent: {e}"));
+            let (_, hash) = sent.tx.sign(&key()).expect("signs");
+            assert_eq!(sent.hash, hex0x(&hash));
+            let asked = s
+                .rpc
+                .calls
+                .lock()
+                .expect("lock")
+                .iter()
+                .any(|(m, p)| m == "eth_getTransactionByHash" && p[0] == json!(sent.hash));
+            assert!(asked, "asked by the local hash");
+        }
+        *s.rpc.by_hash.lock().expect("lock") = Value::Null;
+        for m in [
+            "already known",
+            "unknown transaction type",
+            "insufficient funds",
+        ] {
+            refuse(m);
+            assert!(
+                matches!(
+                    s.broadcast(&to, &[1, 2], 0, Duration::from_secs(5)).await,
+                    Err(SendError::Rpc(_))
+                ),
+                "{m}: not known, not sent"
+            );
+        }
     }
 
     /// Review LAUNCH-R1-A1 (probe-verified): a receipt naming a block the

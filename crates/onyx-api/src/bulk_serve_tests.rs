@@ -1803,6 +1803,294 @@ fn served_versions(w: &World) -> Vec<u64> {
         .collect()
 }
 
+/// ADR-0059 amendment 4 (THREATS CAT-3): a catalog with a tombstone removes
+/// its dataset from the rows, info and listing, and every upload path
+/// refuses it (an old manifest through an older catalog, an own report, a
+/// shard), with 410 naming the catalog; the bytes stay held and the peer
+/// routes by root still answer (storage deals, the history check); the other
+/// datasets serve on; a restart keeps the removal.
+#[tokio::test]
+async fn cat_3_a_tombstone_removes_a_dataset_but_keeps_its_bytes() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let keep = other_leaf("synthetic.other");
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), keep.clone()],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    w.upload_all(&m, &files).await;
+    w.rows("from=0&to=3").await.expect("served");
+    let gone = CatalogLeaf::of(&m.header).tombstone().expect("tombstone");
+    let c1 = catalog_of(Some(&c0), T0 + 20, vec![gone, keep]);
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1).await.expect("c1").0,
+        StatusCode::CREATED
+    );
+    let removed = |e: ApiError| {
+        assert_eq!(e.status, StatusCode::GONE);
+        assert_eq!(e.code, "bulk_dataset_removed");
+    };
+    removed(w.rows("from=0&to=3").await.expect_err("removed"));
+    removed(
+        w.store
+            .info_checked("example.publisher", "synthetic.metrics")
+            .await
+            .expect_err("removed"),
+    );
+    removed(w.post_in(&m, 0).await.expect_err("not again"));
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        Some(1)
+    );
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.other")
+            .expect("read"),
+        None
+    );
+    // Through the routes.
+    let read = routes(w.store.clone());
+    let up = upload_routes(w.store.clone());
+    let peer = peer_routes(w.store.clone());
+    let send = |app: Router, req: Request<Body>| async move {
+        let r = app.oneshot(req).await.expect("ok");
+        let status = r.status();
+        let b = r.into_body().collect().await.expect("ok").to_bytes();
+        (
+            status,
+            serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null),
+        )
+    };
+    let get = |u: String| Request::get(u).body(Body::empty()).expect("ok");
+    for uri in [
+        "/v1/bulk/example.publisher/synthetic.metrics".to_string(),
+        "/v1/bulk/example.publisher/synthetic.metrics/rows?from=0&to=3".to_string(),
+    ] {
+        let (s, v) = send(read.clone(), get(uri.clone())).await;
+        assert_eq!(s, StatusCode::GONE, "{uri}");
+        assert_eq!(v["error"]["code"], json!("bulk_dataset_removed"));
+        assert_eq!(v["catalog"], json!(1));
+        crate::openapi_check::check("GET", &uri, 410, &v);
+    }
+    let (s, v) = send(read.clone(), get("/v1/bulk".into())).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(
+        !v.to_string().contains("synthetic.metrics"),
+        "left out of the list"
+    );
+    let post = |body: Value| {
+        Request::post("/v1/bulk/manifests")
+            .header("content-type", "application/json")
+            .body(Body::from(body.to_string()))
+            .expect("ok")
+    };
+    for body in [
+        json!({"manifest": hex0x(&m.to_bytes()), "catalog": 0}),
+        json!({"manifest": hex0x(&m.to_bytes()), "report": hex0x(&borsh::to_vec(&sign(&m)).expect("ok"))}),
+    ] {
+        let (s, v) = send(up.clone(), post(body)).await;
+        assert_eq!(s, StatusCode::GONE);
+        assert_eq!(v["error"]["code"], json!("bulk_dataset_removed"));
+        crate::openapi_check::check("POST", "/v1/bulk/manifests", 410, &v);
+    }
+    let shard_uri = format!(
+        "/v1/bulk/example.publisher/synthetic.metrics/shards/{}",
+        m.shards[0].root
+    );
+    let (s, v) = send(
+        up.clone(),
+        Request::put(shard_uri.clone())
+            .body(Body::from(files[0].clone()))
+            .expect("ok"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::GONE);
+    crate::openapi_check::check("PUT", &shard_uri, 410, &v);
+    // The bytes stay, and the peer routes by root answer.
+    assert!(w.store.holds_shard(&m.shards[0].root));
+    let (s, _) = send(
+        peer.clone(),
+        get(format!("/v1/bulk/manifests/{}", m.header.root())),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let r = peer
+        .clone()
+        .oneshot(get(format!("/v1/bulk/shards/{}", m.shards[0].root)))
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    // A storage node's own fetch of a deal's manifest (an own-report
+    // manifest, ADR-0060) is not refused for the removal.
+    let own = sign(&m);
+    w.node.anchor(&own);
+    if let Err(e) = w.post(&m, &own).await {
+        assert_ne!(
+            e.code, "bulk_dataset_removed",
+            "the storage path: {}",
+            e.message
+        );
+    }
+    // A restart keeps the removal.
+    let again = w.reopen().expect("starts");
+    assert_eq!(
+        again
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Own-report versions 1 and 2 of `synthetic.metrics`, held and anchored.
+async fn own_two(w: &World) -> (Manifest, Manifest) {
+    let f1 = shard_files(0..30, 10);
+    let m1 = manifest(&f1, None, T0);
+    let f2 = shard_files(30..40, 10);
+    let m2 = manifest(&f2, Some(&m1), T0 + 5);
+    for (m, f) in [(&m1, &f1), (&m2, &f2)] {
+        let r = sign(m);
+        w.node.anchor(&r);
+        assert_eq!(w.post(m, &r).await.expect("own").0, StatusCode::CREATED);
+        w.upload_all(m, f).await;
+    }
+    (m1, m2)
+}
+
+/// Review of the CAT-3 build, finding 1 (amendment 4 items 1 and 4): a
+/// dataset with own-report versions enters a catalog as a tombstone over the
+/// version 2 the node holds with another root: taken (not
+/// `bulk_conflicting_anchor`), and the dataset is removed.
+#[tokio::test]
+async fn cat_3_a_tombstone_over_a_held_own_version_is_taken() {
+    let w = world();
+    let (m1, _m2) = own_two(&w).await;
+    let t = CatalogLeaf::of(&m1.header).tombstone().expect("t");
+    assert_eq!(t.version, 2);
+    let c0 = catalog_of(None, T0 + 10, vec![t]);
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("taken").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        Some(0)
+    );
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("removed")),
+        "bulk_dataset_removed"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review of the CAT-3 build, finding 1 (the set-aside path, `plan_cut`):
+/// after a key theft, the publisher's replacement catalog removes the
+/// dataset with a tombstone over an own-report version the book has not
+/// withdrawn: taken, not refused as a contradicted version.
+#[tokio::test]
+async fn cat_3_a_replacement_may_remove_over_a_live_own_version() {
+    let w = world();
+    let (m1, m2) = own_two(&w).await;
+    // Catalog 0 lists version 1; version 2 is held by its own report.
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m1.header)]);
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 30,
+        vec![CatalogLeaf::of(&m2.header), other_leaf("synthetic.thief")],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("the thief's c1");
+    // The replacement catalog 1 under the new key ends the dataset at
+    // version 2, over the held own version 2 (live, not withdrawn).
+    let t = CatalogLeaf::of(&m1.header).tombstone().expect("t");
+    assert_eq!(t.version, 2);
+    let c1b = catalog_of(Some(&c0), T0 + 50, vec![t]);
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    w.node.anchor_by(&r1b, &SECRET2);
+    w.node.withdraw(&r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        Some(1)
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// ADR-0059 amendment 4 item 4 (review CAT-TOMB-R1 M5): a tombstone is taken
+/// even when the node holds another root at its version; and item 2: a
+/// set-aside of the tombstone's catalog brings the dataset back.
+#[tokio::test]
+async fn cat_3_a_tombstone_is_always_taken_and_a_set_aside_undoes_it() {
+    let t = theft().await;
+    let w = &t.w;
+    // The thief's catalog 1 lists version 2 (held); the next catalog
+    // removes the dataset at version 3, over nothing held there.
+    let c2 = catalog_of(
+        Some(&t.c1),
+        T0 + 40,
+        vec![
+            CatalogLeaf::of(&t.bad.header).tombstone().expect("t"),
+            other_leaf("synthetic.thief"),
+        ],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    assert_eq!(
+        w.post_catalog(&c2, &r2).await.expect("c2").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        Some(2)
+    );
+    // The book withdraws the thief's catalogs 1 and 2; the publisher's
+    // replacement catalog 1 brings the dataset back with its own version 2.
+    let (c1b, r1b, good, files) = replacement(&t);
+    w.node.withdraw(&t.r1);
+    w.node.withdraw(&r2);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        None
+    );
+    w.post_in(&good, 1).await.expect("v2");
+    w.upload_all(&good, &files).await;
+    w.rows("from=0&to=3").await.expect("served again");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
 #[tokio::test]
 async fn cat_5_a_withdrawn_catalog_is_set_aside_for_the_publishers_replacement() {
     let t = theft().await;
@@ -3475,6 +3763,51 @@ impl<F: Fn(&str) -> Option<(u16, Vec<u8>)> + Send + Sync> crate::storage::HttpGe
             None => self.inner.get(url, max),
         }
     }
+}
+
+/// ADR-0059 amendment 4 item 6 (THREATS CAT-3): a rows answer checked
+/// before the publisher removed its dataset comes out `Removed` (exit 4),
+/// naming the tombstone's catalog; a live own report at the tombstone's
+/// version is the publisher's fault, ranked above the removal.
+#[tokio::test]
+async fn cat_3_the_history_check_reports_a_removal_and_a_report_after_it() {
+    let w = world();
+    let (cs, ms) = walked(&w, 3).await;
+    let ck = checked_rows(&w).await;
+    let last = ms.last().expect("v").clone();
+    let (prev, _) = cs.last().expect("c");
+    let mut leaves = prev.leaves.clone();
+    let i = prev.find("synthetic.metrics").expect("listed");
+    leaves[i] = leaves[i].tombstone().expect("t");
+    let c4 = catalog_of(Some(prev), T0 + 1_000, leaves);
+    let r4 = sign_catalog(&c4);
+    w.node.anchor(&r4);
+    assert_eq!(
+        w.post_catalog(&c4, &r4).await.expect("c4").0,
+        StatusCode::CREATED
+    );
+    let get = RouterGet(peer_routes(w.store.clone()));
+    let o = history_with(&w, &ck, &get).await;
+    assert_eq!(o.code(), 4, "{}", o.report());
+    let v = o.report();
+    assert_eq!(v["ok"], json!(false));
+    assert_eq!(v["removed"]["catalog"], json!(4));
+    assert_eq!(v["removed"]["version"], json!(last.header.version + 1));
+    // A live own report at the version after the tombstone: the
+    // publisher's (review of the CAT-3 build, finding 1).
+    let files = shard_files(500..510, 10);
+    let at_t = manifest(&files, Some(&last), T0 + 2_000);
+    let beyond = manifest(&shard_files(510..520, 10), Some(&at_t), T0 + 2_001);
+    assert_eq!(beyond.header.version, last.header.version + 2);
+    w.node.anchor(&sign(&beyond));
+    let (f, why) = refused(history_with(&w, &ck, &get).await);
+    assert_eq!(f, "publisher", "{why}");
+    assert!(why.contains("after the dataset's tombstone"), "{why}");
+    // And one at the tombstone's own version.
+    w.node.anchor(&sign(&at_t));
+    let o = history_with(&w, &ck, &get).await;
+    assert_eq!(refused(o).0, "publisher");
+    let _ = std::fs::remove_dir_all(&w.dir);
 }
 
 async fn checked_rows(w: &World) -> onyx_bulk::wire::Checked {

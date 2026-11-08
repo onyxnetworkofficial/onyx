@@ -14,6 +14,7 @@
 //!
 //! # One anchor for many manifests (ADR-0059 amendment 1):
 //! onyx-publish catalog-build  --publisher <source id> --dirs LIST --out FILE [--prev FILE]
+//!                             [--remove DATASET[,DATASET...]]
 //! onyx-publish catalog-sign   --key publisher.key --catalog FILE
 //! onyx-publish catalog-anchor --catalog FILE --rpc URL --chain-id N --book 0x… --gas-key FILE
 //! onyx-publish catalog-upload --catalog FILE --node URL [--wait-secs N]
@@ -23,6 +24,8 @@
 //! line) and carries over every other dataset of `--prev`, the catalog it
 //! follows; `upload --catalog N` then hands a node each manifest without its
 //! own report. The catalog's report goes next to it as `FILE.report`.
+//! `--remove` ends each named dataset with a tombstone (ADR-0059 amendment 4):
+//! nodes stop serving it, and a later folder of it in LIST is skipped.
 //!
 //! Keys are read from files that only their owner can read and are never
 //! printed. Exit 0 done, 1 refused or failed, 2 usage.
@@ -856,7 +859,7 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
     let manifest_url = format!("{node}/v1/bulk/manifests");
     let body = hyper::body::Bytes::from(body.to_string().into_bytes());
     let pause = Duration::from_secs(RETRY_SECS);
-    let answer = send_until(
+    let answer = match send_until(
         &c,
         hyper::Method::POST,
         &manifest_url,
@@ -866,7 +869,20 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
         pause,
         "manifest",
     )
-    .await?;
+    .await
+    {
+        // The publisher removed the dataset (ADR-0059 amendment 4): nothing
+        // to send, and nothing left to do.
+        Err(e) if e.contains("bulk_dataset_removed") => {
+            println!(
+                "REMOVED version={} root={}: the node holds the dataset as removed",
+                m.header.version,
+                m.header.root()
+            );
+            return Ok(());
+        }
+        a => a?,
+    };
     let mut missing = answer["missing"].as_array().cloned().unwrap_or_default();
     let (mut sent, mut bytes, mut rounds) = (0u64, 0u64, 0u32);
     let manifest_time = t.elapsed();
@@ -957,7 +973,7 @@ fn report_path(catalog: &Path) -> PathBuf {
 /// plus every other dataset of `--prev`, written to `--out` (never over an
 /// existing file: a catalog is kept before it is signed, review CAT-R1 M3).
 fn catalog_build_cmd(o: &Opts) -> Res<()> {
-    o.only(&["publisher", "dirs", "out", "prev"])?;
+    o.only(&["publisher", "dirs", "out", "prev", "remove"])?;
     let publisher = SourceId(o.req("publisher")?.to_string());
     let out = PathBuf::from(o.req("out")?);
     if out.exists() {
@@ -976,17 +992,57 @@ fn catalog_build_cmd(o: &Opts) -> Res<()> {
         .flat_map(|p| p.leaves.iter().cloned())
         .map(|l| (l.dataset.clone(), l))
         .collect();
+    // --remove: a tombstone for each named dataset (ADR-0059 amendment 4).
+    let remove: Vec<String> = o
+        .opt("remove")
+        .map(|r| {
+            r.split(',')
+                .map(str::trim)
+                .filter(|d| !d.is_empty())
+                .map(String::from)
+                .collect()
+        })
+        .unwrap_or_default();
     let mut listed = 0usize;
+    let (mut skipped, mut removed) = (0usize, 0usize);
     for d in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let m = read_manifest(Path::new(d))?;
         if m.header.publisher != publisher {
             return Err(format!("{d}: another publisher ({})", m.header.publisher.0));
+        }
+        if remove.contains(&m.header.dataset) {
+            return Err(format!(
+                "{d}: {} is both listed and to be removed",
+                m.header.dataset
+            ));
+        }
+        // A removed dataset stays removed: its folder is left out (review
+        // CAT-TOMB-R1 M6), never put back over the tombstone.
+        if leaves
+            .get(&m.header.dataset)
+            .is_some_and(onyx_bulk::CatalogLeaf::is_tombstone)
+        {
+            println!("SKIPPED {d}: {} is removed", m.header.dataset);
+            skipped += 1;
+            continue;
         }
         leaves.insert(
             m.header.dataset.clone(),
             onyx_bulk::CatalogLeaf::of(&m.header),
         );
         listed += 1;
+    }
+    for d in &remove {
+        let Some(l) = leaves.get(d) else {
+            return Err(format!(
+                "--remove {d}: the previous catalog does not hold it"
+            ));
+        };
+        let t = l
+            .tombstone()
+            .ok_or_else(|| format!("--remove {d}: removed already"))?;
+        leaves.insert(d.clone(), t);
+        removed += 1;
     }
     // Strictly later than the catalog it follows (the book files a fact by its time).
     let created = prev
@@ -1002,7 +1058,7 @@ fn catalog_build_cmd(o: &Opts) -> Res<()> {
     std::fs::write(&out, borsh::to_vec(&c).map_err(|e| e.to_string())?)
         .map_err(|e| format!("{}: {e}", out.display()))?;
     println!(
-        "CATALOG number={} leaves={} listed={listed} root={} out={}",
+        "CATALOG number={} leaves={} listed={listed} removed={removed} skipped={skipped} root={} out={}",
         c.header.number,
         c.header.leaf_count,
         c.header.root(),
@@ -1316,6 +1372,139 @@ mod tests {
             &dir.join("v3")
         )
         .is_err());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-0059 amendment 4 (THREATS CAT-3): `catalog-build --remove` writes
+    /// a tombstone, a later folder of a removed dataset is skipped (never put
+    /// back over it), and a removal of a dataset not held, removed already,
+    /// or listed in the same build is refused.
+    #[test]
+    fn catalog_build_removes_a_dataset_and_keeps_it_removed() {
+        let schema = Schema::from_json(&synth_schema()).expect("ok");
+        let dir = std::env::temp_dir().join(format!("onyx-publish-rm-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let mut csv = Vec::new();
+        write_synth(&mut csv, 1, 50).expect("ok");
+        for d in ["a", "b"] {
+            let nv = NewVersion {
+                dataset: format!("synthetic.{d}"),
+                publisher: SourceId("example.publisher".into()),
+                created_unix: 10,
+                schema: schema.clone(),
+                rights: DataRights {
+                    license: "CC0-1.0".into(),
+                    redistribution: Redistribution::Allowed,
+                    source: SourceId("example.publisher".into()),
+                    attribution: None,
+                    terms: String::new(),
+                },
+            };
+            let b = build(
+                &schema,
+                &csv[..],
+                Format::Csv,
+                256 << 10,
+                None,
+                nv,
+                &dir.join(d),
+            )
+            .expect("ok");
+            std::fs::write(dir.join(d).join("manifest.bin"), b.manifest.to_bytes()).expect("w");
+        }
+        let p = |n: &str| dir.join(n).display().to_string();
+        let list = |name: &str, items: &[&str]| {
+            let f = dir.join(name);
+            std::fs::write(&f, items.iter().map(|i| p(i) + "\n").collect::<String>()).expect("w");
+            f.display().to_string()
+        };
+        let run = |args: &[String]| catalog_build_cmd(&parse_opts(args).expect("opts"));
+        let a = |v: &[&str]| v.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let both = list("both.txt", &["a", "b"]);
+        let none = list("none.txt", &[]);
+        let only_a = list("a.txt", &["a"]);
+        run(&a(&[
+            "--publisher",
+            "example.publisher",
+            "--dirs",
+            &both,
+            "--out",
+            &p("c0.bin"),
+        ]))
+        .expect("c0");
+        run(&a(&[
+            "--publisher",
+            "example.publisher",
+            "--dirs",
+            &none,
+            "--prev",
+            &p("c0.bin"),
+            "--remove",
+            "synthetic.a",
+            "--out",
+            &p("c1.bin"),
+        ]))
+        .expect("c1");
+        let c1 = read_catalog(&dir.join("c1.bin")).expect("c1");
+        let t = &c1.leaves[c1.find("synthetic.a").expect("listed")];
+        assert!(t.is_tombstone() && t.version == 2);
+        assert!(!c1.leaves[c1.find("synthetic.b").expect("listed")].is_tombstone());
+        // The removed dataset's folder again: skipped, the tombstone stays.
+        run(&a(&[
+            "--publisher",
+            "example.publisher",
+            "--dirs",
+            &only_a,
+            "--prev",
+            &p("c1.bin"),
+            "--out",
+            &p("c2.bin"),
+        ]))
+        .expect("c2");
+        let c2 = read_catalog(&dir.join("c2.bin")).expect("c2");
+        assert_eq!(c2.leaves, c1.leaves);
+        for (args, why) in [
+            (
+                vec![
+                    "--dirs",
+                    &none,
+                    "--prev",
+                    &p("c1.bin"),
+                    "--remove",
+                    "synthetic.a",
+                ],
+                "removed already",
+            ),
+            (
+                vec![
+                    "--dirs",
+                    &none,
+                    "--prev",
+                    &p("c1.bin"),
+                    "--remove",
+                    "synthetic.z",
+                ],
+                "does not hold",
+            ),
+            (
+                vec![
+                    "--dirs",
+                    &only_a,
+                    "--prev",
+                    &p("c0.bin"),
+                    "--remove",
+                    "synthetic.a",
+                ],
+                "both listed",
+            ),
+        ] {
+            let mut v = a(&["--publisher", "example.publisher", "--out", &p("cx.bin")]);
+            v.extend(args.iter().map(|s| s.to_string()));
+            let e = run(&v).expect_err(why);
+            assert!(e.contains(why), "{e}");
+            assert!(!dir.join("cx.bin").exists());
+        }
         let _ = std::fs::remove_dir_all(&dir);
     }
 
