@@ -16,6 +16,18 @@
 //! request at once. Trusted proxies are exempt from the per-client cap: every
 //! client behind them shares their address (their own limits apply, and the
 //! API's per-client budgets read `X-Forwarded-For` at the HTTP layer).
+//!
+//! Writes have a stall timeout (THREATS SERVE-WRITE-1): a connection whose
+//! answer cannot move a byte for `write_stall_timeout` (its reader stopped
+//! reading) is closed, which lets go of its slot, hyper's queued frames and
+//! the kernel's send buffer. It is a no-progress timeout, not a rate floor.
+//! An answer larger than the kernel's send buffer moves only when about a
+//! third of that buffer is free (Linux wakes a writer at two thirds full),
+//! so its reader must take that much a period: about 1.3 MiB per 30 s at a
+//! 4 MiB buffer (45 KiB/s). A drip reader that takes just that much stays
+//! connected and holds what its answer holds: a 64 KiB buffer and a share of
+//! a streamed or shared answer on the routes outside the guard (THREATS
+//! SERVE-WRITE-2).
 
 use axum::extract::ConnectInfo;
 use axum::{Extension, Router};
@@ -26,11 +38,18 @@ use hyper_util::service::TowerToHyperService;
 use onyx_api::{Cidr, PREFIX_RATE_MULTIPLIER};
 use std::collections::HashMap;
 use std::future::Future;
+use std::io;
 use std::net::IpAddr;
+use std::pin::Pin;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::task::{Context, Poll};
 use std::time::Duration;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
 use tokio::net::TcpListener;
 use tokio::task::AbortHandle;
+
+/// Bytes hyper buffers a connection, each way (`max_buf_size`).
+pub const MAX_BUF: usize = 64 << 10;
 
 /// Default connections one client may hold open (AUD-1R-F1).
 pub const DEFAULT_MAX_PER_CLIENT: usize = 32;
@@ -47,6 +66,93 @@ pub struct ServeLimits {
     /// may hold `PREFIX_RATE_MULTIPLIER` times this and a /48 that factor
     /// again); a new one beyond is closed at once. Trusted proxies are exempt.
     pub max_per_client: usize,
+    /// A write that cannot move a byte for this long closes the connection
+    /// (SERVE-WRITE-1).
+    pub write_stall_timeout: Duration,
+}
+
+/// A connection whose writes may not stall longer than `limit`: a write
+/// that stays pending that long fails with `TimedOut`, and hyper closes the
+/// connection. Any written byte starts the period again. Reads are untouched
+/// (the header read timeout covers a client that sends nothing).
+struct StallIo<T> {
+    io: T,
+    limit: Duration,
+    stalled: Option<Pin<Box<tokio::time::Sleep>>>,
+}
+
+impl<T> StallIo<T> {
+    fn new(io: T, limit: Duration) -> Self {
+        StallIo {
+            io,
+            limit,
+            stalled: None,
+        }
+    }
+
+    /// Pending: start (or keep) the stall timer, and fail once it fires.
+    /// Anything else is progress (or an error): the timer stops.
+    fn watch<R>(&mut self, cx: &mut Context<'_>, r: Poll<io::Result<R>>) -> Poll<io::Result<R>> {
+        if r.is_ready() {
+            self.stalled = None;
+            return r;
+        }
+        let limit = self.limit;
+        let timer = self
+            .stalled
+            .get_or_insert_with(|| Box::pin(tokio::time::sleep(limit)));
+        if timer.as_mut().poll(cx).is_ready() {
+            return Poll::Ready(Err(io::Error::new(
+                io::ErrorKind::TimedOut,
+                "the reader stopped reading (write stall timeout)",
+            )));
+        }
+        Poll::Pending
+    }
+}
+
+impl<T: AsyncRead + Unpin> AsyncRead for StallIo<T> {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        Pin::new(&mut self.io).poll_read(cx, buf)
+    }
+}
+
+impl<T: AsyncWrite + Unpin> AsyncWrite for StallIo<T> {
+    fn poll_write(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        let r = Pin::new(&mut self.io).poll_write(cx, buf);
+        self.watch(cx, r)
+    }
+
+    fn poll_write_vectored(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        let r = Pin::new(&mut self.io).poll_write_vectored(cx, bufs);
+        self.watch(cx, r)
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        self.io.is_write_vectored()
+    }
+
+    fn poll_flush(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let r = Pin::new(&mut self.io).poll_flush(cx);
+        self.watch(cx, r)
+    }
+
+    fn poll_shutdown(mut self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        let r = Pin::new(&mut self.io).poll_shutdown(cx);
+        self.watch(cx, r)
+    }
 }
 
 /// One scope a connection counts against: an IPv4 address, or an IPv6 prefix
@@ -243,7 +349,15 @@ pub async fn serve_with(
                 let conn = hyper::server::conn::http1::Builder::new()
                     .timer(TokioTimer::new())
                     .header_read_timeout(limits.header_read_timeout)
-                    .serve_connection(TokioIo::new(stream), svc);
+                    // hyper takes body frames while its write queue is under
+                    // this: 64 KiB instead of its 408 KiB default bounds what
+                    // a dripping reader holds (review SERVE-WRITE-R2 finding 2);
+                    // it also caps the request head at 64 KiB.
+                    .max_buf_size(MAX_BUF)
+                    .serve_connection(
+                        TokioIo::new(StallIo::new(stream, limits.write_stall_timeout)),
+                        svc,
+                    );
                 let conn = graceful.watch(conn);
                 let leave = Leave { book: book.clone(), id };
                 let task = tokio::spawn(async move {
@@ -270,6 +384,7 @@ mod tests {
         header_read_timeout: Duration::from_secs(1),
         max_connections: 3,
         max_per_client: 2,
+        write_stall_timeout: Duration::from_secs(30),
     };
 
     #[test]
@@ -330,6 +445,7 @@ mod tests {
             header_read_timeout: Duration::from_secs(1),
             max_connections: 10_000,
             max_per_client: 2,
+            write_stall_timeout: Duration::from_secs(30),
         };
         let m = PREFIX_RATE_MULTIPLIER as usize;
         let mut b = Book::default();
@@ -376,6 +492,7 @@ mod tests {
             header_read_timeout: Duration::from_secs(1),
             max_connections: 10_000,
             max_per_client: 2,
+            write_stall_timeout: Duration::from_secs(30),
         };
         let mut b = Book::default();
         let proxy: IpAddr = "2001:db8:7:1::1".parse().expect("ip");

@@ -490,6 +490,21 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
     }
 }
 
+impl TieredStore<FsCas, FsCas> {
+    /// `key`'s object as a checked, rewound open file and its length
+    /// ([`FsCas::open_checked`]), from the store [`Cas::get`] reads: rows and
+    /// shards hot first, then warm; every other kind hot.
+    pub fn open_checked(&self, kind: Kind, key: &Hash32) -> Option<(std::fs::File, u64)> {
+        match kind {
+            Kind::Rows | Kind::Shard => self
+                .hot
+                .open_checked(kind, key)
+                .or_else(|| self.warm.open_checked(kind, key)),
+            _ => self.hot.open_checked(kind, key),
+        }
+    }
+}
+
 impl<H: CasPrune, W: CasPrune> Cas for TieredStore<H, W> {
     fn put(&self, kind: Kind, bytes: &[u8]) -> Result<Hash32, CasError> {
         let key = self.hot.put(kind, bytes)?;

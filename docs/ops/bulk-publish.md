@@ -81,8 +81,12 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
    `onyx-publish upload --dir v1 --node <node address> --wait-secs 3600`
    The node takes your manifest only once Base Sepolia has made the anchor final, so the command
    waits and says so every 15 seconds. Then it sends every shard, asks the node again which shards
-   it still misses, sends those again (at most 3 rounds), and prints `UPLOADED ... rounds=N`. If it
-   stops halfway, run the same command again: it sends only what the node is still missing.
+   it still misses, sends those again (at most 3 rounds), and prints `UPLOADED ... rounds=N`. When
+   the node answers a 503 that clears by itself (`bulk_chain_unavailable`, `overloaded`,
+   `bulk_busy`), a 429, a proxy's 502, or nothing, the command says so and tries again, up to 8
+   times in a row, 15 s apart or the node's `retry-after` (`upload`, its recheck and shards, and
+   `catalog-upload` alike); a full node (503 `bulk_node_full`) is refused at once. If it stops halfway,
+   run the same command again: it sends only what the node is still missing.
 10. **Check it like a buyer would (2 minutes).**
     `curl -s "<node address>/v1/bulk/<publisher id>/<dataset id>/rows?from=<a key>&to=<a later key>&limit=100" > rows.json`
     then

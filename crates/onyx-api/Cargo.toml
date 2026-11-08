@@ -28,7 +28,7 @@ base64.workspace = true
 thiserror.workspace = true
 secp256k1.workspace = true
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
-tokio = { version = "1", default-features = false, features = ["time", "sync", "rt"] }
+tokio = { version = "1", default-features = false, features = ["time", "sync", "rt", "fs"] }
 http-body = "1"
 hyper = { version = "1", default-features = false, features = ["client", "http1"], optional = true }
 hyper-util = { version = "0.1", default-features = false, features = ["client-legacy", "http1", "tokio"], optional = true }

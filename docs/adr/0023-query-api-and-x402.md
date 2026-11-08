@@ -195,7 +195,8 @@ Fixes the loop-47 merge-gate review (THREATS.md M7-L47-F1..F5).
    per-client budget (`free_exports_per_minute`, 6). A response holds its in-flight permit until
    its body is written (64 KiB frames) or `send_timeout` (60 s) passes; the next frame after the
    timeout fails and closes the connection. There is no socket write timeout in the server, so
-   public deployments need a buffering proxy with a send timeout (run-api.md).
+   public deployments need a buffering proxy with a send timeout (run-api.md). (Since 2026-11-08
+   the server has a write stall timeout of its own, `ONYX_WRITE_STALL_SECS`: THREATS SERVE-WRITE-1.)
 3. **Settle errors are unknown outcomes.** A facilitator error at settle is treated like a
    timeout: the unit stays spent, nothing is stored as a success, the answer is 503 and the
    retry re-verifies (M7-F5). This supersedes loop 43 item 1. `HttpFacilitator` accepts a

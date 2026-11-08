@@ -262,6 +262,26 @@ fn fee_gas_and_per_client_limits_are_settable_and_bounded() {
     }
 }
 
+/// THREATS SERVE-WRITE-1: the write stall timeout defaults to 30 s, is
+/// settable, and out-of-range values are refused.
+#[test]
+fn serve_write_1_the_write_stall_timeout_is_settable_and_bounded() {
+    let c = load(&base()).expect("config");
+    assert_eq!(c.write_stall_timeout, std::time::Duration::from_secs(30));
+    let mut m = base();
+    m.insert("ONYX_WRITE_STALL_SECS", "120");
+    let c = load(&m).expect("config");
+    assert_eq!(c.write_stall_timeout, std::time::Duration::from_secs(120));
+    for v in ["0", "601", "-1", "1.5", ""] {
+        let mut m = base();
+        m.insert("ONYX_WRITE_STALL_SECS", v);
+        assert!(
+            load(&m).expect_err(v).contains("ONYX_WRITE_STALL_SECS"),
+            "ONYX_WRITE_STALL_SECS={v}"
+        );
+    }
+}
+
 /// M7-7 (ROADMAP L11): the server speaks plain HTTP, so a listen address
 /// other machines can reach is refused unless the operator says, with
 /// `ONYX_ALLOW_PLAIN_HTTP_PUBLIC=1`, that something else keeps it off
@@ -720,4 +740,34 @@ fn running_as_root() -> bool {
     std::fs::metadata("/proc/self")
         .map(|m| m.uid() == 0)
         .unwrap_or(false)
+}
+
+/// Review SERVE-WRITE-R2 finding 1: a streamed shard holds a socket and a
+/// file, so the node warns when the open-file limit is below two a
+/// connection plus a reserve, and the shipped units set a limit far above it.
+#[test]
+fn serve_write_1_a_low_open_file_limit_is_warned_and_the_units_raise_it() {
+    use crate::config::{fd_limit_warning, FD_RESERVE};
+    assert!(fd_limit_warning(None, 1_024).is_none(), "unknown: no guess");
+    assert!(fd_limit_warning(Some(65_536), 1_024).is_none());
+    assert!(fd_limit_warning(Some(2 * 1_024 + FD_RESERVE), 1_024).is_none());
+    let w = fd_limit_warning(Some(1_024), 1_024).expect("warned");
+    assert!(
+        w.contains("LimitNOFILE") && w.contains("ONYX_MAX_CONNECTIONS"),
+        "{w}"
+    );
+    for unit in [
+        include_str!("../../../deploy/systemd/onyx-node.service"),
+        include_str!("../../../deploy/systemd/onyx-storage@.service"),
+    ] {
+        let n: u64 = unit
+            .lines()
+            .find_map(|l| l.strip_prefix("LimitNOFILE="))
+            .expect("LimitNOFILE set")
+            .trim()
+            .parse()
+            .expect("a number");
+        // The default cap, and sixteen times it.
+        assert!(fd_limit_warning(Some(n), 16 * 1_024).is_none(), "{n}");
+    }
 }

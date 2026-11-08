@@ -1287,9 +1287,15 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
     if let Some(w) = c.plain_http_public_warning() {
         eprintln!("{w}");
     }
+    if let Some(w) =
+        crate::config::fd_limit_warning(crate::config::fd_soft_limit(), c.max_connections)
+    {
+        eprintln!("{w}");
+    }
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let limits = crate::serve::ServeLimits {
         header_read_timeout: c.header_read_timeout,
+        write_stall_timeout: c.write_stall_timeout,
         max_connections: c.max_connections,
         max_per_client: c.max_per_client,
     };
@@ -1454,6 +1460,12 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
     }
     if check_only {
         if let Some(w) = loaded.config.plain_http_public_warning() {
+            eprintln!("{w}");
+        }
+        if let Some(w) = crate::config::fd_limit_warning(
+            crate::config::fd_soft_limit(),
+            loaded.config.max_connections,
+        ) {
             eprintln!("{w}");
         }
         let shards = match &loaded.held {

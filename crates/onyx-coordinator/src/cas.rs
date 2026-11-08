@@ -309,6 +309,23 @@ impl Cas for FsCas {
     }
 
     fn get(&self, kind: Kind, key: &Hash32) -> Option<Vec<u8>> {
+        self.read_checked(kind, key).map(|(_, b)| b)
+    }
+}
+
+impl FsCas {
+    /// `key`'s object as an open file, checked exactly as [`Cas::get`] and
+    /// rewound, with its length: a reader can stream the checked bytes from
+    /// this handle, which a later rename or removal of the path never changes
+    /// (THREATS SERVE-WRITE-1).
+    pub fn open_checked(&self, kind: Kind, key: &Hash32) -> Option<(std::fs::File, u64)> {
+        use std::io::Seek;
+        let (mut f, b) = self.read_checked(kind, key)?;
+        f.seek(std::io::SeekFrom::Start(0)).ok()?;
+        Some((f, b.len() as u64))
+    }
+
+    fn read_checked(&self, kind: Kind, key: &Hash32) -> Option<(std::fs::File, Vec<u8>)> {
         // Open without following links and without blocking (a FIFO cannot
         // hang us), then check type and size on the open handle, so nothing can
         // be swapped in between check and read (L19-F6, L20-F6).
@@ -327,10 +344,10 @@ impl Cas for FsCas {
         }
         let mut b = Vec::new();
         use std::io::Read;
-        f.take(max_bytes(kind) as u64 + 1)
+        (&f).take(max_bytes(kind) as u64 + 1)
             .read_to_end(&mut b)
             .ok()?;
-        (key_of(kind, &b) == Some(*key)).then_some(b)
+        (key_of(kind, &b) == Some(*key)).then_some((f, b))
     }
 }
 

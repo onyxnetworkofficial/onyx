@@ -158,6 +158,10 @@ pub struct NodeConfig {
     /// `ONYX_HEADER_READ_TIMEOUT_SECS` (default 10, 1..=120): a connection
     /// that has not sent its request headers by then is closed (AUD-1-F5).
     pub header_read_timeout: Duration,
+    /// `ONYX_WRITE_STALL_SECS` (default 30, 1..=600): a connection whose
+    /// answer cannot move a byte for this long (its reader stopped reading)
+    /// is closed (THREATS SERVE-WRITE-1).
+    pub write_stall_timeout: Duration,
     /// `ONYX_MAX_CONNECTIONS` (default 1024, 1..=65535): open connections;
     /// when all are taken, a new one evicts the oldest connection that has
     /// not sent a request, else it is closed (AUD-1-F5, AUD-1R-F1).
@@ -472,6 +476,16 @@ impl NodeConfig {
                     .ok_or("ONYX_HEADER_READ_TIMEOUT_SECS must be 1..=120")?,
             ),
         };
+        let write_stall_timeout = match get("ONYX_WRITE_STALL_SECS") {
+            None => Duration::from_secs(30),
+            Some(s) => Duration::from_secs(
+                s.trim()
+                    .parse::<u64>()
+                    .ok()
+                    .filter(|n| (1..=600).contains(n))
+                    .ok_or("ONYX_WRITE_STALL_SECS must be 1..=600")?,
+            ),
+        };
         let max_connections = match get("ONYX_MAX_CONNECTIONS") {
             None => 1_024,
             Some(s) => s
@@ -685,6 +699,7 @@ impl NodeConfig {
                 get("ONYX_USDC_EIP712_VERSION").unwrap_or_else(|| "2".into()),
             ),
             header_read_timeout,
+            write_stall_timeout,
             max_connections,
             max_per_client,
             reads_per_minute,
@@ -699,6 +714,32 @@ impl NodeConfig {
 /// or an IPv4-mapped loopback address.
 fn is_loopback(a: SocketAddr) -> bool {
     a.ip().to_canonical().is_loopback()
+}
+
+/// Open files the node needs beyond two a connection (a socket, and a shard
+/// file while one is streamed): stores, journals, RPC sockets.
+pub const FD_RESERVE: u64 = 256;
+
+/// The start-up warning when the open-file limit `soft` (`None`: unknown) is
+/// below two a connection plus [`FD_RESERVE`]: past it every new open fails
+/// (sockets, shard files, stores) while the cap still admits connections
+/// (review SERVE-WRITE-R2 finding 1). The shipped units set
+/// `LimitNOFILE=65536`.
+pub fn fd_limit_warning(soft: Option<u64>, max_connections: usize) -> Option<String> {
+    let need = (max_connections as u64)
+        .saturating_mul(2)
+        .saturating_add(FD_RESERVE);
+    let soft = soft?;
+    (soft < need).then(|| {
+        format!(
+            "onyx-node: warning: the open-file limit ({soft}) is below 2 x ONYX_MAX_CONNECTIONS + {FD_RESERVE} = {need}: each streamed shard holds a socket and a file; raise LimitNOFILE (the shipped units set 65536) or lower ONYX_MAX_CONNECTIONS"
+        )
+    })
+}
+
+/// The process's soft open-file limit, if it can be read.
+pub fn fd_soft_limit() -> Option<u64> {
+    rustix::process::getrlimit(rustix::process::Resource::Nofile).current
 }
 
 impl NodeConfig {

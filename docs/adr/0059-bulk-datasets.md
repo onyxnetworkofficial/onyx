@@ -259,7 +259,8 @@ CAT-HIST-R4, test gaps and one wrong claim; all fixed before deploy and folded i
    time; each is sent in 256 KiB frames and holds its permit until its last frame, or until its
    deadline (60 s, longer for a large answer at 128 KiB/s), when its bytes and permit are let go
    (a reader that stalls then holds only its connection, about 0.7 MiB of queued frames and the
-   kernel's buffer, until the hosted proxy's 75 s write timeout closes it: THREATS SERVE-WRITE-1);
+   kernel's buffer, until the node's write stall timeout, 30 s by default, or the hosted proxy's
+   75 s write timeout closes it: THREATS SERVE-WRITE-1);
    a third gets 503 `bulk_busy` with `retry-after`. A year of daily catalogs of the first publisher is about 12 requests and 31 MB
    (a whole catalog every 32 days).
 2. **Walk** (`onyx-check --bulk <rows> --history <node url>`). From catalog 0 up to the newest

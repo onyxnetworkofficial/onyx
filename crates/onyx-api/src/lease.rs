@@ -9,8 +9,8 @@
 //! that stops reading cannot keep the permit: a watchdog releases it after
 //! the send timeout, and the next frame asked for after that is an error,
 //! which closes the connection. A connection that is never polled again
-//! keeps its unsent bytes until the client closes it: public deployments
-//! need a buffering proxy with a send timeout (docs/ops/run-api.md).
+//! keeps its unsent bytes until the server's write stall timeout closes it
+//! (`onyx_node::serve`, `ONYX_WRITE_STALL_SECS`; THREATS SERVE-WRITE-1).
 
 use axum::body::{Body, Bytes};
 use http_body::{Frame, SizeHint};

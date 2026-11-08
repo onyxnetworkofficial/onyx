@@ -688,37 +688,152 @@ fn client() -> Client {
     hyper_util::client::legacy::Client::builder(hyper_util::rt::TokioExecutor::new()).build(https)
 }
 
+/// One request: the status, the JSON answer and its `retry-after` seconds.
 async fn send(
     c: &Client,
     method: hyper::Method,
     url: &str,
     ctype: &str,
-    body: Vec<u8>,
-) -> Res<(u16, Value)> {
+    body: hyper::body::Bytes,
+) -> Res<(u16, Value, Option<u64>)> {
     check_facilitator_url(url).map_err(|e| e.replacen("facilitator", "node", 1))?;
     let req = hyper::Request::builder()
         .method(method)
         .uri(url)
         .header("content-type", ctype)
         .header("content-length", body.len().to_string())
-        .body(http_body_util::Full::new(hyper::body::Bytes::from(body)))
+        .body(http_body_util::Full::new(body))
         .map_err(|e| e.to_string())?;
     let r = tokio::time::timeout(Duration::from_secs(600), c.request(req))
         .await
         .map_err(|_| "the node did not answer in time")?
         .map_err(|e| format!("node unreachable: {e}"))?;
     let status = r.status().as_u16();
+    let after = r
+        .headers()
+        .get("retry-after")
+        .and_then(|h| h.to_str().ok())
+        .and_then(|h| h.trim().parse::<u64>().ok());
     let b = http_body_util::Limited::new(r.into_body(), 4 << 20)
         .collect()
         .await
         .map_err(|e| format!("node answer unreadable: {e}"))?
         .to_bytes();
-    Ok((status, serde_json::from_slice(&b).unwrap_or(Value::Null)))
+    Ok((
+        status,
+        serde_json::from_slice(&b).unwrap_or(Value::Null),
+        after,
+    ))
 }
 
 /// Rounds of shard uploads before `upload` gives up: after each round the
 /// manifest is posted again and the node lists what it still misses.
 const UPLOAD_ROUNDS: u32 = 3;
+
+/// Passing answers in a row (a node's 503 `bulk_chain_unavailable`,
+/// `overloaded` or `bulk_busy`, a 429, a proxy's 502 while the node restarts,
+/// or no answer at all) tried again before a command gives up, each at least
+/// [`RETRY_SECS`] apart or the node's `retry-after` (at most
+/// [`MAX_RETRY_SECS`]). A not-final anchor answer between them starts the
+/// count again (review of the retry, finding 2). The refresh of 2026-11-08
+/// stopped after its anchor on one 503 (the public RPC behind the node
+/// answered 429). Every retried request is idempotent on the node.
+const TRANSIENT_TRIES: u32 = 8;
+/// Seconds between two tries at least.
+const RETRY_SECS: u64 = 15;
+/// The longest `retry-after` followed.
+const MAX_RETRY_SECS: u64 = 120;
+
+/// What a command does with a node's answer.
+#[derive(Debug, PartialEq, Eq)]
+enum Next {
+    /// Taken.
+    Done,
+    /// The anchor is not final yet: wait (within `--wait-secs`).
+    Final,
+    /// Passing: try again ([`TRANSIENT_TRIES`] in a row at most).
+    Again,
+    /// Refused.
+    Fail,
+}
+
+/// Whether an answer will likely clear by itself. A 503 that will not (a
+/// full node, `bulk_node_full`) is not one (review of the retry, finding 3).
+fn passing(status: u16, v: &Value) -> bool {
+    match status {
+        429 | 502 => true,
+        503 => matches!(
+            v["error"]["code"].as_str(),
+            Some("bulk_chain_unavailable" | "overloaded" | "bulk_busy")
+        ),
+        _ => false,
+    }
+}
+
+/// The step after answer `status`/`v`, `elapsed` of `wait`, after `tries`
+/// passing answers in a row.
+fn next_step(status: u16, v: &Value, elapsed: Duration, wait: Duration, tries: u32) -> Next {
+    match status {
+        200 | 201 => Next::Done,
+        409 if v["error"]["code"] == "bulk_not_anchored" && elapsed < wait => Next::Final,
+        _ if passing(status, v) && tries < TRANSIENT_TRIES => Next::Again,
+        _ => Next::Fail,
+    }
+}
+
+/// Send `body` until the node takes it: wait for a not-final anchor within
+/// `wait` (every `pause`, at most `wait`), try passing answers again (at
+/// least `pause` apart), and refuse the rest as `"{what} refused ..."`.
+/// `pause` is [`RETRY_SECS`] seconds except in tests.
+#[allow(clippy::too_many_arguments)]
+async fn send_until(
+    c: &Client,
+    method: hyper::Method,
+    url: &str,
+    ctype: &str,
+    body: hyper::body::Bytes,
+    wait: Duration,
+    pause: Duration,
+    what: &str,
+) -> Res<Value> {
+    let t = Instant::now();
+    let mut tries = 0;
+    loop {
+        let (s, v, after) = match send(c, method.clone(), url, ctype, body.clone()).await {
+            Ok(a) => a,
+            Err(e) if tries < TRANSIENT_TRIES => {
+                tries += 1;
+                eprintln!("{what}: {e}; try {tries} of {TRANSIENT_TRIES} again");
+                tokio::time::sleep(pause).await;
+                continue;
+            }
+            Err(e) => return Err(e),
+        };
+        match next_step(s, &v, t.elapsed(), wait, tries) {
+            Next::Done => return Ok(v),
+            Next::Final => {
+                tries = 0;
+                eprintln!(
+                    "{what}: waiting for the anchor to be final ({}; {:.0} s so far)",
+                    v["reason"].as_str().unwrap_or("?"),
+                    t.elapsed().as_secs_f64()
+                );
+                tokio::time::sleep(pause.min(wait)).await;
+            }
+            Next::Again => {
+                tries += 1;
+                let d = pause.max(Duration::from_secs(after.unwrap_or(0).min(MAX_RETRY_SECS)));
+                eprintln!(
+                    "{what}: the node said try again ({s} {}); try {tries} of {TRANSIENT_TRIES} in {:.0} s",
+                    v["error"]["code"].as_str().unwrap_or("?"),
+                    d.as_secs_f64()
+                );
+                tokio::time::sleep(d).await;
+            }
+            Next::Fail => return Err(format!("{what} refused ({s}): {v}")),
+        }
+    }
+}
 
 async fn upload_cmd(o: &Opts) -> Res<()> {
     o.only(&["dir", "node", "wait-secs", "catalog"])?;
@@ -738,28 +853,20 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
         }
     };
     let t = Instant::now();
-    let answer = loop {
-        let (s, v) = send(
-            &c,
-            hyper::Method::POST,
-            &format!("{node}/v1/bulk/manifests"),
-            "application/json",
-            body.to_string().into_bytes(),
-        )
-        .await?;
-        match s {
-            200 | 201 => break v,
-            409 if v["error"]["code"] == "bulk_not_anchored" && t.elapsed() < wait => {
-                eprintln!(
-                    "waiting for the anchor to be final ({}; {:.0} s so far)",
-                    v["reason"].as_str().unwrap_or("?"),
-                    t.elapsed().as_secs_f64()
-                );
-                tokio::time::sleep(Duration::from_secs(15).min(wait)).await;
-            }
-            _ => return Err(format!("manifest refused ({s}): {v}")),
-        }
-    };
+    let manifest_url = format!("{node}/v1/bulk/manifests");
+    let body = hyper::body::Bytes::from(body.to_string().into_bytes());
+    let pause = Duration::from_secs(RETRY_SECS);
+    let answer = send_until(
+        &c,
+        hyper::Method::POST,
+        &manifest_url,
+        "application/json",
+        body.clone(),
+        wait,
+        pause,
+        "manifest",
+    )
+    .await?;
     let mut missing = answer["missing"].as_array().cloned().unwrap_or_default();
     let (mut sent, mut bytes, mut rounds) = (0u64, 0u64, 0u32);
     let manifest_time = t.elapsed();
@@ -784,33 +891,33 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
                 m.header.publisher.0, m.header.dataset
             );
             let n = file.len() as u64;
-            let (s, v) = send(
+            send_until(
                 &c,
                 hyper::Method::PUT,
                 &url,
                 "application/octet-stream",
-                file,
+                hyper::body::Bytes::from(file),
+                Duration::ZERO,
+                pause,
+                &format!("shard {root}"),
             )
             .await?;
-            if s != 200 && s != 201 {
-                return Err(format!("shard {root} refused ({s}): {v}"));
-            }
             sent += 1;
             bytes += n;
         }
         // Ask again: a shard the node answered "stored" for must no longer be
         // missing (review BULK-LOSS-1: two of 8,849 were not, once).
-        let (s, v) = send(
+        let v = send_until(
             &c,
             hyper::Method::POST,
-            &format!("{node}/v1/bulk/manifests"),
+            &manifest_url,
             "application/json",
-            body.to_string().into_bytes(),
+            body.clone(),
+            wait,
+            pause,
+            "manifest recheck",
         )
         .await?;
-        if s != 200 && s != 201 {
-            return Err(format!("manifest recheck refused ({s}): {v}"));
-        }
         missing = v["missing"].as_array().cloned().unwrap_or_default();
         if !missing.is_empty() {
             eprintln!(
@@ -979,42 +1086,168 @@ async fn catalog_upload_cmd(o: &Opts) -> Res<()> {
     let body =
         json!({"catalog": hx(&borsh::to_vec(&c).map_err(|e| e.to_string())?), "report": hx(&r)});
     let cl = client();
-    let t = Instant::now();
-    loop {
-        let (s, v) = send(
-            &cl,
-            hyper::Method::POST,
-            &format!("{node}/v1/bulk/catalogs"),
-            "application/json",
-            body.to_string().into_bytes(),
-        )
-        .await?;
-        match s {
-            200 | 201 => {
-                println!(
-                    "UPLOADED catalog={} leaves={} root={}",
-                    c.header.number,
-                    c.header.leaf_count,
-                    c.header.root()
-                );
-                return Ok(());
-            }
-            409 if v["error"]["code"] == "bulk_not_anchored" && t.elapsed() < wait => {
-                eprintln!(
-                    "waiting for the catalog's anchor to be final ({}; {:.0} s so far)",
-                    v["reason"].as_str().unwrap_or("?"),
-                    t.elapsed().as_secs_f64()
-                );
-                tokio::time::sleep(Duration::from_secs(15).min(wait)).await;
-            }
-            _ => return Err(format!("catalog refused ({s}): {v}")),
-        }
-    }
+    send_until(
+        &cl,
+        hyper::Method::POST,
+        &format!("{node}/v1/bulk/catalogs"),
+        "application/json",
+        hyper::body::Bytes::from(body.to_string().into_bytes()),
+        wait,
+        Duration::from_secs(RETRY_SECS),
+        "catalog",
+    )
+    .await?;
+    println!(
+        "UPLOADED catalog={} leaves={} root={}",
+        c.header.number,
+        c.header.leaf_count,
+        c.header.root()
+    );
+    Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A node's passing answers are tried again, a not-final anchor is
+    /// waited for within `--wait-secs`, a 503 that will not clear and the
+    /// rest are refused.
+    #[test]
+    fn passing_answers_are_tried_again_and_the_rest_refused() {
+        let none = json!(null);
+        let code = |c: &str| json!({"error": {"code": c}});
+        let (z, w) = (Duration::ZERO, Duration::from_secs(60));
+        assert_eq!(next_step(201, &none, z, w, 0), Next::Done);
+        assert_eq!(next_step(200, &none, z, z, 0), Next::Done);
+        let nf = code("bulk_not_anchored");
+        assert_eq!(next_step(409, &nf, z, w, 0), Next::Final);
+        assert_eq!(next_step(409, &nf, w, w, 0), Next::Fail, "past --wait-secs");
+        for (s, c) in [
+            (503, "bulk_chain_unavailable"),
+            (503, "overloaded"),
+            (503, "bulk_busy"),
+            (429, "rate_limited"),
+            (502, "?"),
+        ] {
+            let v = code(c);
+            assert_eq!(next_step(s, &v, z, z, 0), Next::Again, "{s} {c}");
+            assert_eq!(next_step(s, &v, z, z, TRANSIENT_TRIES - 1), Next::Again);
+            assert_eq!(next_step(s, &v, z, z, TRANSIENT_TRIES), Next::Fail);
+        }
+        assert_eq!(next_step(503, &code("bulk_node_full"), z, w, 0), Next::Fail);
+        for s in [400, 403, 404, 413, 422, 500, 504] {
+            assert_eq!(next_step(s, &code("x"), z, w, 0), Next::Fail, "{s}");
+        }
+    }
+
+    /// A node that answers each request with the next of `answers`
+    /// (status, JSON body), then closes; the requests it got, counted.
+    async fn scripted_node(
+        answers: Vec<(u16, &'static str)>,
+    ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let l = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind");
+        let url = format!("http://{}", l.local_addr().expect("addr"));
+        let seen = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let count = seen.clone();
+        tokio::spawn(async move {
+            for (status, body) in answers {
+                let Ok((mut s, _)) = l.accept().await else {
+                    return;
+                };
+                // The head, then the body its content-length names.
+                let mut buf = Vec::new();
+                let mut b = [0u8; 4096];
+                let head_end = loop {
+                    let Ok(n) = s.read(&mut b).await else { return };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&b[..n]);
+                    if let Some(i) = buf.windows(4).position(|w| w == b"\r\n\r\n") {
+                        break i + 4;
+                    }
+                };
+                let head = String::from_utf8_lossy(&buf[..head_end]).to_lowercase();
+                let len: usize = head
+                    .lines()
+                    .find_map(|l| l.strip_prefix("content-length:"))
+                    .and_then(|v| v.trim().parse().ok())
+                    .unwrap_or(0);
+                while buf.len() < head_end + len {
+                    let Ok(n) = s.read(&mut b).await else { return };
+                    if n == 0 {
+                        return;
+                    }
+                    buf.extend_from_slice(&b[..n]);
+                }
+                count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                let resp = format!(
+                    "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = s.write_all(resp.as_bytes()).await;
+                let _ = s.shutdown().await;
+            }
+        });
+        (url, seen)
+    }
+
+    async fn post(url: &str, wait: Duration) -> Res<Value> {
+        send_until(
+            &client(),
+            hyper::Method::POST,
+            &format!("{url}/v1/bulk/catalogs"),
+            "application/json",
+            hyper::body::Bytes::from_static(b"{}"),
+            wait,
+            Duration::from_millis(1),
+            "catalog",
+        )
+        .await
+    }
+
+    /// The refresh of 2026-11-08: a 503 the node marks as passing is tried
+    /// again and the upload goes through; a full node is refused at once;
+    /// a not-final anchor between passing answers starts their count again.
+    #[tokio::test]
+    async fn a_passing_503_is_tried_again_and_a_full_node_is_not() {
+        let chain = r#"{"error":{"code":"bulk_chain_unavailable"}}"#;
+        let (url, seen) = scripted_node(vec![
+            (503, chain),
+            (503, r#"{"error":{"code":"overloaded"}}"#),
+            (201, r#"{"ok":true}"#),
+        ])
+        .await;
+        let v = post(&url, Duration::ZERO).await.expect("taken");
+        assert_eq!(v["ok"], json!(true));
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let (url, seen) = scripted_node(vec![
+            (503, r#"{"error":{"code":"bulk_node_full"}}"#),
+            (201, "{}"),
+        ])
+        .await;
+        let e = post(&url, Duration::ZERO).await.expect_err("refused");
+        assert!(e.contains("bulk_node_full"), "{e}");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // Seven passing answers, a not-final anchor, seven more, then taken:
+        // fourteen in all, but never eight in a row.
+        let n = (TRANSIENT_TRIES - 1) as usize;
+        let mut script = vec![(429, r#"{"error":{"code":"rate_limited"}}"#); n];
+        script.push((409, r#"{"error":{"code":"bulk_not_anchored"}}"#));
+        script.extend(vec![(503, chain); n]);
+        script.push((201, "{}"));
+        let (url, seen) = scripted_node(script).await;
+        post(&url, Duration::from_secs(600)).await.expect("taken");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 2 * n + 2);
+        // Eight passing answers in a row: refused.
+        let (url, _) = scripted_node(vec![(503, chain); TRANSIENT_TRIES as usize + 1]).await;
+        let e = post(&url, Duration::ZERO).await.expect_err("refused");
+        assert!(e.contains("bulk_chain_unavailable"), "{e}");
+    }
 
     #[test]
     fn synth_rows_build_into_shards_and_successors() {

@@ -263,8 +263,42 @@ impl<'de> serde::de::Visitor<'de> for Bounded<'_> {
     }
 }
 
+/// Tries of a call a node turns away as rate limited (HTTP 429, or a JSON-RPC
+/// error -32005 "limit exceeded" some providers send with 200): a public node
+/// limits bursts, and its 429s behind the bulk store's 503 stopped the
+/// catalog upload and three version uploads of the 2026-11-08 refresh. The
+/// waits grow (about 250 ms, 500 ms, 1 s), each a random time in its upper
+/// half so calls do not try again in step, and every call through the same
+/// client holds back until the last wait is over (review of the retry,
+/// finding 1: five storage nodes behind one address share one limit,
+/// THREATS STORAGE-S15-4). Every method through this client is a read or a
+/// pre-signed transaction, so sending one again is safe: a transaction sent
+/// twice has one hash.
+pub const RPC_RATE_LIMIT_TRIES: u32 = 4;
+/// Longest a call keeps trying a rate-limited answer again.
+pub const RPC_RATE_LIMIT_BUDGET: std::time::Duration = std::time::Duration::from_secs(3);
+
+/// A random number below `n` (`n` > 0): the standard library's per-hasher
+/// random keys, enough to spread retries.
+fn jitter(n: u64) -> u64 {
+    use std::hash::{BuildHasher, Hasher};
+    let mut h = std::collections::hash_map::RandomState::new().build_hasher();
+    h.write_u64(n);
+    h.finish() % n.max(1)
+}
+
+/// True for a rate-limited answer: HTTP 429, or JSON-RPC error -32005.
+fn rate_limited(status: u16, body: &[u8]) -> bool {
+    status == 429
+        || (status == 200
+            && body.windows(6).any(|w| w == b"-32005")
+            && serde_json::from_slice::<Value>(body)
+                .is_ok_and(|v| v["error"]["code"] == json!(-32005)))
+}
+
 /// JSON-RPC 2.0 over any [`HttpPost`](crate::x402::HttpPost) transport (M8,
-/// docs/ops/demo-local.md): one POST per call. An answer with `error`, a non-200
+/// docs/ops/demo-local.md): one POST per call, more when the node rate-limits
+/// it ([`RPC_RATE_LIMIT_TRIES`]). An answer with `error`, a non-200
 /// status, or an `id` other than the request's is an error, never a value.
 /// With [`HyperPost::for_rpc`](crate::x402::HyperPost) it reads a public HTTPS
 /// node (Base Sepolia) with a 1 MiB answer cap, not the facilitator's 64 KiB
@@ -273,6 +307,8 @@ pub struct HttpJsonRpc<P: crate::x402::HttpPost> {
     url: String,
     post: P,
     next_id: std::sync::atomic::AtomicU64,
+    /// Until when every call holds back after a rate-limited answer.
+    quiet_until: std::sync::Mutex<Option<tokio::time::Instant>>,
 }
 
 impl<P: crate::x402::HttpPost> HttpJsonRpc<P> {
@@ -282,6 +318,17 @@ impl<P: crate::x402::HttpPost> HttpJsonRpc<P> {
             url: url.into(),
             post,
             next_id: std::sync::atomic::AtomicU64::new(1),
+            quiet_until: std::sync::Mutex::new(None),
+        }
+    }
+
+    /// Hold back while the node asked for quiet, then a random moment more
+    /// (so the calls that waited do not all go at once).
+    async fn quiet(&self) {
+        let until = self.quiet_until.lock().ok().and_then(|q| *q);
+        if let Some(t) = until.filter(|t| *t > tokio::time::Instant::now()) {
+            tokio::time::sleep_until(t).await;
+            tokio::time::sleep(std::time::Duration::from_millis(jitter(250))).await;
         }
     }
 }
@@ -296,7 +343,27 @@ impl<P: crate::x402::HttpPost> JsonRpc for HttpJsonRpc<P> {
                 &json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
             )
             .map_err(|e| e.to_string())?;
-            let (status, bytes) = self.post.post(&self.url, body).await?;
+            let started = tokio::time::Instant::now();
+            let mut tries = 1;
+            let (status, bytes) = loop {
+                self.quiet().await;
+                let (status, bytes) = self.post.post(&self.url, body.clone()).await?;
+                if rate_limited(status, &bytes)
+                    && tries < RPC_RATE_LIMIT_TRIES
+                    && started.elapsed() < RPC_RATE_LIMIT_BUDGET
+                {
+                    let base = 250u64 << (tries - 1);
+                    let wait = std::time::Duration::from_millis(base / 2 + jitter(base / 2 + 1));
+                    if let Ok(mut q) = self.quiet_until.lock() {
+                        let t = tokio::time::Instant::now() + wait;
+                        *q = Some(q.map_or(t, |old| old.max(t)));
+                    }
+                    tokio::time::sleep(wait).await;
+                    tries += 1;
+                    continue;
+                }
+                break (status, bytes);
+            };
             if status != 200 {
                 return Err(format!("{method}: node answered HTTP {status}"));
             }
@@ -754,6 +821,112 @@ mod tests {
             let out = (self.status, self.body.clone().into_bytes());
             Box::pin(async move { Ok(out) })
         }
+    }
+
+    /// A transport that answers with HTTP 429 `limited` times, then 200
+    /// with `body`; the posts it got, counted.
+    struct Limited {
+        limited: u32,
+        body: String,
+        posts: std::sync::atomic::AtomicU32,
+    }
+    impl crate::x402::HttpPost for Limited {
+        fn post<'a>(
+            &'a self,
+            _url: &'a str,
+            _body: Vec<u8>,
+        ) -> BoxFuture<'a, Result<(u16, Vec<u8>), String>> {
+            let n = self.posts.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let out = if n < self.limited {
+                (429, b"rate limited".to_vec())
+            } else {
+                (200, self.body.clone().into_bytes())
+            };
+            Box::pin(async move { Ok(out) })
+        }
+    }
+
+    /// A rate-limited answer (429, or -32005 with 200) is tried again three
+    /// times, each wait a random time in the upper half of 250 ms, 500 ms
+    /// and 1 s, then given up as an error with no wait after the last; any
+    /// other failure, a transport error included, is not tried again; a
+    /// rate-limited answer makes later calls hold back too.
+    #[tokio::test(start_paused = true)]
+    async fn a_rate_limited_call_is_tried_again_a_few_times() {
+        let body = r#"{"jsonrpc":"2.0","id":1,"result":"0x7a69"}"#;
+        let rpc = |limited| {
+            HttpJsonRpc::new(
+                "http://127.0.0.1:8545",
+                Limited {
+                    limited,
+                    body: body.into(),
+                    posts: std::sync::atomic::AtomicU32::new(0),
+                },
+            )
+        };
+        let (lo, hi) = (
+            std::time::Duration::from_millis(875),
+            std::time::Duration::from_millis(1_751),
+        );
+        let r = rpc(RPC_RATE_LIMIT_TRIES - 1);
+        let t = tokio::time::Instant::now();
+        assert_eq!(r.call("eth_chainId", json!([])).await, Ok(json!("0x7a69")));
+        assert!((lo..hi).contains(&t.elapsed()), "{:?}", t.elapsed());
+        assert_eq!(
+            r.post.posts.load(std::sync::atomic::Ordering::SeqCst),
+            RPC_RATE_LIMIT_TRIES
+        );
+        assert!(
+            r.quiet_until.lock().expect("lock").is_some(),
+            "later calls hold back"
+        );
+        let r = rpc(RPC_RATE_LIMIT_TRIES);
+        let t = tokio::time::Instant::now();
+        let e = r
+            .call("eth_chainId", json!([]))
+            .await
+            .expect_err("given up");
+        assert!(e.contains("HTTP 429"), "{e}");
+        assert!(
+            (lo..hi).contains(&t.elapsed()),
+            "no wait after the last: {:?}",
+            t.elapsed()
+        );
+        assert_eq!(
+            r.post.posts.load(std::sync::atomic::Ordering::SeqCst),
+            RPC_RATE_LIMIT_TRIES
+        );
+        // A 500 is not tried again, nor is a transport error.
+        let c = canned(500, body);
+        assert!(c.call("eth_chainId", json!([])).await.is_err());
+        assert_eq!(c.post.sent.lock().expect("lock").len(), 1);
+        struct Down(std::sync::atomic::AtomicU32);
+        impl crate::x402::HttpPost for Down {
+            fn post<'a>(
+                &'a self,
+                _url: &'a str,
+                _body: Vec<u8>,
+            ) -> BoxFuture<'a, Result<(u16, Vec<u8>), String>> {
+                self.0.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                Box::pin(async { Err("timed out".to_string()) })
+            }
+        }
+        let d = HttpJsonRpc::new(
+            "http://127.0.0.1:8545",
+            Down(std::sync::atomic::AtomicU32::new(0)),
+        );
+        assert!(d.call("eth_chainId", json!([])).await.is_err());
+        assert_eq!(d.post.0.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // -32005 with HTTP 200 counts as rate limited; another error does not.
+        assert!(rate_limited(
+            200,
+            br#"{"jsonrpc":"2.0","id":1,"error":{"code":-32005,"message":"limit exceeded"}}"#
+        ));
+        assert!(!rate_limited(
+            200,
+            br#"{"jsonrpc":"2.0","id":1,"error":{"code":3,"message":"-32005"}}"#
+        ));
+        assert!(!rate_limited(503, b""));
     }
 
     fn canned(status: u16, body: &str) -> HttpJsonRpc<Canned> {

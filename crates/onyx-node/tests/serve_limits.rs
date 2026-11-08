@@ -2,7 +2,8 @@
 //! send its request headers in time (slowloris), shares its connection cap
 //! fairly (a per-client cap, and a full cap evicts the oldest connection that
 //! has not sent a request), passes the peer address to handlers, and stops
-//! gracefully.
+//! gracefully. SERVE-WRITE-1: it also closes a connection whose reader stopped
+//! reading, and never one whose reader keeps reading.
 //!
 //! Time (ROADMAP E12): these run real sockets on real time, so no check
 //! guesses how fast this machine is. A slow handler holds its answer until
@@ -25,6 +26,9 @@ use tokio::net::{TcpListener, TcpSocket, TcpStream};
 
 /// The cap on every wait: far above any run, only a hang reaches it.
 const CAP: Duration = Duration::from_secs(30);
+
+/// Bytes of `/big`'s answer: far above the two kernels' buffers on loopback.
+const BIG: usize = 32 << 20;
 
 /// `/slow`'s handlers: how many have started, and the gate that ends them.
 #[derive(Clone)]
@@ -83,6 +87,7 @@ async fn start_with(
             "/",
             get(|ConnectInfo(peer): ConnectInfo<SocketAddr>| async move { peer.ip().to_string() }),
         )
+        .route("/big", get(|| async { vec![7u8; BIG] }))
         .route(
             "/slow",
             get(move || {
@@ -141,7 +146,34 @@ const fn limits(timeout_ms: u64, max: usize, per_client: usize) -> ServeLimits {
         header_read_timeout: Duration::from_millis(timeout_ms),
         max_connections: max,
         max_per_client: per_client,
+        // Far above CAP: only the write stall tests set their own.
+        write_stall_timeout: Duration::from_secs(600),
     }
+}
+
+/// A `/big` request on a socket with a small receive buffer, so the
+/// server's writes block soon after the reader stops.
+async fn ask_big(to: SocketAddr) -> TcpStream {
+    let sock = TcpSocket::new_v4().expect("socket");
+    sock.set_recv_buffer_size(16 << 10).expect("rcvbuf");
+    let mut s = sock.connect(to).await.expect("connect");
+    s.write_all(b"GET /big HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n")
+        .await
+        .expect("write");
+    s
+}
+
+/// Read `n` bytes or up to the end; the count read.
+async fn read_some(s: &mut TcpStream, n: usize) -> usize {
+    let mut buf = vec![0u8; 64 << 10];
+    let mut got = 0;
+    while got < n {
+        match tokio::time::timeout(CAP, s.read(&mut buf)).await {
+            Ok(Ok(0)) | Ok(Err(_)) | Err(_) => break,
+            Ok(Ok(k)) => got += k,
+        }
+    }
+    got
 }
 
 async fn read_all(s: &mut TcpStream, wait: Duration) -> Option<Vec<u8>> {
@@ -327,5 +359,53 @@ async fn idle_keep_alive_and_a_missing_body_are_closed() {
         .await
         .expect("write");
     assert!(closed_within(&mut s, CAP).await, "missing body");
+    let _ = stop.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reader_that_stops_reading_is_closed_after_the_write_stall_timeout() {
+    let mut l = limits(10_000, 8, 8);
+    l.write_stall_timeout = Duration::from_millis(300);
+    let (addr, stop, _h, _) = start(l).await;
+    let mut s = ask_big(addr).await;
+    let first = read_some(&mut s, 64 << 10).await;
+    assert!(first > 0, "the answer started");
+    // The reader stops well past the stall timeout: the server's writes
+    // block on the full buffers, and it closes the connection.
+    tokio::time::sleep(Duration::from_millis(1_500)).await;
+    let rest = read_some(&mut s, usize::MAX).await;
+    let total = first + rest;
+    assert!(
+        total < BIG,
+        "cut after the reader stalled: {total} of {BIG} bytes arrived"
+    );
+    let _ = stop.send(());
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_reader_that_keeps_reading_gets_the_whole_answer() {
+    let mut l = limits(10_000, 8, 8);
+    // Pauses of 40% of it, the whole read over four times it: a timer that
+    // did not start again on progress would cut this reader.
+    l.write_stall_timeout = Duration::from_millis(500);
+    let (addr, stop, _h, _) = start(l).await;
+    let mut s = ask_big(addr).await;
+    let started = std::time::Instant::now();
+    let mut total = 0;
+    for _ in 0..10 {
+        // 2 MiB: more than a third of the server's largest send buffer
+        // (4 MiB), so each read wakes its writer.
+        total += read_some(&mut s, 2 << 20).await;
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+    assert!(
+        started.elapsed() >= Duration::from_millis(2_000),
+        "the reads took four times the timeout"
+    );
+    total += read_some(&mut s, usize::MAX).await;
+    assert!(
+        total > BIG,
+        "the whole answer and its headers: {total} bytes for a {BIG}-byte body"
+    );
     let _ = stop.send(());
 }

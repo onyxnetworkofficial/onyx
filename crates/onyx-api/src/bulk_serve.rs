@@ -100,6 +100,13 @@ const MAX_REBUILDS: usize = 2;
 /// at most `MAX_FILES_BYTES` each; ADR-0059 amendment 3, review CAT-HIST-R1
 /// finding 6: apart from the rebuilds uploads need).
 const MAX_FILE_READS: usize = 2;
+/// Bytes of encoded catalog and manifest answers kept (THREATS
+/// SERVE-WRITE-2): every reader of one catalog or manifest shares one copy of
+/// its JSON (about 2 MB for a catalog of 9,000 leaves) instead of a fresh one
+/// each, so readers that drip cannot multiply it; the oldest used goes first.
+/// An answer still being sent stays shared after it leaves the kept set
+/// (review SERVE-WRITE-R3 finding 2).
+pub const ANSWER_BYTES: usize = 32 << 20;
 /// A publisher's catalog fork record (THREATS CAT-6).
 const FORK_FILE: &str = "fork.bin";
 
@@ -716,6 +723,125 @@ struct HeldCatalog {
     anchor: AnchorView,
 }
 
+/// An encoded answer, shared by every reader of it.
+type Answer = Arc<axum::body::Bytes>;
+
+/// The encoded catalog and manifest answers (`catalog/{publisher}/{n}`,
+/// `manifest/{root}`), each valid only while the held object has the root
+/// and report hash it was made for (a set-aside or a replaced report makes
+/// it stale; review SERVE-WRITE-R3 finding 6).
+#[derive(Default)]
+struct AnswerBook {
+    /// Every answer still alive, kept or still being sent: one copy an
+    /// object, however many read it (review SERVE-WRITE-R3 finding 2).
+    live: std::collections::HashMap<String, ((Hash32, Hash32), std::sync::Weak<axum::body::Bytes>)>,
+    /// The kept answers by key: their use stamp and a strong reference.
+    kept: std::collections::HashMap<String, (u64, Answer)>,
+    /// Use order of the kept answers, oldest first.
+    order: BTreeMap<u64, String>,
+    kept_bytes: usize,
+    stamp: u64,
+    /// One build at a time a key: later askers wait and take it (review
+    /// SERVE-WRITE-R3 finding 1).
+    building: std::collections::HashMap<String, Arc<tokio::sync::Mutex<()>>>,
+    /// Answers kept as a new copy (tests count them).
+    builds: u64,
+}
+
+impl AnswerBook {
+    fn get(&mut self, key: &str, check: (Hash32, Hash32)) -> Option<Answer> {
+        let (made_for, weak) = self.live.get(key)?;
+        // Made for another check: not this answer. It is not dropped here: a
+        // reader with an old check must not throw away the valid answer
+        // others read (review SERVE-WRITE-R4 finding 1); `put` replaces it.
+        if *made_for != check {
+            return None;
+        }
+        let Some(a) = weak.upgrade() else {
+            self.live.remove(key);
+            return None;
+        };
+        self.touch(key, a.clone());
+        Some(a)
+    }
+
+    fn forget(&mut self, key: &str) {
+        self.live.remove(key);
+        if let Some((stamp, a)) = self.kept.remove(key) {
+            self.order.remove(&stamp);
+            self.kept_bytes = self.kept_bytes.saturating_sub(a.len());
+        }
+    }
+
+    /// Kept again as the newest used; the oldest used out past
+    /// [`ANSWER_BYTES`].
+    fn touch(&mut self, key: &str, a: Answer) {
+        if a.len() > ANSWER_BYTES {
+            return;
+        }
+        self.stamp += 1;
+        let len = a.len();
+        if let Some((old, prev)) = self.kept.insert(key.to_string(), (self.stamp, a)) {
+            self.order.remove(&old);
+            self.kept_bytes = self.kept_bytes.saturating_sub(prev.len());
+        }
+        self.kept_bytes += len;
+        self.order.insert(self.stamp, key.to_string());
+        while self.kept_bytes > ANSWER_BYTES {
+            let Some((_, k)) = self.order.pop_first() else {
+                break;
+            };
+            if let Some((_, a)) = self.kept.remove(&k) {
+                self.kept_bytes = self.kept_bytes.saturating_sub(a.len());
+            }
+        }
+    }
+
+    /// Keep a built answer, unless one made for the same check is alive:
+    /// then that copy is handed out and the new bytes dropped, so one copy an
+    /// object never depends on the build gate (review SERVE-WRITE-R4).
+    fn put(&mut self, key: String, check: (Hash32, Hash32), bytes: axum::body::Bytes) -> Answer {
+        if let Some(a) = self.get(&key, check) {
+            return a;
+        }
+        let a = Arc::new(bytes);
+        self.builds += 1;
+        self.forget(&key);
+        self.live.insert(key.clone(), (check, Arc::downgrade(&a)));
+        self.touch(&key, a.clone());
+        if self.live.len() > 2 * self.kept.len() + 1_024 {
+            self.live.retain(|_, (_, w)| w.strong_count() > 0);
+        }
+        a
+    }
+}
+
+/// A turn to build one key's answer; the key's gate goes when it ends.
+struct AnswerTurn {
+    store: Arc<BulkStore>,
+    key: String,
+    gate: Arc<tokio::sync::Mutex<()>>,
+    _held: tokio::sync::OwnedMutexGuard<()>,
+}
+
+impl Drop for AnswerTurn {
+    /// The gate goes only when nobody waits on it: the book's, this turn's
+    /// and its guard's references are all (review SERVE-WRITE-R4 finding 2:
+    /// a turn that ended without an answer left its waiters on a gate the
+    /// next arrival no longer saw).
+    fn drop(&mut self) {
+        if let Ok(mut b) = self.store.answers.lock() {
+            if b.building
+                .get(&self.key)
+                .is_some_and(|g| Arc::ptr_eq(g, &self.gate))
+                && Arc::strong_count(&self.gate) <= 3
+            {
+                b.building.remove(&self.key);
+            }
+        }
+    }
+}
+
 /// A catalog and its leaves' tree, built once (a leaf proof per upload
 /// rebuilt the tree: about 18,000 hashes for 9,000 leaves; SCALE-3).
 struct CatalogBody {
@@ -788,6 +914,8 @@ pub struct BulkStore {
     /// a step; review CAT-DIFF-R1 M1, L3).
     old_body: Mutex<BTreeMap<String, (u64, Arc<CatalogBody>)>>,
     rebuilds: Arc<tokio::sync::Semaphore>,
+    /// Encoded catalog and manifest answers (SERVE-WRITE-2).
+    answers: Mutex<AnswerBook>,
     file_reads: Arc<tokio::sync::Semaphore>,
     /// Bytes of stored catalogs per publisher (counted in its quota).
     catalog_bytes: Mutex<BTreeMap<String, u64>>,
@@ -991,6 +1119,7 @@ impl BulkStore {
             catalogs: RwLock::new(BTreeMap::new()),
             old_body: Mutex::new(BTreeMap::new()),
             rebuilds: Arc::new(tokio::sync::Semaphore::new(MAX_REBUILDS)),
+            answers: Mutex::new(AnswerBook::default()),
             file_reads: Arc::new(tokio::sync::Semaphore::new(MAX_FILE_READS)),
             catalog_bytes: Mutex::new(BTreeMap::new()),
             refused_keys: Mutex::new(BTreeMap::new()),
@@ -1914,6 +2043,59 @@ impl BulkStore {
             .map(|(body, report)| (body.catalog.clone(), report)))
     }
 
+    /// The root and report hash of held catalog `n`: what a kept answer
+    /// for it must match.
+    fn catalog_check(&self, publisher: &str, n: u64) -> Option<(Hash32, Hash32)> {
+        let cs = self.catalogs.read().ok()?;
+        let h = cs.get(publisher)?.get(&n)?;
+        Some((h.header.root(), h.report.hash()))
+    }
+
+    /// The live answer under `key` when it was made for `check` (kept, or
+    /// still being sent to someone); a stale one is dropped (SERVE-WRITE-2).
+    fn answer(&self, key: &str, check: (Hash32, Hash32)) -> Option<Answer> {
+        self.answers.lock().ok()?.get(key, check)
+    }
+
+    /// Wait for the turn to build `key`'s answer: the first asker builds, the
+    /// others find it built when their turn comes.
+    async fn answer_turn(self: &Arc<Self>, key: &str) -> AnswerTurn {
+        let gate = self
+            .answers
+            .lock()
+            .map(|mut b| b.building.entry(key.to_string()).or_default().clone())
+            .unwrap_or_default();
+        let held = gate.clone().lock_owned().await;
+        AnswerTurn {
+            store: self.clone(),
+            key: key.to_string(),
+            gate,
+            _held: held,
+        }
+    }
+
+    /// Keep a built answer and hand it out.
+    fn keep_answer(
+        &self,
+        key: String,
+        check: (Hash32, Hash32),
+        bytes: axum::body::Bytes,
+    ) -> Answer {
+        match self.answers.lock() {
+            Ok(mut b) => b.put(key, check, bytes),
+            Err(_) => Arc::new(bytes),
+        }
+    }
+
+    /// The report hash of held manifest `root`, without copying it.
+    fn manifest_check(&self, root: &Hash32) -> Option<(Hash32, Hash32)> {
+        let ds = self.datasets.read().ok()?;
+        ds.values()
+            .flat_map(|d| d.versions.iter())
+            .find(|h| h.manifest.header.root() == *root)
+            .map(|h| (*root, h.report.hash()))
+    }
+
     /// Held catalog `n` without a rebuild (shared, not copied): the newest,
     /// or the one rebuilt last for its publisher. `None` otherwise (also
     /// when not held).
@@ -2792,6 +2974,19 @@ impl BulkStore {
     /// Whether a shard with this root is held (hot or warm).
     pub fn holds_shard(&self, root: &Hash32) -> bool {
         self.tiers.tier(root).is_some()
+    }
+
+    /// A held shard's file, checked against its root as [`Self::shard_file`]
+    /// does and rewound, with its length: `GET /v1/bulk/shards/{root}` sends
+    /// it from this handle in frames instead of holding it in memory (THREATS
+    /// SERVE-WRITE-1).
+    pub async fn shard_open(&self, root: &Hash32) -> Option<(std::fs::File, u64)> {
+        self.tiers.tier(root)?;
+        let (tiers, r) = (self.tiers.clone(), *root);
+        tokio::task::spawn_blocking(move || tiers.open_checked(Kind::Shard, &r))
+            .await
+            .ok()
+            .flatten()
     }
 
     /// A held shard file, read back through the CAS (which rechecks its
@@ -3791,8 +3986,65 @@ async fn post_catalog(State(store): State<Arc<BulkStore>>, body: Body) -> Respon
     .await
 }
 
+/// A shared answer sent in [`FILE_FRAME`] slices of one copy: hyper never
+/// holds more than its buffer of it per connection, whatever its write
+/// strategy (SERVE-WRITE-2).
+struct SharedBody {
+    bytes: Answer,
+    at: usize,
+}
+
+impl http_body::Body for SharedBody {
+    type Data = axum::body::Bytes;
+    type Error = std::convert::Infallible;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        _: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        let this = &mut *self;
+        if this.at >= this.bytes.len() {
+            return std::task::Poll::Ready(None);
+        }
+        let end = this.bytes.len().min(this.at.saturating_add(FILE_FRAME));
+        let chunk = this.bytes.slice(this.at..end);
+        this.at = end;
+        std::task::Poll::Ready(Some(Ok(http_body::Frame::data(chunk))))
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.at >= self.bytes.len()
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.bytes.len().saturating_sub(self.at) as u64)
+    }
+}
+
+/// Encoded JSON at its own size (`to_vec` doubles as it grows: the slack
+/// would be kept and counted short; review SERVE-WRITE-R3 finding 3).
+fn json_bytes(v: &Value) -> Result<axum::body::Bytes, ApiError> {
+    let mut b = serde_json::to_vec(v).map_err(|_| internal("answer encoding"))?;
+    b.shrink_to_fit();
+    Ok(axum::body::Bytes::from(b))
+}
+
+/// A 200 JSON answer from shared bytes, not stored by caches.
+fn shared_json(bytes: Answer) -> Response {
+    let mut r = (StatusCode::OK, Body::new(SharedBody { bytes, at: 0 })).into_response();
+    let h = r.headers_mut();
+    h.insert(
+        header::CONTENT_TYPE,
+        HeaderValue::from_static("application/json"),
+    );
+    h.insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    r
+}
+
 /// `GET /v1/bulk/catalogs/{publisher}/{n}`: `{publisher, number, root,
 /// catalog, report}` (Borsh hex), the body `POST /v1/bulk/catalogs` takes.
+/// Encoded once and shared while the held catalog stays the same
+/// (SERVE-WRITE-2).
 async fn get_catalog(
     State(store): State<Arc<BulkStore>>,
     client: Option<Extension<ClientKey>>,
@@ -3802,6 +4054,24 @@ async fn get_catalog(
         limited(&store, client)?;
         let Path((p, n)) = path.map_err(|e| bad_request(e.body_text()))?;
         let n: u64 = n.parse().map_err(|_| bad_request("n: a catalog number"))?;
+        let key = format!("catalog/{p}/{n}");
+        let not_held = || {
+            ApiError::new(
+                StatusCode::NOT_FOUND,
+                "bulk_unknown_catalog",
+                "this node holds no such catalog",
+            )
+        };
+        let check = store.catalog_check(&p, n).ok_or_else(not_held)?;
+        if let Some(a) = store.answer(&key, check) {
+            return Ok(a);
+        }
+        let _turn = store.answer_turn(&key).await;
+        // Read again: the held catalog may have changed while this waited.
+        let check = store.catalog_check(&p, n).ok_or_else(not_held)?;
+        if let Some(a) = store.answer(&key, check) {
+            return Ok(a);
+        }
         // The newest, or the one rebuilt last, at once; an older catalog is
         // rebuilt from its files a few at a time, off the async threads, the
         // permit held by the rebuild itself (review CAT-DIFF-R1 L3, review
@@ -3833,17 +4103,19 @@ async fn get_catalog(
                     "this node holds no such catalog",
                 )
             })?;
-        Ok::<Value, ApiError>(json!({
+        let v = json!({
             "publisher": p,
             "number": n,
             "root": c.header.root().to_string(),
             "catalog": hex0x(&borsh::to_vec(&c).unwrap_or_default()),
             "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
-        }))
+        });
+        let body = json_bytes(&v)?;
+        Ok::<_, ApiError>(store.keep_answer(key, (c.header.root(), rep.hash()), body))
     }
     .await;
     match r {
-        Ok(v) => no_store(StatusCode::OK, v),
+        Ok(b) => shared_json(b),
         Err(e) => e.into_response(),
     }
 }
@@ -3879,30 +4151,46 @@ fn root_of(p: Result<Path<String>, PathRejection>) -> Result<Hash32, ApiError> {
 }
 
 /// `GET /v1/bulk/manifests/{root}`: `{root, manifest, report}` (Borsh hex),
-/// the body `POST /v1/bulk/manifests` takes.
+/// the body `POST /v1/bulk/manifests` takes. Encoded once and shared while
+/// the held report stays the same (SERVE-WRITE-2).
 async fn get_manifest(
     State(store): State<Arc<BulkStore>>,
     client: Option<Extension<ClientKey>>,
     path: Result<Path<String>, PathRejection>,
 ) -> Response {
-    let r = (|| -> Result<Value, ApiError> {
+    let r = async {
         limited(&store, client)?;
         let root = root_of(path)?;
-        let (m, rep) = store.manifest_record(&root).ok_or_else(|| {
+        let not_held = || {
             ApiError::new(
                 StatusCode::NOT_FOUND,
                 "bulk_unknown_manifest",
                 "this node holds no manifest with this root",
             )
-        })?;
-        Ok(json!({
+        };
+        let key = format!("manifest/{root}");
+        let check = store.manifest_check(&root).ok_or_else(not_held)?;
+        if let Some(a) = store.answer(&key, check) {
+            return Ok(a);
+        }
+        let _turn = store.answer_turn(&key).await;
+        // Read again: the held report may have changed while this waited.
+        let check = store.manifest_check(&root).ok_or_else(not_held)?;
+        if let Some(a) = store.answer(&key, check) {
+            return Ok(a);
+        }
+        let (m, rep) = store.manifest_record(&root).ok_or_else(not_held)?;
+        let v = json!({
             "root": root.to_string(),
             "manifest": hex0x(&m.to_bytes()),
             "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
-        }))
-    })();
+        });
+        let body = json_bytes(&v)?;
+        Ok::<_, ApiError>(store.keep_answer(key, (root, rep.hash()), body))
+    }
+    .await;
     match r {
-        Ok(v) => no_store(StatusCode::OK, v),
+        Ok(b) => shared_json(b),
         Err(e) => e.into_response(),
     }
 }
@@ -3915,8 +4203,8 @@ const FILES_FRAME: usize = 256 << 10;
 /// permit are let go, and the body ends with an error when it is asked for
 /// another frame. A reader that never reads again still holds its connection
 /// slot, hyper's queued frames (about 0.7 MiB) and the kernel's send buffer
-/// until the connection closes: the server has no write timeout (THREATS
-/// SERVE-WRITE-1).
+/// until the server's write stall timeout closes the connection
+/// (`onyx_node::serve`, THREATS SERVE-WRITE-1).
 pub const FILES_SEND_SECS: u64 = 60;
 /// Bytes a second an honest reader is given at least: a larger answer gets
 /// longer than [`FILES_SEND_SECS`] (review CAT-HIST-R4 finding 5).
@@ -4108,8 +4396,79 @@ async fn get_catalog_files(
     }
 }
 
+/// Bytes per frame of a streamed shard file: hyper asks for the next frame
+/// only once its write buffer (64 KiB, `onyx_node::serve::MAX_BUF`) has room,
+/// so an answer being sent holds a few frames (about 0.2 MiB with tokio's
+/// file buffer), never the file (THREATS SERVE-WRITE-1).
+const FILE_FRAME: usize = 64 << 10;
+
+/// A checked shard file sent from its open handle, [`FILE_FRAME`] bytes a
+/// frame. A file that ends before its checked length fails the body, so the
+/// reader sees a cut answer, never a short one.
+struct FileBody {
+    file: tokio::fs::File,
+    left: u64,
+}
+
+impl FileBody {
+    fn new(file: std::fs::File, len: u64) -> Self {
+        FileBody {
+            file: tokio::fs::File::from_std(file),
+            left: len,
+        }
+    }
+}
+
+impl http_body::Body for FileBody {
+    type Data = axum::body::Bytes;
+    type Error = std::io::Error;
+
+    fn poll_frame(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        use tokio::io::AsyncRead;
+        let this = &mut *self;
+        if this.left == 0 {
+            return std::task::Poll::Ready(None);
+        }
+        let want = usize::try_from(this.left).map_or(FILE_FRAME, |l| l.min(FILE_FRAME));
+        // A fresh buffer a frame: nothing is kept between frames but tokio's
+        // own read buffer.
+        let mut buf = vec![0u8; want];
+        let mut rb = tokio::io::ReadBuf::new(&mut buf);
+        match std::pin::Pin::new(&mut this.file).poll_read(cx, &mut rb) {
+            std::task::Poll::Pending => std::task::Poll::Pending,
+            std::task::Poll::Ready(Err(e)) => std::task::Poll::Ready(Some(Err(e))),
+            std::task::Poll::Ready(Ok(())) if rb.filled().is_empty() => {
+                std::task::Poll::Ready(Some(Err(std::io::Error::new(
+                    std::io::ErrorKind::UnexpectedEof,
+                    "the shard file ended before its checked length",
+                ))))
+            }
+            std::task::Poll::Ready(Ok(())) => {
+                let chunk = axum::body::Bytes::copy_from_slice(rb.filled());
+                this.left -= chunk.len() as u64;
+                std::task::Poll::Ready(Some(Ok(http_body::Frame::data(chunk))))
+            }
+        }
+    }
+
+    fn is_end_stream(&self) -> bool {
+        self.left == 0
+    }
+
+    fn size_hint(&self) -> http_body::SizeHint {
+        http_body::SizeHint::with_exact(self.left)
+    }
+}
+
 /// `GET /v1/bulk/shards/{root}`: the shard file's bytes. The reader checks
 /// them against its own manifest entry (a node never trusts a peer's bytes).
+/// The node checks the file against its root under a load permit, then sends
+/// it from the same open file in [`FILE_FRAME`] frames with no permit held:
+/// a slow reader holds a connection slot and about one frame, not the shard
+/// (THREATS SERVE-WRITE-1).
 async fn get_shard(
     State(store): State<Arc<BulkStore>>,
     client: Option<Extension<ClientKey>>,
@@ -4119,14 +4478,14 @@ async fn get_shard(
         limited(&store, client)?;
         let root = root_of(path)?;
         let _permit = store.loads.acquire().await.map_err(|_| internal("loads"))?;
-        store.shard_file(&root).await.ok_or_else(|| {
+        store.shard_open(&root).await.ok_or_else(|| {
             shard_missing("this node does not hold this shard (or it did not read back)")
         })
     }
     .await;
     match r {
-        Ok(bytes) => {
-            let mut resp = (StatusCode::OK, bytes).into_response();
+        Ok((file, len)) => {
+            let mut resp = (StatusCode::OK, Body::new(FileBody::new(file, len))).into_response();
             let h = resp.headers_mut();
             h.insert(
                 header::CONTENT_TYPE,

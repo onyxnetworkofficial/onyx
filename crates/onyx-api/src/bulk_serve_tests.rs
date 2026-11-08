@@ -497,6 +497,11 @@ async fn peer_routes_give_manifests_and_shard_files_by_root() {
         r.headers().get(header::CONTENT_TYPE).expect("type"),
         "application/octet-stream"
     );
+    // Streamed from the checked file with its exact length (SERVE-WRITE-1).
+    assert_eq!(
+        http_body::Body::size_hint(r.body()).exact(),
+        Some(files[1].len() as u64)
+    );
     let body = r.into_body().collect().await.expect("ok").to_bytes();
     assert_eq!(body.to_vec(), files[1]);
     // An unknown manifest root, an unknown shard root, a malformed root.
@@ -522,6 +527,95 @@ async fn peer_routes_give_manifests_and_shard_files_by_root() {
         crate::openapi_check::check("GET", &uri, status, &v);
         assert_eq!(v["error"]["code"], json!(code), "{uri}: {v}");
     }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// THREATS SERVE-WRITE-1: a shard answer is sent from its checked open file
+/// in frames of at most [`FILE_FRAME`] bytes, never held whole in memory; the
+/// handle keeps the checked bytes even when the path is removed (a move
+/// between tiers), and a file shorter than its checked length fails the body
+/// instead of ending it short.
+#[tokio::test]
+async fn serve_write_1_a_shard_streams_from_its_checked_file_in_frames() {
+    let dir = std::env::temp_dir().join(format!(
+        "onyx-file-body-{}-{}",
+        std::process::id(),
+        N.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).expect("dir");
+    let path = dir.join("shard");
+    let data: Vec<u8> = (0..(FILE_FRAME * 3 + 10))
+        .map(|i| (i % 251) as u8)
+        .collect();
+    std::fs::write(&path, &data).expect("write");
+    let f = std::fs::File::open(&path).expect("open");
+    std::fs::remove_file(&path).expect("moved away");
+    let mut body = FileBody::new(f, data.len() as u64);
+    assert_eq!(
+        http_body::Body::size_hint(&body).exact(),
+        Some(data.len() as u64)
+    );
+    let mut got = Vec::new();
+    while let Some(fr) = body.frame().await {
+        let fr = fr.expect("frame").into_data().expect("data");
+        assert!(
+            !fr.is_empty() && fr.len() <= FILE_FRAME,
+            "{} bytes",
+            fr.len()
+        );
+        got.extend_from_slice(&fr);
+    }
+    assert_eq!(got, data);
+    assert!(http_body::Body::is_end_stream(&body));
+    // A file that ends early: an error, not a short answer.
+    std::fs::write(&path, &data[..100]).expect("write");
+    let f = std::fs::File::open(&path).expect("open");
+    let mut body = FileBody::new(f, 200);
+    let first = body.frame().await.expect("frame").expect("ok");
+    assert_eq!(first.into_data().expect("data").len(), 100);
+    let err = body.frame().await.expect("frame").expect_err("cut");
+    assert_eq!(err.kind(), std::io::ErrorKind::UnexpectedEof);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review SERVE-WRITE-R2 finding 3: the route itself streams a shard larger
+/// than a frame in frames of at most [`FILE_FRAME`] bytes (a buffered answer
+/// would come as one frame).
+#[tokio::test]
+async fn serve_write_1_the_shard_route_answers_in_frames() {
+    let w = world();
+    let files = shard_files(0..8_000, 8_000);
+    assert!(files[0].len() > 2 * FILE_FRAME, "{} bytes", files[0].len());
+    let m = manifest(&files, None, T0);
+    let r = sign(&m);
+    w.node.anchor(&r);
+    assert_eq!(w.post(&m, &r).await.expect("ok").0, StatusCode::CREATED);
+    assert_eq!(
+        w.put(&m.shards[0].root, files[0].clone())
+            .await
+            .expect("ok")
+            .0,
+        StatusCode::CREATED
+    );
+    let resp = peer_routes(w.store.clone())
+        .oneshot(
+            Request::get(format!("/v1/bulk/shards/{}", m.shards[0].root))
+                .body(Body::empty())
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(resp.status(), StatusCode::OK);
+    let mut body = resp.into_body();
+    let (mut got, mut frames) = (Vec::new(), 0);
+    while let Some(f) = body.frame().await {
+        let f = f.expect("frame").into_data().expect("data");
+        assert!(f.len() <= FILE_FRAME, "{} bytes in one frame", f.len());
+        got.extend_from_slice(&f);
+        frames += 1;
+    }
+    assert!(frames > 2, "{frames} frames");
+    assert_eq!(got, files[0]);
     let _ = std::fs::remove_dir_all(&w.dir);
 }
 
@@ -2658,11 +2752,351 @@ async fn cat_diff_the_live_layout_whole_files_then_diffs() {
     }
     std::fs::write(&f, borsh::to_vec(&d).expect("enc")).expect("write");
     again.old_body.lock().expect("lock").clear();
+    // The answer kept from the good file would be served (SERVE-WRITE-2):
+    // drop it, so the route rebuilds from the damaged one.
+    *again.answers.lock().expect("lock") = AnswerBook::default();
     let r = app.clone().oneshot(get(2)).await.expect("ok");
     assert_eq!(r.status(), StatusCode::INTERNAL_SERVER_ERROR);
     let r = app.clone().oneshot(get(9)).await.expect("ok");
     assert_eq!(r.status(), StatusCode::NOT_FOUND);
     let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// THREATS SERVE-WRITE-2: the catalog route answers from the kept answer
+/// when it was made for the held root and report (a seeded answer comes back
+/// as is), builds again when it was not, and every reader shares one copy.
+#[tokio::test]
+async fn serve_write_2_catalog_answers_are_shared_and_checked() {
+    let w = world();
+    walked(&w, 3).await;
+    let app = peer_routes(w.store.clone());
+    let get = |n: u64| {
+        Request::get(format!("/v1/bulk/catalogs/example.publisher/{n}"))
+            .body(Body::empty())
+            .expect("ok")
+    };
+    let read = |r: Response| async move {
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(
+            r.headers().get(header::CONTENT_TYPE).expect("type"),
+            "application/json"
+        );
+        assert_eq!(
+            r.headers().get(header::CACHE_CONTROL).expect("cc"),
+            "no-store"
+        );
+        r.into_body().collect().await.expect("ok").to_bytes()
+    };
+    let first = read(app.clone().oneshot(get(2)).await.expect("ok")).await;
+    let v: Value = serde_json::from_slice(&first).expect("json");
+    crate::openapi_check::check("GET", "/v1/bulk/catalogs/example.publisher/2", 200, &v);
+    assert_eq!(v["number"], json!(2));
+    let key = "catalog/example.publisher/2";
+    let check = w.store.catalog_check("example.publisher", 2).expect("held");
+    let a = w.store.answer(key, check).expect("kept");
+    let b = w.store.answer(key, check).expect("kept");
+    assert_eq!(*a, first);
+    assert!(Arc::ptr_eq(&a, &b), "one shared copy");
+    let builds = w.store.answers.lock().expect("lock").builds;
+    assert_eq!(
+        read(app.clone().oneshot(get(2)).await.expect("ok")).await,
+        first
+    );
+    assert_eq!(
+        w.store.answers.lock().expect("lock").builds,
+        builds,
+        "no rebuild"
+    );
+    // The route reads the kept answer: one seeded under the held check is
+    // what it sends.
+    let seeded = axum::body::Bytes::from_static(b"{\"seeded\":true}");
+    // (A valid copy alive is kept over a new one: drop it first.)
+    drop((a, b));
+    w.store.answers.lock().expect("lock").forget(key);
+    w.store.keep_answer(key.into(), check, seeded.clone());
+    assert_eq!(
+        read(app.clone().oneshot(get(2)).await.expect("ok")).await,
+        seeded
+    );
+    // Made for another report: stale, dropped, the real answer built again.
+    w.store
+        .keep_answer(key.into(), (check.0, Hash32([0x5a; 32])), seeded.clone());
+    assert_eq!(
+        read(app.clone().oneshot(get(2)).await.expect("ok")).await,
+        first
+    );
+    assert!(w.store.answer(key, (check.0, Hash32([0x5a; 32]))).is_none());
+    // Not held: a 404, nothing kept.
+    let r = app.clone().oneshot(get(9)).await.expect("ok");
+    assert_eq!(r.status(), StatusCode::NOT_FOUND);
+    assert!(w.store.answers.lock().expect("lock").building.is_empty());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review SERVE-WRITE-R3 findings 1 and 2: readers that arrive together for
+/// an answer nobody holds get one build, and an answer pushed out of the
+/// kept set while a reader still holds it is handed out again, not rebuilt.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serve_write_2_one_build_for_a_crowd_and_no_second_copy_after_eviction() {
+    let w = world();
+    walked(&w, 3).await;
+    w.store.old_body.lock().expect("lock").clear();
+    w.store.answers.lock().expect("lock").kept.clear();
+    let app = peer_routes(w.store.clone());
+    let before = w.store.answers.lock().expect("lock").builds;
+    let mut readers = Vec::new();
+    for _ in 0..32 {
+        let app = app.clone();
+        readers.push(tokio::spawn(async move {
+            let r = app
+                .oneshot(
+                    Request::get("/v1/bulk/catalogs/example.publisher/0")
+                        .body(Body::empty())
+                        .expect("ok"),
+                )
+                .await
+                .expect("ok");
+            assert_eq!(r.status(), StatusCode::OK);
+            r.into_body().collect().await.expect("ok").to_bytes()
+        }));
+    }
+    let mut bodies = Vec::new();
+    for h in readers {
+        bodies.push(h.await.expect("reader"));
+    }
+    assert!(bodies.windows(2).all(|p| p[0] == p[1]));
+    assert_eq!(
+        w.store.answers.lock().expect("lock").builds - before,
+        1,
+        "one build for 32 readers"
+    );
+    // A reader still holds the answer; others push it out of the kept set.
+    let key = "catalog/example.publisher/0";
+    let check = w.store.catalog_check("example.publisher", 0).expect("held");
+    let held = w.store.answer(key, check).expect("live");
+    let big = || axum::body::Bytes::from(vec![0u8; 12 << 20]);
+    for n in 0..3u64 {
+        w.store.keep_answer(
+            format!("catalog/x/{n}"),
+            (Hash32([1; 32]), Hash32([2; 32])),
+            big(),
+        );
+    }
+    {
+        let b = w.store.answers.lock().expect("lock");
+        assert!(!b.kept.contains_key(key), "pushed out of the kept set");
+        assert!(b.kept_bytes <= ANSWER_BYTES, "{}", b.kept_bytes);
+    }
+    let builds = w.store.answers.lock().expect("lock").builds;
+    let again = w.store.answer(key, check).expect("still live");
+    assert!(
+        Arc::ptr_eq(&held, &again),
+        "the held copy, not a second one"
+    );
+    assert_eq!(w.store.answers.lock().expect("lock").builds, builds);
+    // Nobody holds it any more, and it is not kept: built again next time.
+    drop((held, again));
+    for n in 3..6u64 {
+        w.store.keep_answer(
+            format!("catalog/x/{n}"),
+            (Hash32([1; 32]), Hash32([2; 32])),
+            big(),
+        );
+    }
+    assert!(w.store.answer(key, check).is_none());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// SERVE-WRITE-2: the manifest route answers from the kept answer in the
+/// same way, without copying the manifest to check it.
+#[tokio::test]
+async fn serve_write_2_manifest_answers_are_shared_and_checked() {
+    let w = world();
+    let (m, _) = published(&w).await;
+    let root = m.header.root();
+    let uri = format!("/v1/bulk/manifests/{root}");
+    let app = peer_routes(w.store.clone());
+    let fetch = || async {
+        let r = app
+            .clone()
+            .oneshot(Request::get(uri.clone()).body(Body::empty()).expect("ok"))
+            .await
+            .expect("ok");
+        assert_eq!(r.status(), StatusCode::OK);
+        assert_eq!(
+            r.headers().get(header::CONTENT_TYPE).expect("type"),
+            "application/json"
+        );
+        r.into_body().collect().await.expect("ok").to_bytes()
+    };
+    let first = fetch().await;
+    assert_eq!(fetch().await, first);
+    let v: Value = serde_json::from_slice(&first).expect("json");
+    crate::openapi_check::check("GET", &uri, 200, &v);
+    let key = format!("manifest/{root}");
+    let check = w.store.manifest_check(&root).expect("held");
+    let (_, rep) = w.store.manifest_record(&root).expect("held");
+    assert_eq!(check, (root, rep.hash()));
+    let a = w.store.answer(&key, check).expect("kept");
+    let b = w.store.answer(&key, check).expect("kept");
+    assert_eq!(*a, first);
+    assert!(Arc::ptr_eq(&a, &b), "one shared copy");
+    let seeded = axum::body::Bytes::from_static(b"{\"seeded\":true}");
+    drop((a, b));
+    w.store.answers.lock().expect("lock").forget(&key);
+    w.store.keep_answer(key.clone(), check, seeded.clone());
+    assert_eq!(fetch().await, seeded);
+    w.store
+        .keep_answer(key.clone(), (root, Hash32([9; 32])), seeded.clone());
+    assert_eq!(fetch().await, first);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review SERVE-WRITE-R4 finding 1: a look with an old check does not throw
+/// away the valid answer others hold; the next reader gets that same copy.
+#[tokio::test]
+async fn serve_write_2_a_stale_look_keeps_the_live_copy() {
+    let w = world();
+    walked(&w, 3).await;
+    let app = peer_routes(w.store.clone());
+    let get = || {
+        Request::get("/v1/bulk/catalogs/example.publisher/2")
+            .body(Body::empty())
+            .expect("ok")
+    };
+    let r = app.clone().oneshot(get()).await.expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    let key = "catalog/example.publisher/2";
+    let check = w.store.catalog_check("example.publisher", 2).expect("held");
+    let held = w.store.answer(key, check).expect("kept");
+    assert!(w.store.answer(key, (check.0, Hash32([7; 32]))).is_none());
+    let before = w.store.answers.lock().expect("lock").builds;
+    let r = app.clone().oneshot(get()).await.expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+    assert_eq!(
+        w.store.answers.lock().expect("lock").builds,
+        before,
+        "no new copy"
+    );
+    let again = w.store.answer(key, check).expect("kept");
+    assert!(Arc::ptr_eq(&held, &again), "the same copy");
+    // A build that finishes while a valid copy is alive hands out that copy.
+    let other = w
+        .store
+        .keep_answer(key.into(), check, axum::body::Bytes::from_static(b"{}"));
+    assert!(Arc::ptr_eq(&held, &other));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review SERVE-WRITE-R4 finding 2: a turn that ends without an answer (a
+/// cancelled or failed holder) leaves its gate to the reader waiting on it,
+/// so a later arrival waits too: one copy for both, and no gate left after.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serve_write_2_a_turn_that_ends_without_an_answer_keeps_one_copy() {
+    let w = world();
+    walked(&w, 3).await;
+    w.store.old_body.lock().expect("lock").clear();
+    w.store.answers.lock().expect("lock").kept.clear();
+    let app = peer_routes(w.store.clone());
+    let key = "catalog/example.publisher/0";
+    let req = || {
+        Request::get("/v1/bulk/catalogs/example.publisher/0")
+            .body(Body::empty())
+            .expect("ok")
+    };
+    let waiters = |n: usize| {
+        let s = w.store.clone();
+        async move {
+            tokio::time::timeout(std::time::Duration::from_secs(30), async {
+                loop {
+                    let c = s
+                        .answers
+                        .lock()
+                        .expect("lock")
+                        .building
+                        .get(key)
+                        .map_or(0, Arc::strong_count);
+                    if c >= n {
+                        break;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                }
+            })
+            .await
+            .expect("the readers queued");
+        }
+    };
+    // The rebuilds are busy, and a holder takes the turn and gives up.
+    let permits = w
+        .store
+        .rebuilds
+        .clone()
+        .acquire_many_owned(MAX_REBUILDS as u32)
+        .await
+        .expect("permits");
+    let holder = w.store.answer_turn(key).await;
+    let first = tokio::spawn(app.clone().oneshot(req()));
+    // The book, the holder's gate and guard, and the waiter.
+    waiters(4).await;
+    drop(holder);
+    let second = tokio::spawn(app.clone().oneshot(req()));
+    // The book, the first reader's gate and guard, and the second waiting.
+    waiters(4).await;
+    drop(permits);
+    let (r1, r2) = (
+        first.await.expect("task").expect("ok"),
+        second.await.expect("task").expect("ok"),
+    );
+    assert_eq!((r1.status(), r2.status()), (StatusCode::OK, StatusCode::OK));
+    let (mut b1, mut b2) = (r1.into_body(), r2.into_body());
+    let f1 = b1
+        .frame()
+        .await
+        .expect("f")
+        .expect("f")
+        .into_data()
+        .expect("d");
+    let f2 = b2
+        .frame()
+        .await
+        .expect("f")
+        .expect("f")
+        .into_data()
+        .expect("d");
+    assert_eq!(f1.as_ptr(), f2.as_ptr(), "one copy for both readers");
+    drop((b1, b2));
+    assert!(
+        w.store.answers.lock().expect("lock").building.is_empty(),
+        "no gate left"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn serve_write_2_a_shared_answer_goes_out_in_slices_of_one_copy() {
+    let data = axum::body::Bytes::from(
+        (0..(FILE_FRAME * 2 + 7))
+            .map(|i| i as u8)
+            .collect::<Vec<_>>(),
+    );
+    let mut body = SharedBody {
+        bytes: Arc::new(data.clone()),
+        at: 0,
+    };
+    let range = data.as_ptr() as usize..data.as_ptr() as usize + data.len();
+    let (mut got, mut frames) = (Vec::new(), 0);
+    while let Some(f) = body.frame().await {
+        let f = f.expect("frame").into_data().expect("data");
+        assert!(f.len() <= FILE_FRAME);
+        assert!(
+            range.contains(&(f.as_ptr() as usize)),
+            "a slice, not a copy"
+        );
+        got.extend_from_slice(&f);
+        frames += 1;
+    }
+    assert_eq!(frames, 3);
+    assert_eq!(got, data);
 }
 
 // ---------------------------------------------------------------- history (CAT-1)

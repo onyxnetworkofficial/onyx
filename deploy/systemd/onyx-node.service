@@ -89,6 +89,9 @@ SystemCallFilter=~@privileged @resources
 CapabilityBoundingSet=
 AmbientCapabilities=
 UMask=0077
+# Two open files a connection (a socket and a streamed shard file) for ONYX_MAX_CONNECTIONS
+# (default 1,024), plus stores and journals (THREATS SERVE-WRITE-1, review SERVE-WRITE-R2).
+LimitNOFILE=65536
 MemoryMax=2G
 
 [Install]

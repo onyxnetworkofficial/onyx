@@ -182,11 +182,19 @@ client's own value: `deploy/caddy/Caddyfile`, deployment.md "TLS in front"; ngin
 
 A response holds its in-flight permit until its body is written, in 64 KiB frames, at most
 `send_timeout`; after that the permit is released and the next frame fails, which closes the
-connection. The server has no socket write timeout of its own: a client that stops reading
-keeps its unsent bytes (up to one export) until it disconnects. A public deployment therefore
-needs a reverse proxy in front with a send timeout and TLS (THREATS.md M7-L47-F2, M7-7): the
-shipped `deploy/caddy/Caddyfile` cuts a whole response at 75 s (`timeouts write`) and does not
-buffer it, so a slow reader holds a permit at most `send_timeout` (deployment.md "TLS in front").
+connection. The server's write stall timeout (`ONYX_WRITE_STALL_SECS`, default 30 s; THREATS
+SERVE-WRITE-1) closes a connection whose answer cannot move a byte that long, so a client that
+stops reading lets go of its unsent bytes, its slot and the kernel's send buffer. It is not a
+rate floor: a client that drips just enough keeps its connection, but holds little: Bulk
+shard answers (`GET /v1/bulk/shards/{root}`) are sent from the checked file in 64 KiB frames
+through a 64 KiB connection buffer, so such a client holds an open file and about 0.2 MiB, never
+the shard; the shipped units set `LimitNOFILE=65536` for the two open files a connection can
+take, and the node warns at start below 2 x `ONYX_MAX_CONNECTIONS` + 256; a catalog or manifest
+answer is built once and every reader of it shares that one copy, sent in 64 KiB slices (THREATS
+SERVE-WRITE-2), so drip readers of many different objects still keep each one alive while they
+read. A public deployment therefore still needs a reverse proxy in front with TLS (THREATS.md
+M7-7) and a send timeout: the shipped `deploy/caddy/Caddyfile` cuts a whole response at 75 s
+(`timeouts write`) and does not buffer it (deployment.md "TLS in front").
 
 Live testnet run (after the M6 deploy): `--live-facilitator` sends verify and settle over HTTPS
 (`x402::HyperPost`: hyper with rustls and the webpki roots, HTTPS only, no redirects, answers
@@ -205,7 +213,8 @@ funded testnet payer is needed. Tests never call a real facilitator.
 
 ## Connection limits (AUD-1-F5, AUD-1R-F1)
 `onyx-node` cuts a connection that has not sent its request headers within
-`ONYX_HEADER_READ_TIMEOUT_SECS`, holds at most `ONYX_MAX_CONNECTIONS` open, and at most
+`ONYX_HEADER_READ_TIMEOUT_SECS`, or whose answer cannot move a byte for `ONYX_WRITE_STALL_SECS`
+(a reader that stopped reading; SERVE-WRITE-1), holds at most `ONYX_MAX_CONNECTIONS` open, and at most
 `ONYX_MAX_CONNS_PER_IP` per client (an IPv4 address or an IPv6 /64). When every slot is taken, a
 new connection evicts the oldest one that has not sent a request, so a peer opening idle sockets
 cannot shut out a client that sends its request at once; only when every slot is mid-request is a
