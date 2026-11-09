@@ -97,6 +97,9 @@ class Fake:
         self.catalogs = [{"publisher": "example.publisher", "number": 5, "root": "0x" + "ab" * 32,
                           "createdUnix": NOW - 3600, "leaves": 10, "removed": 0}]
         self.storage_status = {"s1": 200, "s2": 200}
+        # /v1/health bodies of the storage nodes: none of them reports its loop (`storage`) unless a
+        # test sets one (THREATS OBS-STORAGE-1).
+        self.storage_health = {}
 
     def rpc(self, req):
         m, p = req.get("method"), req.get("params")
@@ -145,7 +148,8 @@ class Handler(BaseHTTPRequestHandler):
                                               "catalogs": f.catalogs}).encode())
         for name, status in f.storage_status.items():
             if self.path == f"/{name}/v1/health":
-                return self.send(status, b"{}")
+                body = f.storage_health.get(name, {})
+                return self.send(status, body if isinstance(body, bytes) else json.dumps(body).encode())
         if self.path == "/site/":
             return self.send(f.site_status, b"<!doctype html>", "text/html")
         if self.path == "/site/data/demo.json":
@@ -394,6 +398,178 @@ class BulkAndStorage(Base):
                     os.environ[k] = v
         self.assertEqual(a.bulk_publishers, ["a.pub", "b.pub"])
         self.assertEqual(a.storage_nodes, ["http://127.0.0.1:8201", "http://127.0.0.1:8202"])
+
+
+# The /v1/health of a storage node exactly as onyx-api writes it (review OBS-STORAGE-R1 5): `ok` after a
+# good tick, `running` while a tick never returns. Written by the Rust test
+# onyx-api::storage::tests::obs_storage_r1_health_matches_the_shared_golden.
+GOLDEN = json.loads((ROOT / "fixtures/storage/health.json").read_text(encoding="utf-8"))
+TIMES = ("startedUnix", "tickStartedUnix", "lastTickUnix", "lastOkUnix")
+
+
+def storage_health(state="ok", at=NOW - 30, **fields):
+    """The golden health `state`, its times moved together so its reference (`lastTickUnix` for ok,
+    `tickStartedUnix` for running) is `at`, then `fields` set on its `storage` object."""
+    h = copy.deepcopy(GOLDEN[state])
+    st = h["storage"]
+    shift = at - st["tickStartedUnix" if state == "running" else "lastTickUnix"]
+    for k in TIMES:
+        if st[k] is not None:
+            st[k] += shift
+    st.update(fields)
+    return h
+
+
+class StorageLoop(Base):
+    """THREATS OBS-STORAGE-1, review OBS-STORAGE-R1: a storage node that reports its loop alerts when
+    a tick runs longer than storage.tick_run_max_s or the loop idles longer than tick_idle_max_s (or
+    3 x everySecs), when its own count of failed ticks in a row passes failed_in_a_row_max, and when
+    its last good tick missed answers for N runs; a node without a storage object is checked by the
+    200 alone; a malformed node is reported alone."""
+
+    def setUp(self):
+        super().setUp()
+        self.opts.storage_nodes = [self.url + "/s1", self.url + "/s2"]
+
+    def test_the_golden_health_of_a_good_tick_is_ok(self):
+        self.assertEqual(set(GOLDEN), {"about", "ok", "running"})
+        self.fake.storage_health = {"s1": storage_health(), "s2": storage_health(at=NOW - 5)}
+        r = self.assert_ok("storage.tick_age")
+        self.assertEqual((r["value"], r["limit"]), (30, 300))
+        self.assert_ok("storage.tick_failing")
+        self.assert_ok("storage.answers")
+        self.assert_ok("storage.up")
+
+    def test_a_tick_that_never_returns_alerts_as_stuck(self):
+        limit = self.cfg["storage"]["tick_run_max_s"]
+        self.assertEqual(limit, 900)
+        self.assertNotIn("storage.tick_age", self.cfg["after"])
+
+        def at(age):
+            # The Rust shape of a tick that hangs: tickStartedUnix set, lastTickUnix frozen before it.
+            self.fake.storage_health = {"s1": storage_health(), "s2": storage_health("running", at=NOW - age)}
+        self.edge("storage.tick_age", at, limit)
+        r = self.assert_alert("storage.tick_age")
+        self.assertIn("#2 ", r["detail"])
+        self.assertIn(f"a tick has run {limit + 1} s", r["detail"])
+        # A long tick is not a stuck loop: running 600 s with the last tick ended 660 s ago is ok.
+        self.fresh()
+        self.fake.storage_health = {"s2": storage_health("running", at=NOW - 600)}
+        self.assertLess(self.fake.storage_health["s2"]["storage"]["lastTickUnix"], NOW - 600)
+        self.assert_ok("storage.tick_age")
+
+    def test_an_idle_loop_alerts(self):
+        limit = self.cfg["storage"]["tick_idle_max_s"]
+        self.assertEqual(limit, 300)
+
+        def at(age):
+            self.fake.storage_health = {"s1": storage_health(), "s2": storage_health(at=NOW - age)}
+        self.edge("storage.tick_age", at, limit)
+        r = self.assert_alert("storage.tick_age")
+        self.assertIn("no tick since the last ended 301 s", r["detail"])
+        # A longer period moves the limit to 3 x everySecs.
+        self.fresh()
+        self.fake.storage_health = {"s2": storage_health(at=NOW - 1800, everySecs=600)}
+        self.assert_ok("storage.tick_age")
+        self.fresh()
+        self.fake.storage_health = {"s2": storage_health(at=NOW - 1801, everySecs=600)}
+        self.assert_alert("storage.tick_age")
+        # Before the first tick the wait is dated from the start: a loop that never ticks alerts.
+        never = {"lastTickUnix": None, "lastOkUnix": None, "lastTickOk": None}
+        self.fresh()
+        self.fake.storage_health = {"s1": storage_health(**never, startedUnix=NOW - limit)}
+        self.assert_ok("storage.tick_age")
+        self.fresh()
+        self.fake.storage_health = {"s1": storage_health(**never, startedUnix=NOW - limit - 1)}
+        r = self.assert_alert("storage.tick_age")
+        self.assertIn("no tick since the start", r["detail"])
+
+    def test_failed_ticks_in_a_row_alert_at_the_threshold_not_on_samples(self):
+        top = self.cfg["storage"]["failed_in_a_row_max"]
+        self.assertEqual(top, 2)
+        self.assertNotIn("storage.tick_failing", self.cfg["after"])
+        # One failed tick, then a long one: lastTickOk stays false for many watch runs, no page.
+        self.fake.storage_health = {"s2": storage_health(failedInARow=1, lastTickOk=False,
+                                                         lastErrorClass="rpc_rate_limited")}
+        for _ in range(5):
+            self.assertEqual(self.status("storage.tick_failing")[1], "ok")
+
+        def at(n):
+            self.fake.storage_health = {"s1": storage_health(),
+                                        "s2": storage_health(failedInARow=n, lastTickOk=False,
+                                                             lastErrorClass="rpc_rate_limited")}
+        self.edge("storage.tick_failing", at, top)
+        r = self.assert_alert("storage.tick_failing")
+        self.assertIn("#2 ", r["detail"])
+        self.assertIn("3 ticks in a row failed (rpc_rate_limited)", r["detail"])
+        self.assertNotIn("#1 ", r["detail"])
+
+    def test_missed_answers_alert_after_the_runs_in_after(self):
+        n = self.cfg["after"]["storage.answers"]
+        self.assertEqual(n, 3)
+        self.fake.storage_health = {"s1": storage_health(), "s2": storage_health(answerFailed=1)}
+        for want in ["warn"] * (n - 1) + ["alert"]:
+            code, st, by = self.status("storage.answers")
+            self.assertEqual(st, want, by["storage.answers"])
+        self.assertIn("1 answer send(s) failed", by["storage.answers"]["detail"])
+        self.assertEqual(by["storage.tick_failing"]["status"], "ok", "the tick itself ended well")
+        self.fake.storage_health["s2"] = storage_health()
+        self.assertEqual(self.status("storage.answers")[1], "ok")
+        self.fake.storage_health["s2"] = storage_health(unanswerable=2)
+        code, st, by = self.status("storage.answers")
+        self.assertEqual(st, "warn")
+        self.assertIn("2 challenge(s) unanswerable", by["storage.answers"]["detail"])
+
+    def test_a_node_without_a_storage_object_is_checked_by_the_200_alone(self):
+        self.fake.storage_health = {"s1": {"status": "ok"}, "s2": {"status": "ok", "storage": None}}
+        code, by = self.run_watch()
+        self.assertEqual(by["storage.up"]["status"], "ok")
+        for c in ("storage.tick_age", "storage.tick_failing", "storage.answers"):
+            self.assertEqual(by[c]["status"], "skip", by[c])
+            self.assertIn("no storage object", by[c]["detail"])
+        self.assertEqual(code, 0)
+        # Down is storage.up's alert only; a node with a loop beside it is still checked.
+        self.cfg["after"]["storage.up"] = 1
+        self.fake.storage_status["s1"] = 503
+        self.fake.storage_health["s2"] = storage_health(at=NOW - 301)
+        self.fresh()
+        code, by = self.run_watch()
+        self.assertEqual(by["storage.up"]["status"], "alert")
+        self.assertEqual(by["storage.tick_age"]["status"], "alert")
+        self.assertIn("#2 ", by["storage.tick_age"]["detail"])
+        self.assertNotIn("#1 ", by["storage.tick_age"]["detail"])
+
+    def test_a_malformed_node_is_reported_alone_and_the_rest_are_checked(self):
+        bad = storage_health()
+        bad["storage"]["lastTickUnix"] = "soon"
+        self.fake.storage_health = {"s1": bad, "s2": storage_health(failedInARow=3, lastTickOk=False,
+                                                                     lastErrorClass="rpc_error")}
+        code, by = self.run_watch()
+        age, failing = by["storage.tick_age"], by["storage.tick_failing"]
+        self.assertEqual(age["status"], "alert", age)
+        self.assertIn("#1 ", age["detail"])
+        self.assertIn("lastTickUnix", age["detail"])
+        self.assertEqual(age["value"], 30, "the readable node is still measured")
+        self.assertEqual(failing["status"], "alert", failing)
+        self.assertIn("#2 ", failing["detail"])
+        self.assertNotIn("#1 ", failing["detail"])
+        self.assertEqual(by["storage.answers"]["status"], "ok")
+        # A 200 that is not JSON: that node alone, the other still checked.
+        self.fresh()
+        self.fake.storage_health = {"s1": b"<html>proxy page</html>", "s2": storage_health()}
+        code, by = self.run_watch()
+        self.assertEqual(by["storage.tick_age"]["status"], "alert")
+        self.assertIn("#1 ", by["storage.tick_age"]["detail"])
+        self.assertIn("not JSON", by["storage.tick_age"]["detail"])
+        self.assertEqual(by["storage.tick_failing"]["status"], "ok")
+        self.assertEqual(by["storage.answers"]["status"], "ok")
+        # Only malformed nodes: the other two checks skip (nothing readable), never pass.
+        self.fresh()
+        self.fake.storage_health = {"s1": {"storage": []}, "s2": {"storage": []}}
+        code, by = self.run_watch()
+        self.assertEqual(by["storage.tick_age"]["status"], "alert")
+        for c in ("storage.tick_failing", "storage.answers"):
+            self.assertEqual(by[c]["status"], "skip", by[c])
 
 
 class NodeThresholds(Base):
@@ -927,6 +1103,7 @@ class Cli(Base):
         # A healthy head and a fresh catalog need the real clock here.
         self.fake.head_ts = int(time.time())
         self.fake.catalogs[0]["createdUnix"] = int(time.time()) - 60
+        self.fake.storage_health = {k: storage_health(at=int(time.time()) - 30) for k in ("s1", "s2")}
         p = self.cli("--once", "--node", self.url + "/node", "--site", self.url + "/site", "--state", st,
                      env={"ONYX_WATCH_RPC_URL": self.url + "/rpc", "ONYX_WATCH_BULK_PUBLISHERS": "example.publisher",
                           "ONYX_WATCH_STORAGE_NODES": f"{self.url}/s1,{self.url}/s2"})

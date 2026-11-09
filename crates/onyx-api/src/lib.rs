@@ -437,6 +437,9 @@ pub struct ApiState {
     /// Observe on the first paid query (ADR-0049, NORTH-STAR NS10): a level-2 subject no round
     /// settled yet is offered for a prepaid hold. See [`ApiState::with_observe`].
     pub observe: Option<Arc<observe::ObserveState>>,
+    /// The storage-node loop (ADR-0060), for `/v1/health` (THREATS
+    /// OBS-STORAGE-1). Set with [`ApiState::with_storage`].
+    pub storage: Option<Arc<storage::StorageNode>>,
     inflight: Arc<Semaphore>,
     facilitator_slots: Arc<Semaphore>,
     /// Per-client request buckets of [`ApiConfig::reads_per_minute`], apart
@@ -488,6 +491,7 @@ impl ApiState {
             settle_check: None,
             prepaid: None,
             observe: None,
+            storage: None,
         })
     }
 
@@ -583,6 +587,14 @@ impl ApiState {
         }
         self.observe = Some(observe);
         Ok(self)
+    }
+
+    /// Report the storage-node loop on `/v1/health` (THREATS OBS-STORAGE-1):
+    /// its last tick's counters, when the last tick ended and its error, so
+    /// a stuck or failing loop no longer answers like a healthy one.
+    pub fn with_storage(mut self, node: Arc<storage::StorageNode>) -> Self {
+        self.storage = Some(node);
+        self
     }
 }
 
@@ -1708,6 +1720,8 @@ async fn health(State(state): State<Arc<ApiState>>) -> Response {
         "rights": state.config.rights.as_str(),
         // ADR-0049: paid observation tickets (null when observing on payment is off).
         "observe": state.observe.as_ref().map(|o| o.health((state.clock)())),
+        // THREATS OBS-STORAGE-1: the storage-node loop (null outside storage mode).
+        "storage": state.storage.as_ref().map(|s| s.status_json()),
     }))
     .into_response();
     r.headers_mut()

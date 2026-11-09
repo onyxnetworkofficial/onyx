@@ -10,6 +10,10 @@ Pinned inputs with checksums. Never edit a fixture in place; add a new one.
   Treasury example) and the recorded Debt to the Penny answer the check pull reads (ADR-0038).
 - `markets/vectors.json`: shared stake and futures cases run by the contracts and the website's
   `markets.ts` (ADR-0042).
+- `storage/health.json`: a storage node's `GET /v1/health` after a good tick (`ok`) and while a tick
+  never returns (`running`), written by `onyx-api::storage::tests::obs_storage_r1_health_matches_the_shared_golden`
+  (`ONYX_BLESS=1`) and read by scripts/health-watch-tests.py, so the watch's tests use the node's shape
+  (THREATS OBS-STORAGE-R1).
 - `ops/rehearsal-gas.json`: gas measured in the Base Sepolia fork rehearsal, behind the run plan's
   budget (THREATS RESAPI-R1-5).
 - `revenue/`: revenue split vectors, the contributor-pass policy and the pricing defaults, each

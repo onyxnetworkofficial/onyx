@@ -3012,6 +3012,220 @@
                 "type": "null"
               }
             ]
+          },
+          "storage": {
+            "oneOf": [
+              {
+                "type": "object",
+                "description": "The storage-node loop (ADR-0060, THREATS OBS-STORAGE-1, review OBS-STORAGE-R1; docs/ops/storage-node.md \"Health\"). The counters are the last tick that ended well. `tickStartedUnix` is when the running tick began (null between ticks), `lastTickUnix` when the last tick ended, well or not, and `lastOkUnix` when the last good one did, all on the node's clock (`startedUnix` dates the wait before the first). `failedInARow` counts failed ticks in a row and `lastErrorClass` names the last one's error class. `logsReadThrough` shows how far the kept chain logs reach (a node catching up after a restart).",
+                "properties": {
+                  "node": {
+                    "type": "string",
+                    "pattern": "^0x[0-9a-f]{64}$",
+                    "description": "This storage node's id."
+                  },
+                  "epoch": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "wanted": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "held": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "fetched": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "fetchFailed": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "answered": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "answerFailed": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Answers whose transaction failed to send (out of gas, a fee cap, a nonce): missed unless a later tick sends them."
+                  },
+                  "unanswerable": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Challenges the node could not answer (shard not held or not provable)."
+                  },
+                  "seeds": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "settled": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "declined": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "startedUnix": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "When the node started, unix seconds on its clock."
+                  },
+                  "tickStartedUnix": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "When the running tick began; null between ticks."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastTickUnix": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastOkUnix": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lastTickOk": {
+                    "oneOf": [
+                      {
+                        "type": "boolean"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "failedInARow": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "Ticks in a row that ended in an error (0 after one that ended well)."
+                  },
+                  "lastErrorClass": {
+                    "oneOf": [
+                      {
+                        "type": "string",
+                        "enum": [
+                          "rpc_rate_limited",
+                          "rpc_unreachable",
+                          "rpc_error",
+                          "contract_version",
+                          "snapshot_disagrees",
+                          "store",
+                          "other"
+                        ],
+                        "description": "The last tick's error class, never its text (the text is in the node's log)."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "everySecs": {
+                    "type": "integer",
+                    "minimum": 0,
+                    "description": "The loop's period (`ONYX_STORAGE_EVERY_SECS`); 0 before the loop starts."
+                  },
+                  "logsReadThrough": {
+                    "oneOf": [
+                      {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "The last block the kept chain logs cover (THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1): kept in the node's state folder across restarts, it climbs to the chain's safe block while the node catches up; null when none are kept, or while logs loaded from that file are not checked against the chain yet (the first pass after a start)."
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "removals": {
+                    "type": "object",
+                    "properties": {
+                      "mode": {
+                        "type": "string",
+                        "enum": [
+                          "on",
+                          "log",
+                          "off"
+                        ]
+                      },
+                      "kept": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "neverLearned": {
+                        "type": "integer",
+                        "minimum": 0
+                      },
+                      "checkedAt": {
+                        "type": "integer",
+                        "minimum": 0,
+                        "description": "The last learn pass's finalized block (0: none ran)."
+                      }
+                    },
+                    "required": [
+                      "checkedAt",
+                      "kept",
+                      "mode",
+                      "neverLearned"
+                    ],
+                    "additionalProperties": false,
+                    "description": "Learned removals (ADR-0059 amendment 4 item 5a slice 2a)."
+                  }
+                },
+                "required": [
+                  "answerFailed",
+                  "answered",
+                  "declined",
+                  "epoch",
+                  "everySecs",
+                  "failedInARow",
+                  "fetchFailed",
+                  "fetched",
+                  "held",
+                  "lastErrorClass",
+                  "lastOkUnix",
+                  "lastTickOk",
+                  "lastTickUnix",
+                  "logsReadThrough",
+                  "node",
+                  "removals",
+                  "seeds",
+                  "settled",
+                  "startedUnix",
+                  "tickStartedUnix",
+                  "unanswerable",
+                  "wanted"
+                ],
+                "additionalProperties": false
+              },
+              {
+                "type": "null"
+              }
+            ]
           }
         },
         "required": [
@@ -3037,6 +3251,7 @@
           "shardLevels",
           "shardsWithheld",
           "status",
+          "storage",
           "x402Version"
         ],
         "additionalProperties": false,

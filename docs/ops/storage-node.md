@@ -52,6 +52,66 @@ deployment: its log says "this node follows rules v3". Sending nothing does not 
 checks and keepers slash and jail it. So exit the node from the old contract first (`exit`, then
 `withdraw-bond` two epochs later), then upgrade and register on the new deployment.
 
+## Health
+
+`GET /v1/health` of a storage node carries a `storage` object (null on a node outside storage
+mode; THREATS OBS-STORAGE-1, review OBS-STORAGE-R1), so a loop that is stuck or failing no longer
+answers like a healthy one. Times are unix seconds on this host's clock.
+
+| Field | Meaning |
+|---|---|
+| `node` | This node's id |
+| `epoch`, `wanted`, `held`, `fetched`, `fetchFailed`, `answered`, `answerFailed`, `unanswerable`, `seeds`, `settled`, `declined` | The last tick that ended well: its epoch, shards placed here now or next epoch, of those held, fetched and failed fetches, answers sent, answers whose send failed (out of gas, a fee cap, a nonce), challenges it could not answer (shard not held or not provable), seeds recorded, misses settled and shards declined |
+| `startedUnix` | When the node started |
+| `tickStartedUnix` | When the running tick began; null between ticks |
+| `lastTickUnix` | When the last tick ended, well or not; null before the first, which waits a random part of the period |
+| `lastOkUnix` | When the last tick that ended well ended |
+| `lastTickOk` | Whether the last tick ended well; null before the first |
+| `failedInARow` | Ticks in a row that ended in an error (0 after one that ended well) |
+| `lastErrorClass` | The last tick's error class: `rpc_rate_limited`, `rpc_unreachable`, `rpc_error`, `contract_version`, `snapshot_disagrees`, `store` or `other`; null when it ended well. Never the error text (it may name a provider URL and its key): that is in the node log only (`onyx-node: storage: tick:`) |
+| `everySecs` | The loop's period (`ONYX_STORAGE_EVERY_SECS`) |
+| `logsReadThrough` | The last block the kept chain logs cover ("Restarts" below): it climbs to the chain's safe block while the node catches up, then follows it; null when none are kept, and on a restarted node until its first pass has checked the file against the chain |
+| `removals` | `mode` (`on`, `log`, `off`), removals `kept`, placed datasets `neverLearned` and the last learn pass's finalized block `checkedAt` (0: none ran) |
+
+The health watch alerts `storage.tick_age` when a tick has run more than 900 s or no tick has
+started for 300 s (or 3 x `everySecs`) since the last ended, `storage.tick_failing` at the third
+failed tick in a row and `storage.answers` when the last good tick missed answers for 3 runs
+(docs/ops/runbooks/health-watch.md).
+
+## Restarts (the chain log cache)
+
+Each pass reads the contract's logs (node lists, registrations, deals, declines, slashes, passes)
+in `eth_getLogs` ranges of 200 blocks and keeps those of safe blocks, so the next pass reads only
+the newer blocks. The kept logs are also saved in the node's state folder,
+`ONYX_STATE_DIR/storage-logs-0x<contract>.json` (`/var/lib/onyx-storage/<name>/state/` on the web
+host; THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1): when a pass changed them (a new
+event) and every 50 ranges they move otherwise, each save anchored at its last block (that block's
+hash) and written whole (a temporary file of its own, sync, rename, folder sync). Before this, a
+restart read the whole history from the deploy block again: about 14,900 calls through the public
+endpoint on 2026-11-09, and no finished tick for well over 20 minutes.
+
+A restart loads the file and reads on from its next block: a node that was current asks for at
+most about 50 ranges, not the whole history. The file is used only when it is for this contract,
+`ONYX_STORAGE_FROM_BLOCK`, the node's events and fold rules, of version 2, at most 32 MiB and
+decodes whole (its check matches). The first pass then checks it against the chain before using
+it: the RPC's chain id (`eth_chainId`) must be the file's and its last block must have the same
+hash. A different chain id or hash drops it; an RPC that does not know that block yet (a backend
+behind) fails the pass with `rpc_error` and the file is checked again next pass, never dropped
+for that. The node's first pass after a start, and one about every day after, also compares the
+contract's `exclusionFrom` with the kept logs for the nodes ranked at or above it on each shard
+(at most 64 calls a check): a difference drops the logs and fails that pass
+(`snapshot_disagrees`), and the next pass reads every log again. A file not used is logged
+(`onyx-node: storage: log cache <path>: ignored (...)` or `dropped (...)`) and never fails the
+start; when the node drops its kept logs (a reorg, logs that disagree with the contract) it removes
+the file too.
+
+**A wrong view.** If the node's view looks wrong (placement or exclusions that differ from
+`onyx-storage status`, a node it should replace that it never fetches for), stop the node, delete
+`storage-logs-0x<contract>.json` from its state folder and start it: it reads every log again from
+the deploy block (one whole read, about 15,000 calls on 2026-11-09). The file holds only public
+chain data, so deleting it is always safe; keep it with the state folder otherwise. Watch
+`storage.logsReadThrough` on `/v1/health` climb to the chain's safe block after a restart.
+
 ## What gets you slashed
 - A challenge for a shard you hold that you do not answer in its epoch (offline, disk lost,
   fetching off).

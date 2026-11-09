@@ -1149,11 +1149,18 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             .ok_or_else(|| "ONYX_STORAGE_KEY_FILE is not a valid secp256k1 key".to_string())?;
         let me = onyx_storage::NodeId(onyx_core::Hash32(sc.node));
         let operator = tx.address();
+        // THREATS STORAGE-RESTART-1: the logs of safe blocks are kept in
+        // ONYX_STATE_DIR (one process per folder), so a restart reads only
+        // the blocks since, not the whole history from the deploy block.
         let chain = onyx_api::storage::StorageChain::new(
             Arc::new(rpc_logs(&c)),
             sc.contract,
             sc.from_block,
-        );
+        )
+        .with_log_file(onyx_api::storage::log_cache_file(
+            &c.state_dir,
+            &sc.contract,
+        ));
         let node = Arc::new(
             onyx_api::storage::StorageNode::new(
                 chain,
@@ -1194,6 +1201,8 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 Duration::from_secs(sc.removals_every_secs),
             ));
         }
+        // THREATS OBS-STORAGE-1: /v1/health shows the loop's last tick.
+        state = state.with_storage(node.clone());
         tokio::spawn(onyx_api::storage::run(
             node,
             Duration::from_secs(sc.every_secs),

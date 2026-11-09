@@ -84,6 +84,8 @@ struct Fake {
     junk_url: Option<Vec<u8>>,
     /// The RPC's quirks (review STORAGE-R3-1).
     quirks: Quirks,
+    /// `eth_chainId`.
+    chain_id: u64,
 }
 
 /// How the fake RPC misbehaves.
@@ -101,6 +103,17 @@ struct Quirks {
     /// The contract is from before ADR-0060 amendment 2 (no
     /// `RULES_VERSION()`: the call reverts).
     v0: bool,
+    /// No call is ever answered (a node that hangs; review OBS-STORAGE-R1 5).
+    hang: bool,
+    /// Only this many more `eth_getLogs` calls are answered; the rest never
+    /// return (a node killed part way through a read, THREATS
+    /// STORAGE-RESTART-1).
+    hang_logs: Option<usize>,
+    /// A backend behind the chain (review STORAGE-RESTART-R1 M3): blocks
+    /// above this one are unknown (null), as blocks above the head always are.
+    known_to: Option<u64>,
+    /// The backend's safe block is this many blocks lower.
+    safe_lag: u64,
 }
 
 /// The safe block of the fake chain: 64 below the head.
@@ -133,16 +146,31 @@ fn log(event: &str, topics: Vec<Hash32>, data: Vec<u8>) -> Value {
 impl JsonRpc for FakeChain {
     fn call<'a>(&'a self, method: &'a str, p: Value) -> BoxFuture<'a, Result<Value, String>> {
         let f = self.0.lock().expect("lock").clone();
+        if f.quirks.hang {
+            return Box::pin(std::future::pending());
+        }
+        if method == "eth_getLogs" {
+            let mut g = self.0.lock().expect("lock");
+            match g.quirks.hang_logs.as_mut() {
+                Some(0) => return Box::pin(std::future::pending()),
+                Some(n) => *n -= 1,
+                None => {}
+            }
+        }
         let r = (|| -> Result<Value, String> {
             Ok(match method {
                 "eth_blockNumber" => json!(format!("0x{:x}", f.block)),
+                "eth_chainId" => json!(format!("0x{:x}", f.chain_id)),
                 "eth_getBlockByNumber" => {
                     let tag = p[0].as_str().unwrap_or_default();
                     let n = if tag == "safe" {
-                        safe(f.block)
+                        safe(f.block).saturating_sub(f.quirks.safe_lag)
                     } else {
                         qty(&p[0])?
                     };
+                    if n > f.block || f.quirks.known_to.is_some_and(|k| n > k) {
+                        return Ok(Value::Null);
+                    }
                     let mut h = [f.quirks.fork; 32];
                     h[24..].copy_from_slice(&n.to_be_bytes());
                     json!({"number": format!("0x{n:x}"), "hash": Hash32(h).to_string()})
@@ -353,6 +381,38 @@ impl JsonRpc for FakeChain {
                         encode(&[word_tok(&set_hash(&ids))])
                     } else if sel == abi::selector("epochStart(uint64)") {
                         encode(&[uint((u(0) * 10).into())])
+                    } else if sel == abi::selector("exclusionFrom(uint64,uint32,bytes32)") {
+                        // From the same records the fake's logs carry, as of
+                        // the asked block (every log is at `LOG_BLOCK`).
+                        let mut x = Exclusions::new();
+                        let at = match &p[1] {
+                            Value::String(t) if t.starts_with("0x") => qty(&p[1]).ok(),
+                            Value::Object(o) => {
+                                o.get("blockHash").and_then(|h| h32(h).ok()).map(|h| {
+                                    u64::from_be_bytes(h.0[24..].try_into().unwrap_or([0; 8]))
+                                })
+                            }
+                            _ => None,
+                        };
+                        let before = at.is_some_and(|b| b < LOG_BLOCK);
+                        let (slashed, declined, answered) = if before {
+                            (Vec::new(), Vec::new(), Vec::new())
+                        } else {
+                            (f.slashed.clone(), f.declined.clone(), f.answered.clone())
+                        };
+                        for (n, d, idx, from) in &slashed {
+                            x.slash(*d, *idx, *n, *from);
+                        }
+                        for (n, d, idx, from) in &declined {
+                            x.decline(*d, *idx, *n, *from);
+                        }
+                        for (d, e, n, _, shard, passed) in &answered {
+                            if *passed {
+                                x.pass(*d, *shard, *n, *e);
+                            }
+                        }
+                        let from = x.from(u(0), u(1) as u32, &NodeId(Hash32(arg(2))));
+                        encode(&[uint(from.unwrap_or(0).into())])
                     } else if sel == abi::selector("slotStatus(uint64,uint64,uint32,bytes32)") {
                         let k = (u(0), u(1), u(2) as u32, NodeId(Hash32(arg(3))));
                         encode(&[uint(f.status.get(&k).copied().unwrap_or(0).into())])
@@ -533,6 +593,7 @@ fn setup_with(n: usize, publisher: World, m: Manifest) -> Setup {
             status: BTreeMap::new(),
             junk_url: None,
             quirks: Quirks::default(),
+            chain_id: 84_532,
         }),
         Mutex::new(Calls::default()),
     ));
@@ -2091,7 +2152,7 @@ async fn cat_3_learn_a_storage_node_learns_from_a_catalog_node_when_the_deals_so
     assert_eq!(e.code, "bulk_dataset_removed");
     let v = node.status_json();
     assert_eq!(v["removals"]["kept"], json!(1));
-    assert_eq!(v["removals"]["never_learned"], json!(0));
+    assert_eq!(v["removals"]["neverLearned"], json!(0));
     // The storage paths: the next tick still holds every placed shard, and
     // they serve by root.
     let t = node.tick().await.expect("tick");
@@ -2111,7 +2172,7 @@ async fn cat_3_learn_a_storage_node_learns_from_a_catalog_node_when_the_deals_so
     let r = n2.learn_pass().await.expect("pass");
     assert_eq!((r.learned, r.kept, r.never_learned), (0, 0, 1));
     assert_eq!(lv2.calls()[0], format!("http://publisher{LEAF_URL}"));
-    assert_eq!(n2.status_json()["removals"]["never_learned"], json!(1));
+    assert_eq!(n2.status_json()["removals"]["neverLearned"], json!(1));
     let _ = std::fs::remove_dir_all(&other.dir);
     clean(&s, &own);
 }
@@ -2422,4 +2483,1040 @@ fn cat_3_learn_the_order_asks_again_then_the_unlearned_then_one_learned() {
     assert_eq!(learn_order(&[], &un, &[], 1, 4), vec![4, 5, 6, 0]);
     assert_eq!(learn_order(&[], &[7], &le, 0, 4), vec![7, 100, 101, 102]);
     assert_eq!(learn_order(&[100], &[], &le, 0, 4), vec![100, 101, 102]);
+}
+
+// ---- THREATS OBS-STORAGE-1, review OBS-STORAGE-R1: /v1/health shows the storage loop ----
+
+fn health_cfg(node: NodeId) -> StorageNodeConfig {
+    StorageNodeConfig {
+        contract: CONTRACT,
+        node,
+        fetch: true,
+        keeper: false,
+        fetches_per_tick: 64,
+    }
+}
+
+/// A storage node over `s` (node 0) whose ticks are stamped with `now`.
+fn health_node(s: &Setup, own: &World, now: Arc<std::sync::atomic::AtomicU64>) -> Arc<StorageNode> {
+    Arc::new(
+        StorageNode::new(
+            reader(s),
+            Arc::new(Sent::default()),
+            net(s, &[("http://publisher", Peer::Good)]),
+            own.store.clone(),
+            health_cfg(s.nodes[0]),
+        )
+        .with_clock(Arc::new(move || now.load(Ordering::SeqCst))),
+    )
+}
+
+/// GET `/v1/health` of an API state with `storage` (none: not a storage
+/// node), checked against docs/api/openapi.json.
+async fn health_of(storage: Option<Arc<StorageNode>>) -> Value {
+    use axum::body::Body;
+    use axum::http::Request;
+    use http_body_util::BodyExt;
+    use tower::ServiceExt;
+    let state = crate::ApiState::new(
+        crate::catalog::Catalog::new(),
+        Arc::new(crate::roots::LedgerRoots::new()),
+        Arc::new(onyx_coordinator::cas::MemCas::new()),
+        None,
+        Arc::new(|| 1_700_000_000),
+        "http://127.0.0.1",
+        crate::ApiConfig::default(),
+    )
+    .expect("state");
+    let state = Arc::new(match storage {
+        Some(n) => state.with_storage(n),
+        None => state,
+    });
+    let r = crate::router(state)
+        .oneshot(
+            Request::get("/v1/health")
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("response");
+    let status = r.status().as_u16();
+    let body = r.into_body().collect().await.expect("body").to_bytes();
+    let v: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(status, 200);
+    crate::openapi_check::check("GET", "/v1/health", status, &v);
+    v
+}
+
+/// Yield until `done` holds (the condition the test reads, never a fixed
+/// sleep); a cap far above any run.
+async fn until(mut done: impl FnMut() -> bool, what: &str) {
+    for _ in 0..100_000 {
+        if done() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("{what}");
+}
+
+/// A storage node's health carries `storage`: before the first tick no tick
+/// time (`startedUnix` dates the wait); after each tick that ends well its
+/// end on the node's clock (it moves with the clock), no tick running, no
+/// error class, and the tick's counters.
+#[tokio::test]
+async fn obs_storage_1_health_shows_when_the_last_tick_ended() {
+    let s = setup(5).await;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(1_000));
+    let node = health_node(&s, &own, now.clone());
+    let h = health_of(Some(node.clone())).await;
+    let st = &h["storage"];
+    assert_eq!(st["node"], json!(s.nodes[0].to_string()));
+    assert_eq!(st["startedUnix"], json!(1_000));
+    for k in [
+        "tickStartedUnix",
+        "lastTickUnix",
+        "lastOkUnix",
+        "lastTickOk",
+        "lastErrorClass",
+    ] {
+        assert_eq!(st[k], Value::Null, "no tick yet: {k}");
+    }
+    assert_eq!(st["failedInARow"], json!(0));
+    assert_eq!(st["everySecs"], json!(0), "no loop runs here");
+    assert_eq!(st["removals"]["mode"], json!("on"));
+    now.store(1_060, Ordering::SeqCst);
+    let t = node.tick().await.expect("tick");
+    let st = health_of(Some(node.clone())).await["storage"].clone();
+    assert_eq!(st["lastTickUnix"], json!(1_060));
+    assert_eq!(st["lastOkUnix"], json!(1_060));
+    assert_eq!(st["tickStartedUnix"], Value::Null, "between ticks");
+    assert_eq!(st["lastTickOk"], json!(true));
+    assert_eq!(st["lastErrorClass"], Value::Null);
+    assert_eq!(st["epoch"], json!(t.epoch));
+    assert_eq!(st["wanted"], json!(t.wanted));
+    assert_eq!(st["held"], json!(t.held));
+    assert_eq!(st["fetched"], json!(t.fetched));
+    assert_eq!(st["seeds"], json!(t.seeds));
+    assert!(t.wanted > 0 && t.held == t.wanted);
+    now.store(1_120, Ordering::SeqCst);
+    node.tick().await.expect("tick");
+    let st = health_of(Some(node)).await["storage"].clone();
+    assert_eq!(st["lastTickUnix"], json!(1_120), "it moves with each tick");
+    assert_eq!(st["lastTickOk"], json!(true));
+    clean(&s, &own);
+}
+
+/// Review OBS-STORAGE-R1 1: failed ticks are counted in a row
+/// (`failedInARow`), with the last one's error class and the last good
+/// tick's end (`lastOkUnix`); one good tick clears the count. No error text
+/// is on health (review OBS-STORAGE-R1 3).
+#[tokio::test]
+async fn obs_storage_r1_failed_ticks_in_a_row_and_the_last_good_one_show_on_health() {
+    let s = setup(5).await;
+    s.chain.0.lock().expect("lock").quirks.v0 = true;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(3_000));
+    let node = health_node(&s, &own, now.clone());
+    for (n, t) in [(1, 3_060), (2, 3_120)] {
+        now.store(t, Ordering::SeqCst);
+        node.tick().await.expect_err("an older contract is refused");
+        let st = health_of(Some(node.clone())).await["storage"].clone();
+        assert_eq!(st["failedInARow"], json!(n));
+        assert_eq!(st["lastTickUnix"], json!(t));
+        assert_eq!(st["lastOkUnix"], Value::Null, "no good tick yet");
+        assert_eq!(st["lastTickOk"], json!(false));
+        assert_eq!(st["lastErrorClass"], json!("contract_version"));
+        assert_eq!(st["tickStartedUnix"], Value::Null);
+        assert!(st.get("lastError").is_none(), "no error text: {st}");
+        assert_eq!(
+            st["wanted"],
+            json!(0),
+            "the counters are the last good tick's"
+        );
+    }
+    s.chain.0.lock().expect("lock").quirks.v0 = false;
+    now.store(3_180, Ordering::SeqCst);
+    node.tick().await.expect("tick");
+    let st = health_of(Some(node)).await["storage"].clone();
+    assert_eq!(
+        (
+            &st["failedInARow"],
+            &st["lastOkUnix"],
+            &st["lastTickOk"],
+            &st["lastErrorClass"]
+        ),
+        (&json!(0), &json!(3_180), &json!(true), &Value::Null)
+    );
+    clean(&s, &own);
+}
+
+/// Sends everything but answers, whose sends fail as an operator out of gas
+/// does.
+#[derive(Default)]
+struct NoGasForAnswers(Mutex<Vec<Vec<u8>>>);
+
+impl TxSend for NoGasForAnswers {
+    fn address(&self) -> [u8; 20] {
+        [0xAA; 20]
+    }
+    fn send<'a>(
+        &'a self,
+        _to: &'a [u8; 20],
+        data: Vec<u8>,
+    ) -> BoxFuture<'a, Result<String, String>> {
+        let answer = data[..4]
+            == abi::selector(
+                "answer(uint64,uint64,uint32,bytes32,bytes32[],bytes,bytes32[],bytes,bytes32[])",
+            );
+        if let Ok(mut s) = self.0.lock() {
+            s.push(data);
+        }
+        Box::pin(async move {
+            if answer {
+                Err("insufficient funds for gas * price + value".to_string())
+            } else {
+                Ok("0x01".to_string())
+            }
+        })
+    }
+}
+
+/// Review OBS-STORAGE-R1 2: a challenge asked before the node holds its
+/// shard counts as `unanswerable`; an answer whose send fails (out of gas)
+/// counts as `answerFailed` while the tick itself ends well.
+#[tokio::test]
+async fn obs_storage_r1_answer_send_failures_and_unanswerable_show_on_health() {
+    let s = setup(5).await;
+    let seed = Hash32([0x33; 32]);
+    s.chain.0.lock().expect("lock").seeds.insert(3, seed);
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let (me, asked) = s
+        .nodes
+        .iter()
+        .find_map(|n| {
+            let k = (0..2)
+                .filter(|slot| snap.challenged(&d, 3, &seed, *slot).1.contains(n))
+                .count();
+            (k > 0).then_some((*n, k))
+        })
+        .expect("a challenged node");
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let tx = Arc::new(NoGasForAnswers::default());
+    let node = Arc::new(StorageNode::new(
+        reader(&s),
+        tx.clone(),
+        net(&s, &[("http://publisher", Peer::Good)]),
+        own.store.clone(),
+        health_cfg(me),
+    ));
+    // Answers come before fetches: the first tick is asked before it holds.
+    let t = node.tick().await.expect("tick");
+    assert_eq!((t.unanswerable, t.answer_failed), (asked, 0));
+    assert_eq!(t.held, t.wanted);
+    let st = health_of(Some(node.clone())).await["storage"].clone();
+    assert_eq!(st["unanswerable"], json!(asked));
+    assert_eq!(st["answerFailed"], json!(0));
+    // Now it holds them, and every answer's send fails.
+    let t = node.tick().await.expect("the tick still ends well");
+    assert_eq!((t.answered, t.answer_failed, t.unanswerable), (0, asked, 0));
+    let st = health_of(Some(node)).await["storage"].clone();
+    assert_eq!(st["answerFailed"], json!(asked));
+    assert_eq!(st["unanswerable"], json!(0));
+    assert_eq!(st["lastTickOk"], json!(true));
+    assert_eq!(st["failedInARow"], json!(0));
+    clean(&s, &own);
+}
+
+/// A node's health after a good tick at 1,060 (`ok`), and at 2,000 while its
+/// next tick, begun at 1,120, never returns (`running`: the chain never
+/// answers).
+async fn ok_and_running() -> (Value, Value) {
+    let s = setup(5).await;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(1_000));
+    let node = health_node(&s, &own, now.clone());
+    now.store(1_060, Ordering::SeqCst);
+    node.tick().await.expect("tick");
+    let ok = health_of(Some(node.clone())).await;
+    s.chain.0.lock().expect("lock").quirks.hang = true;
+    now.store(1_120, Ordering::SeqCst);
+    let n = node.clone();
+    let task = tokio::spawn(async move { n.tick().await });
+    until(
+        || node.loop_status().tick_started.is_some(),
+        "the tick began",
+    )
+    .await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(
+        !task.is_finished(),
+        "a chain that never answers never ends the tick"
+    );
+    now.store(2_000, Ordering::SeqCst);
+    let running = health_of(Some(node)).await;
+    task.abort();
+    clean(&s, &own);
+    (ok, running)
+}
+
+/// Review OBS-STORAGE-R1 5: a tick that never returns: health still
+/// answers, with `tickStartedUnix` set and `lastTickUnix` frozen at the last
+/// tick that ended, however far the clock moves (the watch's stuck alert).
+#[tokio::test]
+async fn obs_storage_r1_a_tick_that_never_returns_shows_as_running_on_health() {
+    let (ok, running) = ok_and_running().await;
+    let (a, b) = (&ok["storage"], &running["storage"]);
+    assert_eq!(a["tickStartedUnix"], Value::Null);
+    assert_eq!(a["lastTickUnix"], json!(1_060));
+    assert_eq!(b["tickStartedUnix"], json!(1_120), "the tick that hangs");
+    assert_eq!(b["lastTickUnix"], json!(1_060), "frozen");
+    assert_eq!(b["lastOkUnix"], json!(1_060));
+    assert_eq!(
+        b["lastTickOk"],
+        json!(true),
+        "the last tick that ended did well"
+    );
+    assert_eq!(b["failedInARow"], json!(0));
+}
+
+/// The shared golden health (fixtures/storage/health.json, `ok` and
+/// `running`) that scripts/health-watch-tests.py feeds the watch, so the
+/// watch's tests use the shape this node writes. Regenerate after an
+/// intended change of the `storage` object: `ONYX_BLESS=1 cargo test -p
+/// onyx-api --lib obs_storage_r1_health_matches_the_shared_golden`.
+#[tokio::test]
+async fn obs_storage_r1_health_matches_the_shared_golden() {
+    let (ok, running) = ok_and_running().await;
+    let doc = json!({
+        "about": "GET /v1/health of a storage node (THREATS OBS-STORAGE-1, review OBS-STORAGE-R1): `ok` after a good tick at 1060, `running` at 2000 while the tick begun at 1120 never returns. Written by onyx-api::storage::tests::obs_storage_r1_health_matches_the_shared_golden (ONYX_BLESS=1), read by scripts/health-watch-tests.py.",
+        "ok": ok,
+        "running": running,
+    });
+    let text = serde_json::to_string_pretty(&doc).expect("json") + "\n";
+    let path = format!(
+        "{}/../../fixtures/storage/health.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    if std::env::var_os("ONYX_BLESS").is_some() {
+        std::fs::write(&path, &text).expect("write");
+    }
+    let on_disk = std::fs::read_to_string(&path)
+        .expect("fixtures/storage/health.json missing; run with ONYX_BLESS=1");
+    assert_eq!(
+        on_disk, text,
+        "fixtures/storage/health.json drifted from the node's health"
+    );
+}
+
+/// Review OBS-STORAGE-R1 5: `run` sets the loop's period on health.
+#[tokio::test]
+async fn obs_storage_r1_run_sets_every_secs() {
+    let s = setup(5).await;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    let now = Arc::new(std::sync::atomic::AtomicU64::new(1_000));
+    let node = health_node(&s, &own, now);
+    let task = tokio::spawn(run(node.clone(), Duration::from_secs(60)));
+    until(
+        || node.status_json()["everySecs"] != json!(0),
+        "run set its period",
+    )
+    .await;
+    let st = health_of(Some(node)).await["storage"].clone();
+    assert_eq!(st["everySecs"], json!(60));
+    task.abort();
+    clean(&s, &own);
+}
+
+/// A node outside storage mode answers `storage: null`.
+#[tokio::test]
+async fn obs_storage_1_a_node_without_storage_mode_has_no_storage_object() {
+    let h = health_of(None).await;
+    assert_eq!(h.get("storage"), Some(&Value::Null));
+}
+
+/// Review OBS-STORAGE-R1 3: health names a fixed class of a tick's error,
+/// never its text (a provider URL and its key stay in the node's log).
+#[test]
+fn obs_storage_r1_the_error_class_is_fixed_never_text() {
+    for (e, want) in [
+        (
+            "this node follows rules v3 (ADR-0060 amendment 2) and the contract has no \
+             RULES_VERSION(), so it is older (eth_call: execution reverted)",
+            "contract_version",
+        ),
+        ("eth_getLogs: node answered HTTP 429", "rpc_rate_limited"),
+        (
+            "eth_call: node error: {\"code\":-32005,\"message\":\"limit\"}",
+            "rpc_rate_limited",
+        ),
+        ("rpc unreachable: client error (Connect)", "rpc_unreachable"),
+        ("rpc call timed out", "rpc_unreachable"),
+        (
+            "chain read failed or disagrees with the contract: deals 2, logs 1",
+            "snapshot_disagrees",
+        ),
+        (
+            "eth_call: node error: {\"code\":-32000,\"message\":\"x\"}",
+            "rpc_error",
+        ),
+        (
+            "could not read the contract's RULES_VERSION(): eth_call: answer has no result",
+            "rpc_error",
+        ),
+        ("No space left on device (os error 28)", "store"),
+        (
+            "https://user:pw@rpc.example/v2/SECRETKEY?k=x; (y) 'z', w",
+            "other",
+        ),
+    ] {
+        let c = error_class(e);
+        assert_eq!(c, want, "{e}");
+        assert!(ERROR_CLASSES.contains(&c));
+        assert!(!c.contains("SECRET") && !c.contains("://"));
+    }
+}
+
+// ---- THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1: the kept logs outlive a restart ----
+
+/// The log cache file of `s`'s contract in a state folder of the test's own.
+fn log_file(s: &Setup) -> PathBuf {
+    log_cache_file(&s.publisher.dir.join("state"), &CONTRACT)
+}
+
+/// A reader of `contract` from block `from` that keeps its logs in `path`.
+fn file_reader(s: &Setup, contract: [u8; 20], from: u64, path: &Path) -> StorageChain {
+    StorageChain::new(s.chain.clone(), contract, from).with_log_file(path.to_path_buf())
+}
+
+/// The `eth_getLogs` ranges asked since the last call.
+fn log_calls(s: &Setup) -> Vec<(u64, u64)> {
+    std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges)
+}
+
+/// Blocks the ranges cover.
+fn blocks_of(ranges: &[(u64, u64)]) -> u64 {
+    ranges.iter().map(|(f, t)| t - f + 1).sum()
+}
+
+/// The next block the reader's kept logs reach, checked or not.
+fn kept_next(r: &StorageChain) -> Option<u64> {
+    r.cache.lock().expect("lock").logs.as_ref().map(|l| l.0)
+}
+
+/// The fake chain's head.
+fn head(s: &Setup, block: u64) {
+    s.chain.0.lock().expect("lock").block = block;
+}
+
+/// A whole read of blocks 0..=20,000 at head 20,000: 100 ranges up to the
+/// safe block and one above it.
+const WHOLE_READ: usize = 101;
+
+/// Yield until `done` holds, for at most a minute (a save syncs on a
+/// blocking thread, so the cap is time, not yields).
+async fn until_soon(mut done: impl FnMut() -> bool, what: &str) {
+    let end = std::time::Instant::now() + Duration::from_secs(60);
+    while std::time::Instant::now() < end {
+        if done() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("{what}");
+}
+
+/// THREATS STORAGE-RESTART-1: a reader that caught up and saved is rebuilt
+/// from its file after a restart and asks only for the ranges above the
+/// saved block (2 `eth_getLogs` calls, not 46), with the same snapshot;
+/// passes and declines come back from the file too. A pass that moves the
+/// kept logs a few blocks with no new log does not write the file; 50
+/// ranges do (review STORAGE-RESTART-R1 L2).
+#[tokio::test]
+async fn storage_restart_1_a_rebuilt_reader_reads_only_the_new_ranges() {
+    let s = setup(5).await;
+    let n = s.nodes.clone();
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.block = 9_000;
+        f.answered.push((0, 2, n[1], 0, 1, true));
+        f.declined.push((n[1], 0, 1, 4));
+    }
+    let path = log_file(&s);
+    let first = file_reader(&s, CONTRACT, 0, &path);
+    let note = first.log_note().expect("note");
+    assert!(note.starts_with("none yet"), "{note}");
+    let snap = first.snapshot().await.expect("snapshot");
+    assert_eq!(
+        log_calls(&s).len(),
+        46,
+        "45 ranges to the safe block, one above"
+    );
+    assert!(path.exists(), "saved");
+    drop(first);
+    // The restart.
+    head(&s, 9_010);
+    let again = file_reader(&s, CONTRACT, 0, &path);
+    let note = again.log_note().expect("note");
+    assert!(note.starts_with("loaded"), "{note}");
+    assert_eq!(kept_next(&again), Some(safe(9_000) + 1));
+    assert_eq!(again.logs_read_through(), None, "not checked yet");
+    let snap2 = again.snapshot().await.expect("snapshot");
+    assert_eq!(
+        log_calls(&s),
+        vec![(safe(9_000) + 1, safe(9_010)), (safe(9_010) + 1, 9_010)],
+        "only the new ranges"
+    );
+    assert_eq!(again.logs_read_through(), Some(safe(9_010)));
+    assert_eq!((snap2.deals.len(), snap2.nodes.len()), (1, 5));
+    assert_eq!(snap2.lists, snap.lists);
+    assert_eq!(snap2.registrations, snap.registrations);
+    assert_eq!(snap2.placement_key(), snap.placement_key());
+    assert_eq!(
+        snap2.excl.from(0, 1, &n[1]),
+        Some(5),
+        "the pass and decline"
+    );
+    let on_disk = |s: &Setup| kept_next(&file_reader(s, CONTRACT, 0, &path));
+    assert_eq!(
+        on_disk(&s),
+        Some(safe(9_000) + 1),
+        "10 quiet blocks: not saved"
+    );
+    head(&s, 19_500);
+    again.snapshot().await.expect("snapshot");
+    assert_eq!(
+        on_disk(&s),
+        Some(safe(9_010) + 1 + LOG_SAVE_EVERY_RANGES as u64 * LOG_RANGE),
+        "saved 50 ranges on; the quiet ranges after that are not"
+    );
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1: a file written for another contract or
+/// deploy block is ignored (logged) and every log read again from the deploy
+/// block; the reader's own file replaces it. Another contract's reader uses
+/// a file of its own name.
+#[tokio::test]
+async fn storage_restart_1_a_file_for_another_contract_or_deploy_block_is_ignored() {
+    let s = setup(5).await;
+    head(&s, 20_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 5, &path)
+        .snapshot()
+        .await
+        .expect("snapshot from block 5");
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    let note = r.log_note().expect("note");
+    assert!(
+        note.starts_with("ignored") && note.contains("written for deploy block 5"),
+        "{note}"
+    );
+    assert_eq!(kept_next(&r), None);
+    r.snapshot().await.expect("snapshot");
+    let calls = log_calls(&s);
+    assert_eq!((calls.len(), calls[0].0), (WHOLE_READ, 0), "read again");
+    let other = [0x77; 20];
+    assert_ne!(log_cache_file(&s.publisher.dir.join("state"), &other), path);
+    let r = file_reader(&s, other, 0, &path);
+    let note = r.log_note().expect("note");
+    assert!(
+        note.starts_with("ignored") && note.contains("written for another contract"),
+        "{note}"
+    );
+    assert_eq!(kept_next(&r), None);
+    r.snapshot().await.expect("snapshot");
+    assert_eq!(log_calls(&s).len(), WHOLE_READ, "read again");
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1: a damaged file (cut short, empty, not JSON,
+/// one digit changed, an older version) or one that cannot be read never
+/// fails the start: it is ignored (logged), every log is read again, and
+/// the pass writes a good file; a save that fails leaves the pass well.
+#[tokio::test]
+async fn storage_restart_1_a_damaged_file_is_ignored_and_never_fails_the_start() {
+    let s = setup(5).await;
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    log_calls(&s);
+    let good = std::fs::read(&path).expect("file");
+    let text = String::from_utf8(good.clone()).expect("utf-8");
+    let at = text.find("\"data\":\"0x").expect("a log") + 10;
+    let mut flipped = text.clone().into_bytes();
+    flipped[at] = if flipped[at] == b'0' { b'1' } else { b'0' };
+    let mut v: Value = serde_json::from_str(&text).expect("json");
+    v.as_object_mut().expect("object").remove("check");
+    v["onyxStorageLogs"] = json!(1);
+    v["check"] = json!(log_file_check(&v));
+    let version1 = serde_json::to_vec(&v).expect("json");
+    for (what, bytes, why) in [
+        (
+            "cut short",
+            good[..good.len() / 2].to_vec(),
+            "does not decode",
+        ),
+        ("empty", Vec::new(), "does not decode"),
+        ("not JSON", b"\x00\xffjunk".to_vec(), "does not decode"),
+        ("one digit changed", flipped, "check does not match"),
+        ("an older version", version1, "version 1"),
+    ] {
+        std::fs::write(&path, &bytes).expect("write");
+        let r = file_reader(&s, CONTRACT, 0, &path);
+        let note = r.log_note().expect("note");
+        assert!(
+            note.starts_with("ignored") && note.contains(why),
+            "{what}: {note}"
+        );
+        assert_eq!(kept_next(&r), None, "{what}");
+        r.snapshot().await.expect(what);
+        assert_eq!(log_calls(&s).len(), 46, "{what}: read again");
+        assert_eq!(
+            std::fs::read(&path).expect("file"),
+            good,
+            "{what}: replaced"
+        );
+    }
+    // A folder where the file should be: not read, not written, the pass ends well.
+    std::fs::remove_file(&path).expect("remove");
+    std::fs::create_dir_all(path.join("x")).expect("folder");
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    let note = r.log_note().expect("note");
+    assert!(note.contains("it does not read"), "{note}");
+    r.snapshot().await.expect("a failed save fails no pass");
+    assert_eq!(r.logs_read_through(), Some(safe(9_000)), "kept in memory");
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1: dropping the kept logs removes the file, so a
+/// restart never reads them back: directly, and when the chain changed under
+/// them (a reorg) and the logs read again disagree with the contract's
+/// counts (a lying backend), nothing is left on disk.
+#[tokio::test]
+async fn storage_restart_1_forget_logs_invalidates_the_file() {
+    let s = setup(5).await;
+    head(&s, 20_000);
+    let path = log_file(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    r.snapshot().await.expect("snapshot");
+    assert!(path.exists());
+    r.forget_logs("a test").await;
+    assert!(!path.exists(), "removed");
+    let note = r.log_note().expect("note");
+    assert!(note.starts_with("dropped (a test)"), "{note}");
+    let fresh = file_reader(&s, CONTRACT, 0, &path);
+    assert!(fresh.log_note().expect("note").starts_with("none yet"));
+    r.snapshot().await.expect("snapshot");
+    assert!(path.exists(), "written again");
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.quirks.fork = 7;
+        f.quirks.empty_logs = 1_000;
+    }
+    r.snapshot()
+        .await
+        .expect_err("the logs read again disagree");
+    assert!(!path.exists(), "the dropped logs are not on disk");
+    let rebuilt = file_reader(&s, CONTRACT, 0, &path);
+    assert_eq!(kept_next(&rebuilt), None);
+    s.chain.0.lock().expect("lock").quirks.empty_logs = 0;
+    log_calls(&s);
+    rebuilt.snapshot().await.expect("a clean read");
+    assert_eq!(log_calls(&s)[0].0, 0, "from the deploy block");
+    assert!(path.exists());
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1: a node killed part way through its first read
+/// (60 ranges in) restarts from the last save ([`LOG_SAVE_EVERY_RANGES`]:
+/// range 50, anchored at its last block) and reads only the blocks from
+/// there, each once.
+#[tokio::test]
+async fn storage_restart_1_a_restart_mid_catch_up_resumes_from_the_saved_next_block() {
+    let s = setup(5).await;
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.block = 20_000;
+        f.quirks.hang_logs = Some(60);
+    }
+    let path = log_file(&s);
+    let r = Arc::new(file_reader(&s, CONTRACT, 0, &path));
+    let r2 = r.clone();
+    let task = tokio::spawn(async move { r2.snapshot().await });
+    until_soon(|| kept_next(&r) == Some(60 * LOG_RANGE), "60 ranges read").await;
+    for _ in 0..100 {
+        tokio::task::yield_now().await;
+    }
+    assert!(!task.is_finished(), "the 61st range never returns");
+    task.abort();
+    let _ = task.await;
+    drop(r);
+    // The restart.
+    s.chain.0.lock().expect("lock").quirks.hang_logs = None;
+    let saved = LOG_SAVE_EVERY_RANGES as u64 * LOG_RANGE;
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert_eq!(kept_next(&r), Some(saved), "saved at range 50");
+    log_calls(&s);
+    let snap = r.snapshot().await.expect("snapshot");
+    let calls = log_calls(&s);
+    assert_eq!(calls[0].0, saved, "goes on from the saved block");
+    assert_eq!(blocks_of(&calls), 20_001 - saved, "each block once");
+    assert_eq!((snap.deals.len(), snap.nodes.len()), (1, 5));
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1 with STORAGE-S15-4: a first read cut off by
+/// HTTP 429 after 70 ranges keeps its last save (range 50: 20 quiet ranges
+/// are not saved, review STORAGE-RESTART-R1 L2), and a restart goes on from
+/// there.
+#[tokio::test]
+async fn storage_restart_1_a_rate_limited_catch_up_resumes_from_its_last_save() {
+    let s = setup(5).await;
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.block = 20_000;
+        f.quirks.answer_logs = Some(70);
+    }
+    let path = log_file(&s);
+    let e = file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect_err("cut off");
+    assert!(e.contains("HTTP 429"), "{e}");
+    s.chain.0.lock().expect("lock").quirks.answer_logs = None;
+    let saved = LOG_SAVE_EVERY_RANGES as u64 * LOG_RANGE;
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert_eq!(kept_next(&r), Some(saved));
+    log_calls(&s);
+    r.snapshot().await.expect("snapshot");
+    let calls = log_calls(&s);
+    assert_eq!(calls[0].0, saved);
+    assert_eq!(blocks_of(&calls), 20_001 - saved);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1: health's
+/// `logsReadThrough` is the last block the kept logs cover: null before the
+/// first tick of a restarted node (the file is not checked against the
+/// chain yet), the new safe block after it, null with nothing kept.
+#[tokio::test]
+async fn storage_restart_1_health_shows_how_far_the_logs_are_cached() {
+    let s = setup(5).await;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    let node = Arc::new(StorageNode::new(
+        file_reader(&s, CONTRACT, 0, &path),
+        Arc::new(Sent::default()),
+        net(&s, &[("http://publisher", Peer::Good)]),
+        own.store.clone(),
+        health_cfg(s.nodes[0]),
+    ));
+    let st = health_of(Some(node.clone())).await["storage"].clone();
+    assert_eq!(
+        st["logsReadThrough"],
+        Value::Null,
+        "loaded, not checked yet"
+    );
+    head(&s, 9_400);
+    node.tick().await.expect("tick");
+    let st = health_of(Some(node)).await["storage"].clone();
+    assert_eq!(st["logsReadThrough"], json!(safe(9_400)), "after the tick");
+    let bare = health_node(&s, &own, Arc::new(std::sync::atomic::AtomicU64::new(1_000)));
+    let st = health_of(Some(bare)).await["storage"].clone();
+    assert_eq!(st["logsReadThrough"], Value::Null, "nothing kept yet");
+    clean(&s, &own);
+}
+
+/// Review STORAGE-RESTART-R1 M3, L1: a file whose last block's hash changed
+/// while the node was down (a reorg) is dropped on the first pass, before
+/// it is used, and every log is read again.
+#[tokio::test]
+async fn storage_restart_r1_a_file_whose_anchor_changed_while_down_is_dropped_at_load() {
+    let s = setup(5).await;
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    s.chain.0.lock().expect("lock").quirks.fork = 7;
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert!(r.log_note().expect("note").starts_with("loaded"));
+    let snap = r.snapshot().await.expect("snapshot");
+    let note = r.log_note().expect("note");
+    assert!(
+        note.starts_with(&format!(
+            "dropped (the hash of the kept block {} changed)",
+            safe(9_000)
+        )),
+        "{note}"
+    );
+    let calls = log_calls(&s);
+    assert_eq!((calls[0].0, blocks_of(&calls)), (0, 9_001), "read again");
+    assert_eq!((snap.deals.len(), snap.nodes.len()), (1, 5));
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review STORAGE-RESTART-R1 M3: the safe boundary. A file whose next block
+/// is the chain's safe block + 1 is used on the first pass; one at safe + 2
+/// is used too when the RPC knows its last block with the same hash (it was
+/// safe when saved), and while the RPC does not know that block yet it is
+/// neither used nor dropped: the pass ends as one with no answer and the
+/// next uses it. Only a different hash drops a file (the anchor test).
+#[tokio::test]
+async fn storage_restart_r1_the_safe_boundary_keeps_safe_plus_one_and_waits_on_an_unknown_last_block(
+) {
+    let s = setup(5).await;
+    let path = log_file(&s);
+    // next = safe + 1.
+    head(&s, 9_000);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert_eq!(kept_next(&r), Some(safe(9_000) + 1));
+    r.snapshot().await.expect("snapshot");
+    assert_eq!(log_calls(&s), vec![(safe(9_000) + 1, 9_000)], "used");
+    assert_eq!(r.logs_read_through(), Some(safe(9_000)));
+    // next = safe + 2: saved one block later, read at 9,000 again.
+    std::fs::remove_file(&path).expect("remove");
+    head(&s, 9_001);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    head(&s, 9_000);
+    let good = std::fs::read(&path).expect("file");
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert_eq!(kept_next(&r), Some(safe(9_000) + 2));
+    s.chain.0.lock().expect("lock").quirks.known_to = Some(safe(9_000));
+    let e = r.snapshot().await.expect_err("its last block is unknown");
+    assert!(e.contains("does not know the block yet"), "{e}");
+    assert_eq!(error_class(&e), "rpc_error");
+    assert_eq!(kept_next(&r), Some(safe(9_000) + 2), "kept");
+    assert_eq!(r.logs_read_through(), None, "not used yet");
+    assert_eq!(std::fs::read(&path).expect("file"), good, "the file stays");
+    assert!(log_calls(&s).is_empty(), "nothing read meanwhile");
+    s.chain.0.lock().expect("lock").quirks.known_to = None;
+    r.snapshot().await.expect("the RPC knows it now");
+    assert_eq!(log_calls(&s), vec![(safe(9_000) + 2, 9_000)], "used");
+    assert_eq!(r.logs_read_through(), Some(safe(9_000) + 1));
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review STORAGE-RESTART-R1 M3: a lagging backend on the first pass after a
+/// restart (its safe block 100 below the file's last block, and that block
+/// unknown to it) keeps the file: the pass ends as one with no answer; once
+/// the backend knows the block (its safe block still behind) the file is
+/// used and only the blocks above it are read.
+#[tokio::test]
+async fn storage_restart_r1_a_lagging_backend_on_the_first_pass_keeps_the_file() {
+    let s = setup(5).await;
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    let good = std::fs::read(&path).expect("file");
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.quirks.safe_lag = 100;
+        f.quirks.known_to = Some(safe(9_000) - 100);
+    }
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    let e = r.snapshot().await.expect_err("behind the file");
+    assert_eq!(error_class(&e), "rpc_error", "{e}");
+    assert_eq!(std::fs::read(&path).expect("file"), good, "kept");
+    assert_eq!(kept_next(&r), Some(safe(9_000) + 1));
+    assert!(
+        r.log_note().expect("note").starts_with("loaded"),
+        "not dropped"
+    );
+    s.chain.0.lock().expect("lock").quirks.known_to = None;
+    let snap = r.snapshot().await.expect("its anchor checks");
+    assert_eq!(
+        log_calls(&s),
+        vec![(safe(9_000) + 1, 9_000)],
+        "only the new blocks"
+    );
+    assert_eq!((snap.deals.len(), snap.nodes.len()), (1, 5));
+    assert_eq!(
+        std::fs::read(&path).expect("file"),
+        good,
+        "nothing new to save"
+    );
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review STORAGE-RESTART-R1 M1: a file with a good check but wrong
+/// contents (a `Slashed` log it never got, as an empty `eth_getLogs` answer
+/// leaves) passes the counts and the anchor; the node's first pass compares
+/// the contract's `exclusionFrom` for the nodes ranked above it, finds the
+/// difference, drops the logs and fails the pass (nothing sent from that
+/// view); the next pass reads them again and sees the slash.
+#[tokio::test]
+async fn storage_restart_r1_a_file_missing_a_slashed_log_is_caught_by_exclusion_from() {
+    let s = setup(5).await;
+    let own = world();
+    own.node.anchor(&sign(&s.manifest));
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    let salt = s.chain.0.lock().expect("lock").deal.salt;
+    let order = ranked(&shard_key(&salt, 0), &s.nodes);
+    let (top, me) = (order[0], order[order.len() - 1]);
+    // Slashed on chain (the log is in the kept blocks), missing from the file.
+    s.chain.0.lock().expect("lock").slashed.push((top, 0, 0, 4));
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        file_reader(&s, CONTRACT, 0, &path),
+        tx.clone(),
+        net(&s, &[("http://publisher", Peer::Good)]),
+        own.store.clone(),
+        health_cfg(me),
+    );
+    let e = node.tick().await.expect_err("the view is wrong");
+    assert!(
+        e.contains("exclusionFrom(deal 0, shard 0, node ") && e.contains("is 4 at block"),
+        "{e}"
+    );
+    assert_eq!(error_class(&e), "snapshot_disagrees");
+    assert!(!path.exists(), "dropped with the logs");
+    assert!(
+        tx.0.lock().expect("lock").is_empty(),
+        "nothing sent from the wrong view"
+    );
+    node.tick().await.expect("read again");
+    let snap = node.snap.lock().expect("lock").clone().expect("snapshot");
+    assert_eq!(snap.excl.from(0, 0, &top), Some(4), "the slash is seen");
+    assert!(path.exists(), "saved again");
+    clean(&s, &own);
+}
+
+/// Review STORAGE-RESTART-R1 M2: a file of another event set or fold rules
+/// is ignored at load; one of another chain (`eth_chainId`) is dropped on
+/// the first pass, before it is used.
+#[tokio::test]
+async fn storage_restart_r1_a_changed_event_set_fold_rules_or_chain_id_ignores_the_file() {
+    let s = setup(5).await;
+    head(&s, 9_000);
+    let path = log_file(&s);
+    file_reader(&s, CONTRACT, 0, &path)
+        .snapshot()
+        .await
+        .expect("snapshot");
+    let good = std::fs::read(&path).expect("file");
+    let changed = |field: &str, to: Value| {
+        let mut v: Value = serde_json::from_slice(&good).expect("json");
+        v.as_object_mut().expect("object").remove("check");
+        v[field] = to;
+        v["check"] = json!(log_file_check(&v));
+        serde_json::to_vec(&v).expect("json")
+    };
+    for (field, to, why) in [
+        (
+            "events",
+            json!(Hash32([1; 32]).to_string()),
+            "another set of events",
+        ),
+        ("fold", json!(LOG_FOLD_VERSION + 1), "fold rules"),
+    ] {
+        std::fs::write(&path, changed(field, to)).expect("write");
+        let r = file_reader(&s, CONTRACT, 0, &path);
+        let note = r.log_note().expect("note");
+        assert!(
+            note.starts_with("ignored") && note.contains(why),
+            "{field}: {note}"
+        );
+        assert_eq!(kept_next(&r), None, "{field}");
+    }
+    std::fs::write(&path, &good).expect("write");
+    s.chain.0.lock().expect("lock").chain_id = 1;
+    log_calls(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    assert!(r.log_note().expect("note").starts_with("loaded"));
+    r.snapshot().await.expect("snapshot");
+    let note = r.log_note().expect("note");
+    assert!(
+        note.starts_with("dropped (written for chain 84532, the RPC serves chain 1)"),
+        "{note}"
+    );
+    assert_eq!(log_calls(&s)[0].0, 0, "read again");
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review STORAGE-RESTART-R1 L3: a save and a drop of the kept logs that
+/// race leave no file of the dropped logs: a save copied before the drop and
+/// written after its removal is not written (the generation), a removal
+/// waits for a write under way, and so in either order however the
+/// blocking threads interleave.
+#[tokio::test]
+async fn storage_restart_r1_a_save_racing_forget_logs_leaves_no_stale_file() {
+    let s = setup(5).await;
+    head(&s, 9_000);
+    let path = log_file(&s);
+    let r = file_reader(&s, CONTRACT, 0, &path);
+    r.snapshot().await.expect("snapshot");
+    let (logs, anchor) = {
+        let c = r.cache.lock().expect("lock");
+        (c.logs.clone(), c.anchor)
+    };
+    let restore = |r: &StorageChain| {
+        if let Ok(mut c) = r.cache.lock() {
+            c.logs = logs.clone();
+            c.anchor = anchor;
+            c.saved = None;
+        }
+    };
+    // Copied, then dropped (the file removed), then written: not written.
+    restore(&r);
+    let file = r.file.clone().expect("file");
+    let (mark, bytes) = LogFile::prepare(&r.cache, &CONTRACT, 0)
+        .expect("prepare")
+        .expect("a save is due");
+    r.forget_logs("a race").await;
+    assert!(!path.exists());
+    file.commit(&r.cache, mark, &bytes).expect("commit");
+    assert!(!path.exists(), "the dropped logs are not written");
+    // Both orders, the threads as they come.
+    for round in 0..64 {
+        restore(&r);
+        if round % 2 == 0 {
+            tokio::join!(r.save_logs(), r.forget_logs("a race"));
+        } else {
+            tokio::join!(r.forget_logs("a race"), r.save_logs());
+        }
+        assert!(!path.exists(), "round {round}: no stale file");
+        assert_eq!(kept_next(&r), None, "round {round}");
+    }
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }

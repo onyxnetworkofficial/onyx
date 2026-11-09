@@ -1,16 +1,14 @@
-Latest: 2026-11-04: 9,044 on-chain-metric datasets live, refreshed under one anchor per refresh (catalogs, S22; the daily timer waits for the owner), searchable on the All datasets page; testnet live at https://onyx.cryptagraph.com
-- Website: browse checked data, run the checks in your browser, add data (form, API or AI connector)
+Latest: 2026-11-09: the first publisher's 9,044 on-chain-metric datasets refresh daily under one anchor a day (catalog 5: 569 versions); testnet live at https://onyx.cryptagraph.com
+- Website: browse checked data, run the checks in your browser, add data (form, API or AI connector); every page and web worker runs under a strict Content-Security-Policy
+- Large datasets (CL5, S22): searchable on the All datasets page; a publisher can remove one with a tombstone, nodes stop serving it (storage nodes learn it too) and erase its files after 30 days (dry run for now)
+- Serving: slow readers cut off, shards streamed from disk, each catalog answer built once and shared
+- Payments: the paid flow checked end to end through the hosted web server's config on a local fork (402, paid 200, one charge); not switched on live
 - Markets on Base Sepolia: two U.S. debt futures (one settled from observed data, one open)
 - Test insurance: frost and earthquake cover, backed by a 1,000 tONYX pool
 - Level 2 data (bonded observers agree on chain): U.S. debt, Treasury cash and deposits, weather, earthquakes
-- New sources from a reviewed manifest, no new code (CL3): Treasury daily deposits is the first, live
-- Large datasets (CL5): 549 daily on-chain datasets from the first bulk publisher, every row provable
-- Storage network (CL9, S15, S16): run 1 passed 612 of 612 checks over 14 hours; run 2 (S16 contract 0x9244…ee43) passed 85 of 90: 5 misses in its first epoch from a rate limit, fixed. A check proves a correct row, not a kept copy (ADR-0062)
-- Desktop app and onyx-contrib (CL2, CL10): installers for Windows, macOS and Linux in v0.3.1-testnet; keys stay on your computer
-- API: https://onyx.cryptagraph.com/v1 (OpenAPI at /v1/openapi.json); payments not switched on
-- AI connector (MCP): https://onyx.cryptagraph.com/mcp (find, read and propose data)
-- Testnet only: tONYX and test USDC have no value; token economics are not final
-- Not public yet: the entity label sets (rights not cleared; DATA-LICENSE.md)
-- Test ETH: deployer 0.000075, nodes 0.000026 to 0.000083, payer 0.000023; a long storage run needs a faucet, which needs a sign-up
-- Correction markets (CL7): contract live on Base Sepolia and paired with Treasury deposits; the recheck runner passes end to end locally; no market yet
-- Next: open each installer on a real machine (S20), outside observers, the first correction market (recheck days from 2026-11-14), a security audit
+- Storage network (S15, S16): two live runs passed (612 of 612 checks; 85 of 90, fixed); no deal open now
+- API: https://onyx.cryptagraph.com/v1 (OpenAPI at /v1/openapi.json); AI connector at /mcp
+- Testnet only: tONYX and test USDC have no value; the entity label sets are not public yet (rights, DATA-LICENSE.md)
+- Test ETH: the publisher has about 116 daily anchors left; deployer 0.000075; storage nodes too low for a long run (a faucet needs a sign-up)
+- Monitoring: the health watch (catalog age, storage nodes, the publisher's gas) is staged on the server, waiting for its one-time install
+- Next: install the health watch; storage nodes decline deals on removed data (needs test ETH); open each installer on a real machine (S20); a security audit

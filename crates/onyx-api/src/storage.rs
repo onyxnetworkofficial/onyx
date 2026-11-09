@@ -19,11 +19,14 @@ use onyx_core::{Hash32, SignedReport};
 use onyx_storage::abi::{self, events, DealInfo, NodeInfo};
 use onyx_storage::challenge;
 use onyx_storage::ids::{set_hash, shard_key, slot_shard, NodeId};
-use onyx_storage::placement::{challenged, holders, holders_at, Exclusions, Jailed, WHOLE_DEAL};
+use onyx_storage::placement::{
+    challenged, holders, holders_at, ranked, Exclusions, Jailed, WHOLE_DEAL,
+};
 use onyx_storage::repair::DealPlace;
 use serde_json::{json, Value};
 use std::collections::{BTreeMap, BTreeSet};
-use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -35,6 +38,38 @@ pub const MAX_MANIFEST_ANSWER: usize = crate::bulk_serve::MAX_MANIFEST_BODY;
 /// 200 (the indexer's default span; ROADMAP S15, found on the first live
 /// deploy 2026-11-01).
 pub const LOG_RANGE: u64 = crate::indexer::DEFAULT_SPAN;
+/// The format of a reader's log cache file ([`StorageChain::with_log_file`],
+/// THREATS STORAGE-RESTART-1); a file of another version is ignored. 2 adds
+/// the chain id, the events and the fold rules (review STORAGE-RESTART-R1 M2)
+/// and anchors every file at its last block (R1 L1).
+pub const LOG_FILE_VERSION: u64 = 2;
+/// What the kept logs mean: which logs are kept and how `Answered` logs fold
+/// into passes (`fold_logs`). Raise it with any change to either: a file of
+/// another value is ignored (review STORAGE-RESTART-R1 M2).
+pub const LOG_FOLD_VERSION: u64 = 1;
+/// Ranges the kept logs move between two saves of the log cache file when
+/// no kept log changed (THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1
+/// L2). A save writes the whole file and syncs it twice: a catch-up of
+/// 14,900 ranges saves about 300 times, a quiet node about every 10,000
+/// blocks, and a restart reads at most 49 ranges again. A pass that changed
+/// the kept logs (a new event) saves when it ends.
+pub const LOG_SAVE_EVERY_RANGES: usize = 50;
+/// Blocks of [`LOG_SAVE_EVERY_RANGES`] ranges.
+const LOG_SAVE_BLOCKS: u64 = LOG_SAVE_EVERY_RANGES as u64 * LOG_RANGE;
+/// Largest log cache file read or written (review STORAGE-RESTART-R1 L2):
+/// 32 MiB, far above a testnet node's (a few KiB) and well inside a storage
+/// unit's 512 MiB of memory once decoded. A larger file is ignored, and a
+/// cache that would be larger is not saved (logged).
+pub const MAX_LOG_FILE_BYTES: u64 = 32 << 20;
+/// `exclusionFrom` calls one check of the kept logs makes at most (review
+/// STORAGE-RESTART-R1 M1); with more (deal, shard, node) to check, the next
+/// check goes on where this one stopped.
+pub const EXCL_CHECK_CALLS: usize = 64;
+/// Seconds between two checks of the kept logs against `exclusionFrom`
+/// (about a day); the first is on the first pass after start.
+pub const EXCL_CHECK_EVERY_SECS: u64 = 86_400;
+/// Seconds before a check that got no answer is tried again.
+pub const EXCL_CHECK_RETRY_SECS: u64 = 600;
 /// The events a snapshot reads: one `eth_getLogs` call per range asks for
 /// all of them (topic 0 is any of these), not one call per event. `Answered`
 /// gives the last pass per shard, which the decline notice reads (ADR-0060
@@ -64,6 +99,17 @@ pub const LEARN_ANSWER_BYTES: usize = 64 << 10;
 pub const LEARN_CALL_TIMEOUT: Duration = Duration::from_secs(10);
 /// Datasets a learn pass asks about (they take turns).
 pub const LEARN_PER_PASS: usize = 4;
+/// Every `storage.lastErrorClass` on `/v1/health` ([`error_class`],
+/// review OBS-STORAGE-R1 3: a class, never error text).
+pub const ERROR_CLASSES: [&str; 7] = [
+    "rpc_rate_limited",
+    "rpc_unreachable",
+    "rpc_error",
+    "contract_version",
+    "snapshot_disagrees",
+    "store",
+    "other",
+];
 
 /// HTTP GET transport (shard files, manifests and rows from peers).
 pub trait HttpGet: Send + Sync {
@@ -145,7 +191,10 @@ pub struct StorageChain {
     contract: [u8; 20],
     from_block: u64,
     /// What a pass need not read again (review STORAGE-R1-8).
-    cache: Mutex<ChainCache>,
+    cache: Arc<Mutex<ChainCache>>,
+    /// Where the kept logs outlive a restart ([`StorageChain::with_log_file`],
+    /// THREATS STORAGE-RESTART-1); none: in memory only.
+    file: Option<Arc<LogFile>>,
     /// JSON-RPC calls that got no answer (HTTP 429, a timeout): a pass that
     /// failed only for that keeps its logs (THREATS STORAGE-S15-4).
     rpc_errors: AtomicUsize,
@@ -163,8 +212,388 @@ struct ChainCache {
     /// The next block to read, the kept logs (every snapshot event but
     /// `Answered`) and the passes folded from `Answered` logs.
     logs: Option<(u64, Vec<Log>, Passes)>,
+    /// A kept block and its hash: the last kept block once a pass read up to
+    /// the safe block, and in every save (review STORAGE-RESTART-R1 L1).
     anchor: Option<(u64, Hash32)>,
     closed: BTreeSet<u64>,
+    /// The kept logs came from the log file of this chain id and are not
+    /// checked against the chain yet (THREATS STORAGE-RESTART-1, review
+    /// STORAGE-RESTART-R1 M2, M3).
+    from_file: Option<u64>,
+    /// The chain id the RPC serves (asked once, with a log file only).
+    chain_id: Option<u64>,
+    /// Bumped when the kept logs or passes change.
+    changes: u64,
+    /// Bumped when the kept logs are dropped: a save begun before is not
+    /// written (review STORAGE-RESTART-R1 L3).
+    generation: u64,
+    /// What the log file holds.
+    saved: Option<Saved>,
+    /// What the log file last did (loaded, ignored or dropped, and why); the
+    /// node log has it too.
+    note: Option<String>,
+}
+
+/// What the log file holds: the generation, next block and changes of the
+/// kept logs it was written from.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Saved {
+    generation: u64,
+    next: u64,
+    changes: u64,
+}
+
+impl ChainCache {
+    /// The block the last save of this generation reached (the deploy block
+    /// when none).
+    fn saved_next(&self, from_block: u64) -> u64 {
+        match self.saved {
+            Some(s) if s.generation == self.generation => s.next,
+            _ => from_block,
+        }
+    }
+
+    /// The kept logs moved [`LOG_SAVE_EVERY_RANGES`] ranges since the last
+    /// save (checked against the chain, with its chain id known).
+    fn moved_far(&self, from_block: u64) -> bool {
+        match (&self.logs, self.from_file, self.chain_id) {
+            (Some((next, ..)), None, Some(_)) => {
+                *next >= self.saved_next(from_block).saturating_add(LOG_SAVE_BLOCKS)
+            }
+            _ => false,
+        }
+    }
+
+    /// A save is due: the kept logs changed or moved far since the last one,
+    /// or none of them is saved yet (review STORAGE-RESTART-R1 L2).
+    fn save_due(&self, from_block: u64) -> bool {
+        let changed = match self.saved {
+            Some(s) if s.generation == self.generation => s.changes != self.changes,
+            _ => true,
+        };
+        match (&self.logs, self.from_file, self.chain_id) {
+            (Some((next, ..)), None, Some(_)) => {
+                *next > from_block && (changed || self.moved_far(from_block))
+            }
+            _ => false,
+        }
+    }
+}
+
+/// A reader's log cache file (THREATS STORAGE-RESTART-1).
+struct LogFile {
+    path: PathBuf,
+    /// Held while the file is written or removed: a removal waits for a
+    /// write under way, and a write checks the generation under it.
+    lock: Mutex<()>,
+}
+
+/// The log cache file of `contract` in a node's state folder
+/// (`ONYX_STATE_DIR`, one process per folder; THREATS STORAGE-RESTART-1):
+/// named after the contract, so another contract's reader never opens it.
+pub fn log_cache_file(state_dir: &Path, contract: &[u8; 20]) -> PathBuf {
+    state_dir.join(format!("storage-logs-{}.json", hex0x(contract)))
+}
+
+/// What a log cache file holds: the chain id, the next block to read, the
+/// kept logs, the passes and the anchor (always the last kept block, review
+/// STORAGE-RESTART-R1 L1).
+struct FileLogs {
+    chain_id: u64,
+    next: u64,
+    logs: Vec<Log>,
+    passes: Passes,
+    anchor: (u64, Hash32),
+}
+
+/// The events the kept logs are of: Keccak-256 of [`SNAPSHOT_EVENTS`]'
+/// topics in order (review STORAGE-RESTART-R1 M2).
+fn events_hash() -> String {
+    let mut b = Vec::new();
+    for e in SNAPSHOT_EVENTS {
+        b.extend_from_slice(&abi::topic(e).0);
+    }
+    onyx_core::hash::keccak256(&b).to_string()
+}
+
+/// The check of a log cache file: Keccak-256 of the compact JSON of every
+/// field but `check` (a file changed after it was written does not decode).
+fn log_file_check(body: &Value) -> String {
+    onyx_core::hash::keccak256(&serde_json::to_vec(body).unwrap_or_default()).to_string()
+}
+
+/// The log cache file's bytes: compact JSON with its check.
+fn encode_log_file(contract: &[u8; 20], from_block: u64, k: &FileLogs) -> Vec<u8> {
+    let logs: Vec<Value> = k
+        .logs
+        .iter()
+        .map(|l| {
+            json!({
+                "block": l.block,
+                "topics": l.topics.iter().map(|t| t.to_string()).collect::<Vec<_>>(),
+                "data": hex0x(&l.data),
+            })
+        })
+        .collect();
+    let passes: Vec<Value> = k
+        .passes
+        .iter()
+        .map(|((deal, index, node), epoch)| json!([deal, index, node.to_string(), epoch]))
+        .collect();
+    let mut body = json!({
+        "onyxStorageLogs": LOG_FILE_VERSION,
+        "chainId": k.chain_id,
+        "contract": hex0x(contract),
+        "fromBlock": from_block,
+        "events": events_hash(),
+        "fold": LOG_FOLD_VERSION,
+        "next": k.next,
+        "anchor": [k.anchor.0, k.anchor.1.to_string()],
+        "logs": logs,
+        "passes": passes,
+    });
+    let check = log_file_check(&body);
+    body["check"] = json!(check);
+    let mut bytes = serde_json::to_vec(&body).unwrap_or_default();
+    bytes.push(b'\n');
+    bytes
+}
+
+/// Decode a log cache file whole for `contract` read from `from_block`, or
+/// say why it is not used: nothing in it is used unless all of it checks.
+fn decode_log_file(bytes: &[u8], contract: &[u8; 20], from_block: u64) -> Result<FileLogs, String> {
+    let mut v: Value =
+        serde_json::from_slice(bytes).map_err(|e| format!("it does not decode: {e}"))?;
+    if v["onyxStorageLogs"] != json!(LOG_FILE_VERSION) {
+        return Err(format!(
+            "version {}, this node reads version {LOG_FILE_VERSION}",
+            v["onyxStorageLogs"]
+        ));
+    }
+    let check = v
+        .as_object_mut()
+        .and_then(|o| o.remove("check"))
+        .ok_or("it has no check")?;
+    if check.as_str() != Some(log_file_check(&v).as_str()) {
+        return Err("its check does not match: damaged".into());
+    }
+    if hexb(&v["contract"]).ok().as_deref() != Some(&contract[..]) {
+        return Err(format!(
+            "written for another contract ({}), not {}",
+            v["contract"],
+            hex0x(contract)
+        ));
+    }
+    if v["fromBlock"] != json!(from_block) {
+        return Err(format!(
+            "written for deploy block {}, this node reads from block {from_block}",
+            v["fromBlock"]
+        ));
+    }
+    if v["events"] != json!(events_hash()) {
+        return Err("written for another set of events".into());
+    }
+    if v["fold"] != json!(LOG_FOLD_VERSION) {
+        return Err(format!(
+            "written with fold rules {}, this node folds with {LOG_FOLD_VERSION}",
+            v["fold"]
+        ));
+    }
+    let num = |x: &Value, what: &str| x.as_u64().ok_or_else(|| format!("{what} is not a number"));
+    let chain_id = num(&v["chainId"], "chainId")?;
+    let next = num(&v["next"], "next")?;
+    if next <= from_block {
+        return Err(format!("next block {next} is not after the deploy block"));
+    }
+    let anchor = (
+        num(&v["anchor"][0], "the anchor's block")?,
+        h32(&v["anchor"][1])?,
+    );
+    if anchor.0 != next - 1 {
+        return Err(format!(
+            "its anchor {} is not its last block {}",
+            anchor.0,
+            next - 1
+        ));
+    }
+    let mut logs = Vec::new();
+    for l in v["logs"].as_array().ok_or("logs is not a list")? {
+        let block = num(&l["block"], "a log's block")?;
+        if block < from_block || block >= next {
+            return Err(format!("a log at block {block} is outside the blocks read"));
+        }
+        let topics = l["topics"]
+            .as_array()
+            .ok_or("a log's topics is not a list")?
+            .iter()
+            .map(h32)
+            .collect::<Result<Vec<_>, _>>()?;
+        logs.push(Log {
+            topics,
+            data: hexb(&l["data"])?,
+            block,
+        });
+    }
+    let mut passes = Passes::new();
+    for p in v["passes"].as_array().ok_or("passes is not a list")? {
+        let index = u32::try_from(num(&p[1], "a pass's shard")?)
+            .map_err(|_| "a pass's shard is not a uint32".to_string())?;
+        let key = (num(&p[0], "a pass's deal")?, index, NodeId(h32(&p[2])?));
+        passes.insert(key, num(&p[3], "a pass's epoch")?);
+    }
+    Ok(FileLogs {
+        chain_id,
+        next,
+        logs,
+        passes,
+        anchor,
+    })
+}
+
+/// A poisoned lock as an I/O error.
+fn poisoned<T>(_: T) -> std::io::Error {
+    std::io::Error::other("lock")
+}
+
+/// Read at most [`MAX_LOG_FILE_BYTES`] of `path` (larger: an error).
+fn read_capped(path: &Path) -> std::io::Result<Vec<u8>> {
+    use std::io::Read;
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)?
+        .take(MAX_LOG_FILE_BYTES + 1)
+        .read_to_end(&mut bytes)?;
+    if bytes.len() as u64 > MAX_LOG_FILE_BYTES {
+        return Err(std::io::Error::other(format!(
+            "larger than the {} MiB cap",
+            MAX_LOG_FILE_BYTES >> 20
+        )));
+    }
+    Ok(bytes)
+}
+
+/// Write `path` whole: a temporary file of this process and write only
+/// (review STORAGE-RESTART-R1 L3: two writers never share one), synced,
+/// renamed over `path`, then the folder synced.
+fn write_log_file(path: &Path, bytes: &[u8]) -> std::io::Result<()> {
+    use std::io::Write;
+    static TEMP: AtomicU64 = AtomicU64::new(0);
+    let dir = path
+        .parent()
+        .filter(|d| !d.as_os_str().is_empty())
+        .ok_or_else(|| std::io::Error::other("no folder"))?;
+    std::fs::create_dir_all(dir)?;
+    let name = path
+        .file_name()
+        .ok_or_else(|| std::io::Error::other("no file name"))?
+        .to_string_lossy();
+    let tmp = dir.join(format!(
+        ".{name}.{}-{}.tmp",
+        std::process::id(),
+        TEMP.fetch_add(1, Ordering::Relaxed)
+    ));
+    let written = (|| {
+        let mut f = std::fs::File::create(&tmp)?;
+        f.write_all(bytes)?;
+        f.sync_all()?;
+        std::fs::rename(&tmp, path)
+    })();
+    if written.is_err() {
+        let _ = std::fs::remove_file(&tmp);
+    }
+    written?;
+    std::fs::File::open(dir)?.sync_all()
+}
+
+impl LogFile {
+    /// Write the kept logs when a save is due ([`ChainCache::save_due`]) and
+    /// they are anchored at their last block (review STORAGE-RESTART-R1 L1).
+    /// They are copied under the cache's lock and encoded outside it (R1
+    /// L2); a generation dropped meanwhile is not written (R1 L3).
+    fn save(
+        &self,
+        cache: &Mutex<ChainCache>,
+        contract: &[u8; 20],
+        from_block: u64,
+    ) -> std::io::Result<()> {
+        match Self::prepare(cache, contract, from_block)? {
+            Some((mark, bytes)) => self.commit(cache, mark, &bytes),
+            None => Ok(()),
+        }
+    }
+
+    /// The bytes of a due save and what they hold (none: no save due).
+    fn prepare(
+        cache: &Mutex<ChainCache>,
+        contract: &[u8; 20],
+        from_block: u64,
+    ) -> std::io::Result<Option<(Saved, Vec<u8>)>> {
+        let (mark, kept) = {
+            let c = cache.lock().map_err(poisoned)?;
+            let (Some((next, logs, passes)), Some(anchor), Some(chain_id)) =
+                (&c.logs, c.anchor, c.chain_id)
+            else {
+                return Ok(None);
+            };
+            if !c.save_due(from_block) || anchor.0.saturating_add(1) != *next {
+                return Ok(None);
+            }
+            let mark = Saved {
+                generation: c.generation,
+                next: *next,
+                changes: c.changes,
+            };
+            let kept = FileLogs {
+                chain_id,
+                next: *next,
+                logs: logs.clone(),
+                passes: passes.clone(),
+                anchor,
+            };
+            (mark, kept)
+        };
+        let bytes = encode_log_file(contract, from_block, &kept);
+        if bytes.len() as u64 > MAX_LOG_FILE_BYTES {
+            return Err(std::io::Error::other(format!(
+                "{} bytes, above the {} MiB cap (a restart reads every log again)",
+                bytes.len(),
+                MAX_LOG_FILE_BYTES >> 20
+            )));
+        }
+        Ok(Some((mark, bytes)))
+    }
+
+    /// Write `bytes` (holding `mark`) unless the kept logs were dropped since
+    /// they were copied.
+    fn commit(&self, cache: &Mutex<ChainCache>, mark: Saved, bytes: &[u8]) -> std::io::Result<()> {
+        let _held = self.lock.lock().map_err(poisoned)?;
+        if cache.lock().map_err(poisoned)?.generation != mark.generation {
+            return Ok(());
+        }
+        write_log_file(&self.path, bytes)?;
+        if let Ok(mut c) = cache.lock() {
+            if c.generation == mark.generation {
+                c.saved = Some(mark);
+            }
+        }
+        Ok(())
+    }
+
+    /// Remove the file and sync its folder (none: done), after any write
+    /// under way.
+    fn remove(&self) -> std::io::Result<()> {
+        let _held = self
+            .lock
+            .lock()
+            .map_err(|_| std::io::Error::other("lock"))?;
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => match self.path.parent().filter(|d| !d.as_os_str().is_empty()) {
+                Some(dir) => std::fs::File::open(dir)?.sync_all(),
+                None => Ok(()),
+            },
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(e) => Err(e),
+        }
+    }
 }
 
 /// The last epoch each node passed a check on each shard: (deal, shard, node)
@@ -175,12 +604,15 @@ struct ChainCache {
 type Passes = BTreeMap<(u64, u32, NodeId), u64>;
 
 /// Split `logs` into the ones to keep and the passes they hold (`Answered`
-/// with `passed`), in chain order.
-fn fold_logs(logs: Vec<Log>, keep: &mut Vec<Log>, passes: &mut Passes) -> Result<(), String> {
+/// with `passed`), in chain order; true when either changed. A change here
+/// changes what a log cache file means: raise [`LOG_FOLD_VERSION`].
+fn fold_logs(logs: Vec<Log>, keep: &mut Vec<Log>, passes: &mut Passes) -> Result<bool, String> {
     let answered = abi::topic(events::ANSWERED);
+    let mut changed = false;
     for l in logs {
         if l.topics.first() != Some(&answered) {
             keep.push(l);
+            changed = true;
             continue;
         }
         // Data: slot, shard index, passed, paid.
@@ -191,10 +623,50 @@ fn fold_logs(logs: Vec<Log>, keep: &mut Vec<Log>, passes: &mut Passes) -> Result
         let epoch = topic_u64(&l, 2, "Answered topic")?;
         let node = NodeId(*l.topics.get(3).ok_or("Answered topic")?);
         let index = word_u32(&l, 1, "Answered index")?;
-        let e = passes.entry((deal, index, node)).or_insert(epoch);
-        *e = (*e).max(epoch);
+        match passes.get_mut(&(deal, index, node)) {
+            Some(e) if *e >= epoch => {}
+            Some(e) => {
+                *e = epoch;
+                changed = true;
+            }
+            None => {
+                passes.insert((deal, index, node), epoch);
+                changed = true;
+            }
+        }
     }
-    Ok(())
+    Ok(changed)
+}
+
+/// The raw records behind `exclusionFrom` (ADR-0060 amendment 2 item 2) in
+/// `logs` and `passes`: slashes, declines and passes, in any order.
+fn exclusions_of<'a>(
+    logs: impl Iterator<Item = &'a Log>,
+    passes: &Passes,
+) -> Result<Exclusions, String> {
+    let (slashed, declined) = (abi::topic(events::SLASHED), abi::topic(events::DECLINED));
+    let err = |e: abi::AbiError| e.to_string();
+    let mut excl = Exclusions::new();
+    for l in logs {
+        let t = l.topics.first();
+        if t == Some(&slashed) {
+            let node = NodeId(*l.topics.get(1).ok_or("Slashed topic")?);
+            let deal = topic_u64(l, 2, "Slashed topic")?;
+            let index = word_u32(l, 2, "Slashed index")?;
+            let from = abi::word_u64(&l.data, 4).map_err(err)?;
+            excl.slash(deal, index, node, from);
+        } else if t == Some(&declined) {
+            let node = NodeId(*l.topics.get(1).ok_or("Declined topic")?);
+            let deal = topic_u64(l, 2, "Declined topic")?;
+            let index = word_u32(l, 0, "Declined index")?;
+            let from = abi::word_u64(&l.data, 1).map_err(err)?;
+            excl.decline(deal, index, node, from);
+        }
+    }
+    for ((deal, index, node), epoch) in passes {
+        excl.pass(*deal, *index, *node, *epoch);
+    }
+    Ok(excl)
 }
 
 /// Topic `i` of a log as a `uint64` (the low 8 bytes).
@@ -242,9 +714,141 @@ impl StorageChain {
             rpc,
             contract,
             from_block,
-            cache: Mutex::new(ChainCache::default()),
+            cache: Arc::new(Mutex::new(ChainCache::default())),
+            file: None,
             rpc_errors: AtomicUsize::new(0),
         }
+    }
+
+    /// Keep the logs of safe blocks in `path` too, so a restart reads only
+    /// the blocks since (THREATS STORAGE-RESTART-1; [`log_cache_file`]), and
+    /// start from what the file holds when it is for this contract, deploy
+    /// block, events and fold rules, of [`LOG_FILE_VERSION`], at most
+    /// [`MAX_LOG_FILE_BYTES`] and decodes whole. The first pass checks it
+    /// against the chain (its chain id and its last block's hash) before
+    /// using it, and the node's first pass checks it against the contract's
+    /// `exclusionFrom` (review STORAGE-RESTART-R1). A file that is not used
+    /// is logged and the logs are read again from the deploy block: it never
+    /// fails the start.
+    pub fn with_log_file(mut self, path: PathBuf) -> Self {
+        let from = self.from_block;
+        let what = match read_capped(&path) {
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                format!("none yet; every log is read from block {from}")
+            }
+            Err(e) => {
+                format!("ignored (it does not read: {e}); every log is read from block {from}")
+            }
+            Ok(bytes) => match decode_log_file(&bytes, &self.contract, from) {
+                Ok(k) => {
+                    let what = format!(
+                        "loaded ({} logs, {} passes, read through block {}); checked against the chain on the first pass",
+                        k.logs.len(),
+                        k.passes.len(),
+                        k.anchor.0
+                    );
+                    if let Ok(mut c) = self.cache.lock() {
+                        c.saved = Some(Saved {
+                            generation: c.generation,
+                            next: k.next,
+                            changes: c.changes,
+                        });
+                        c.logs = Some((k.next, k.logs, k.passes));
+                        c.anchor = Some(k.anchor);
+                        c.from_file = Some(k.chain_id);
+                    }
+                    what
+                }
+                Err(why) => format!("ignored ({why}); every log is read again from block {from}"),
+            },
+        };
+        self.file = Some(Arc::new(LogFile {
+            path,
+            lock: Mutex::new(()),
+        }));
+        self.note(what);
+        self
+    }
+
+    /// Log what the log cache file did, and keep it for [`Self::log_note`].
+    fn note(&self, what: String) {
+        if let Some(f) = &self.file {
+            eprintln!("onyx-node: storage: log cache {}: {what}", f.path.display());
+        }
+        if let Ok(mut c) = self.cache.lock() {
+            c.note = Some(what);
+        }
+    }
+
+    /// What the log cache file last did: loaded, ignored or dropped, and why
+    /// (none without a file).
+    pub fn log_note(&self) -> Option<String> {
+        self.cache.lock().ok().and_then(|c| c.note.clone())
+    }
+
+    /// The last block the kept logs cover: `logsReadThrough` on `/v1/health`
+    /// (THREATS STORAGE-RESTART-1, review STORAGE-RESTART-R1). `None` when
+    /// none are kept, or while logs loaded from the file are not checked
+    /// against the chain yet.
+    pub fn logs_read_through(&self) -> Option<u64> {
+        let c = self.cache.lock().ok()?;
+        if c.from_file.is_some() {
+            return None;
+        }
+        c.logs.as_ref().map(|l| l.0.saturating_sub(1))
+    }
+
+    /// Save the kept logs to the log cache file when a save is due, on a
+    /// blocking thread so the runtime never waits on the disk. A save is
+    /// anchored at its last block: when the kept anchor is older, that
+    /// block's hash is asked first (no answer: no save now; review
+    /// STORAGE-RESTART-R1 L1). A failed save is logged; the logs stay in
+    /// memory and a later save writes them.
+    async fn save_logs(&self) {
+        let Some(file) = self.file.clone() else {
+            return;
+        };
+        let from = self.from_block;
+        let unanchored = self.cache.lock().ok().and_then(|c| {
+            let next = c.logs.as_ref()?.0;
+            (c.save_due(from) && c.anchor.map(|a| a.0.saturating_add(1)) != Some(next))
+                .then_some(next - 1)
+        });
+        if let Some(n) = unanchored {
+            let Some(h) = self.hash_of(n).await else {
+                return;
+            };
+            if let Ok(mut c) = self.cache.lock() {
+                if c.logs.as_ref().map(|l| l.0) == Some(n + 1) {
+                    c.anchor = Some((n, h));
+                }
+            }
+        }
+        let (f, cache, contract) = (file.clone(), self.cache.clone(), self.contract);
+        let r = tokio::task::spawn_blocking(move || f.save(&cache, &contract, from))
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+            .and_then(|r| r);
+        if let Err(e) = r {
+            eprintln!(
+                "onyx-node: storage: log cache {}: not saved: {e}",
+                file.path.display()
+            );
+        }
+    }
+
+    /// The hash of block `n`, asked once and not counted as a failed call
+    /// (a save's anchor; `None`: no save now).
+    async fn hash_of(&self, n: u64) -> Option<Hash32> {
+        let b = self
+            .rpc
+            .call("eth_getBlockByNumber", json!([format!("0x{n:x}"), false]))
+            .await
+            .ok()?;
+        if qty(&b["number"]).ok()? != n {
+            return None;
+        }
+        h32(&b["hash"]).ok()
     }
 
     /// One JSON-RPC call, counted in `rpc_errors` when it fails.
@@ -478,22 +1082,47 @@ impl StorageChain {
     /// They are kept range by range: a first read cut off by the node (HTTP
     /// 429 from a public endpoint after a few hundred calls) goes on where it
     /// stopped (THREATS STORAGE-S15-4). What is kept stays small (no raw
-    /// `Answered`), so saving it after each range stays cheap.
-    async fn cached_logs(&self, to: u64, safe: u64) -> Result<(Vec<Log>, Passes), String> {
+    /// `Answered`), so keeping it after each range stays cheap; the log
+    /// cache file is written each [`LOG_SAVE_EVERY_RANGES`] ranges while
+    /// catching up (THREATS STORAGE-RESTART-1) and when [`Self::snapshot`]
+    /// ends with a save due. Once read up to the safe block `(safe, hash)`,
+    /// the kept logs are anchored there (review STORAGE-RESTART-R1 L1).
+    async fn cached_logs(
+        &self,
+        to: u64,
+        (safe, safe_hash): (u64, Hash32),
+    ) -> Result<(Vec<Log>, Passes), String> {
         let (mut next, mut out, mut passes) = self
             .cache
             .lock()
             .ok()
             .and_then(|c| c.logs.clone())
             .unwrap_or((self.from_block, Vec::new(), Passes::new()));
-        let safe = safe.min(to);
-        while next <= safe {
-            let end = next.saturating_add(LOG_RANGE - 1).min(safe);
+        let last = safe.min(to);
+        let mut read = false;
+        while next <= last {
+            let end = next.saturating_add(LOG_RANGE - 1).min(last);
             let got = self.logs_range(&SNAPSHOT_EVENTS, next, end).await?;
-            fold_logs(got, &mut out, &mut passes)?;
+            let changed = fold_logs(got, &mut out, &mut passes)?;
             next = end + 1;
+            read = true;
+            let far = match self.cache.lock() {
+                Ok(mut c) => {
+                    c.logs = Some((next, out.clone(), passes.clone()));
+                    if changed {
+                        c.changes += 1;
+                    }
+                    c.moved_far(self.from_block)
+                }
+                Err(_) => false,
+            };
+            if far && next <= last {
+                self.save_logs().await;
+            }
+        }
+        if read && next == safe.saturating_add(1) {
             if let Ok(mut c) = self.cache.lock() {
-                c.logs = Some((next, out.clone(), passes.clone()));
+                c.anchor = Some((safe, safe_hash));
             }
         }
         if next <= to {
@@ -503,21 +1132,181 @@ impl StorageChain {
         Ok((out, passes))
     }
 
-    /// The number and hash of block `tag` (`"safe"` or a `0x` number).
+    /// The number and hash of block `tag` (`"safe"` or a `0x` number). A
+    /// block the RPC does not know (a backend behind it answers null) is no
+    /// answer, counted as a failed call, never a wrong one (review
+    /// STORAGE-RESTART-R1 M3).
     async fn block_id(&self, tag: &str) -> Result<(u64, Hash32), String> {
         let b = self
             .rpc_call("eth_getBlockByNumber", json!([tag, false]))
             .await?;
+        if b.is_null() {
+            self.rpc_errors.fetch_add(1, Ordering::Relaxed);
+            return Err(format!(
+                "eth_getBlockByNumber {tag}: the RPC does not know the block yet"
+            ));
+        }
         Ok((qty(&b["number"])?, h32(&b["hash"])?))
     }
 
     /// Drop every kept log (the chain changed under them, or they disagree
-    /// with the contract's own counts).
-    fn forget_logs(&self) {
+    /// with the contract, `why`), and the log cache file with them (THREATS
+    /// STORAGE-RESTART-1): a restart never reads them back. The removal runs
+    /// on a blocking thread, after any write under way; a save begun before
+    /// is not written (review STORAGE-RESTART-R1 L3).
+    async fn forget_logs(&self, why: &str) {
         if let Ok(mut c) = self.cache.lock() {
             c.logs = None;
             c.anchor = None;
+            c.saved = None;
+            c.from_file = None;
+            c.generation += 1;
         }
+        let Some(file) = self.file.clone() else {
+            return;
+        };
+        let f = file.clone();
+        let r = tokio::task::spawn_blocking(move || f.remove())
+            .await
+            .map_err(|e| std::io::Error::other(e.to_string()))
+            .and_then(|r| r);
+        self.note(match r {
+            Ok(()) => format!(
+                "dropped ({why}); file removed, every log is read again from block {}",
+                self.from_block
+            ),
+            Err(e) => format!(
+                "dropped ({why}); the file could not be removed ({e}), the next save replaces it"
+            ),
+        });
+    }
+
+    /// The chain id the RPC serves, asked once (with a log file only); logs
+    /// loaded from a file of another chain are dropped (review
+    /// STORAGE-RESTART-R1 M2).
+    async fn check_chain(&self) -> Result<(), String> {
+        if self.file.is_none() {
+            return Ok(());
+        }
+        let known = self.cache.lock().ok().and_then(|c| c.chain_id);
+        let id = match known {
+            Some(id) => id,
+            None => {
+                let id = qty(&self.rpc_call("eth_chainId", json!([])).await?)?;
+                if let Ok(mut c) = self.cache.lock() {
+                    c.chain_id = Some(id);
+                }
+                id
+            }
+        };
+        let file = self.cache.lock().ok().and_then(|c| c.from_file);
+        if let Some(f) = file.filter(|f| *f != id) {
+            self.forget_logs(&format!("written for chain {f}, the RPC serves chain {id}"))
+                .await;
+        }
+        Ok(())
+    }
+
+    /// Logs loaded from the log cache file are used once the chain vouches
+    /// for them: every block they cover is at or below its safe block
+    /// `safe`, or their anchor's hash matched (`vouched`, the anchor's block)
+    /// and the anchor is their last block (THREATS STORAGE-RESTART-1, review
+    /// STORAGE-RESTART-R1 M3). Else the RPC is behind the file: the pass ends
+    /// as one that got no answer, the logs are kept and checked again next
+    /// pass. Only a different hash drops them (the anchor check).
+    fn check_loaded(&self, safe: u64, vouched: Option<u64>) -> Result<(), String> {
+        let last = {
+            let Ok(mut c) = self.cache.lock() else {
+                return Ok(());
+            };
+            if c.from_file.is_none() {
+                return Ok(());
+            }
+            let Some(last) = c.logs.as_ref().map(|l| l.0.saturating_sub(1)) else {
+                c.from_file = None;
+                return Ok(());
+            };
+            if last <= safe || vouched.is_some_and(|n| n >= last) {
+                c.from_file = None;
+                return Ok(());
+            }
+            last
+        };
+        self.rpc_errors.fetch_add(1, Ordering::Relaxed);
+        Err(format!(
+            "the RPC's safe block {safe} is below the kept logs' last block {last}: checked again next pass"
+        ))
+    }
+
+    /// Check the kept logs against the contract's `exclusionFrom` at their
+    /// last block (review STORAGE-RESTART-R1 M1: a dropped `Slashed`,
+    /// `Declined` or `Answered` log passes the counts and the anchor). Asked
+    /// for every node ranked at or above `me` on each shard of the live deals
+    /// of `s` (the nodes that decide whether `me` holds it), at most
+    /// [`EXCL_CHECK_CALLS`] calls from turn `turn`'s place in that list. On
+    /// a difference the kept logs are dropped and it is returned.
+    pub async fn check_exclusions(
+        &self,
+        s: &Snapshot,
+        me: &NodeId,
+        turn: usize,
+    ) -> Result<Option<String>, String> {
+        let Some(((next, logs, passes), anchor)) = self
+            .cache
+            .lock()
+            .ok()
+            .and_then(|c| Some((c.logs.clone()?, c.anchor)))
+        else {
+            return Ok(None);
+        };
+        let at = next.saturating_sub(1);
+        // The state the kept logs end at: by its hash when anchored there
+        // (EIP-1898, the same block on every backend), else by number.
+        let block = match anchor {
+            Some((n, h)) if n == at => json!({ "blockHash": h.to_string() }),
+            _ => json!(format!("0x{at:x}")),
+        };
+        let kept = exclusions_of(logs.iter(), &passes)?;
+        let list = s.list_at(s.epoch);
+        let list = &list;
+        let pairs = move || {
+            s.deals.iter().flat_map(move |d| {
+                (0..d.info.shard_count).flat_map(move |index| {
+                    let order = ranked(&shard_key(&d.info.salt, index), list);
+                    let upto = order.iter().position(|n| n == me).map_or(0, |i| i + 1);
+                    order.into_iter().take(upto).map(move |n| (d.id, index, n))
+                })
+            })
+        };
+        let total = pairs().count();
+        if total == 0 {
+            return Ok(None);
+        }
+        let start = turn.wrapping_mul(EXCL_CHECK_CALLS) % total;
+        let picked: Vec<_> = pairs()
+            .chain(pairs())
+            .skip(start)
+            .take(EXCL_CHECK_CALLS.min(total))
+            .collect();
+        for (deal, index, node) in picked {
+            let data = abi::exclusion_from(deal, index, &node);
+            let r = self
+                .rpc_call(
+                    "eth_call",
+                    json!([{"to": hex0x(&self.contract), "data": hex0x(&data)}, block]),
+                )
+                .await?;
+            let chain = abi::word_u64(&hexb(&r)?, 0).map_err(|e| e.to_string())?;
+            let view = kept.from(deal, index, &node).unwrap_or(0);
+            if chain != view {
+                let why = format!(
+                    "exclusionFrom(deal {deal}, shard {index}, node {node}) is {chain} at block {at}, the kept logs give {view}"
+                );
+                self.forget_logs(&why).await;
+                return Ok(Some(why));
+            }
+        }
+        Ok(None)
     }
 
     /// The logs of any of `events` in blocks `from..=to`, one call per
@@ -581,6 +1370,15 @@ impl StorageChain {
     /// backend that answered an old range wrongly, or a deep reorg; review
     /// STORAGE-R3-1).
     pub async fn snapshot(&self) -> Result<Snapshot, String> {
+        let r = self.snapshot_tries().await;
+        // The pass ends: the log cache file gets what is kept now, if it
+        // moved (nothing after dropped logs; THREATS STORAGE-RESTART-1).
+        self.save_logs().await;
+        r
+    }
+
+    /// [`Self::snapshot`] without the closing save.
+    async fn snapshot_tries(&self) -> Result<Snapshot, String> {
         let mut why = String::new();
         for _ in 0..SNAPSHOT_TRIES {
             let failed = self.rpc_errors.load(Ordering::Relaxed);
@@ -598,8 +1396,8 @@ impl StorageChain {
                 }
                 Err(e) => e,
             };
+            self.forget_logs(&w).await;
             why = w;
-            self.forget_logs();
         }
         Err(format!(
             "chain read failed or disagrees with the contract: {why}"
@@ -636,18 +1434,27 @@ impl StorageChain {
     async fn snapshot_once(&self) -> Result<Snapshot, String> {
         // The kept logs end at a safe block: if that block's hash changed,
         // they are dropped (review STORAGE-R3-1).
+        self.check_chain().await?;
+        // A block the RPC does not know yet fails the pass and keeps the
+        // logs (`block_id`); only another hash drops them (review
+        // STORAGE-RESTART-R1 M3).
         let anchor = self.cache.lock().ok().and_then(|c| c.anchor);
+        let mut vouched = None;
         if let Some((n, h)) = anchor {
-            if self.block_id(&format!("0x{n:x}")).await?.1 != h {
-                self.forget_logs();
+            if self.block_id(&format!("0x{n:x}")).await? == (n, h) {
+                vouched = Some(n);
+            } else {
+                self.forget_logs(&format!("the hash of the kept block {n} changed"))
+                    .await;
             }
         }
         let (fin, fin_hash) = self.block_id("safe").await?;
+        self.check_loaded(fin, vouched)?;
         let head = self.block_number().await?;
         let epoch = self.current_epoch().await?;
         let params = self.params().await?;
         let err = |e: abi::AbiError| e.to_string();
-        let (all, passes) = self.cached_logs(head, fin).await?;
+        let (all, passes) = self.cached_logs(head, (fin, fin_hash)).await?;
         let of = |e: &str| {
             let t = abi::topic(e);
             all.iter().filter(move |l| l.topics.first() == Some(&t))
@@ -699,26 +1506,7 @@ impl StorageChain {
             let url = url_of_index.get(&i).cloned().unwrap_or_default();
             nodes.insert(id, NodeEntry { info, url });
         }
-        // The raw records behind `exclusionFrom` (ADR-0060 amendment 2 item
-        // 2): slashes, declines and passes, in any order.
-        let mut excl = Exclusions::new();
-        for l in of(events::SLASHED) {
-            let node = NodeId(*l.topics.get(1).ok_or("Slashed topic")?);
-            let deal = topic_u64(l, 2, "Slashed topic")?;
-            let index = word_u32(l, 2, "Slashed index")?;
-            let from = abi::word_u64(&l.data, 4).map_err(err)?;
-            excl.slash(deal, index, node, from);
-        }
-        for l in of(events::DECLINED) {
-            let node = NodeId(*l.topics.get(1).ok_or("Declined topic")?);
-            let deal = topic_u64(l, 2, "Declined topic")?;
-            let index = word_u32(l, 0, "Declined index")?;
-            let from = abi::word_u64(&l.data, 1).map_err(err)?;
-            excl.decline(deal, index, node, from);
-        }
-        for ((deal, index, node), epoch) in &passes {
-            excl.pass(*deal, *index, *node, *epoch);
-        }
+        let excl = exclusions_of(all.iter(), &passes)?;
         let mut deals = Vec::new();
         let mut deal_logs = 0u64;
         for l in of(events::DEAL_CREATED) {
@@ -756,9 +1544,6 @@ impl StorageChain {
                 dataset: s(10),
                 source_url: s(11),
             });
-        }
-        if let Ok(mut c) = self.cache.lock() {
-            c.anchor = Some((fin, fin_hash));
         }
         Ok(Snapshot {
             block: head,
@@ -1147,8 +1932,74 @@ pub struct TickReport {
     pub settled: usize,
     /// Challenges this node could not answer (shard not held).
     pub unanswerable: usize,
+    /// Answers whose transaction failed to send (out of gas, a fee cap, a
+    /// nonce; review OBS-STORAGE-R1 2): the challenge is missed unless a
+    /// later tick in the epoch sends it.
+    pub answer_failed: usize,
     /// Shards given up because no source served them.
     pub declined: usize,
+}
+
+/// The storage loop's progress for `/v1/health` (THREATS OBS-STORAGE-1,
+/// review OBS-STORAGE-R1): a tick that runs, the last one that ended and
+/// the last one that ended well, so a long tick is told from a stuck loop
+/// and one failed tick from a failing one.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LoopStatus {
+    /// When the running tick began, on the node's clock (`None` between ticks).
+    pub tick_started: Option<u64>,
+    /// When the last tick ended, well or not.
+    pub last_tick: Option<u64>,
+    /// When the last tick that ended well ended.
+    pub last_ok: Option<u64>,
+    /// Ticks in a row that ended in an error (0 after one that ended well).
+    pub failed_in_a_row: u64,
+    /// The last tick's [`error_class`]; `None` when it ended well.
+    pub last_error_class: Option<&'static str>,
+}
+
+/// The class of a tick's error, one of [`ERROR_CLASSES`] (review
+/// OBS-STORAGE-R1 3): `/v1/health` shows only this, never the text, which
+/// may name a provider URL and its key; the text goes to the node's log.
+pub fn error_class(e: &str) -> &'static str {
+    let e = e.to_ascii_lowercase();
+    let has = |words: &[&str]| words.iter().any(|w| e.contains(w));
+    if has(&["follows rules v"]) {
+        "contract_version"
+    } else if has(&["http 429", "-32005", "rate limit", "rate-limit"]) {
+        "rpc_rate_limited"
+    } else if has(&["unreachable", "timed out", "connection refused"]) {
+        "rpc_unreachable"
+    } else if has(&["disagrees with the contract"]) {
+        "snapshot_disagrees"
+    } else if has(&[
+        "node error",
+        "node answered http",
+        "bad answer",
+        "answer is for another request",
+        "answer has no result",
+        "chain read failed",
+        "rules_version()",
+        "revert",
+    ]) {
+        "rpc_error"
+    } else if has(&[
+        "os error",
+        "no space left",
+        "read-only file system",
+        "permission denied",
+    ]) {
+        "store"
+    } else {
+        "other"
+    }
+}
+
+/// This host's clock, unix seconds.
+fn system_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |d| d.as_secs())
 }
 
 /// A node's placement (its (deal, shard) pairs) and the inputs it came from.
@@ -1220,6 +2071,20 @@ pub struct StorageNode {
     /// Datasets a verified leaf answer named since start.
     heard: Mutex<BTreeSet<(String, String)>>,
     learn_last: Mutex<LearnReport>,
+    /// This host's clock, unix seconds ([`StorageNode::with_clock`]).
+    clock: crate::Clock,
+    /// When the node was made, on `clock` (the loop's age before its first
+    /// tick).
+    started: u64,
+    /// The loop's progress ([`StorageNode::loop_status`]).
+    progress: Mutex<LoopStatus>,
+    /// The loop's period in seconds ([`run`] sets it; 0 before it starts).
+    every_secs: AtomicU64,
+    /// When the kept logs are next checked against `exclusionFrom`, on
+    /// `clock` (`None`: on the next pass; review STORAGE-RESTART-R1 M1).
+    excl_due: Mutex<Option<u64>>,
+    /// Rotates the (deal, shard, node) that check asks about.
+    excl_turn: AtomicUsize,
 }
 
 impl StorageNode {
@@ -1252,7 +2117,21 @@ impl StorageNode {
             learn_turn: AtomicUsize::new(0),
             heard: Mutex::new(BTreeSet::new()),
             learn_last: Mutex::new(LearnReport::default()),
+            clock: Arc::new(system_unix),
+            started: system_unix(),
+            progress: Mutex::new(LoopStatus::default()),
+            every_secs: AtomicU64::new(0),
+            excl_due: Mutex::new(None),
+            excl_turn: AtomicUsize::new(0),
         }
+    }
+
+    /// Stamp ticks with `clock` (unix seconds; tests move it by hand); the
+    /// node counts as started now on it.
+    pub fn with_clock(mut self, clock: crate::Clock) -> Self {
+        self.started = clock();
+        self.clock = clock;
+        self
     }
 
     /// Learn of removals (ADR-0059 amendment 4 item 5a slice 2a) from
@@ -1373,8 +2252,42 @@ impl StorageNode {
     /// One pass: record the seed and answer this epoch's challenges first
     /// (a slow or withholding source must never delay them, review
     /// STORAGE-R1-2), settle others' misses (keeper), then fetch what is
-    /// placed here within [`FETCH_BUDGET`].
+    /// placed here within [`FETCH_BUDGET`]. When it starts and when it ends,
+    /// well or not, [`StorageNode::loop_status`] records it for `/v1/health`
+    /// (THREATS OBS-STORAGE-1, review OBS-STORAGE-R1).
     pub async fn tick(&self) -> Result<TickReport, String> {
+        let started = (self.clock)();
+        if let Ok(mut l) = self.progress.lock() {
+            l.tick_started = Some(started);
+        }
+        let r = self.pass().await;
+        let now = (self.clock)();
+        if let Ok(mut l) = self.progress.lock() {
+            l.tick_started = None;
+            l.last_tick = Some(now);
+            match &r {
+                Ok(_) => {
+                    l.last_ok = Some(now);
+                    l.failed_in_a_row = 0;
+                    l.last_error_class = None;
+                }
+                Err(e) => {
+                    l.failed_in_a_row += 1;
+                    l.last_error_class = Some(error_class(e));
+                }
+            }
+        }
+        r
+    }
+
+    /// The loop's progress: the running tick, the last one and the last good
+    /// one.
+    pub fn loop_status(&self) -> LoopStatus {
+        self.progress.lock().map(|l| l.clone()).unwrap_or_default()
+    }
+
+    /// [`StorageNode::tick`]'s pass.
+    async fn pass(&self) -> Result<TickReport, String> {
         // Nothing is sent to a contract of another version (no seed, fetch,
         // answer, settle or decline): it would read our answers as wrong.
         if !self.version_ok.load(Ordering::Relaxed) {
@@ -1382,6 +2295,7 @@ impl StorageNode {
             self.version_ok.store(true, Ordering::Relaxed);
         }
         let s = Arc::new(self.chain.snapshot().await?);
+        self.check_kept_logs(&s).await?;
         if let Ok(mut k) = self.snap.lock() {
             *k = Some(s.clone());
         }
@@ -1422,6 +2336,41 @@ impl StorageNode {
             *l = rep.clone();
         }
         Ok(rep)
+    }
+
+    /// On the first pass after start and about daily after
+    /// ([`EXCL_CHECK_EVERY_SECS`]), check the kept logs against the
+    /// contract's `exclusionFrom` (review STORAGE-RESTART-R1 M1). A
+    /// difference drops them and fails the pass, so nothing is sent from a
+    /// wrong view; the next pass reads them again. A check that got no answer
+    /// is logged and tried again after [`EXCL_CHECK_RETRY_SECS`].
+    async fn check_kept_logs(&self, s: &Snapshot) -> Result<(), String> {
+        let now = (self.clock)();
+        let due = match self.excl_due.lock() {
+            Ok(d) => d.is_none_or(|t| now >= t),
+            Err(_) => false,
+        };
+        if !due {
+            return Ok(());
+        }
+        let turn = self.excl_turn.fetch_add(1, Ordering::Relaxed);
+        let (next, r) = match self.chain.check_exclusions(s, &self.cfg.node, turn).await {
+            Ok(None) => (Some(now.saturating_add(EXCL_CHECK_EVERY_SECS)), Ok(())),
+            Ok(Some(why)) => (
+                None,
+                Err(format!(
+                    "the snapshot disagrees with the contract ({why}); the kept logs are dropped and read again next pass"
+                )),
+            ),
+            Err(e) => {
+                eprintln!("onyx-node: storage: exclusionFrom check of the kept logs: {e}");
+                (Some(now.saturating_add(EXCL_CHECK_RETRY_SECS)), Ok(()))
+            }
+        };
+        if let Ok(mut d) = self.excl_due.lock() {
+            *d = next;
+        }
+        r
     }
 
     /// Count a failed pass for `(deal, index)` (`index` = `WHOLE_DEAL` for a
@@ -1711,10 +2660,13 @@ impl StorageNode {
                             x.insert(key);
                         }
                     }
-                    Err(err) => eprintln!(
-                        "onyx-node: storage: answer deal {} slot {slot}: {err}",
-                        d.id
-                    ),
+                    Err(err) => {
+                        rep.answer_failed += 1;
+                        eprintln!(
+                            "onyx-node: storage: answer deal {} slot {slot}: {err}",
+                            d.id
+                        )
+                    }
                 }
             }
         }
@@ -1850,20 +2802,40 @@ impl StorageNode {
         Ok(n)
     }
 
-    /// The status JSON the operator CLI and `/v1/health` show.
+    /// The `storage` object of `/v1/health` (THREATS OBS-STORAGE-1, review
+    /// OBS-STORAGE-R1; docs/ops/storage-node.md "Health"): the counters of
+    /// the last tick that ended well, the running tick's start
+    /// (`tickStartedUnix`, null between ticks), the last tick's end and the
+    /// last good one's (this host's clock; `startedUnix` dates the wait
+    /// before the first), failed ticks in a row and the last one's error
+    /// class (never its text), the loop's period, the last block the kept
+    /// logs cover (`logsReadThrough`, THREATS STORAGE-RESTART-1: it climbs
+    /// to the chain's safe block while the node catches up; null while logs
+    /// loaded from the file are not checked against the chain yet) and the
+    /// learned removals.
     pub fn status_json(&self) -> Value {
         let l = self.last();
         let r = self.learn_last();
+        let p = self.loop_status();
         json!({
             "node": self.cfg.node.to_string(), "epoch": l.epoch, "wanted": l.wanted, "held": l.held,
-            "fetched": l.fetched, "fetch_failed": l.fetch_failed, "answered": l.answered,
-            "seeds": l.seeds, "settled": l.settled, "unanswerable": l.unanswerable,
-            "declined": l.declined,
+            "fetched": l.fetched, "fetchFailed": l.fetch_failed, "answered": l.answered,
+            "answerFailed": l.answer_failed, "unanswerable": l.unanswerable, "seeds": l.seeds,
+            "settled": l.settled, "declined": l.declined,
+            "startedUnix": self.started,
+            "tickStartedUnix": p.tick_started,
+            "lastTickUnix": p.last_tick,
+            "lastOkUnix": p.last_ok,
+            "lastTickOk": p.last_tick.map(|_| p.failed_in_a_row == 0),
+            "failedInARow": p.failed_in_a_row,
+            "lastErrorClass": p.last_error_class,
+            "everySecs": self.every_secs.load(Ordering::Relaxed),
+            "logsReadThrough": self.chain.logs_read_through(),
             "removals": {
                 "mode": format!("{:?}", self.store.removals_mode()).to_lowercase(),
                 "kept": self.store.learned_count(),
-                "never_learned": r.never_learned,
-                "checked_at": r.block,
+                "neverLearned": r.never_learned,
+                "checkedAt": r.block,
             },
         })
     }
@@ -2084,6 +3056,7 @@ pub(crate) fn pass_waits(node: &NodeId, every: Duration) -> impl Iterator<Item =
 /// the public endpoint's rate limit together for a whole epoch (THREATS
 /// STORAGE-S16-R10).
 pub async fn run(node: Arc<StorageNode>, every: Duration) {
+    node.every_secs.store(every.as_secs(), Ordering::Relaxed);
     let mut waits = pass_waits(&node.cfg.node, every);
     tokio::time::sleep(waits.next().unwrap_or(every)).await;
     loop {

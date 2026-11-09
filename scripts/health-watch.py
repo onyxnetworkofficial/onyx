@@ -16,7 +16,12 @@
 #             build;
 #   bulk      each --bulk-publisher's newest catalog on the node (GET /v1/bulk catalogs) is
 #             younger than bulk.catalog_max_age_s (skipped while node.up is not ok);
-#   storage   each --storage-node answers GET /v1/health with 200 (checked last, short timeout).
+#   storage   each --storage-node answers GET /v1/health with 200 (checked last, short timeout);
+#             one that reports its loop (`storage` on its health, THREATS OBS-STORAGE-1, review
+#             OBS-STORAGE-R1): no tick runs longer than storage.tick_run_max_s and the loop is never
+#             idle longer than storage.tick_idle_max_s (or 3 x its everySecs); its failed ticks in a
+#             row stay at most storage.failed_in_a_row_max; its last good tick sent every answer
+#             (answerFailed, unanswerable; after N runs). A node with no `storage` object: the 200 only.
 # Thresholds: deploy/health-watch/thresholds.json (the only copy; --config overlays more files).
 # Output: one JSON line per check on stdout. Exit 0 when nothing alerts, 1 when any check alerts,
 # 2 on a usage, config or lock error. A check that cannot be read (unreachable, timeout, malformed
@@ -89,7 +94,8 @@ SCHEMA = {
     "balances": {"deployer_wei_min": str, "operator_wei_min": str, "publisher_wei_min": str},
     "site": {"timeout_s": (int, float)},
     "bulk": {"timeout_s": (int, float), "catalog_max_age_s": INT},
-    "storage": {"timeout_s": (int, float)},
+    "storage": {"timeout_s": (int, float), "tick_run_max_s": INT, "tick_idle_max_s": INT,
+                "failed_in_a_row_max": INT},
     "after": "checks",
     "notify": {"realert_after_s": INT, "command_timeout_s": (int, float)},
 }
@@ -113,7 +119,7 @@ CHECKS = {
     "rpc.up", "rpc.chain", "rpc.head_age", "rpc.finalized_lag",
     "balances.deployer_eth", "balances.operator_eth", "balances.publisher_eth", "balances.revenue",
     "site.up", "site.public",
-    "bulk.catalog_age", "storage.up",
+    "bulk.catalog_age", "storage.up", "storage.tick_age", "storage.tick_failing", "storage.answers",
     "watch.state",
 } | {name for name, _ in WRITE_ERRORS}
 
@@ -795,14 +801,119 @@ def bulk_checks(cfg, node, publishers, now, out):
     out.append(guarded("bulk.catalog_age", age))
 
 
-def storage_checks(cfg, nodes, out):
-    """Every listed storage node answers GET /v1/health with 200."""
-    down = []
+# THREATS OBS-STORAGE-1, review OBS-STORAGE-R1: a storage node says when its running tick began
+# (tickStartedUnix, null between ticks), so a long tick is told from a stuck loop. A tick may spend
+# FETCH_BUDGET (300 s) fetching plus a 120 s shard call and sends that wait for receipts; between
+# ticks the loop waits up to 1.25 x its period. The idle limit is storage.tick_idle_max_s or this
+# many periods (`everySecs` on its health), whichever is larger.
+TICK_PERIODS = 3
+STORAGE_NAMES = ["storage.up", "storage.tick_age", "storage.tick_failing", "storage.answers"]
+
+
+def storage_loop(name, body):
+    """The `storage` object of a storage node's /v1/health body (`name` labels it), or None when it
+    has none (an older node, or not in storage mode: the 200 alone, as before). Malformed: Fault."""
+    label = f"/v1/health of {name}"
+    if len(body) > MAX_BODY:
+        raise Fault(f"{label}: answer larger than 4 MiB")
+    try:
+        h = json.loads(body)
+    except ValueError:
+        raise Fault(f"malformed {label}: not JSON") from None
+    if not isinstance(h, dict):
+        raise Fault(f"malformed {label}: a JSON {type(h).__name__}, not an object")
+    st = h.get("storage")
+    if st is None:
+        return None
+    if not isinstance(st, dict):
+        raise Fault(f"malformed {label}: storage is not an object")
+
+    def f(key, kinds):
+        return field(h, ("storage", key), kinds, label)
+    opt = (int, type(None))
+    return {"started": f("startedUnix", int), "running": f("tickStartedUnix", opt), "last": f("lastTickUnix", opt),
+            "last_ok": f("lastOkUnix", opt), "failed": f("failedInARow", int),
+            "cls": f("lastErrorClass", (str, type(None))), "every": f("everySecs", int),
+            "answer_failed": f("answerFailed", int), "unanswerable": f("unanswerable", int)}
+
+
+def tick_checks(cfg, seen, now):
+    """storage.tick_age, storage.tick_failing and storage.answers over the nodes that answered 200
+    (`seen`: (name, body)). A node that is down is storage.up's (one cause, one alert); a malformed
+    one alerts in storage.tick_age alone and the rest are still checked (review OBS-STORAGE-R1 4)."""
+    c, now = cfg["storage"], int(now)
+    loops, malformed = [], []
+    for name, body in seen:
+        try:
+            x = storage_loop(name, body)
+        except Fault as e:
+            malformed.append(str(e))
+            continue
+        if x is not None:
+            loops.append((name, x))
+    if not loops and not malformed:
+        why = ("no storage node answered this run (storage.up)" if not seen else
+               "no storage node reports its loop (no storage object on /v1/health: an older node)")
+        return [skip(n, why) for n in STORAGE_NAMES[1:]]
+    skew = cfg["node"]["clock_skew_max_s"]
+    stale, worst = [], None
+    failing, worst_failed = [], 0
+    missed, total_missed = [], 0
+    for name, x in loops:
+        if x["running"] is not None:
+            ref, limit = x["running"], c["tick_run_max_s"]
+            what = "a tick has run"
+        else:
+            ref, limit = (x["last"] if x["last"] is not None else x["started"]), max(c["tick_idle_max_s"], TICK_PERIODS * x["every"])
+            what = "no tick since the last ended" if x["last"] is not None else "no tick since the start"
+        if ref - now > skew:
+            stale.append(f"{name}: {what}, {ref - now} s in the future (this box's clock?)")
+            age = limit + 1
+        else:
+            age = max(0, now - ref)
+            if age > limit:
+                stale.append(f"{name}: {what} {age} s (limit {limit} s)")
+        if worst is None or age - limit > worst[0] - worst[1]:
+            worst = (age, limit)
+        if x["failed"] > c["failed_in_a_row_max"]:
+            good = f"last good tick {now - x['last_ok']} s ago" if x["last_ok"] is not None else "no good tick since the start"
+            failing.append(f"{name}: {x['failed']} ticks in a row failed ({x['cls'] or 'no class'}); {good}")
+        worst_failed = max(worst_failed, x["failed"])
+        n_missed = x["answer_failed"] + x["unanswerable"]
+        if n_missed:
+            missed.append(f"{name}: {x['answer_failed']} answer send(s) failed, {x['unanswerable']} challenge(s) "
+                          f"unanswerable in the last good tick")
+        total_missed += n_missed
+    out = []
+    value, limit = worst if worst else (None, None)
+    if malformed:
+        out.append({**bad("storage.tick_age", value, limit, "; ".join(malformed + stale)), "malformed": True})
+    elif stale:
+        out.append(bad("storage.tick_age", value, limit, "; ".join(stale)))
+    else:
+        out.append(ok("storage.tick_age", value, limit))
+    if not loops:
+        why = "no readable storage loop (storage.tick_age)"
+        return out + [skip("storage.tick_failing", why), skip("storage.answers", why)]
+    out.append(bad("storage.tick_failing", worst_failed, c["failed_in_a_row_max"], "; ".join(failing)) if failing
+               else ok("storage.tick_failing", worst_failed, c["failed_in_a_row_max"]))
+    out.append(bad("storage.answers", total_missed, 0, "; ".join(missed)) if missed
+               else ok("storage.answers", 0, 0))
+    return out
+
+
+def storage_checks(cfg, nodes, now, out):
+    """Every listed storage node answers GET /v1/health with 200; one that reports its loop is not
+    stuck, not failing tick after tick and sent its answers (THREATS OBS-STORAGE-1, review
+    OBS-STORAGE-R1)."""
+    down, seen = [], []
     for i, n in enumerate(nodes):
         try:
-            status, _ = http(n.rstrip("/") + "/v1/health", cfg["storage"]["timeout_s"])
+            status, body = http(n.rstrip("/") + "/v1/health", cfg["storage"]["timeout_s"])
             if status != 200:
                 down.append(f"{origin(n)} answered HTTP {status}")
+            else:
+                seen.append((f"#{i + 1} {origin(n)}", body))
         except Fault as e:
             down.append(f"{origin(n)}: {e}")
         except DeadlineHit:
@@ -811,6 +922,7 @@ def storage_checks(cfg, nodes, out):
             out.append(immediate(bad("storage.up", len(down), 0, "; ".join(down))))
             raise
     out.append(bad("storage.up", len(down), 0, "; ".join(down)) if down else ok("storage.up", 0, 0))
+    out.extend(tick_checks(cfg, seen, now))
 
 
 # ---------------------------------------------------------------- one run
@@ -893,12 +1005,12 @@ def gather(cfg, opts, now, mem):
     # site's budget (review of LC-17, finding 3).
     storage = getattr(opts, "storage_nodes", None) or []
     if not storage:
-        results.append(skip("storage.up", "no storage node (--storage-node or ONYX_WATCH_STORAGE_NODES)"))
+        results.extend(skip(c, "no storage node (--storage-node or ONYX_WATCH_STORAGE_NODES)") for c in STORAGE_NAMES)
     else:
         try:
-            storage_checks(cfg, storage, results)
+            storage_checks(cfg, storage, now, results)
         except DeadlineHit:
-            out_of_time(["storage.up"])
+            out_of_time(STORAGE_NAMES)
     return results
 
 

@@ -70,17 +70,22 @@
   },
   "storage": {
     "_about": "Storage nodes (--storage-node, ONYX_WATCH_STORAGE_NODES): each must answer GET /v1/health with 200. They run next to the watch, so a short timeout: five of them at 3 s fit the run's budget after everything else. One check for all of them: a second node down while one already alerts is in the detail, notified again after notify.realert_after_s.",
-    "timeout_s": 3
+    "timeout_s": 3,
+    "_tick": "THREATS OBS-STORAGE-1, review OBS-STORAGE-R1: a node whose /v1/health has a storage object (its loop, crates/onyx-api/src/storage.rs fn status_json). storage.tick_age: a running tick (tickStartedUnix) older than tick_run_max_s is stuck: a tick may spend FETCH_BUDGET (300 s) fetching plus a 120 s shard call and sends that each wait up to 120 s for a receipt, so 900 s leaves room for a few slow sends. Between ticks (tickStartedUnix null) the loop waits up to 1.25 x its period, so no tick for longer than tick_idle_max_s, or 3 x its everySecs when that is larger, since the last one ended (lastTickUnix, or startedUnix before the first) is a dead loop. storage.tick_failing: the node's own count of failed ticks in a row (failedInARow) above failed_in_a_row_max, on the first run: one failed tick followed by a long one never pages (the watch does not count its own samples). storage.answers: the last good tick's answerFailed (an answer whose send failed: out of gas, a fee cap, a nonce) plus unanswerable (a challenge for a shard not held) above 0, after the runs in after. A node with no storage object (an older node) is checked by the 200 alone.",
+    "tick_run_max_s": 900,
+    "tick_idle_max_s": 300,
+    "failed_in_a_row_max": 2
   },
   "after": {
-    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures. bulk.catalog_age and storage.up wait 3 too, so a node restart does not page.",
+    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures. bulk.catalog_age and storage.up wait 3 too, so a node restart does not page; storage.answers waits 3: a shard just placed and still fetching, or one send that a later tick of the epoch repeats, does not page.",
     "node.up": 3,
     "rpc.up": 2,
     "node.indexer.failing": 3,
     "node.reporter.last_error": 3,
     "node.level3.retrying": 3,
     "bulk.catalog_age": 3,
-    "storage.up": 3
+    "storage.up": 3,
+    "storage.answers": 3
   },
   "notify": {
     "_about": "A check that stays in alert is sent again after realert_after_s; a recovery is sent once.",
