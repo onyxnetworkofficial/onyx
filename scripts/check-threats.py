@@ -319,6 +319,11 @@ def check(lines, code, open_ms, done_ms, legacy, legacy_base):
         if not line.startswith("|"):
             header = None
             continue
+        # A line break inside a cell splits a row: its first part then parses as a short row, or
+        # not at all, and the row's checks silently stop (seen 2026-11-09 on MUT-5).
+        if not line.rstrip().endswith("|"):
+            problems.append(f"THREATS.md:{n}: a table line that does not end with `|` (a line break inside a cell splits the row)")
+            continue
         c = cells(line)
         if header is None:
             header = [h.lower() for h in c]
@@ -403,6 +408,7 @@ def self_test(code, open_ms, done_ms, legacy, legacy_base):
         "duplicate ID": "| T-MERK-1 | Any | Low | x | y | FIXED: `onyx-merkle::root_binds_count_and_order` |",
         "planned test only": "| ZZ-1 | Any | Low | x | y | FIXED. TODO L2: `onyx-merkle::root_binds_count_and_order` |",
         "script not naming the row": "| ZZ-1 | Any | Low | x | y | FIXED: `scripts/check-secrets.sh` |",
+        "row split by a line break": "| ZZ-1 | Any | Low | x | y | FIXED: `onyx-merkle::root_binds_count_and_order` and\nmore text |",
     }
     good = {
         "real test": "| ZZ-1 | Any | Low | x | y | FIXED: `onyx-merkle::root_binds_count_and_order` |",
@@ -413,7 +419,7 @@ def self_test(code, open_ms, done_ms, legacy, legacy_base):
     fails = 0
     table = ["", "| ID | Attacker | Severity | Threat | Mitigation | Status |", "|---|---|---|---|---|---|"]
     for name, row in planted.items():
-        p, _ = check(lines + table + [row], code, open_ms, done_ms, legacy, legacy_base)
+        p, _ = check(lines + table + row.split("\n"), code, open_ms, done_ms, legacy, legacy_base)
         if not p:
             print(f"self-test: planted row passed: {name}")
             fails += 1
