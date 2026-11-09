@@ -9,6 +9,7 @@
 # request, and test_node_timeout_counts_as_down runs a real socket timeout against a server that
 # never answers until the test is over.
 # Run: python3 -I scripts/health-watch-tests.py   (check-all runs it; about 10 s)
+import contextlib
 import copy
 import importlib.util
 import io
@@ -398,6 +399,198 @@ class BulkAndStorage(Base):
                     os.environ[k] = v
         self.assertEqual(a.bulk_publishers, ["a.pub", "b.pub"])
         self.assertEqual(a.storage_nodes, ["http://127.0.0.1:8201", "http://127.0.0.1:8202"])
+
+
+GIB = 1 << 30
+
+
+def fs(total, free, files=1000, favail=500, frsize=4096):
+    """A statvfs answer: `total` and `free` bytes (whole blocks), `files` inodes, `favail` free."""
+    return types.SimpleNamespace(f_frsize=frsize, f_blocks=total // frsize, f_bavail=free // frsize,
+                                 f_files=files, f_favail=favail)
+
+
+class Disk(Base):
+    """THREATS OBS-DISK-1: each --disk path's free space and inodes, at their edges; a path that
+    cannot be read alerts; unset, both skip."""
+
+    def setUp(self):
+        super().setUp()
+        self.answers = {}
+        self.opts.disks = ["/srv/a"]
+
+        def fake(path):
+            if path not in self.answers:
+                raise FileNotFoundError(2, "No such file or directory")
+            return self.answers[path]
+        self.swap(_statvfs=fake)
+
+    def test_not_configured_skips(self):
+        self.opts.disks = []
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.free"]["status"], "skip")
+        self.assertEqual(by["disk.inodes"]["status"], "skip")
+        self.assertEqual(code, 0)
+        self.cfg["require"]["disk"] = True
+        self.fresh()
+        self.assert_alert("disk.free")
+
+    def test_free_percent_edge(self):
+        self.assertEqual(self.cfg["disk"]["free_min_pct"], 10)
+        self.answers["/srv/a"] = fs(100 * GIB, 10 * GIB)
+        r = self.assert_ok("disk.free")
+        self.assertEqual(r["value"], 10.0)
+        self.fresh()
+        self.answers["/srv/a"] = fs(100 * GIB, 10 * GIB - 4096)
+        r = self.assert_alert("disk.free")
+        self.assertIn("/srv/a", r["detail"])
+
+    def test_free_bytes_edge(self):
+        self.assertEqual(self.cfg["disk"]["free_min_bytes"], 2 * GIB)
+        self.cfg["disk"]["free_min_pct"] = 0
+        self.answers["/srv/a"] = fs(1024 * GIB, 2 * GIB)
+        self.assert_ok("disk.free")
+        self.fresh()
+        self.answers["/srv/a"] = fs(1024 * GIB, 2 * GIB - 4096)
+        self.assert_alert("disk.free")
+
+    def test_inodes_edge(self):
+        self.assertEqual(self.cfg["disk"]["inodes_free_min_pct"], 5)
+        self.answers["/srv/a"] = fs(100 * GIB, 50 * GIB, files=1000, favail=50)
+        self.assert_ok("disk.inodes")
+        self.fresh()
+        self.answers["/srv/a"] = fs(100 * GIB, 50 * GIB, files=1000, favail=49)
+        r = self.assert_alert("disk.inodes")
+        self.assertIn("49 of 1000 inodes", r["detail"])
+
+    def test_the_worst_of_several_paths_counts(self):
+        self.opts.disks = ["/srv/a", "/srv/b"]
+        self.answers["/srv/a"] = fs(100 * GIB, 50 * GIB)
+        self.answers["/srv/b"] = fs(100 * GIB, 5 * GIB)
+        r = self.assert_alert("disk.free")
+        self.assertEqual(r["value"], 5.0)
+        self.assertIn("/srv/b", r["detail"])
+        self.assertNotIn("/srv/a", r["detail"])
+
+    def test_no_inode_count_skips_that_part_only(self):
+        self.answers["/srv/a"] = fs(100 * GIB, 50 * GIB, files=0, favail=0)
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.free"]["status"], "ok", by["disk.free"])
+        self.assertEqual(by["disk.inodes"]["status"], "skip", by["disk.inodes"])
+        self.assertIn("/srv/a", by["disk.inodes"]["detail"])
+
+    def test_an_unreadable_path_alerts_never_passes(self):
+        self.opts.disks = ["/srv/a", "/srv/gone"]
+        self.answers["/srv/a"] = fs(100 * GIB, 50 * GIB)
+        r = self.assert_alert("disk.free")
+        self.assertIn("/srv/gone", r["detail"])
+        # One cause, one alert (review OBS-DISK-R1 7): disk.inodes names it, does not alert.
+        self.fresh()
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.inodes"]["status"], "ok", by["disk.inodes"])
+        self.assertIn("not read: /srv/gone", by["disk.inodes"]["detail"])
+        # A file system that reports nonsense (no size, more free than total, more free inodes
+        # than inodes) alerts too.
+        for bad_fs in (fs(0, 0), types.SimpleNamespace(f_frsize=4096, f_blocks=10, f_bavail=11, f_files=1, f_favail=1),
+                       fs(100 * GIB, 50 * GIB, files=100, favail=200)):
+            self.answers["/srv/gone"] = bad_fs
+            self.fresh()
+            self.assert_alert("disk.free")
+        self.opts.disks = ["/srv/gone"]
+        self.fresh()
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.inodes"]["status"], "skip", by["disk.inodes"])
+
+    def test_the_detail_says_which_rule_fired(self):
+        self.answers["/srv/a"] = fs(16 * GIB, 19 * GIB // 10)
+        r = self.assert_alert("disk.free")
+        self.assertIn("below 2.0 GiB", r["detail"])
+        self.assertNotIn("below 10%", r["detail"])
+        self.fresh()
+        self.answers["/srv/a"] = fs(1000 * GIB, 99 * GIB)
+        r = self.assert_alert("disk.free")
+        self.assertIn("below 10%", r["detail"])
+        self.assertEqual(r["value"], 9.9)
+        # Two decimals: 9.96% does not print as the limit itself.
+        self.fresh()
+        self.answers["/srv/a"] = fs(10000 * GIB, 996 * GIB)
+        r = self.assert_alert("disk.free")
+        self.assertEqual(r["value"], 9.96)
+
+    def test_a_hung_mount_alerts_and_the_run_goes_on(self):
+        gate = threading.Event()
+        self.addCleanup(gate.set)
+
+        def hung(path):
+            gate.wait(30)
+            raise OSError(5, "Input/output error")
+        self.swap(_statvfs=hung)
+        self.cfg["disk"]["timeout_s"] = 0.2
+        t = time.monotonic()
+        r = self.assert_alert("disk.free")
+        self.assertLess(time.monotonic() - t, 10)
+        self.assertIn("did not return within 0.2 s", r["detail"])
+
+    def test_config_refuses_percents_outside_0_to_100_and_nan(self):
+        for over in ({"free_min_pct": 101}, {"inodes_free_min_pct": -1}, {"free_min_pct": float("nan")},
+                     {"free_min_bytes": -1}, {"timeout_s": 0}):
+            path = os.path.join(self.tmp.name, "over.json")
+            Path(path).write_text(json.dumps({"disk": over}))
+            with self.assertRaises(hw.ConfigError, msg=over):
+                hw.load_config([path])
+
+    def test_a_full_disk_neither_breaks_the_run_nor_repages(self):
+        """Review OBS-DISK-R1 3: the watch's own state and alert log are on the disk it watches."""
+        self.answers["/srv/a"] = fs(100 * GIB, 1 * GIB)
+        got = os.path.join(self.tmp.name, "sent.jsonl")
+        self.opts.notify_cmd = f"{sys.executable} -I -c \"import sys; open(sys.argv[1], 'a').write(sys.stdin.read())\" {got}"
+        self.opts.alert_log = os.path.join(self.tmp.name, "no-such-dir", "alerts.jsonl")  # the log write fails
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.free"]["status"], "alert")
+        sent = [json.loads(x) for x in Path(got).read_text().splitlines()]
+        self.assertEqual([e["check"] for e in sent], ["disk.free"])
+        # The command delivered it: the next run does not send it again.
+        self.run_watch(now=self.now + 60)
+        sent = [json.loads(x)["check"] for x in Path(got).read_text().splitlines()]
+        self.assertEqual(sent.count("disk.free"), 1, sent)
+
+        def full(path, state):
+            raise OSError(28, "No space left on device")
+        self.swap(save_state=full)
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            code, by = self.run_watch(now=self.now + 120)
+        self.assertEqual(code, 1)
+        self.assertIn("No space left on device", err.getvalue())
+
+    def test_the_system_unit_watches_the_root_file_system(self):
+        unit = (ROOT / "deploy/systemd/onyx-health-watch.service").read_text()
+        self.assertRegex(unit, r"(?m)^ExecStart=.*health-watch\.py --once .*--disk /( |$)")
+
+    def test_a_real_directory_is_read(self):
+        self.swap(_statvfs=os.statvfs)
+        self.opts.disks = [self.tmp.name]
+        self.cfg["disk"].update(free_min_pct=0, free_min_bytes=0, inodes_free_min_pct=0)
+        code, by = self.run_watch()
+        self.assertEqual(by["disk.free"]["status"], "ok", by["disk.free"])
+        self.assertIsInstance(by["disk.free"]["value"], float)
+
+    def test_options_read_the_environment_and_need_absolute_paths(self):
+        old = os.environ.get("ONYX_WATCH_DISKS")
+        os.environ["ONYX_WATCH_DISKS"] = "/, /var/lib/onyx"
+        try:
+            a = hw.parse_args(["--once", "--node", "http://127.0.0.1:8080", "--state", self.opts.state])
+            self.assertEqual(a.disks, ["/", "/var/lib/onyx"])
+            # --disk adds to the variable; a path named twice is read once.
+            a = hw.parse_args(["--once", "--node", "http://127.0.0.1:8080", "--state", self.opts.state, "--disk", "/", "--disk", "/srv"])
+            self.assertEqual(a.disks, ["/", "/var/lib/onyx", "/srv"])
+            with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
+                hw.parse_args(["--once", "--node", "http://127.0.0.1:8080", "--state", self.opts.state, "--disk", "var/lib"])
+        finally:
+            if old is None:
+                os.environ.pop("ONYX_WATCH_DISKS", None)
+            else:
+                os.environ["ONYX_WATCH_DISKS"] = old
 
 
 # The /v1/health of a storage node exactly as onyx-api writes it (review OBS-STORAGE-R1 5): `ok` after a
@@ -1104,12 +1297,18 @@ class Cli(Base):
         self.fake.head_ts = int(time.time())
         self.fake.catalogs[0]["createdUnix"] = int(time.time()) - 60
         self.fake.storage_health = {k: storage_health(at=int(time.time()) - 30) for k in ("s1", "s2")}
+        # The real disk of the test's machine: thresholds 0, so only a read failure could alert.
+        overlay = os.path.join(self.tmp.name, "disk-overlay.json")
+        Path(overlay).write_text(json.dumps({"disk": {"free_min_pct": 0, "free_min_bytes": 0, "inodes_free_min_pct": 0}}))
         p = self.cli("--once", "--node", self.url + "/node", "--site", self.url + "/site", "--state", st,
+                     "--config", overlay,
                      env={"ONYX_WATCH_RPC_URL": self.url + "/rpc", "ONYX_WATCH_BULK_PUBLISHERS": "example.publisher",
-                          "ONYX_WATCH_STORAGE_NODES": f"{self.url}/s1,{self.url}/s2"})
+                          "ONYX_WATCH_STORAGE_NODES": f"{self.url}/s1,{self.url}/s2", "ONYX_WATCH_DISKS": self.tmp.name})
         self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
         lines = [json.loads(x) for x in p.stdout.splitlines()]
-        self.assertTrue(lines and all(x["status"] == "ok" for x in lines), p.stdout)
+        # disk.inodes skips on a file system with no inode count (btrfs; review OBS-DISK-R1 8).
+        self.assertTrue(lines and all(x["status"] == "ok" or (x["check"] == "disk.inodes" and x["status"] == "skip")
+                                      for x in lines), p.stdout)
         self.fake.chain = 31337
         p = self.cli("--once", "--node", self.url + "/node", "--rpc", self.url + "/rpc", "--state", st)
         self.assertEqual(p.returncode, 1, p.stdout)

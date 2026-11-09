@@ -16,6 +16,10 @@
 #             build;
 #   bulk      each --bulk-publisher's newest catalog on the node (GET /v1/bulk catalogs) is
 #             younger than bulk.catalog_max_age_s (skipped while node.up is not ok);
+#   disk      each --disk path's file system (os.statvfs, local): free space above both
+#             disk.free_min_pct and disk.free_min_bytes, free inodes above disk.inodes_free_min_pct
+#             (THREATS OBS-DISK-1: a full disk stops every journal and catalog write, and the node
+#             shows it only after the first failed write);
 #   storage   each --storage-node answers GET /v1/health with 200 (checked last, short timeout);
 #             one that reports its loop (`storage` on its health, THREATS OBS-STORAGE-1, review
 #             OBS-STORAGE-R1): no tick runs longer than storage.tick_run_max_s and the loop is never
@@ -43,12 +47,14 @@
 import argparse
 import fcntl
 import json
+import math
 import os
 import re
 import shlex
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -66,7 +72,7 @@ INT = int
 SCHEMA = {
     "chain_id": INT,
     "deadline_s": INT,
-    "require": {"node": bool, "rpc": bool, "site": bool},
+    "require": {"node": bool, "rpc": bool, "site": bool, "disk": bool},
     "addresses": {"deployer": (str, type(None)), "operator": (str, type(None)), "revenue": (str, type(None)),
                   "usdc": (str, type(None)), "publisher": (str, type(None))},
     "node": {
@@ -94,6 +100,8 @@ SCHEMA = {
     "balances": {"deployer_wei_min": str, "operator_wei_min": str, "publisher_wei_min": str},
     "site": {"timeout_s": (int, float)},
     "bulk": {"timeout_s": (int, float), "catalog_max_age_s": INT},
+    "disk": {"timeout_s": (int, float), "free_min_pct": (int, float), "free_min_bytes": INT,
+             "inodes_free_min_pct": (int, float)},
     "storage": {"timeout_s": (int, float), "tick_run_max_s": INT, "tick_idle_max_s": INT,
                 "failed_in_a_row_max": INT},
     "after": "checks",
@@ -119,7 +127,7 @@ CHECKS = {
     "rpc.up", "rpc.chain", "rpc.head_age", "rpc.finalized_lag",
     "balances.deployer_eth", "balances.operator_eth", "balances.publisher_eth", "balances.revenue",
     "site.up", "site.public",
-    "bulk.catalog_age", "storage.up", "storage.tick_age", "storage.tick_failing", "storage.answers",
+    "bulk.catalog_age", "disk.free", "disk.inodes", "storage.up", "storage.tick_age", "storage.tick_failing", "storage.answers",
     "watch.state",
 } | {name for name, _ in WRITE_ERRORS}
 
@@ -161,6 +169,7 @@ _DEADLINE = [None]
 # server's delays on that clock, so the deadline tests hold on a loaded machine.
 _clock = time.monotonic
 _sleep = time.sleep
+_statvfs = os.statvfs
 
 
 def _urlopen(req, timeout):
@@ -264,6 +273,12 @@ def load_config(paths):
             raise ConfigError(f"{p}: not a JSON object")
         cfg = merge(cfg, part)
     validate(cfg)
+    d = cfg["disk"]
+    for k in ("free_min_pct", "inodes_free_min_pct"):
+        if not (math.isfinite(d[k]) and 0 <= d[k] <= 100):
+            raise ConfigError(f"disk.{k} must be a number from 0 to 100 (got {d[k]})")
+    if d["free_min_bytes"] < 0 or not (math.isfinite(d["timeout_s"]) and d["timeout_s"] > 0):
+        raise ConfigError("disk.free_min_bytes must be at least 0 and disk.timeout_s above 0")
     return cfg
 
 
@@ -807,6 +822,88 @@ def bulk_checks(cfg, node, publishers, now, out):
 # ticks the loop waits up to 1.25 x its period. The idle limit is storage.tick_idle_max_s or this
 # many periods (`everySecs` on its health), whichever is larger.
 TICK_PERIODS = 3
+DISK_NAMES = ["disk.free", "disk.inodes"]
+
+
+def gib(n):
+    return f"{n / (1 << 30):.1f} GiB"
+
+
+def statvfs_within(path, timeout):
+    """os.statvfs, given up after `timeout` s: on a hung network or FUSE mount it never returns
+    (review OBS-DISK-R1 4). The thread is left behind (a daemon); the run goes on."""
+    box = {}
+
+    def run():
+        try:
+            box["st"] = _statvfs(path)
+        except OSError as e:
+            box["err"] = e
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    t.join(timeout)
+    if t.is_alive():
+        raise TimeoutError(f"statvfs did not return within {timeout} s (a hung network mount?)")
+    if "err" in box:
+        raise box["err"]
+    return box["st"]
+
+
+def disk_checks(cfg, paths, out):
+    """Free space and free inodes of each --disk path's file system (THREATS OBS-DISK-1, review
+    OBS-DISK-R1). Space counts what an unprivileged writer may still use (f_bavail, the side
+    onyx-node and the storage nodes are on): below disk.free_min_pct of the file system or below
+    disk.free_min_bytes alerts, and the detail says which. A path that cannot be read alerts
+    disk.free once (disk.inodes skips it: one cause, one alert). A file system that reports no
+    inode count (f_files 0, e.g. btrfs) skips the inode part, saying so. `value` is the lowest
+    free percent over all paths (two decimals)."""
+    d = cfg["disk"]
+    low, low_inodes, unread, no_inodes = [], [], [], []
+    worst = worst_inodes = None
+    read = 0
+    for p in paths:
+        try:
+            st = statvfs_within(p, d["timeout_s"])
+        except OSError as e:
+            unread.append(f"{p}: {e.strerror or e}")
+            continue
+        total, free = st.f_blocks * st.f_frsize, st.f_bavail * st.f_frsize
+        if total <= 0 or free < 0 or free > total or st.f_files < 0 or not 0 <= st.f_favail <= max(st.f_files, 0):
+            unread.append(f"{p}: the file system reports {free} free of {total} bytes, "
+                          f"{st.f_favail} free of {st.f_files} inodes")
+            continue
+        read += 1
+        pct = 100.0 * free / total
+        worst = pct if worst is None else min(worst, pct)
+        why = [f"below {d['free_min_pct']}%"] if pct < d["free_min_pct"] else []
+        why += [f"below {gib(d['free_min_bytes'])}"] if free < d["free_min_bytes"] else []
+        if why:
+            low.append(f"{p}: {gib(free)} free of {gib(total)} ({pct:.2f}%): {' and '.join(why)}")
+        if st.f_files == 0:
+            no_inodes.append(p)
+            continue
+        ipct = 100.0 * st.f_favail / st.f_files
+        worst_inodes = ipct if worst_inodes is None else min(worst_inodes, ipct)
+        if ipct < d["inodes_free_min_pct"]:
+            low_inodes.append(f"{p}: {st.f_favail} of {st.f_files} inodes free ({ipct:.2f}%)")
+
+    def r(v):
+        return None if v is None else round(v, 2)
+    if unread or low:
+        out.append(bad("disk.free", r(worst), d["free_min_pct"], "; ".join(unread + low)))
+    else:
+        out.append(ok("disk.free", r(worst), d["free_min_pct"],
+                      f"at least {gib(d['free_min_bytes'])} and {d['free_min_pct']}% free on {len(paths)} path(s)"))
+    notes = ([f"no inode count on {', '.join(no_inodes)}"] if no_inodes else []) + \
+            ([f"not read: {', '.join(u.split(':')[0] for u in unread)} (disk.free)"] if unread else [])
+    if low_inodes:
+        out.append(bad("disk.inodes", r(worst_inodes), d["inodes_free_min_pct"], "; ".join(low_inodes + notes)))
+    elif worst_inodes is None:
+        out.append(skip("disk.inodes", "; ".join(notes) or "no path read"))
+    else:
+        out.append(ok("disk.inodes", r(worst_inodes), d["inodes_free_min_pct"], "; ".join(notes)))
+
+
 STORAGE_NAMES = ["storage.up", "storage.tick_age", "storage.tick_failing", "storage.answers"]
 
 
@@ -1001,6 +1098,12 @@ def gather(cfg, opts, now, mem):
             site_checks(cfg, opts.site, cfg["site"]["timeout_s"], results)
         except DeadlineHit:
             out_of_time(SITE_NAMES)
+    # Local file systems: each read is bounded by disk.timeout_s, not by the run's deadline.
+    disks = getattr(opts, "disks", None) or []
+    if not disks:
+        results += missing(cfg, "disk", DISK_NAMES, "disk path (--disk or ONYX_WATCH_DISKS)")
+    else:
+        disk_checks(cfg, disks, results)
     # Last: several local nodes, each with a short timeout, so a slow one cannot eat the
     # site's budget (review of LC-17, finding 3).
     storage = getattr(opts, "storage_nodes", None) or []
@@ -1094,7 +1197,9 @@ class Notifier:
                 f.write(text + "\n")
         except OSError as e:
             print(f"health-watch: alert log {self.alert_log}: {e.strerror}", file=sys.stderr)
-            delivered = False
+            # Without a command the log is the delivery; with one, the command is (a full disk
+            # fails the log, review OBS-DISK-R1 3, and must not re-page every run).
+            delivered = bool(self.cmd)
         if self.cmd:
             left = min(self.timeout, self.until - _clock())
             if left <= 0:
@@ -1213,7 +1318,16 @@ def run_once(cfg, opts, now=None, out=None):
     for ev in events:
         if notifier.send(ev):
             mark_sent(state, ev)
-    save_state(opts.state, state)
+    try:
+        save_state(opts.state, state)
+    except OSError as e:
+        # A full disk (review OBS-DISK-R1 3): the lines above are out; this run's debounce counts
+        # and sent marks are lost, so an alert may be sent again next run.
+        print(f"health-watch: state file {opts.state}: {e.strerror or e}; this run's state is lost", file=sys.stderr)
+        try:
+            os.unlink(f"{opts.state}.tmp")
+        except OSError:
+            pass
     return 1 if any(line["status"] == "alert" for line in lines) else 0
 
 
@@ -1238,6 +1352,10 @@ def parse_args(argv):
                    default=[x for x in os.environ.get("ONYX_WATCH_STORAGE_NODES", "").split(",") if x.strip()],
                    help="a storage node base URL whose /v1/health must answer 200 (repeatable; "
                         "default $ONYX_WATCH_STORAGE_NODES, comma-separated)")
+    p.add_argument("--disk", dest="disks", action="append", metavar="PATH",
+                   default=[x for x in os.environ.get("ONYX_WATCH_DISKS", "").split(",") if x.strip()],
+                   help="a path whose file system must keep disk.free_min_pct / free_min_bytes and "
+                        "inodes_free_min_pct free (repeatable; default $ONYX_WATCH_DISKS, comma-separated)")
     p.add_argument("--state", metavar="FILE", help="state file (default $XDG_STATE_HOME/onyx-health-watch/state.json)")
     p.add_argument("--alert-log", metavar="FILE", help="alert events, one JSON line each (default: alerts.jsonl next to the state file)")
     p.add_argument("--notify-cmd", metavar="CMD", default=os.environ.get("ONYX_WATCH_NOTIFY_CMD") or None,
@@ -1268,6 +1386,10 @@ def parse_args(argv):
             p.error(f"--{name} must be an http(s) URL (got {origin(v)})")
     a.bulk_publishers = [x.strip() for x in a.bulk_publishers if x.strip()]
     a.storage_nodes = [x.strip() for x in a.storage_nodes if x.strip()]
+    a.disks = list(dict.fromkeys(x.strip() for x in a.disks if x.strip()))
+    for v in a.disks:
+        if not os.path.isabs(v):
+            p.error(f"--disk must be an absolute path (got {v})")
     for v in a.storage_nodes:
         if urllib.parse.urlsplit(v).scheme not in ("http", "https"):
             p.error(f"--storage-node must be an http(s) URL (got {origin(v)})")

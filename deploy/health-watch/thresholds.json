@@ -4,10 +4,11 @@
   "_deadline": "One budget for a whole run (all checks); checks not done when it runs out alert as 'deadline'. Notify commands get 2 x notify.command_timeout_s on top. The systemd unit's TimeoutStartSec must stay above both (a test checks).",
   "deadline_s": 90,
   "require": {
-    "_about": "A target that is not configured (no --node / --rpc / --site and no ONYX_WATCH_* variable) alerts when required, else prints skip lines. The site turns required once a public build is published (LC-6).",
+    "_about": "A target that is not configured (no --node / --rpc / --site and no ONYX_WATCH_* variable) alerts when required, else prints skip lines. The site turns required once a public build is published (LC-6). disk: the server's install sets ONYX_WATCH_DISKS; elsewhere unset paths skip.",
     "node": true,
     "rpc": true,
-    "site": false
+    "site": false,
+    "disk": false
   },
   "addresses": {
     "_source": "docs/ops/deployment.md 'Deployed addresses (Base Sepolia)' (the NS17 run of 2026-10-27). Public addresses only, never a key; health-watch-tests.py checks they match that table. null skips the check, with a skip line.",
@@ -67,6 +68,13 @@
     "_about": "Bulk catalogs (launch checklist LC-17): for each --bulk-publisher (ONYX_WATCH_BULK_PUBLISHERS), the newest catalog the node holds (GET /v1/bulk catalogs[].createdUnix) must be younger than this. A daily refresh makes one a day; 36 h leaves a late or rerun day room and still alerts the day after a refresh stops.",
     "timeout_s": 15,
     "catalog_max_age_s": 129600
+  },
+  "disk": {
+    "_about": "THREATS OBS-DISK-1: each --disk path (ONYX_WATCH_DISKS) on the watch's own host, by os.statvfs. A full disk stops every journal write (receipts, settle intents, the indexer state) and every catalog the node takes; the node's write-error counters show it only after the first failed write. Space is what an unprivileged writer may still use (f_bavail): below free_min_pct of the file system or below free_min_bytes alerts (2 GiB: a few days of catalogs and logs at today's rate, and room for a release). Free inodes below inodes_free_min_pct alert; a file system with no inode count (btrfs) skips that part. Local file systems only, named by their mount point as the watch's sandbox sees it (ProtectHome hides /home; a DynamicUser's /var/lib/private is replaced): each read gives up after timeout_s (a hung network mount alerts instead of stopping the run).",
+    "timeout_s": 5,
+    "free_min_pct": 10,
+    "free_min_bytes": 2147483648,
+    "inodes_free_min_pct": 5
   },
   "storage": {
     "_about": "Storage nodes (--storage-node, ONYX_WATCH_STORAGE_NODES): each must answer GET /v1/health with 200. They run next to the watch, so a short timeout: five of them at 3 s fit the run's budget after everything else. One check for all of them: a second node down while one already alerts is in the detail, notified again after notify.realert_after_s.",

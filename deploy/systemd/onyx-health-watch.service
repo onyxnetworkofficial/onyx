@@ -13,6 +13,7 @@
 #   ONYX_WATCH_BULK_PUBLISHERS=onchain-archive      # newest catalog under 36 h (bulk.catalog_age)
 #   ONYX_WATCH_STORAGE_NODES=http://127.0.0.1:8201,http://127.0.0.1:8202,http://127.0.0.1:8203,http://127.0.0.1:8204,http://127.0.0.1:8205
 #                                                   # each /v1/health 200 (8201 is onyx-storage@n1, ... 8205 n5)
+#   ONYX_WATCH_DISKS=/srv                           # optional: more file systems (ExecStart already has --disk /)
 #   ONYX_WATCH_NOTIFY_CMD=/usr/local/bin/onyx-alert # the channel (LC-18) waits for the owner
 #
 # Exit 1 (any alert) marks this unit failed: `systemctl status onyx-health-watch` and
@@ -28,7 +29,9 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 EnvironmentFile=/etc/onyx/health-watch.env
-ExecStart=/usr/bin/python3 -I /opt/onyx-watch/scripts/health-watch.py --once --state /var/lib/onyx-health-watch/state.json
+# --disk /: the root file system holds every state dir (THREATS OBS-DISK-1, review OBS-DISK-R1 1);
+# set here, not in the env file, so an install that forgets the env line still watches it.
+ExecStart=/usr/bin/python3 -I /opt/onyx-watch/scripts/health-watch.py --once --state /var/lib/onyx-health-watch/state.json --disk /
 DynamicUser=yes
 StateDirectory=onyx-health-watch
 StateDirectoryMode=0700
