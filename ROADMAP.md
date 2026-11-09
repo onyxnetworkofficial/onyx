@@ -1124,6 +1124,14 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       without a settled meaning stay as written), and search goes by meaning ("bitcoin holders",
       "whale", "stablecoin") through the node's whole-word `any` search. Left: CAT-1 (a history check), CAT-2 (deals), CAT-3
       (takedown), CAT-4 (catalog lines past 10,000 datasets a publisher)
+- [ ] S23 Schema changes for bulk datasets (THREATS BULK-SCHEMA-1): a version keeps its dataset's
+      schema (`onyx-bulk` `check_successor`), so new rows that need a wider decimal scale or a new
+      column cannot be added: the dataset freezes and the publisher can only start a new dataset id
+      with the whole history and end the old one with a tombstone (docs/ops/bulk-publish.md "When new
+      rows do not fit the schema"). Not needed yet: the first publisher's two refused datasets fit
+      their schema, and the refusal was its exporter's check (BULK-SCHEMA-1). Design: a widening
+      successor (a decimal scale may grow, a nullable column may be added at the end) with each shard
+      checked under the schema it was built with, and a successor link from the ended id to the new one
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);

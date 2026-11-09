@@ -115,6 +115,23 @@ columns often hold the same values by chance, or one is empty. `build` publishes
 nullable column as empty, and a published version never changes (THREATS BULK-COL-1). Decide which
 columns to drop (duplicates, all-empty) over the whole history, as for version 1.
 
+### When new rows do not fit the schema
+
+A dataset keeps the schema of its version 1 for good: `build --prev` refuses rows that need more
+decimal places than a column's `scale`, or a column version 1 did not have (values are padded,
+never rounded). So:
+
+1. At version 1, give each decimal column a few more decimal places than the data needs today (the
+   padding costs a few bytes a value). A source that writes floats can gain digits later. Later,
+   check new rows against the places their values need, not against the scale your exporter would
+   pick for a new dataset (with its headroom): a value with fewer places is padded and fits.
+2. If new rows still do not fit, start a **new dataset id** (for example `<dataset id>-2`): build its
+   version 1 from the whole history with the wider schema, list it in your next catalog, and end
+   the old id in the same catalog with a tombstone (`onyx-publish catalog-build ... --remove <old id>`,
+   ADR-0059 amendment 4). Readers of the old id see it removed; nodes erase its files after the
+   grace period. Onyx has no link from the old id to the new one yet (ROADMAP S23), so say it
+   wherever you announce your data.
+
 ## Many datasets with one anchor (catalogs)
 
 Each `anchor` above is one transaction. With many datasets, or a refresh of all of them, anchor
