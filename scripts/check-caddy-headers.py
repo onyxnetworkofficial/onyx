@@ -101,8 +101,11 @@ def loopback(text, worker, site):
                     lines += [line, "\tauto_https off"]
                     continue
             if re.match(r"^[^\s#{}][^{]*\{$", line):
-                lines.append(f"http://127.0.0.1:{port if n_sites == 0 else free_port()} {{")
-                n_sites += 1
+                # The first site that is not the port-80 redirect block serves the files; every
+                # other site (that block included, THREATS TLS-9) gets a port of its own.
+                main = n_sites == 0 and not line.startswith("http://")
+                lines.append(f"http://127.0.0.1:{port if main else free_port()} {{")
+                n_sites += main
                 continue
             lines.append(re.sub(r"^(\s*root \* ).*$", lambda m: m.group(1) + www, line))
         if not opts or n_sites == 0:
@@ -186,9 +189,12 @@ def main():
     if args == ["--self-test"]:
         # The layout review WEB-CSP-R2 caught: the site policy in the site-wide header block (deferred
         # by its -Server) and the workers' policy set at once, so the site-wide one replaced it.
-        faulty = re.sub(r"^(\t\t)-Server$", lambda m: f'{m.group(1)}{CSP} "{site}"\n{m.group(1)}-Server', text, count=1, flags=re.M)
+        # The site-wide block is the one with Cross-Origin-Opener-Policy (the port-80 block also
+        # deletes Server, THREATS TLS-9).
+        coop = '\t\tCross-Origin-Opener-Policy "same-origin"\n'
+        faulty = text.replace(coop, coop + f'\t\t{CSP} "{site}"\n', 1)
         faulty = re.sub(r"(header @workers \{\n\s*%s \"[^\"]+\")\n\s*defer\n" % CSP, r"\1\n", faulty, count=1)
-        if faulty.count("defer") != text.count("defer") - 1 or CSP not in faulty.split("-Server", 1)[0].rsplit("header {", 1)[-1]:
+        if text.count(coop) != 1 or faulty.count("defer") != text.count("defer") - 1:
             sys.exit("check-caddy-headers --self-test: could not plant the fault")
         # Caught for the right reason only: both worker answers served (200) with the site's policy,
         # and every other answer right; any other failure (Caddy not starting, a port taken) is not

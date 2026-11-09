@@ -317,6 +317,64 @@ fn bulk_upload_group_matches_the_node() {
 /// The hosted node's config (deploy/caddy/onyx-web.Caddyfile).
 const WEB_CADDYFILE: &str = include_str!("../../../deploy/caddy/onyx-web.Caddyfile");
 
+/// THREATS TLS-9 (as TLS-3 for deploy/caddy/Caddyfile): the hosted file's port 80 is an
+/// explicit `http://` block for every site name that only redirects, so it takes the global
+/// `servers` options (timeouts, header cap, HTTP/1.1 only); Caddy's automatic redirect server
+/// takes none of them.
+#[test]
+fn tls_9_the_hosted_port_80_is_an_explicit_redirect_block() {
+    let ls: Vec<&str> = WEB_CADDYFILE
+        .lines()
+        .map(|l| l.split('#').next().unwrap_or("").trim())
+        .filter(|l| !l.is_empty())
+        .collect();
+    let i = ls
+        .iter()
+        .position(|l| {
+            *l == "http://onyx.cryptagraph.com, http://cryptagraph.com, http://www.cryptagraph.com {"
+        })
+        .expect("an explicit http:// block for every site name");
+    assert_eq!(
+        &ls[i + 1..i + 10],
+        &[
+            "header {",
+            "-Server",
+            "Location https://{host}{uri}",
+            "}",
+            "respond 308 {",
+            "close",
+            "}",
+            "}",
+            "http:// {",
+        ],
+        "port 80 only redirects, closes, and sends no Server header; any other name is closed"
+    );
+    assert_eq!(
+        &ls[i + 10..i + 13],
+        &["header -Server", "abort", "}"],
+        "port 80 answers nothing for any other name"
+    );
+    // One `servers` block for every listener: one bound to an address would leave port 80
+    // without the options (review of TLS-9).
+    let servers: Vec<&&str> = ls.iter().filter(|l| l.starts_with("servers")).collect();
+    assert_eq!(
+        servers,
+        vec![&"servers {"],
+        "one address-less servers block"
+    );
+    // Every https site name has its http:// twin in that block.
+    for site in [
+        "onyx.cryptagraph.com {",
+        "cryptagraph.com, www.cryptagraph.com {",
+    ] {
+        assert!(ls.contains(&site), "site {site}");
+    }
+    // The global options the redirect block now takes.
+    for opt in ["read_header 10s", "max_header_size 32KiB", "protocols h1"] {
+        assert!(ls.contains(&opt), "global option {opt}");
+    }
+}
+
 /// THREATS SCALE-1 (and NS17-8): of the API, only the bulk answers are
 /// compressed, and they send no ETag, so a compressed answer never breaks a
 /// 304; the site's files are the only other `encode`.

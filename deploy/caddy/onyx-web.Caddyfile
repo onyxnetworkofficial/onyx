@@ -21,6 +21,28 @@
 	}
 }
 
+# Plain HTTP: redirect only, nothing is proxied (THREATS TLS-9, as TLS-3 in deploy/caddy/Caddyfile).
+# Written out, not left to Caddy's automatic redirect server, which takes none of the `servers`
+# options above (on 2.11.7 it held an unfinished request header 60 s, offered h2 and h3 and sent
+# `Server`): here port 80 gets the same timeouts, header cap and HTTP/1.1 only. ACME HTTP
+# challenges are still answered on port 80.
+http://onyx.cryptagraph.com, http://cryptagraph.com, http://www.cryptagraph.com {
+	header {
+		-Server
+		Location https://{host}{uri}
+	}
+	# Closed after the answer, as the automatic redirect did: no idle port-80 connection to hold.
+	respond 308 {
+		close
+	}
+}
+
+# Any other name, a bare address or no Host on port 80: closed, nothing sent.
+http:// {
+	header -Server
+	abort
+}
+
 onyx.cryptagraph.com {
 	header {
 		Strict-Transport-Security "max-age=31536000"

@@ -66,6 +66,19 @@ sub-path, so absolute paths load nothing and the page is blank (version 76, 2026
         `Intl.DateTimeFormat` (`format.ts` `dayMonth`, tested against the old form in
         `tests/format.test.mjs`): performance 87, TBT 122 ms (median of 3). Left: LCP 3.9 s
         (W9 3.4 s; LCP element `p.lede`), and the verifier WASM's +300 KiB.
+        2026-11-09, measured (Lighthouse 12.8.2, mobile, simulated slow 4G, 3 runs each taking
+        turns, load 3.5-7, the public build's data): the LCP element is the dataset catalog's lede
+        and 88% of its 3.9 s is render delay behind the script chain (HTML, then the entry, the
+        layout node, a second node and the Data route's node of 41.8 KiB, each found only after
+        the one before ran), not `demo.json` (5.8 KiB on the wire, preloaded by `app.html`).
+        Moving `DatasetCatalog` above the data gate changed nothing (3.9 s before and after; 3.8 to
+        3.7 s with the small fixture data), so it was not kept. Preloading the route's 30 chunks
+        from the Vite manifest (`modulepreload` in `index.html`, by hand) changed nothing either
+        (3.8-3.9 s both). The paint itself is at 209 ms observed (FCP 51 ms); the simulated 3.9 s
+        counts every request started before that paint (three preloaded fonts, 58 KiB; about
+        120 KiB of scripts, one 21.8 KiB chunk with 903 ms boot time at 4x CPU) on the slow-4G
+        model, so the lever is fewer bytes before the first paint (fonts preloaded only where
+        their text is above the fold, the largest early chunk split), not their order.
       - [ ] Not new, still open from W1: public Explorer's throttled browser LCP 11.5-11.7 s in the
         cleared build (W1 11.9 s), 2.0 s in the fallback build, so the late element is likely a
         label-derived one (not traced).

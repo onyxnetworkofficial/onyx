@@ -183,7 +183,13 @@ results, what was fixed, what stays open with a THREATS row).
       (two clients, separate limits); added to docs/audit/2026-10-15-tls-front.md; Caddy is not
       installed today (free, apt). 2026-10-27 (NL12): the TLS 1.1 refusal is shown on the real
       server instead (onyx.cryptagraph.com answers TLS 1.0 and 1.1 with alert 70 to a client that
-      offers them; launch checklist LC-7); the paid flow and the Docker setup stay open
+      offers them; launch checklist LC-7); the paid flow and the Docker setup stay open.
+      2026-11-08: the paid flow is shown through a loopback copy of deploy/caddy/onyx-web.Caddyfile
+      on `tls internal` and an anvil fork of Base Sepolia (402 with `payment-required` intact, a
+      settled 200 with `payment-response`, 504 then 503 `payment_pending` then 200 with one charge,
+      a 16 KiB payment header; Caddy 2.11.7, the server's 2.6.2 not run; addendum in
+      docs/audit/2026-10-15-tls-front.md). It found TLS-9 (the hosted file's port 80 lacked the
+      `servers` options), fixed 2026-11-09 with an explicit `http://` block; the Docker setup stays open
 
 ## Phase H: hardening before mainnet (after the project owner decides to leave testnets; L9 sweep)
 

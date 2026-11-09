@@ -441,11 +441,26 @@ taken below.
      finds no other holder fails its challenges and declines. A new deal on a removed own-report
      manifest costs each placed node one decline (THREATS CAT-ERASE-2) until OnyxStorage v2
      (with CAT-2) refuses such deals.
-   - **Slice 2 (outline, drafted later).** A route that serves the publisher's newest catalog leaf
-     for a dataset with its proof, so a storage node can learn a removal without the catalogs;
-     declines of each deal on a due removal (`decline(deal, WHOLE_DEAL, node)`, paid by the
-     operator, with the ADR-0060 notice), never before the grace; erasure only once every
-     placement on a root is out.
+   - **Slice 2a: storage nodes learn of a removal** (draft 1, 2026-11-09, for a design review; not
+     built). No chain write. A catalog node serves `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`
+     (a peer route, no chain read): the newest held catalog's header, its signed report and the
+     dataset's leaf with its proof (or a learned proof it keeps, whichever has the higher number);
+     404 when it lists none, 409 under a fork mark. A storage node, in a paced task of its own beside
+     its tick (hourly, a few datasets a pass, capped answers), asks each placed deal's source and
+     then its peers for the leaf of each (publisher, dataset) its held manifests name, and keeps a
+     proof only when, read at one finalized block: the header is the publisher's and proves the leaf,
+     the leaf is that dataset's tombstone (version 2 or later) and ends a version at or after the
+     newest held one (`prev` is its root when it is the next), the report verifies, reads anchored
+     and its key is active and not suspended. A kept proof (`<bulk dir>/learned/`) makes rows,
+     info and listing answer `410 bulk_dataset_removed` with `learned`; each pass reads it again,
+     and a withdrawal, a held later version that still reads anchored, or a key no longer active
+     stops it at once (serving resumes; doubt serves). A forged or replayed proof cannot stop a
+     storage node serving; a source that withholds the leaf only delays. Challenges, shard routes
+     and earnings are untouched. `ONYX_STORAGE_REMOVALS` = `on` (default), `log` or `off`.
+   - **Slice 2b (outline).** Declines of each deal on a due removal (`decline(deal, WHOLE_DEAL,
+     node)`, paid by the operator, with the ADR-0060 notice), never before the grace, and only once
+     no fork stands (a relay can hand out one forked side); erasure only once every placement on a
+     root is out.
 
 6. **The history check** (amendment 3). The walk accepts a tombstone as a dataset step. When the
    walk ends the answer's dataset in a tombstone, the outcome is `Removed` (exit 4): the rows
