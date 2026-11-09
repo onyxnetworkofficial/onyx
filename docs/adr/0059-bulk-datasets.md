@@ -6,7 +6,7 @@ Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) acce
 on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
 amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
 CAT-DIFF-R1, built 2026-11-04; amendment 3 (a client check of a publisher's catalog history)
-draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion; its item 5a (erasure) draft 2 after design review CAT-ERASE-R1, slice 1 built 2026-11-09 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -355,10 +355,98 @@ taken below.
    first build a removed dataset's manifests and shards stay held and counted, and the peer
    routes by root (`GET /v1/bulk/manifests/{root}`, `GET /v1/bulk/shards/{root}`) keep answering,
    so storage deals keep their challenges and the history check can read own-report manifests
-   (CAT-TOMB-R1 L7). TODO: delete after a grace period with the key unchanged (30 days), counting
-   references by root across every publisher's held and set-aside manifests and every deal
-   placement, and file the ADR-0060 decline with notice for each deal on the removed manifests,
-   refusing new ones.
+   (CAT-TOMB-R1 L7). Erasure after a grace period (item 5a) deletes the shards later.
+
+5a. **Erasure** (draft 2, 2026-11-09, after design review CAT-ERASE-R1; slice 1 built with it).
+   Two slices. Slice 1 erases on a node that holds the publisher's catalogs (the query API node)
+   and needs no chain write. Slice 2 brings in storage nodes (they hold deals' manifests by root
+   and no catalogs) and files the ADR-0060 declines; it is drafted after slice 1.
+   - **What is erased.** Only shard files. Manifests, catalogs and set-aside (withdrawn) files are
+     never erased: they are small, carry no rows, and the history check reads them (amendment 3;
+     CAT-TOMB-R1 L7). Rows are what a takedown is about.
+   - **The record.** For each dataset the newest held catalog of its publisher lists as removed,
+     the node keeps one durable record `<bulk dir>/removals/<publisher>/<dataset>.bin` (written
+     like every bulk file: a temporary file, synced, renamed; loaded at start before any route
+     serves): the run's first catalog (number and root), the newest catalog's key, `since`, and a
+     phase `Waiting`, `Erasing` (block, time, the shard roots chosen) or `Erased` (the same, plus
+     the roots kept as shared). The run is the newest held catalogs, walked back from the newest,
+     that list the dataset's tombstone; its first catalog under the newest catalog's key starts
+     the grace (two keys taking turns cannot restart it; CAT-ERASE-R1 M2).
+   - **`since`** is the later of the chain time the book recorded that first catalog's report and
+     the time of the block at which this node took that catalog (its anchor read), so a catalog
+     anchored early and uploaded late still shows its removal for the whole grace before any
+     erase (CAT-ERASE-R1 M2). Never the catalog's own creation time or the host clock.
+   - **When a dataset is due.** An hourly pass (after the bulk sweep) reads at one finalized block
+     and takes `now` from that block's own answer. The dataset is due only when: `now >= since +
+     grace`; the block is at or past the highest anchor block of the publisher's held catalogs;
+     the run's first catalog and the newest both read anchored at that block; the newest
+     catalog's key reads `life == 1` (active) and not suspended at that block (`keyState`: an
+     anchored report alone is not enough, a retired or compromised key's past facts stay
+     anchored; CAT-ERASE-R1 M3); no catalog fork of the publisher stands; and no operator hold
+     names the publisher or the dataset.
+   - **Candidates and references** (CAT-ERASE-R1 M1; build review CAT-ERASE-R2). The candidates
+     are the shard roots of every version of the due dataset, held and set aside. A candidate is
+     kept when a held (not set aside) manifest of another dataset names it, of any publisher,
+     unless that dataset is `Erasing` or `Erased` and still removed (one that came back is a
+     reference again). A dataset due in the same pass is a reference, so a root two removed
+     datasets share goes with the last of them, one plan later. Set-aside manifests are no
+     references (they are not served). A held manifest that does not decode stops the whole
+     pass. The kept roots are written in the record. A node in storage mode
+     (`ONYX_STORAGE_CONTRACT` set) does not erase in slice 1: its deals' placements are
+     references only slice 2 counts.
+   - **One lock** (CAT-ERASE-R1 H1; CAT-ERASE-R2). A store-wide erase lock: every manifest
+     upload, every shard write (publisher `PUT`, a storage peer's fetch; taken once the body is
+     read and checked) and every catalog upload (a set-aside comes with one) takes it to read,
+     always before a publisher lock and never nested; the pass takes it to write from the
+     reference count to the end, and under the due publisher's lock re-checks that `removed()`
+     still names the dataset with the newest catalog and the run's first held unchanged. A record
+     whose dataset came back moves aside at the next pass. Storing an erased root again clears its
+     erased mark and its record's entry (written under the record lock).
+   - **Crash-safe order.** (1) write `Erasing` with the roots; (2) mark them erased in memory (no
+     route serves them; their cached manifest entries are dropped); (3) remove them from the tier
+     index (`TieredStore::forget_bulk`) and save it once, so a restart never finds a tracked shard
+     without its file; (4) unlink the files, a missing one counting as done; (5) write `Erased`.
+     On restart an `Erasing` record redoes (2) to (5) after a fresh reference count, so a root
+     referenced meanwhile is kept.
+   - **Dry-run and the first erase** (CAT-ERASE-R1 L2; CAT-ERASE-R2). `dry-run` (the default)
+     writes only `Waiting` records and logs each plan with a digest of its roots; it marks nothing
+     in memory and deletes nothing. With `on`, a pass erases a plan only when an earlier pass
+     logged the same digest at an earlier block while the dataset stayed due (a hold or a guard
+     that fails drops the plan; a dry run's plan counts), and at most `ONYX_BULK_ERASE_MAX_SHARDS`
+     shards a pass (10,000; the first dataset of a pass goes even when larger). A held `Erasing`
+     record is not finished, and its roots stay unserved.
+   - **Answers.** Rows and info answer `410 bulk_dataset_removed` as before, with the phase and the
+     due time; the listing leaves removed datasets out, as before. `GET /v1/bulk/shards/{root}`
+     for an erased root answers `410 bulk_shard_removed`. Manifest and catalog routes are
+     unchanged. An erased dataset counts toward the publisher's dataset cap and no longer toward
+     its byte quota or the node's total (CAT-ERASE-R1 L4).
+   - **Withdrawal after erasure** (CAT-ERASE-R1 M4). When the book withdraws the tombstone's
+     catalog and a set-aside brings the dataset back, the record moves aside and its roots stop
+     being erased; a shard `PUT` then takes any root of that record that a held version names
+     (not only the latest version's; versions only append, so the latest names the earlier
+     ones' shards), so the publisher's `upload` restores them; until then rows answer
+     `409 bulk_shard_missing`. The residual (a compromise found after the grace costs the owner
+     that re-upload) is THREATS CAT-ERASE-1.
+   - **Config.** `ONYX_BULK_ERASE` = `off`, `dry-run` (default) or `on`;
+     `ONYX_BULK_ERASE_GRACE_DAYS` (30, at least 30); `ONYX_BULK_ERASE_HOLD` (publishers or
+     `publisher/dataset` names the node keeps); `ONYX_BULK_ERASE_MAX_SHARDS`. `on` is refused in
+     storage mode. No "erase now" (a legal order) in this slice: it would skip the guard against
+     a thief's tombstone and needs its own review.
+   - **Logs.** One line per change of phase and per hold: `bulk: erase: <p>/<d>: waiting, due
+     <time>`, `held: <reason>`, `plan <digest>: <n> shards, <k> shared kept, block <b>`,
+     `erasing`, `erased`, `withdrawn after erasure: re-upload <n> shards`. `GET /v1/bulk`'s
+     `catalogs` gains the counts waiting and erased per publisher.
+   - **Storage deals in slice 1** (CAT-ERASE-R1 L3). A storage node fetches a deal's shards from
+     its source, possibly this node: once erased here they answer 410, so a placed node that
+     finds no other holder fails its challenges and declines. A new deal on a removed own-report
+     manifest costs each placed node one decline (THREATS CAT-ERASE-2) until OnyxStorage v2
+     (with CAT-2) refuses such deals.
+   - **Slice 2 (outline, drafted later).** A route that serves the publisher's newest catalog leaf
+     for a dataset with its proof, so a storage node can learn a removal without the catalogs;
+     declines of each deal on a due removal (`decline(deal, WHOLE_DEAL, node)`, paid by the
+     operator, with the ADR-0060 notice), never before the grace; erasure only once every
+     placement on a root is out.
+
 6. **The history check** (amendment 3). The walk accepts a tombstone as a dataset step. When the
    walk ends the answer's dataset in a tombstone, the outcome is `Removed` (exit 4): the rows
    were the publisher's, and the publisher has withdrawn them; the report names the tombstone's
@@ -374,10 +462,10 @@ taken below.
    previous catalog holds as a tombstone is skipped with `SKIPPED ... removed` (CAT-TOMB-R1 M6), and
    `upload` takes a `410 bulk_dataset_removed` as done.
 
-**What it does not do.** It cannot force any copy off another machine, and it does not remove the
-dataset from catalogs already signed (the history check needs them). Until item 5's TODO is built,
-a removed dataset's bytes stay on the nodes that held them and anyone can still fetch its files by
-root; only its rows, its info and its listing stop.
+**What it does not do.** It cannot force any copy off another machine; on this node, any held manifest of another dataset that names a removed dataset's shards keeps them, fetchable by root (CAT-ERASE-R1 L5); and it does not remove the
+dataset from catalogs already signed (the history check needs them). Until a node runs item 5a
+with `ONYX_BULK_ERASE=on`, and on every storage node until slice 2, a removed dataset's bytes stay
+and anyone can still fetch its files by root; only its rows, its info and its listing stop.
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and

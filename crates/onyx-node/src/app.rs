@@ -1096,7 +1096,8 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 b.limits,
             )
             .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?
-            .with_free_per_minute(b.free_per_minute);
+            .with_free_per_minute(b.free_per_minute)
+            .with_erase(b.erase.clone());
             eprintln!(
                 "onyx-node: bulk datasets on (ONYX_BULK_DIR), anchored in signed book {}",
                 hx(&pin.book)
@@ -1115,6 +1116,15 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                     .unwrap_or(0);
                 if moved > 0 {
                     eprintln!("onyx-node: bulk: {moved} quiet shard(s) moved to warm");
+                }
+                // ADR-0059 amendment 4 item 5a: removed datasets past their grace.
+                match store.erase_pass().await {
+                    Ok(p) if p.erased > 0 || p.planned > 0 => eprintln!(
+                        "onyx-node: bulk: erase pass: {} erased ({} shards, {} kept), {} planned, {} waiting",
+                        p.erased, p.shards, p.kept, p.planned, p.waiting
+                    ),
+                    Ok(_) => {}
+                    Err(e) => eprintln!("onyx-node: bulk: erase pass: {e}"),
                 }
             }
         });

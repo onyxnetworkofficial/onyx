@@ -33,6 +33,84 @@ fn a_minimal_testnet_config_is_free_and_strict() {
     assert!(c.storage.is_none());
 }
 
+/// ADR-0059 amendment 4 item 5a: erasing removed datasets is a dry run by
+/// default; `on` is refused in storage mode, the grace is at least 30 days,
+/// holds are publisher or publisher/dataset ids, and the settings need
+/// `ONYX_BULK_DIR`.
+#[test]
+fn cat_3_erase_settings() {
+    use onyx_api::bulk_serve::{EraseMode, MAX_SHARDS_PER_PASS};
+    let mut m = base();
+    m.insert("ONYX_BULK_ERASE", "on");
+    assert!(load(&m)
+        .expect_err("no bulk")
+        .contains("ONYX_BULK_ERASE is set but ONYX_BULK_DIR is not"));
+    m.remove("ONYX_BULK_ERASE");
+    m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk");
+    let e = load(&m).expect("ok").bulk.expect("bulk").erase;
+    assert_eq!(e.mode, EraseMode::DryRun);
+    assert_eq!(e.grace_secs, 30 * 86_400);
+    assert!(e.hold.is_empty());
+    assert_eq!(e.max_shards, MAX_SHARDS_PER_PASS);
+    for (v, mode) in [
+        ("off", EraseMode::Off),
+        ("dry-run", EraseMode::DryRun),
+        ("on", EraseMode::On),
+    ] {
+        m.insert("ONYX_BULK_ERASE", v);
+        assert_eq!(load(&m).expect("ok").bulk.expect("bulk").erase.mode, mode);
+    }
+    m.insert("ONYX_BULK_ERASE", "yes");
+    assert!(load(&m).expect_err("bad").contains("off, dry-run or on"));
+    m.insert("ONYX_BULK_ERASE", "on");
+    for days in ["0", "29"] {
+        m.insert("ONYX_BULK_ERASE_GRACE_DAYS", days);
+        assert!(load(&m)
+            .expect_err("short")
+            .contains("ONYX_BULK_ERASE_GRACE_DAYS"));
+    }
+    m.insert("ONYX_BULK_ERASE_GRACE_DAYS", "45");
+    m.insert(
+        "ONYX_BULK_ERASE_HOLD",
+        " example.publisher , other.pub/synthetic.metrics ,",
+    );
+    m.insert("ONYX_BULK_ERASE_MAX_SHARDS", "500");
+    let e = load(&m).expect("ok").bulk.expect("bulk").erase;
+    assert_eq!(e.grace_secs, 45 * 86_400);
+    assert_eq!(e.max_shards, 500);
+    assert_eq!(
+        e.hold.into_iter().collect::<Vec<_>>(),
+        vec![
+            "example.publisher".to_string(),
+            "other.pub/synthetic.metrics".to_string()
+        ]
+    );
+    for bad in ["../x", "a/b/c", "a b"] {
+        m.insert("ONYX_BULK_ERASE_HOLD", bad);
+        assert!(
+            load(&m)
+                .expect_err("bad hold")
+                .contains("ONYX_BULK_ERASE_HOLD"),
+            "{bad}"
+        );
+    }
+    m.remove("ONYX_BULK_ERASE_HOLD");
+    m.insert(
+        "ONYX_STORAGE_CONTRACT",
+        "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    );
+    m.insert(
+        "ONYX_STORAGE_NODE_ID",
+        "0x0101010101010101010101010101010101010101010101010101010101010101",
+    );
+    m.insert("ONYX_STORAGE_KEY_FILE", "/run/credentials/onyx/storage-key");
+    assert!(load(&m)
+        .expect_err("storage")
+        .contains("refused in storage mode"));
+    m.insert("ONYX_BULK_ERASE", "dry-run");
+    assert!(load(&m).expect("a dry run is fine").storage.is_some());
+}
+
 /// ADR-0060: the storage-node mode is off unless `ONYX_STORAGE_CONTRACT`
 /// is set, needs the bulk store, a node id and a key file, and its
 /// settings are bounded and refused when it is off.

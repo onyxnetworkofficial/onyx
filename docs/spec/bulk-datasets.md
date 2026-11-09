@@ -121,9 +121,21 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   publisher's newest held catalog lists it, the dataset is removed on the node: its rows, info and
   listing, and every upload of it (`POST /v1/bulk/manifests` either way, shard `PUT`), answer
   `410 bulk_dataset_removed` naming the catalog. A tombstone is taken even over a held version at
-  its number. Nothing held is deleted yet: the manifests and shards stay, counted, and the peer
+  its number. Nothing held is deleted then: the manifests and shards stay, counted, and the peer
   routes by root still answer (storage deals, the history check); a set-aside of the tombstone's
   catalog (THREATS CAT-5) brings the dataset back.
+- R-BULK-14 (erasure, ADR-0059 amendment 4 item 5a, slice 1): a node holding the publisher's
+  catalogs (not in storage mode) with `ONYX_BULK_ERASE=on` erases a removed dataset's shard files
+  once, read at one finalized block, the grace is out (30 days or more of chain time from the later
+  of the book's record of the run's first tombstone catalog under the newest key and the block the
+  node took it at), both that catalog and the newest read anchored, the newest key is active and
+  not suspended, no catalog fork stands and no operator hold names it; it erases only roots no held
+  manifest of another dataset names (one not erasing, erased or due), and only a plan it logged at
+  an earlier pass unchanged. Manifests, catalogs and set-aside files are never erased. An erased
+  root answers `410 bulk_shard_removed` on the peer route; rows and info carry the phase and due
+  time; the dataset counts toward the cap but not the byte quota. A set-aside of the tombstone's
+  catalog after erasure moves the record aside and the publisher's shard uploads restore every
+  version.
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every

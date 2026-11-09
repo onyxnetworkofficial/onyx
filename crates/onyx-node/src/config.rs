@@ -1018,6 +1018,12 @@ pub struct BulkConfig {
     /// `ONYX_BULK_FREE_PER_MINUTE` (default 60): free bulk answers per
     /// client per minute (reads, and storage-network peer fetches, ADR-0060).
     pub free_per_minute: u32,
+    /// `ONYX_BULK_ERASE` (`off`, `dry-run` default, `on`),
+    /// `ONYX_BULK_ERASE_GRACE_DAYS` (30, at least 30), `ONYX_BULK_ERASE_HOLD`
+    /// (publishers or `publisher/dataset`, comma separated) and
+    /// `ONYX_BULK_ERASE_MAX_SHARDS` (10,000): erasing removed datasets
+    /// (ADR-0059 amendment 4 item 5a). `on` is refused in storage mode.
+    pub erase: onyx_api::bulk_serve::EraseConfig,
 }
 
 impl BulkConfig {
@@ -1029,6 +1035,10 @@ impl BulkConfig {
             "ONYX_BULK_MAX_GIB",
             "ONYX_BULK_WARM_AFTER_DAYS",
             "ONYX_BULK_FREE_PER_MINUTE",
+            "ONYX_BULK_ERASE",
+            "ONYX_BULK_ERASE_GRACE_DAYS",
+            "ONYX_BULK_ERASE_HOLD",
+            "ONYX_BULK_ERASE_MAX_SHARDS",
         ];
         let Some(dir) = get("ONYX_BULK_DIR")
             .map(|p| p.trim().to_string())
@@ -1076,12 +1086,65 @@ impl BulkConfig {
             u64::from(onyx_api::bulk_serve::FREE_PER_MINUTE),
             1_000_000,
         )? as u32;
+        let erase = Self::erase_from_env(get, &num)?;
         Ok(Some(BulkConfig {
             dir,
             warm,
             limits,
             free_per_minute,
+            erase,
         }))
+    }
+
+    fn erase_from_env(
+        get: &impl Fn(&str) -> Option<String>,
+        num: &impl Fn(&str, u64, u64) -> Result<u64, String>,
+    ) -> Result<onyx_api::bulk_serve::EraseConfig, String> {
+        use onyx_api::bulk_serve::{EraseConfig, EraseMode, MAX_SHARDS_PER_PASS, MIN_GRACE_DAYS};
+        let mode = match get("ONYX_BULK_ERASE").as_deref().map(str::trim) {
+            None | Some("dry-run") => EraseMode::DryRun,
+            Some("off") => EraseMode::Off,
+            Some("on") => EraseMode::On,
+            Some(_) => return Err("ONYX_BULK_ERASE must be off, dry-run or on".into()),
+        };
+        let storage = get("ONYX_STORAGE_CONTRACT").is_some_and(|v| !v.trim().is_empty());
+        if mode == EraseMode::On && storage {
+            return Err("ONYX_BULK_ERASE=on is refused in storage mode (ONYX_STORAGE_CONTRACT): a storage node's deals are references only slice 2 counts (ADR-0059 amendment 4 item 5a)".into());
+        }
+        let days = num("ONYX_BULK_ERASE_GRACE_DAYS", MIN_GRACE_DAYS, 3_650)?;
+        if days < MIN_GRACE_DAYS {
+            return Err(format!(
+                "ONYX_BULK_ERASE_GRACE_DAYS must be {MIN_GRACE_DAYS}..=3650"
+            ));
+        }
+        let mut hold = std::collections::BTreeSet::new();
+        for h in get("ONYX_BULK_ERASE_HOLD").unwrap_or_default().split(',') {
+            let h = h.trim();
+            if h.is_empty() {
+                continue;
+            }
+            let ok = match h.split_once('/') {
+                None => onyx_core::ids::is_dotted_id(h),
+                Some((p, d)) => onyx_core::ids::is_dotted_id(p) && onyx_core::ids::is_dotted_id(d),
+            };
+            if !ok {
+                return Err(format!(
+                    "ONYX_BULK_ERASE_HOLD: {h:?} is not a publisher or publisher/dataset id"
+                ));
+            }
+            hold.insert(h.to_string());
+        }
+        let max_shards = num(
+            "ONYX_BULK_ERASE_MAX_SHARDS",
+            MAX_SHARDS_PER_PASS as u64,
+            1_000_000,
+        )? as usize;
+        Ok(EraseConfig {
+            mode,
+            grace_secs: days * 86_400,
+            hold,
+            max_shards,
+        })
     }
 }
 

@@ -105,6 +105,9 @@ pub enum TierError {
     /// The rows are not readable where the tier says they are.
     #[error("rows of {0} not readable at their tier")]
     Missing(Hash32),
+    /// The shard is tracked: its files are not dropped (forget it first).
+    #[error("shard {0} is still tracked")]
+    Tracked(Hash32),
     /// The copy written to the next tier did not read back.
     #[error("copy of {0} did not read back")]
     CopyNotReadBack(Hash32),
@@ -299,6 +302,38 @@ impl<H: CasPrune, W: CasPrune> TieredStore<H, W> {
         if let Ok(mut t) = self.tiers.lock() {
             t.insert(root, tier);
         }
+    }
+
+    /// Stop tracking bulk shard `root` (ADR-0059 amendment 4 item 5a, an
+    /// erased dataset): its tier is forgotten and its files stay until
+    /// [`Self::drop_bulk_files`]. The caller saves the index between the two,
+    /// so a start never finds a tracked shard without its file. True when it
+    /// was tracked; a row batch is never forgotten here.
+    pub fn forget_bulk(&self, root: &Hash32) -> bool {
+        if !self.is_bulk(root) {
+            return false;
+        }
+        let was = self
+            .tiers
+            .lock()
+            .is_ok_and(|mut t| t.remove(root).is_some());
+        if let Ok(mut b) = self.bulk.lock() {
+            b.remove(root);
+        }
+        was
+    }
+
+    /// Remove bulk shard `root`'s files from both stores, a missing one being
+    /// no error. Refused while `root` is tracked (a shard stored again after
+    /// [`Self::forget_bulk`] keeps its file).
+    pub fn drop_bulk_files(&self, root: &Hash32) -> Result<(), TierError> {
+        if self.tier(root).is_some() {
+            return Err(TierError::Tracked(*root));
+        }
+        self.hot
+            .prune(Kind::Shard, root)
+            .map_err(TierError::Store)?;
+        self.warm.prune(Kind::Shard, root).map_err(TierError::Store)
     }
 
     fn expect(&self, root: &Hash32, want: Tier) -> Result<(), TierError> {
@@ -1022,6 +1057,45 @@ mod tests {
         .expect("w");
         assert!(t2.load(&path).is_err());
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// ADR-0059 amendment 4 item 5a: an erased bulk shard is forgotten first
+    /// (a saved index then never names it), its files go only once it is
+    /// untracked, a missing file is no error, a shard stored again keeps its
+    /// file, and a row batch is never forgotten this way.
+    #[test]
+    fn cat_3_erase_a_forgotten_bulk_shard_drops_its_files_only_untracked() {
+        let t = store();
+        let file = onyx_bulk::shard::encode_shard(&[b"x".to_vec(), b"y".to_vec()]);
+        let root = t.put(Kind::Shard, &file).expect("put");
+        t.to_warm(&root).expect("warm");
+        t.put(Kind::Shard, &file).expect("hot again");
+        assert_eq!(t.drop_bulk_files(&root), Err(TierError::Tracked(root)));
+        assert!(t.forget_bulk(&root));
+        assert_eq!(t.tier(&root), None);
+        assert!(!t.is_bulk(&root));
+        assert!(t.bulk_tiers().is_empty());
+        assert_eq!(
+            t.get(Kind::Shard, &root),
+            Some(file.clone()),
+            "kept until dropped"
+        );
+        t.drop_bulk_files(&root).expect("dropped");
+        assert_eq!(t.get(Kind::Shard, &root), None, "gone from hot and warm");
+        t.drop_bulk_files(&root)
+            .expect("a missing file is no error");
+        assert!(!t.forget_bulk(&root));
+        t.put(Kind::Shard, &file).expect("stored again");
+        assert_eq!(t.drop_bulk_files(&root), Err(TierError::Tracked(root)));
+        assert_eq!(t.get(Kind::Shard, &root), Some(file));
+        let rows = t
+            .put(
+                Kind::Rows,
+                &borsh::to_vec(&vec![vec![7u8; 8]]).expect("rows"),
+            )
+            .expect("rows");
+        assert!(!t.forget_bulk(&rows));
+        assert!(t.tier(&rows).is_some());
     }
 
     /// BULK-LOSS-1: saves from many threads at once (the node's two upload

@@ -8,6 +8,15 @@ What Onyx stores, where, and for how long.
 
 Nothing stored yet. Storage design in [ADR-0007](../adr/0007-storage.md): Postgres for metadata and ledgers, a content-addressed store (CAS) for snapshots and recipe artifacts.
 
+## Bulk datasets (ADR-0059)
+
+A publisher's manifests, catalogs and shard files stay on a node while it holds them. A dataset
+removed by a tombstone (amendment 4) stops being served at once; its shard files are erased after
+the grace, 30 days of chain time or more, on a node running `ONYX_BULK_ERASE=on` (item 5a,
+[config.md](config.md)): only files no other held dataset names, never manifests, catalogs or
+set-aside files, and never on a storage node yet. `ONYX_BULK_ERASE_HOLD` keeps a publisher or a
+dataset for a dispute. Backups an operator made are outside this rule.
+
 ## Plan
 
 | Data | Where | Kept |

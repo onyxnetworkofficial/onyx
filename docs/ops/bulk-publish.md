@@ -185,9 +185,12 @@ catalogs under two keys fork you the same way: publish from one place.
    folder of that dataset in a later `--dirs` is skipped (`SKIPPED ... removed`).
 3. The id is gone for good: publish the data again under a new id if you need it back.
 
-Removal is not erasure: nodes still hold the files (they are fetched by root for storage deals
-and the history check), copies others made stay, and catalogs already signed keep the old
-leaves. A reader's `onyx-check --history` on rows read before the removal reports it (exit 4).
+Removal is not erasure at once: nodes still hold the files for the grace (30 days of chain time
+at least; a stolen key's tombstone can be withdrawn meanwhile), then a node that runs
+`ONYX_BULK_ERASE=on` deletes the shard files no other dataset names (ADR-0059 amendment 4 item
+5a); the manifests stay (the history check reads them), storage nodes keep their copies until
+slice 2, copies others made stay, and catalogs already signed keep the old leaves. A reader's
+`onyx-check --history` on rows read before the removal reports it (exit 4).
 
 ## For the operator
 

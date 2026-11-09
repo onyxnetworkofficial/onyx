@@ -2305,6 +2305,9 @@
           "409": {
             "$ref": "#/components/responses/Error"
           },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
           "429": {
             "$ref": "#/components/responses/Error"
           }
@@ -4925,7 +4928,7 @@
       },
       "BulkList": {
         "type": "object",
-        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it), whatever the query, so a watch sees a refresh that stopped.",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped.",
         "properties": {
           "datasets": {
             "type": "array",
@@ -4972,6 +4975,27 @@
                     "null"
                   ],
                   "minimum": 0
+                },
+                "erase": {
+                  "type": [
+                    "object",
+                    "null"
+                  ],
+                  "description": "Erasing removed datasets on this node (ADR-0059 amendment 4 item 5a): records `waiting` out their grace and datasets `erased`; null when it keeps none for this publisher.",
+                  "properties": {
+                    "waiting": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "erased": {
+                      "type": "integer",
+                      "minimum": 0
+                    }
+                  },
+                  "required": [
+                    "waiting",
+                    "erased"
+                  ]
                 }
               },
               "required": [
@@ -6555,7 +6579,11 @@
     },
     "bulk_dataset_removed": {
       "status": 410,
-      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back; its files stay fetchable by root on the peer routes."
+      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back. On rows and info, `erase` (when this node keeps a record of the removal) gives its `phase` (waiting, erasing, erased) and the chain time it is `due` (item 5a): until then its files stay fetchable by root on the peer routes; manifests and catalogs always do."
+    },
+    "bulk_shard_removed": {
+      "status": 410,
+      "description": "`GET /v1/bulk/shards/{root}`: the publisher removed the dataset of this shard and this node erased the file after the grace (ADR-0059 amendment 4 item 5a); answered until a held manifest's upload stores the file again. Another node may still hold it."
     }
   }
 }

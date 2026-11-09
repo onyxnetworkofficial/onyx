@@ -49,6 +49,10 @@ struct Book {
     sources: BTreeMap<Hash32, Hash32>,
     /// `KeyRegistered` logs: (block, key).
     logs: Vec<(u64, Hash32)>,
+    /// The finalized block's time when not `T0`.
+    ts: Option<u64>,
+    /// Block number -> time (`T0` when not set).
+    times: BTreeMap<u64, u64>,
 }
 
 pub(crate) struct Node(Mutex<Book>);
@@ -69,10 +73,19 @@ impl JsonRpc for Node {
             c.reads += 1;
             Ok(match method {
                 "eth_chainId" => json!(format!("0x{CHAIN:x}")),
-                "eth_getBlockByNumber" => {
-                    assert_eq!(p[0], "finalized");
+                "eth_getBlockByNumber" if p[0] == "finalized" => {
                     let n = c.fin.unwrap_or(0x64);
-                    json!({"number": format!("0x{n:x}"), "hash": hex0x(&FIN), "timestamp": format!("0x{T0:x}")})
+                    let ts = c.ts.unwrap_or(T0);
+                    json!({"number": format!("0x{n:x}"), "hash": hex0x(&FIN), "timestamp": format!("0x{ts:x}")})
+                }
+                "eth_getBlockByNumber" => {
+                    let n = u64::from_str_radix(
+                        p[0].as_str().unwrap_or("").trim_start_matches("0x"),
+                        16,
+                    )
+                    .map_err(|_| "block number")?;
+                    let ts = c.times.get(&n).copied().unwrap_or(T0);
+                    json!({"number": format!("0x{n:x}"), "hash": hex0x(&FIN), "timestamp": format!("0x{ts:x}")})
                 }
                 "eth_call" => {
                     assert_eq!(
@@ -2070,6 +2083,7 @@ async fn lc_17_the_listing_names_each_publishers_newest_catalog() {
             "createdUnix": c2.header.created_unix,
             "leaves": c2.header.leaf_count,
             "removed": 0,
+            "erase": null,
         }])
     );
     let _ = std::fs::remove_dir_all(&w.dir);
@@ -4302,4 +4316,648 @@ fn cat_1_fix_f5_a_large_answer_gets_time_for_a_slow_honest_reader() {
     assert_eq!(files_deadline(1 << 20).as_secs(), FILES_SEND_SECS);
     let big = files_deadline(cat::MAX_FILES_BYTES + cat::MAX_CATALOG_BYTES);
     assert!(big.as_secs() >= 190, "24 MiB at 128 KiB/s: {big:?}");
+}
+
+// ADR-0059 amendment 4 item 5a: erasing a removed dataset's shards after
+// the grace (THREATS CAT-3, design review CAT-ERASE-R1).
+
+const DAY: u64 = 86_400;
+
+impl Node {
+    /// The finalized block is `block`, at time `ts`.
+    fn at(&self, block: u64, ts: u64) {
+        let mut c = self.0.lock().expect("ok");
+        c.fin = Some(block);
+        c.ts = Some(ts);
+        c.times.insert(block, ts);
+    }
+}
+
+fn erase_cfg(mode: EraseMode) -> EraseConfig {
+    EraseConfig {
+        mode,
+        ..EraseConfig::default()
+    }
+}
+
+fn world_erase(cfg: EraseConfig) -> World {
+    let w = world();
+    let c = w.clock.clone();
+    let store = BulkStore::open(
+        pin(),
+        w.node.clone(),
+        Arc::new(move || c.load(Ordering::Relaxed)),
+        &w.dir,
+        &w.dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("ok")
+    .with_free_per_minute(10_000)
+    .with_erase(cfg);
+    World {
+        node: w.node,
+        store: Arc::new(store),
+        clock: w.clock,
+        dir: w.dir,
+    }
+}
+
+struct Erase {
+    w: World,
+    m: Manifest,
+    files: Vec<Vec<u8>>,
+    other: Manifest,
+    c1: Catalog,
+    r1: SignedReport,
+}
+
+/// `synthetic.metrics` (3 shards) and `synthetic.other` (its first shard)
+/// in catalog 0 (block 100, time `T0`); catalog 1 removes `synthetic.metrics`.
+async fn erase_world(cfg: EraseConfig) -> Erase {
+    let w = world_erase(cfg);
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let other = manifest_of("synthetic.other", &files[..1], T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), CatalogLeaf::of(&other.header)],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    w.post_in(&other, 0).await.expect("other");
+    w.upload_all(&m, &files).await;
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&other.header),
+        ],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1).await.expect("c1").0,
+        StatusCode::CREATED
+    );
+    Erase {
+        w,
+        m,
+        files,
+        other,
+        c1,
+        r1,
+    }
+}
+
+impl Erase {
+    fn roots(&self) -> Vec<Hash32> {
+        self.m.shards.iter().map(|e| e.root).collect()
+    }
+
+    fn due(&self) -> Option<u64> {
+        self.w
+            .store
+            .erase_json("example.publisher", "synthetic.metrics")
+            .and_then(|v| v["due"].as_u64())
+    }
+
+    async fn pass(&self, block: u64, ts: u64) -> ErasePass {
+        self.w.node.at(block, ts);
+        self.w.store.erase_pass().await.expect("pass")
+    }
+
+    /// Two passes from block `from`, both after `due`: nothing planned or erased.
+    async fn nothing(&self, from: u64, due: u64, what: &str) {
+        for b in from..from + 2 {
+            let p = self.pass(b, due + 10 * b).await;
+            assert_eq!((p.planned, p.erased), (0, 0), "{what}");
+        }
+    }
+
+    async fn other_rows(&self) -> Result<Value, ApiError> {
+        self.w
+            .store
+            .rows(
+                "example.publisher",
+                "synthetic.other",
+                &parse_rows_query(Some("from=0&to=3"))?,
+            )
+            .await
+    }
+}
+
+#[tokio::test]
+async fn cat_3_erase_waits_out_the_grace_then_erases_shards_and_keeps_manifests() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    let p = e.pass(100, T0).await;
+    assert_eq!((p.waiting, p.planned, p.erased), (1, 0, 0));
+    assert_eq!(e.due(), Some(due), "from the take of catalog 1, chain time");
+    let gone = w.rows("from=0&to=3").await.expect_err("removed");
+    assert_eq!(gone.code, "bulk_dataset_removed");
+    assert!(gone
+        .fields
+        .iter()
+        .any(|(k, v)| *k == "erase" && v == &json!({"phase": "waiting", "due": due})));
+    assert_eq!(e.pass(101, due - 1).await.planned, 0, "not due yet");
+    let p = e.pass(102, due).await;
+    assert_eq!(
+        (p.planned, p.erased),
+        (1, 0),
+        "a plan is logged once before it is carried out"
+    );
+    assert!(roots.iter().all(|r| s.holds_shard(r)));
+    let p = e.pass(103, due + 3_600).await;
+    assert_eq!((p.erased, p.shards, p.kept), (1, 2, 1));
+    assert!(s.holds_shard(&roots[0]), "synthetic.other names it");
+    for r in &roots[1..] {
+        assert!(!s.holds_shard(r));
+        assert!(s.shard_file(r).await.is_none());
+        assert!(!w
+            .dir
+            .join("hot")
+            .join("bulk")
+            .join(hex::encode(r.0))
+            .exists());
+    }
+    e.other_rows().await.expect("the other dataset is served");
+    assert!(
+        s.manifest_record(&e.m.header.root()).is_some(),
+        "manifests stay"
+    );
+    let peer = peer_routes(s.clone());
+    let read = routes(s.clone());
+    let get = |u: String| Request::get(u).body(Body::empty()).expect("ok");
+    let send = |app: Router, req: Request<Body>| async move {
+        let r = app.oneshot(req).await.expect("ok");
+        let status = r.status();
+        let b = r.into_body().collect().await.expect("ok").to_bytes();
+        (
+            status,
+            serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null),
+        )
+    };
+    let uri = format!("/v1/bulk/shards/{}", roots[1]);
+    let (st, v) = send(peer.clone(), get(uri.clone())).await;
+    assert_eq!(st, StatusCode::GONE);
+    assert_eq!(v["error"]["code"], json!("bulk_shard_removed"));
+    crate::openapi_check::check("GET", &uri, 410, &v);
+    let (st, _) = send(peer.clone(), get(format!("/v1/bulk/shards/{}", roots[0]))).await;
+    assert_eq!(st, StatusCode::OK, "a shared shard is still served");
+    let (st, _) = send(
+        peer.clone(),
+        get(format!("/v1/bulk/manifests/{}", e.m.header.root())),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK, "the history check reads it");
+    let (st, _) = send(
+        peer.clone(),
+        get("/v1/bulk/catalogs/example.publisher/1".into()),
+    )
+    .await;
+    assert_eq!(st, StatusCode::OK);
+    let (st, v) = send(read.clone(), get("/v1/bulk".into())).await;
+    assert_eq!(st, StatusCode::OK);
+    crate::openapi_check::check("GET", "/v1/bulk", 200, &v);
+    assert_eq!(
+        v["catalogs"][0]["erase"],
+        json!({"waiting": 0, "erased": 1})
+    );
+    let rows_uri = "/v1/bulk/example.publisher/synthetic.metrics/rows?from=0&to=3".to_string();
+    let (st, v) = send(read.clone(), get(rows_uri.clone())).await;
+    assert_eq!(st, StatusCode::GONE);
+    assert_eq!(v["erase"]["phase"], json!("erased"));
+    crate::openapi_check::check("GET", &rows_uri, 410, &v);
+    // A start keeps it, and nothing more goes.
+    let again = w
+        .reopen()
+        .expect("starts")
+        .with_erase(erase_cfg(EraseMode::On));
+    assert!(again.erased_root(&roots[1]) && !again.holds_shard(&roots[1]));
+    assert!(again.holds_shard(&roots[0]));
+    w.node.at(104, due + 7_200);
+    assert_eq!(again.erase_pass().await.expect("pass").erased, 0);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_reads_chain_time_never_the_host_clock() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    e.pass(100, T0 + 100).await;
+    e.w.clock.store(T0 + 400 * DAY, Ordering::Relaxed);
+    for b in 101..104 {
+        let p = e.pass(b, T0 + 200).await;
+        assert_eq!((p.planned, p.erased), (0, 0), "the chain says day 0");
+    }
+    assert!(e.roots().iter().all(|r| e.w.store.holds_shard(r)));
+    let _ = std::fs::remove_dir_all(&e.w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_compromised_retired_or_suspended_key_or_a_withdrawn_catalog_stops_it() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s) = (&e.w, &e.w.store);
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    w.node.life(&e.r1, 3);
+    e.nothing(101, due, "a compromised key").await;
+    w.node.life(&e.r1, 2);
+    e.nothing(103, due, "a retired key").await;
+    w.node.life(&e.r1, 1);
+    w.node.suspend(&e.r1, true);
+    e.nothing(105, due, "a suspended key").await;
+    w.node.suspend(&e.r1, false);
+    w.node.withdraw(&e.r1);
+    e.nothing(107, due, "a withdrawn catalog").await;
+    assert!(e.roots().iter().all(|r| s.holds_shard(r)));
+    // Read anchored with an active key again: planned, then erased.
+    w.node.anchor(&e.r1);
+    assert_eq!(e.pass(200, due + 5_000).await.planned, 1);
+    assert_eq!(e.pass(201, due + 9_000).await.erased, 1);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_new_key_restarts_the_grace_and_two_keys_taking_turns_do_not() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let w = &e.w;
+    e.pass(100, T0).await;
+    assert_eq!(e.due(), Some(T0 + 30 * DAY));
+    let leaves = || {
+        vec![
+            CatalogLeaf::of(&e.m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&e.other.header),
+        ]
+    };
+    // Catalog 2 under the publisher's other key, taken at block 101.
+    w.node.at(101, T0 + 5 * DAY);
+    let c2 = catalog_of(Some(&e.c1), T0 + 30, leaves());
+    let r2 = cat::sign(&SECRET2, &c2.header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&c2, &r2).await.expect("c2").0,
+        StatusCode::CREATED
+    );
+    e.pass(102, T0 + 5 * DAY + 60).await;
+    assert_eq!(
+        e.due(),
+        Some(T0 + 35 * DAY),
+        "a new key starts the grace again"
+    );
+    // Catalog 3 under the first key: its run's first catalog under that key
+    // is catalog 1, so the first grace stands (no restart by taking turns).
+    w.node.at(103, T0 + 6 * DAY);
+    let c3 = catalog_of(Some(&c2), T0 + 40, leaves());
+    let r3 = sign_catalog(&c3);
+    w.node.anchor(&r3);
+    assert_eq!(
+        w.post_catalog(&c3, &r3).await.expect("c3").0,
+        StatusCode::CREATED
+    );
+    e.pass(104, T0 + 6 * DAY + 60).await;
+    assert_eq!(e.due(), Some(T0 + 30 * DAY));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_root_named_meanwhile_is_kept_and_the_plan_waits_again() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    assert_eq!(e.pass(101, due).await.planned, 1);
+    // Before the plan is carried out, catalog 2 adds a dataset naming the
+    // second shard: the plan changes, so it is logged again, not carried out.
+    w.node.at(102, due + 60);
+    let third = manifest_of("synthetic.third", &e.files[1..2], T0);
+    let c2 = catalog_of(
+        Some(&e.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&e.m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&e.other.header),
+            CatalogLeaf::of(&third.header),
+        ],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    w.post_catalog(&c2, &r2).await.expect("c2");
+    w.post_in(&third, 2).await.expect("third");
+    let p = e.pass(103, due + 120).await;
+    assert_eq!((p.planned, p.erased), (1, 0), "a changed plan waits again");
+    let p = e.pass(104, due + 3_600).await;
+    assert_eq!((p.erased, p.shards, p.kept), (1, 1, 2));
+    assert!(s.holds_shard(&roots[0]) && s.holds_shard(&roots[1]));
+    assert!(!s.holds_shard(&roots[2]));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_tombstone_withdrawn_after_erasure_takes_the_shards_again() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    e.pass(101, due).await;
+    assert_eq!(e.pass(102, due + 3_600).await.erased, 1);
+    assert!(!s.holds_shard(&roots[2]));
+    // The book withdraws catalog 1 (its key was stolen); the publisher's
+    // replacement catalog 1 under its new key lists the dataset again.
+    w.node.withdraw(&e.r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    w.node.at(103, due + 4_000);
+    let c1b = catalog_of(
+        Some(
+            &s.catalog_record(&publisher().0, 0)
+                .expect("read")
+                .expect("c0")
+                .0,
+        ),
+        T0 + 50,
+        vec![
+            CatalogLeaf::of(&e.m.header),
+            CatalogLeaf::of(&e.other.header),
+        ],
+    );
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    w.node.anchor_by(&r1b, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        s.removed("example.publisher", "synthetic.metrics")
+            .expect("read"),
+        None
+    );
+    let p = e.pass(104, due + 5_000).await;
+    assert_eq!(p.erased, 0);
+    assert_eq!(e.due(), None, "the record is set aside");
+    assert!(!s.erased_root(&roots[2]));
+    // The publisher sends the shards again; rows are served.
+    w.upload_all(&e.m, &e.files).await;
+    w.rows("from=0&to=3").await.expect("served again");
+    assert!(w.dir.join("removals/example.publisher/withdrawn").is_dir());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_cut_short_resumes_after_a_restart() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    e.pass(101, due).await;
+    *s.erase_stop.lock().expect("lock") = Some(1);
+    w.node.at(102, due + 3_600);
+    assert!(s.erase_pass().await.is_err(), "stopped after one file");
+    // A dry run finishes nothing, and serves none of its roots meanwhile.
+    let dry = w
+        .reopen()
+        .expect("starts")
+        .with_erase(erase_cfg(EraseMode::DryRun));
+    w.node.at(103, due + 5_000);
+    assert_eq!(dry.erase_pass().await.expect("pass").erased, 0);
+    assert!(dry.erased_root(&roots[1]) && dry.erased_root(&roots[2]));
+    // The start finds no tracked shard without its file, and serves none of
+    // the roots it began on.
+    let again = w
+        .reopen()
+        .expect("starts")
+        .with_erase(erase_cfg(EraseMode::On));
+    assert!(again.erased_root(&roots[1]) && again.erased_root(&roots[2]));
+    assert!(again.shard_file(&roots[2]).await.is_none());
+    w.node.at(104, due + 7_200);
+    let p = again.erase_pass().await.expect("finished");
+    assert_eq!(p.erased, 1);
+    for r in &roots[1..] {
+        assert!(!w
+            .dir
+            .join("hot")
+            .join("bulk")
+            .join(hex::encode(r.0))
+            .exists());
+    }
+    assert!(again.holds_shard(&roots[0]));
+    w.reopen().expect("starts again");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_off_dry_run_and_hold() {
+    let due = T0 + 30 * DAY;
+    // Off: no record at all.
+    let e = erase_world(erase_cfg(EraseMode::Off)).await;
+    for b in 100..104 {
+        assert_eq!(e.pass(b, due + b).await, ErasePass::default());
+    }
+    assert!(!e.w.dir.join("removals").exists());
+    let _ = std::fs::remove_dir_all(&e.w.dir);
+    // Dry run: records and one logged plan, never a deletion.
+    let e = erase_world(erase_cfg(EraseMode::DryRun)).await;
+    e.pass(100, T0).await;
+    assert_eq!(e.pass(101, due).await.planned, 1);
+    for b in 102..106 {
+        let p = e.pass(b, due + b).await;
+        assert_eq!((p.planned, p.erased), (0, 0));
+    }
+    assert!(e.roots().iter().all(|r| e.w.store.holds_shard(r)));
+    assert!(
+        e.roots().iter().all(|r| !e.w.store.erased_root(r)),
+        "nothing marked"
+    );
+    // Switched on, the plan the dry run logged is carried out.
+    let on =
+        e.w.reopen()
+            .expect("starts")
+            .with_erase(erase_cfg(EraseMode::On));
+    e.w.node.at(110, due + 9_000);
+    assert_eq!(on.erase_pass().await.expect("pass").erased, 1);
+    let _ = std::fs::remove_dir_all(&e.w.dir);
+    // Hold, by publisher or by dataset.
+    for hold in ["example.publisher", "example.publisher/synthetic.metrics"] {
+        let mut cfg = erase_cfg(EraseMode::On);
+        cfg.hold.insert(hold.into());
+        let e = erase_world(cfg).await;
+        e.pass(100, T0).await;
+        for b in 101..104 {
+            let p = e.pass(b, due + b).await;
+            assert_eq!((p.planned, p.erased), (0, 0), "{hold}");
+        }
+        assert!(e.roots().iter().all(|r| e.w.store.holds_shard(r)));
+        let _ = std::fs::remove_dir_all(&e.w.dir);
+    }
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_lagging_finalized_block_erases_nothing() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    // Catalog 1 was read at block 100: a finalized block before it is behind.
+    for b in [98, 99] {
+        let p = e.pass(b, due + b).await;
+        assert_eq!((p.planned, p.erased), (0, 0));
+    }
+    assert!(e.roots().iter().all(|r| e.w.store.holds_shard(r)));
+    let _ = std::fs::remove_dir_all(&e.w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_two_removed_datasets_sharing_a_root_erase_it_with_the_last() {
+    let mut cfg = erase_cfg(EraseMode::On);
+    cfg.max_shards = 1;
+    let e = erase_world(cfg).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    // Catalog 2 removes synthetic.other too: both name the first shard.
+    let c2 = catalog_of(
+        Some(&e.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&e.m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&e.other.header).tombstone().expect("t"),
+        ],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    w.post_catalog(&c2, &r2).await.expect("c2");
+    e.pass(100, T0).await;
+    assert_eq!(e.pass(101, due).await.planned, 2);
+    // Each keeps the shared root while the other still holds it; the first
+    // erase of a pass goes even over the budget of 1.
+    // In the same pass synthetic.other's plan changes (the shared root is
+    // its own now): logged again, carried out a pass later.
+    let p = e.pass(102, due + 3_600).await;
+    assert_eq!((p.erased, p.shards, p.kept, p.planned), (1, 2, 1, 1));
+    assert!(s.holds_shard(&roots[0]));
+    let p = e.pass(103, due + 7_200).await;
+    assert_eq!((p.erased, p.shards), (1, 1));
+    assert!(roots.iter().all(|r| !s.holds_shard(r)));
+    assert!(s.manifest_record(&e.other.header.root()).is_some());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_spends_its_budget_then_waits_for_the_next_pass() {
+    let mut cfg = erase_cfg(EraseMode::On);
+    cfg.max_shards = 1;
+    let w = world_erase(cfg);
+    let fx = shard_files(100..110, 10);
+    let fy = shard_files(110..120, 10);
+    let x = manifest_of("synthetic.x", &fx, T0);
+    let y = manifest_of("synthetic.y", &fy, T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&x.header), CatalogLeaf::of(&y.header)],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&x, 0).await.expect("x");
+    w.post_in(&y, 0).await.expect("y");
+    for (m, f, d) in [(&x, &fx, "synthetic.x"), (&y, &fy, "synthetic.y")] {
+        w.store
+            .accept_shard(
+                "example.publisher",
+                d,
+                &m.shards[0].root,
+                &HeaderMap::new(),
+                Body::from(f[0].clone()),
+            )
+            .await
+            .expect("stored");
+    }
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&x.header).tombstone().expect("t"),
+            CatalogLeaf::of(&y.header).tombstone().expect("t"),
+        ],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    let due = T0 + 30 * DAY;
+    for (b, ts, want) in [
+        (100, T0, (0, 0, 0)),
+        (101, due, (2, 0, 0)),
+        (102, due + 3_600, (0, 1, 1)),
+        (103, due + 7_200, (0, 1, 1)),
+    ] {
+        w.node.at(b, ts);
+        let p = w.store.erase_pass().await.expect("pass");
+        assert_eq!((p.planned, p.erased, p.shards), want, "block {b}");
+    }
+    assert!(!w.store.holds_shard(&x.shards[0].root));
+    assert!(!w.store.holds_shard(&y.shards[0].root));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn cat_3_erase_a_root_stored_again_is_served_and_erased_bytes_leave_the_quota() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s, roots) = (&e.w, &e.w.store, e.roots());
+    let due = T0 + 30 * DAY;
+    // Quota: the removed dataset's bytes count until it is erased.
+    let others = e.other.header.byte_count + s.catalog_bytes_of("example.publisher");
+    let room = s.limits.quota_bytes - others;
+    assert!(s.check_catalog_quota("example.publisher", room).is_err());
+    e.pass(100, T0).await;
+    e.pass(101, due).await;
+    assert_eq!(e.pass(102, due + 3_600).await.erased, 1);
+    s.check_catalog_quota("example.publisher", room)
+        .expect("the erased dataset's bytes are gone");
+    // Catalog 2 adds a dataset naming an erased root; its upload stores it
+    // again, and it is served and no longer listed as erased.
+    w.node.at(103, due + 4_000);
+    let fourth = manifest_of("synthetic.fourth", &e.files[2..3], T0);
+    let c2 = catalog_of(
+        Some(&e.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&e.m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&e.other.header),
+            CatalogLeaf::of(&fourth.header),
+        ],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    w.post_catalog(&c2, &r2).await.expect("c2");
+    let (_, v) = w.post_in(&fourth, 2).await.expect("fourth");
+    assert_eq!(
+        v["missing"].as_array().map(Vec::len),
+        Some(1),
+        "told to send it"
+    );
+    let (st, _) = s
+        .accept_shard(
+            "example.publisher",
+            "synthetic.fourth",
+            &roots[2],
+            &HeaderMap::new(),
+            Body::from(e.files[2].clone()),
+        )
+        .await
+        .expect("stored again");
+    assert_eq!(st, StatusCode::CREATED);
+    assert!(!s.erased_root(&roots[2]) && s.erased_root(&roots[1]));
+    assert!(s.shard_open(&roots[2]).await.is_some());
+    let again = w
+        .reopen()
+        .expect("starts")
+        .with_erase(erase_cfg(EraseMode::On));
+    assert!(
+        !again.erased_root(&roots[2]),
+        "its record no longer lists it"
+    );
+    assert!(again.holds_shard(&roots[2]));
+    let _ = std::fs::remove_dir_all(&w.dir);
 }

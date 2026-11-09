@@ -947,6 +947,16 @@ pub struct BulkStore {
     fork_read: Mutex<BTreeMap<String, u64>>,
     free_per_minute: u32,
     rate: Caches,
+    /// Erasing removed datasets (ADR-0059 amendment 4 item 5a).
+    erase_cfg: EraseConfig,
+    /// Every manifest upload and shard write holds it to read; an erase pass
+    /// holds it to write from its reference count to its last file (review
+    /// CAT-ERASE-R1 H1). Always taken before a publisher lock.
+    erase_lock: tokio::sync::RwLock<()>,
+    erase: Mutex<erase::EraseState>,
+    /// Tests: an erase stops after this many file removals (a crash).
+    #[cfg(test)]
+    erase_stop: Mutex<Option<usize>>,
 }
 
 fn decode_manifest(b: &[u8]) -> Result<Manifest, ApiError> {
@@ -1152,6 +1162,11 @@ impl BulkStore {
             fork_read: Mutex::new(BTreeMap::new()),
             free_per_minute: FREE_PER_MINUTE,
             rate: Caches::new(1, 1),
+            erase_cfg: EraseConfig::default(),
+            erase_lock: tokio::sync::RwLock::new(()),
+            erase: Mutex::new(erase::EraseState::default()),
+            #[cfg(test)]
+            erase_stop: Mutex::new(None),
         };
         std::fs::create_dir_all(dir).map_err(|e| format!("bulk dir: {e}"))?;
         let tiers = dir.join("tiers.json");
@@ -1162,6 +1177,7 @@ impl BulkStore {
         }
         s.load_catalogs()?;
         s.load_manifests()?;
+        s.load_removals()?;
         let now = (s.now)();
         if let Ok(mut t) = s.touched.lock() {
             for (r, _) in s.tiers.bulk_tiers() {
@@ -1633,7 +1649,7 @@ impl BulkStore {
     /// of its publisher.
     pub async fn info_checked(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
         if let Some(n) = self.removed(publisher, dataset)? {
-            return Err(dataset_removed(n));
+            return Err(self.gone(publisher, dataset, n));
         }
         self.fork_stands(publisher).await?;
         self.info(publisher, dataset)
@@ -1963,6 +1979,10 @@ impl BulkStore {
         {
             return Err(not_anchored(reason::NOT_ACCEPTED));
         }
+        // No erase pass meanwhile: a catalog can bring a removed dataset back
+        // (a set-aside) or name an erased root (review of the CAT-3 erase
+        // build, finding 1). Taken before the publisher lock, never nested.
+        let _no_erase = self.erase_lock.read().await;
         // One catalog upload of a publisher at a time, and no manifest upload
         // of it meanwhile (review CAT-FIX-R1 M2, M3).
         let _one = self.publisher_lock(&publisher).write().await;
@@ -2107,6 +2127,16 @@ impl BulkStore {
             .as_ref()
             .ok_or_else(|| internal("the newest catalog is not held whole: try again"))?;
         Ok(b.removed.contains(dataset).then_some(*n))
+    }
+
+    /// A removed dataset's 410, with its erase phase and due time when this
+    /// node keeps a record of it (ADR-0059 amendment 4 item 5a).
+    fn gone(&self, publisher: &str, dataset: &str, n: u64) -> ApiError {
+        let e = dataset_removed(n);
+        match self.erase_json(publisher, dataset) {
+            Some(v) => e.with_field("erase", v),
+            None => e,
+        }
     }
 
     /// The newest held catalog body of every publisher that removed a
@@ -2342,10 +2372,17 @@ impl BulkStore {
     /// latest versions and stored catalogs within its quota, and the node
     /// within its total (ADR-0059 amendment 2 draft 4 item 7).
     fn check_catalog_quota(&self, publisher: &str, add: u64) -> Result<(), ApiError> {
+        // An erased dataset's bytes are gone (ADR-0059 amendment 4 item 5a).
+        let erased = self.erased_datasets();
         let (mine, all) = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
-            ds.iter().fold((0u64, 0u64), |(mine, all), ((p, _), d)| {
-                let b = d.latest().map_or(0, |h| h.manifest.header.byte_count);
+            ds.iter().fold((0u64, 0u64), |(mine, all), (k, d)| {
+                let p = &k.0;
+                let b = if erased.contains(k) {
+                    0
+                } else {
+                    d.latest().map_or(0, |h| h.manifest.header.byte_count)
+                };
                 (
                     if p == publisher {
                         mine.saturating_add(b)
@@ -2527,6 +2564,8 @@ impl BulkStore {
                 format!("signature: {e}"),
             )
         })?;
+        // The erase lock first, then the publisher's (review CAT-ERASE-R1 H1).
+        let _no_erase = self.erase_lock.read().await;
         let _one = self.publisher_lock(&m.header.publisher.0).read().await;
         if public {
             if let Some(n) = self.removed(&m.header.publisher.0, &m.header.dataset)? {
@@ -2549,6 +2588,8 @@ impl BulkStore {
     ) -> Result<(StatusCode, Value), ApiError> {
         let m = decode_manifest(manifest)?;
         // Held until the version is written: no catalog is set aside meanwhile.
+        // The erase lock first, then the publisher's (review CAT-ERASE-R1 H1).
+        let _no_erase = self.erase_lock.read().await;
         let _one = self.publisher_lock(&m.header.publisher.0).read().await;
         // No version of a removed dataset comes back through an older
         // catalog (ADR-0059 amendment 4 item 3, review CAT-TOMB-R1 H1).
@@ -2876,8 +2917,15 @@ impl BulkStore {
         let mut publisher_bytes = bytes.saturating_add(cats.get(&key.0).copied().unwrap_or(0));
         let mut total = bytes.saturating_add(cats.values().sum());
         let mut count = 1usize;
+        // An erased dataset's bytes are gone; it still counts toward the cap
+        // (ADR-0059 amendment 4 item 5a; review CAT-ERASE-R1 L4).
+        let erased = self.erased_datasets();
         for (k, d) in ds {
-            let b = d.latest().map_or(0, |h| h.manifest.header.byte_count);
+            let b = if erased.contains(k) {
+                0
+            } else {
+                d.latest().map_or(0, |h| h.manifest.header.byte_count)
+            };
             if k == key {
                 continue;
             }
@@ -2938,6 +2986,17 @@ impl BulkStore {
             return Err(forked(d));
         }
         let h = d.latest().ok_or_else(unknown_dataset)?;
+        // A root of a record moved aside after erasure may be any held
+        // version's (review CAT-ERASE-R1 M4): the publisher restores them all.
+        let h = if h.manifest.shards.iter().any(|e| e.root == *root) || !self.restorable(root) {
+            h
+        } else {
+            d.versions
+                .iter()
+                .rev()
+                .find(|v| v.manifest.shards.iter().any(|e| e.root == *root))
+                .unwrap_or(h)
+        };
         let e = h
             .manifest
             .shards
@@ -3007,6 +3066,12 @@ impl BulkStore {
                 "the file's root, rows or key range differ from the manifest entry".into(),
             ));
         }
+        // No erase pass from here to the stored file (review CAT-ERASE-R1 H1),
+        // taken only once the body is read and checked, so a slow upload never
+        // holds a pass, and every upload behind it, for its body (review of the
+        // build, finding 7); the entry is read again under it.
+        let _no_erase = self.erase_lock.read().await;
+        self.entry_of(publisher, dataset, root)?;
         // Stored even when the root is held already: every upload is checked
         // against this dataset's entry and schema (review CL5-R3), and the
         // put of identical bytes changes nothing.
@@ -3028,6 +3093,8 @@ impl BulkStore {
         if let Ok(mut t) = self.touched.lock() {
             t.insert(*root, (self.now)());
         }
+        // Stored again: a held manifest names it, so it is served again.
+        self.unerase(root);
         eprintln!(
             "onyx-node: bulk: stored shard {root} of {publisher}/{dataset} ({} bytes{})",
             e.bytes,
@@ -3091,6 +3158,9 @@ impl BulkStore {
     /// SERVE-WRITE-1).
     pub async fn shard_open(&self, root: &Hash32) -> Option<(std::fs::File, u64)> {
         self.tiers.tier(root)?;
+        if self.erased_root(root) {
+            return None;
+        }
         let (tiers, r) = (self.tiers.clone(), *root);
         tokio::task::spawn_blocking(move || tiers.open_checked(Kind::Shard, &r))
             .await
@@ -3102,6 +3172,9 @@ impl BulkStore {
     /// root); `None` when not held or damaged on disk.
     pub async fn shard_file(&self, root: &Hash32) -> Option<Vec<u8>> {
         self.tiers.tier(root)?;
+        if self.erased_root(root) {
+            return None;
+        }
         let (tiers, r) = (self.tiers.clone(), *root);
         tokio::task::spawn_blocking(move || tiers.get(Kind::Shard, &r))
             .await
@@ -3220,7 +3293,7 @@ impl BulkStore {
     async fn serving(&self, key: &Key) -> Result<Held, ApiError> {
         type Version = (Hash32, SignedReport, [u8; 20]);
         if let Some(n) = self.removed(&key.0, &key.1)? {
-            return Err(dataset_removed(n));
+            return Err(self.gone(&key.0, &key.1, n));
         }
         let (versions, in_catalog): (Vec<Version>, bool) = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
@@ -3312,6 +3385,8 @@ impl BulkStore {
             .collect();
         // Removed datasets are left out (ADR-0059 amendment 4 item 3).
         let removals = self.removals()?;
+        // Records waiting and datasets erased (item 5a), before any other lock.
+        let erase = self.erase_counts();
         // Each publisher's newest held catalog, so a watch sees a refresh
         // that stopped (launch checklist LC-17): small, one per publisher.
         let catalogs: Vec<Value> = self
@@ -3328,6 +3403,7 @@ impl BulkStore {
                     "createdUnix": h.header.created_unix,
                     "leaves": h.header.leaf_count,
                     "removed": h.body.as_ref().map(|b| b.removed.len()),
+                    "erase": erase.get(p).map(|(w, e)| json!({"waiting": w, "erased": e})),
                 }))
             })
             .collect();
@@ -3617,6 +3693,16 @@ fn dataset_removed(n: u64) -> ApiError {
         format!("the publisher removed this dataset in its catalog {n}"),
     )
     .with_field("catalog", json!(n))
+}
+
+/// `GET /v1/bulk/shards/{root}` for a root this node erased (ADR-0059
+/// amendment 4 item 5a).
+fn shard_removed() -> ApiError {
+    ApiError::new(
+        StatusCode::GONE,
+        "bulk_shard_removed",
+        "the publisher removed the dataset of this shard and this node erased it",
+    )
 }
 
 fn unknown_dataset() -> ApiError {
@@ -4631,6 +4717,9 @@ async fn get_shard(
     let r = async {
         limited(&store, client)?;
         let root = root_of(path)?;
+        if store.erased_root(&root) {
+            return Err(shard_removed());
+        }
         let _permit = store.loads.acquire().await.map_err(|_| internal("loads"))?;
         store.shard_open(&root).await.ok_or_else(|| {
             shard_missing("this node does not hold this shard (or it did not read back)")
@@ -4651,6 +4740,10 @@ async fn get_shard(
         Err(e) => e.into_response(),
     }
 }
+
+#[path = "bulk_erase.rs"]
+mod erase;
+pub use erase::{EraseConfig, EraseMode, ErasePass, MAX_SHARDS_PER_PASS, MIN_GRACE_DAYS};
 
 #[cfg(test)]
 #[path = "bulk_serve_tests.rs"]
