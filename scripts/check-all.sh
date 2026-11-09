@@ -254,8 +254,9 @@ else
 fi
 stage "web"
 # Docker images (ROADMAP A3/L7): two release image builds and a smoke run against a local chain
-# in containers (docs/ops/deployment.md "Run with Docker"); slow and needs Docker and the reserve
-# tail files, so opt-in: ONYX_DOCKER=1 scripts/check-all.sh.
+# in containers (docs/ops/deployment.md "Run with Docker"); slow and needs Docker, the reserve
+# tail files and Caddy (ONYX_CADDY, or caddy on PATH: step 5, behind Caddy), so opt-in:
+# ONYX_DOCKER=1 scripts/check-all.sh.
 if [ "${ONYX_DOCKER:-0}" = 1 ]; then
   scripts/docker-smoke.sh
 else

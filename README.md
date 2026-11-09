@@ -119,7 +119,7 @@ git clone --recurse-submodules <repo> && cd onyx
 scripts/check-all.sh                    # format, lint, every test, docs, boundaries, contracts
 ONYX_WEB=1 scripts/check-all.sh         # plus the website build and its browser tests
 ONYX_WEB_PUBLIC=1 scripts/check-all.sh  # plus both public builds and their guards
-ONYX_DOCKER=1 scripts/check-all.sh      # plus both Docker images, built and smoke-tested
+ONYX_DOCKER=1 scripts/check-all.sh      # plus both Docker images, built and smoke-tested (needs Caddy: ONYX_CADDY)
 ```
 
 The entity label data is not public until its rights are cleared ([DATA-LICENSE.md](DATA-LICENSE.md)).

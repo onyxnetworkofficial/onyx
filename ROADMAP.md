@@ -176,7 +176,7 @@ results, what was fixed, what stays open with a THREATS row).
       (L19-1), then review L19-R1's fixes and the agent connector forwarding its users' addresses.
       Deployed with release `3b9de28e`: live 1,695 answers and 1,305 429s out of a 3,000-request
       burst; the rollback from `/var/backups/onyx-prev` rehearsed and rolled forward (NL20-4))
-- [ ] L18 TLS front leftovers that need no domain (LC-7, from P7): with Caddy on `tls internal`
+- [x] L18 TLS front leftovers that need no domain (LC-7, from P7): with Caddy on `tls internal`
       and a local anvil, the paid x402 flow through the proxy (402 with `payment-required`, a settled
       200 with `payment-response`, a 503 `payment_pending` retry), a server-side TLS 1.1 refusal
       shown with a client that can offer 1.1, and the Docker trusted-proxy setup of TLS-7 run once
@@ -189,7 +189,10 @@ results, what was fixed, what stays open with a THREATS row).
       settled 200 with `payment-response`, 504 then 503 `payment_pending` then 200 with one charge,
       a 16 KiB payment header; Caddy 2.11.7, the server's 2.6.2 not run; addendum in
       docs/audit/2026-10-15-tls-front.md). It found TLS-9 (the hosted file's port 80 lacked the
-      `servers` options), fixed 2026-11-09 with an explicit `http://` block; the Docker setup stays open
+      `servers` options), fixed 2026-11-09 with an explicit `http://` block. 2026-11-09: the Docker
+      setup is `scripts/docker-smoke.sh` step 5 (a container behind a loopback Caddy trusts the
+      network's gateway: two clients get separate limits; the `127.0.0.1` control shares one bucket),
+      passed on `9b0fa53c`; its first run found the image no longer built (DOCKER-CTX-1, fixed)
 
 ## Phase H: hardening before mainnet (after the project owner decides to leave testnets; L9 sweep)
 

@@ -110,7 +110,9 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   127.0.0.1:2019 answers). Open: the firewall cap (written and tested, `deploy/nftables/onyx-conn-cap.nft`,
   THREATS NL5-3; installing it waits for the owner's OK) and the paid x402 flow through Caddy
   (payments are off on the hosted node until something sellable is served). The Docker
-  trusted-proxy item does not apply to this host (systemd, not Docker). Before 2026-10-27: PARTIAL 2026-10-15: the Caddy config
+  trusted-proxy item does not apply to this host (systemd, not Docker); for Docker operators it is
+  `scripts/docker-smoke.sh` step 5 since 2026-11-09 (two clients through Caddy get separate limits,
+  and with `127.0.0.1` one shared bucket; docs/audit/2026-10-13-docker.md). Before 2026-10-27: PARTIAL 2026-10-15: the Caddy config
   ships (`deploy/caddy/Caddyfile`, checked against the server by onyx-node `tests/caddyfile.rs`),
   onyx-node refuses a non-loopback `ONYX_LISTEN` without `ONYX_ALLOW_PLAIN_HTTP_PUBLIC=1`, and a
   local run behind Caddy with `tls internal` showed TLS, the HTTP redirect, the 413 body cap and

@@ -8,6 +8,8 @@
 !adapters/
 !recipes/
 !apps/web/verify/
+# onyx-api serves it at /v1/openapi.json (include_str!; scripts/check-docker-context.py).
+!docs/api/openapi.json
 # onyx-node-btc's serving-check inputs (committed, checksummed) and its config.
 !fixtures/SHA256SUMS
 !fixtures/reserves/scan-971199.json

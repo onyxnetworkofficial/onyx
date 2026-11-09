@@ -391,11 +391,14 @@ silent), so check `caddy adapt` names your domain before going live.
 
 **In Docker** (`-p 127.0.0.1:8080:8080`, "Run with Docker") the server keeps `ONYX_LISTEN=0.0.0.0:8080`
 with the opt-in, and Caddy's connections do not arrive from 127.0.0.1: Docker's port proxy
-connects from the bridge gateway (`docker network inspect bridge --format
-'{{(index .IPAM.Config 0).Gateway}}'`, usually `172.17.0.1`). Set
-`-e ONYX_TRUSTED_PROXIES=172.17.0.1` (that address, /32). With `127.0.0.1` the forwarded header
-is ignored and every client shares one rate-limit bucket and the proxy's connection cap (review
-finding TLS-7). Check it once: two clients, as in the audit's section 6, must get separate limits.
+connects from the gateway of the container's network (`docker network inspect bridge --format
+'{{(index .IPAM.Config 0).Gateway}}'`, usually `172.17.0.1`; name the other network if
+`--network` sets one). Set `-e ONYX_TRUSTED_PROXIES=172.17.0.1` (that address, /32). With
+`127.0.0.1` the forwarded header is ignored and every client shares one rate-limit bucket and the
+proxy's connection cap (review finding TLS-7). Trusting the gateway trusts what reaches the
+published port from the host itself, as `127.0.0.1` does without Docker, so publish on
+`127.0.0.1` only. `scripts/docker-smoke.sh` step 5 checks it with the shipped Caddyfile: two
+clients through Caddy get separate limits, and with `127.0.0.1` they share one (the control).
 
 Under systemd, run Caddy as its own unit with those two variables in an `EnvironmentFile`
 (the Caddy project ships one, `caddy.service`, in its dist repository). Ports 80 and 443 need

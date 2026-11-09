@@ -32,6 +32,10 @@ python3 -I scripts/check-openapi.py || fail=1
 # of deploy/caddy/onyx-web.Caddyfile (ONYX_CADDY or caddy on PATH; skipped without one), and the
 # layout review WEB-CSP-R2 caught must fail.
 python3 -I scripts/check-caddy-headers.py --self-test || fail=1
+# Every file the server's release build reads at compile time (include_str! and the like) is in
+# the Docker build context's allowlist, .dockerignore (THREATS DOCKER-CTX-1; no Docker needed).
+python3 -I scripts/check-docker-context.py || fail=1
+[ "$fail" -eq 0 ] && { python3 -I scripts/check-docker-context.py --self-test || fail=1; }
 # README.md's layout and routes, scripts/README.md and docs/README.md are generated from the
 # repository and must be current (PP7; `scripts/check-readme.py --write` regenerates them).
 python3 -I scripts/check-readme.py || fail=1
