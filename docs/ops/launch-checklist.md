@@ -299,7 +299,12 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   cannot be told by reading the source. New THREATS DEP-3, accepted for testnet, mainnet H5.
   Evidence: [dependency audit](../audit/2026-10-13-dependencies.md#advisories-and-decisions),
   [foundry.toml](../../contracts/foundry.toml), THREATS DEP-1..3.
-- [ ] **LC-21 Fuzz smoke on the launch commit (FUZZ-5).** Owner: loop. State: PARTIAL 2026-11-08
+- [ ] **LC-21 Fuzz smoke on the launch commit (FUZZ-5).** Owner: loop. State: PARTIAL 2026-11-09
+  (on 1d19025a plus the learn-answer arm of `bulk_parsers`, THREATS FUZZ-8): `FUZZ_SECS=30
+  scripts/fuzz-smoke.sh` exit 0, all 20 targets ran 30 s without a crash (between 6,217 and
+  10,504,833 executions each; `bulk_parsers` 5,644,031, 2,038 edges at start and 2,176 at the end),
+  no file under `fuzz/artifacts/`; after review FUZZ-8-R1 `bulk_parsers` alone 60 s with the JSON
+  arm: no crash, 9,323,176 executions, 2,346 then 2,835 edges. Before: PARTIAL 2026-11-08
   (on 1c6c2f5c plus the new `bulk_parsers` target, THREATS FUZZ-7): `FUZZ_SECS=30
   scripts/fuzz-smoke.sh` exit 0, all 20 targets ran 30 s without a crash (between 10,732 and
   6,672,144 executions each; `bulk_parsers` 4,595,969 at 2,037 edges), no file under

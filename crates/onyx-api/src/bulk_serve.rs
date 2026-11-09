@@ -4814,7 +4814,7 @@ pub use erase::{EraseConfig, EraseMode, ErasePass, MAX_SHARDS_PER_PASS, MIN_GRAC
 
 #[path = "bulk_learn.rs"]
 mod learn;
-pub use learn::{Learn, LearnPass, Recheck, RemovalsMode};
+pub use learn::{check_leaf_answer, Learn, LearnPass, Recheck, RemovalsMode};
 
 #[cfg(test)]
 #[path = "bulk_serve_tests.rs"]

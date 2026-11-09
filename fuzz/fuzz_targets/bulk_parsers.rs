@@ -1,14 +1,18 @@
 //! Bulk datasets (ADR-0059) on every trust boundary: a publisher's manifest
 //! and shard files (uploads), a catalog (uploads and peers), a node's catalog
 //! files answer walked by the history check (amendment 3, with tombstones,
-//! amendment 4), a signed report, and a rows answer checked by a client. The
-//! first byte picks the parser. None may panic or allocate without bound
-//! (THREATS FUZZ-6: no target covered `onyx-bulk` before 2026-11-08).
+//! amendment 4), a signed report, a rows answer checked by a client, and a
+//! storage node's learn answer (amendment 4 item 5a slice 2a: the API node's
+//! catalog header, a leaf proof and its report, THREATS FUZZ-8), as Borsh
+//! parts and as the JSON the leaf route answers, through the storage node's
+//! own check (`onyx_api::bulk_serve::check_leaf_answer`, review FUZZ-8-R1).
+//! The first byte picks the parser. None may panic or allocate without bound (THREATS
+//! FUZZ-7: no target covered `onyx-bulk` before 2026-11-08).
 #![no_main]
 
 use borsh::BorshDeserialize;
 use libfuzzer_sys::fuzz_target;
-use onyx_bulk::catalog::{Catalog, CatalogFiles, Walker};
+use onyx_bulk::catalog::{Catalog, CatalogFiles, CatalogHeader, LeafProof, Walker};
 use onyx_bulk::manifest::Manifest;
 use onyx_bulk::shard::check_shard;
 use onyx_core::{SignedReport, SourceId};
@@ -17,7 +21,7 @@ fuzz_target!(|data: &[u8]| {
     let Some((&sel, b)) = data.split_first() else {
         return;
     };
-    match sel % 6 {
+    match sel % 8 {
         0 => {
             if let Ok(m) = Manifest::from_bytes(b) {
                 let _ = m.header.root();
@@ -60,11 +64,30 @@ fuzz_target!(|data: &[u8]| {
                 let _ = (r.hash(), r.payload.digest());
             }
         }
-        _ => {
+        5 => {
             if let Ok(v) = serde_json::from_slice::<serde_json::Value>(b) {
                 let _ = onyx_bulk::wire::check_rows_answer(&v, None, None);
                 let _ = onyx_bulk::wire::check_rows_answer(&v, Some(0), Some(10));
             }
+        }
+        6 => {
+            // The parts of a leaf answer, past the JSON layer: the header proves the
+            // leaf and its neighbours, the report signs the header.
+            if let Ok((h, lp, r)) = <(CatalogHeader, LeafProof, SignedReport)>::try_from_slice(b) {
+                let _ = h.proves(&lp);
+                let _ = (lp.leaf.is_tombstone(), lp.leaf.row(), h.root());
+                let _ = onyx_bulk::catalog::verify(&h, &r);
+            }
+        }
+        _ => {
+            // The whole answer as a storage node gets it: JSON, hex fields, and every
+            // check it runs before any chain read (the dataset it asked for is the
+            // one the answer names, so a valid seed passes them all).
+            let dataset = serde_json::from_slice::<serde_json::Value>(b)
+                .ok()
+                .and_then(|v| v["dataset"].as_str().map(str::to_owned))
+                .unwrap_or_else(|| "synthetic.metrics".into());
+            let _ = onyx_api::bulk_serve::check_leaf_answer("example.publisher", &dataset, b);
         }
     }
 });

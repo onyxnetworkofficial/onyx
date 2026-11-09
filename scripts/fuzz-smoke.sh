@@ -21,8 +21,16 @@ if ! rustup run nightly rustc --version >/dev/null 2>&1; then
   echo "fuzz-smoke: needs a nightly toolchain (rustup toolchain install nightly --profile minimal)"; exit 2
 fi
 echo "fuzz-smoke: $(rustup run nightly rustc --version), $(cargo fuzz --version)"
-# Seeds from the fixtures and real values (deterministic; fuzz/seeds is not committed).
-cargo +nightly run --release -q -p onyx-fuzz-common --bin seedgen -- seeds
+# Seeds from the fixtures and real values (deterministic; fuzz/seeds is not committed). Written
+# fresh each run (a seed seedgen no longer makes must not linger), and any `seedgen:` complaint
+# (a seed that no longer checks, review FUZZ-8-R1) fails the smoke.
+rm -rf seeds
+seedlog=$(mktemp)
+cargo +nightly run --release -q -p onyx-fuzz-common --bin seedgen -- seeds 2>"$seedlog" || { cat "$seedlog"; exit 1; }
+if grep -q '^seedgen:' "$seedlog"; then
+  grep '^seedgen:' "$seedlog"; echo "fuzz-smoke: seedgen could not write every seed"; rm -f "$seedlog"; exit 1
+fi
+rm -f "$seedlog"
 # No sanitizer: the fuzzed code is safe Rust (unsafe_code = deny); debug assertions and
 # overflow checks stay on (cargo-fuzz default), so an overflow is a crash.
 cargo +nightly fuzz build -s none

@@ -259,6 +259,27 @@ fn offline(
     cat::verify(header, report).map_err(|e| format!("the report: {e}"))
 }
 
+/// Everything a storage node checks in a leaf answer before any chain read,
+/// with the helpers [`LearnPass`]'s caller runs (`learn_from`): the JSON and
+/// hex layer, [`offline`], and for a tombstone its shape. One pure function
+/// so the fuzz target runs these exact checks, not a copy (THREATS FUZZ-8,
+/// review FUZZ-8-R1). Returns the report's signer and whether the leaf is a
+/// tombstone.
+#[doc(hidden)]
+pub fn check_leaf_answer(
+    publisher: &str,
+    dataset: &str,
+    body: &[u8],
+) -> Result<([u8; 20], bool), String> {
+    let (header, leaf, report) = decode_answer(body)?;
+    let signer = offline(publisher, dataset, &header, &leaf, &report)?;
+    let removed = leaf.leaf.is_tombstone();
+    if removed {
+        tombstone_shape(&leaf.leaf)?;
+    }
+    Ok((signer, removed))
+}
+
 /// A tombstone at version 2 or later (a hand-made catalog may hold any leaf).
 fn tombstone_shape(leaf: &CatalogLeaf) -> Result<(), String> {
     if !leaf.is_tombstone() {

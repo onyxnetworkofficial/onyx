@@ -5089,6 +5089,34 @@ impl Learning {
     }
 }
 
+/// THREATS FUZZ-8 (review FUZZ-8-R1): the pure check the fuzz target calls is
+/// the one `learn_from` composes: a good tombstone and a good live leaf pass
+/// with the catalog key as signer; another publisher, another dataset, a
+/// changed leaf and a body that is not JSON are refused.
+#[tokio::test]
+async fn fuzz_8_the_leaf_answer_check_is_the_storage_nodes() {
+    let l = learning().await;
+    let body = leaf_answer_of(&l.c0, &l.r0, LD);
+    let (signer, removed) = check_leaf_answer(LP, LD, &body).expect("a good tombstone");
+    assert!(removed);
+    let (live, rl) = live_catalog(&l.m, T0 + 30);
+    let (signer_live, removed_live) =
+        check_leaf_answer(LP, LD, &leaf_answer_of(&live, &rl, LD)).expect("a good live leaf");
+    assert!(!removed_live);
+    assert_eq!(signer, signer_live);
+    assert!(check_leaf_answer("other.publisher", LD, &body).is_err());
+    assert!(check_leaf_answer(LP, "synthetic.other", &body).is_err());
+    let other = leaf_answer_of(&l.c0, &l.r0, "synthetic.other");
+    assert!(check_leaf_answer(LP, LD, &other).is_err());
+    let mut v: Value = serde_json::from_slice(&body).expect("json");
+    v["leaf"] = json!(hex0x(
+        &borsh::to_vec(&l.c0.leaf_proof(1).expect("p")).expect("ok")
+    ));
+    assert!(check_leaf_answer(LP, LD, &serde_json::to_vec(&v).expect("ok")).is_err());
+    assert!(check_leaf_answer(LP, LD, b"not json").is_err());
+    l.clean();
+}
+
 /// `GET /v1/bulk/catalogs/{p}/leaf/{d}` on `w`, checked against the spec.
 async fn leaf_get(w: &World, p: &str, d: &str) -> (StatusCode, Value, Vec<u8>) {
     let uri = format!("/v1/bulk/catalogs/{p}/leaf/{d}");

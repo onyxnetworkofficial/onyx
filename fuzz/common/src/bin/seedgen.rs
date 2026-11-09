@@ -856,7 +856,9 @@ fn text(o: &mut Out) {
 }
 
 /// `bulk_parsers` seeds: a shard file, a manifest over it, a catalog listing
-/// it and a tombstone, its report, and a catalog files answer of both.
+/// it and a tombstone, its report, a catalog files answer of both, and a
+/// storage node's learn answers for the tombstone and the live leaf, as Borsh
+/// parts and as JSON (THREATS FUZZ-8, review FUZZ-8-R1).
 fn bulk(o: &mut Out) {
     use onyx_bulk::catalog::{self as cat, Catalog, CatalogFile, CatalogFiles, CatalogLeaf, FileLeaves};
     use onyx_bulk::manifest::{Manifest, NewVersion, ShardEntry};
@@ -917,6 +919,35 @@ fn bulk(o: &mut Out) {
     if let (Ok(b0), Ok(rb)) = (borsh::to_vec(&c0), borsh::to_vec(&r0)) {
         o.sel("bulk_parsers", "catalog", 2, &b0);
         o.sel("bulk_parsers", "report", 4, &rb);
+    }
+    // Leaf answers: 0 is the tombstone (synthetic.metrics sorts first), 1 the live
+    // synthetic.other. Each must pass the storage node's own check, so the fuzzer
+    // starts past it; one that does not is reported (scripts/fuzz-smoke.sh fails on
+    // any `seedgen:` line) and the other seeds are still written.
+    for i in 0..2 {
+        let Some(lp) = c1.leaf_proof(i) else {
+            eprintln!("seedgen: no leaf proof {i} in the bulk catalog");
+            continue;
+        };
+        let (Ok(hb), Ok(lb), Ok(rb)) = (borsh::to_vec(&c1.header), borsh::to_vec(&lp), borsh::to_vec(&r1)) else {
+            eprintln!("seedgen: bulk leaf answer {i} does not encode");
+            continue;
+        };
+        let body = serde_json::json!({
+            "publisher": "example.publisher", "dataset": lp.leaf.dataset, "number": c1.header.number,
+            "root": c1.header.root().to_string(), "removed": lp.leaf.is_tombstone(),
+            "header": onyx_fuzz_common::hex0x(&hb), "leaf": onyx_fuzz_common::hex0x(&lb),
+            "report": onyx_fuzz_common::hex0x(&rb), "from": "catalog",
+        })
+        .to_string();
+        if let Err(e) = onyx_api::bulk_serve::check_leaf_answer("example.publisher", &lp.leaf.dataset, body.as_bytes()) {
+            eprintln!("seedgen: bulk leaf answer {i} does not check: {e}");
+            continue;
+        }
+        if let Ok(b) = borsh::to_vec(&(c1.header.clone(), lp, r1.clone())) {
+            o.sel("bulk_parsers", &format!("learn-answer-{i}"), 6, &b);
+        }
+        o.sel("bulk_parsers", &format!("learn-json-{i}"), 7, body.as_bytes());
     }
     let changed: Vec<CatalogLeaf> = c1
         .leaves
