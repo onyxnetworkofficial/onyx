@@ -35,10 +35,23 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-/// How far back the arrival proof looks for the authorization's use (no
-/// further back than its `validAfter`): 6 hours, longer than any x402
-/// validity window.
+/// How far back from its `validBefore` the arrival proof looks for the
+/// authorization's use (no further back than its `validAfter`): 6 hours,
+/// longer than any x402 validity window.
 const PROOF_LOOKBACK_SECS: u64 = 6 * 3600;
+/// Where the arrival proof starts looking: the authorization's `validAfter`,
+/// but no more than [`PROOF_LOOKBACK_SECS`] before its `validBefore`. The use
+/// can only lie inside the authorization's own window, so the search does not
+/// depend on when it runs: a pending settle resolved hours late (a restart
+/// after an outage) still finds it (review MUT-5-R1; it used `now`, and
+/// past `validBefore` + 6 h the window was empty and the payment dropped).
+fn proof_from(valid_after: u64, valid_before: u64) -> u64 {
+    valid_after.max(valid_before.saturating_sub(PROOF_LOOKBACK_SECS))
+}
+/// A pending settle whose authorization was used but whose use the token's
+/// logs do not show yet (a lagging log backend) is kept until this long
+/// after its `validBefore`, then dropped: undecided is never a "no" sooner.
+const NOT_FOUND_KEEP_SECS: u64 = 24 * 3600;
 /// Extra time over the receipt deadline for a settle's own node calls
 /// (estimate, nonce, fees, send, diagnosis).
 const SETTLE_RPC_SLACK: Duration = Duration::from_secs(20);
@@ -342,7 +355,16 @@ impl<T: JsonRpc> SelfSettle<T> {
     /// and a `Transfer(from, revenue, value)` log from the token in the same
     /// transaction (M8-L58-F3).
     async fn arrived(&self, a: &exact_evm::Authorization) -> Result<bool, String> {
-        crate::arrival::arrived(
+        Ok(matches!(
+            self.use_of(a).await?,
+            crate::arrival::UseOf::Ours(_)
+        ))
+    }
+
+    /// What became of `a`, by the token's state and its own logs in the
+    /// authorization's window ([`proof_from`]).
+    async fn use_of(&self, a: &exact_evm::Authorization) -> Result<crate::arrival::UseOf, String> {
+        crate::arrival::use_of(
             self.sender.rpc(),
             &crate::arrival::Payment {
                 token: self.token,
@@ -351,8 +373,7 @@ impl<T: JsonRpc> SelfSettle<T> {
                 nonce: a.nonce,
                 value: a.value,
             },
-            a.valid_after
-                .max(now_unix().saturating_sub(PROOF_LOOKBACK_SECS)),
+            proof_from(a.valid_after, a.valid_before),
             a.valid_before,
         )
         .await
@@ -391,8 +412,8 @@ impl<T: JsonRpc> SelfSettle<T> {
                 keep.push(ps);
                 continue;
             }
-            match self.arrived(&ps.auth).await {
-                Ok(true) => {
+            match self.use_of(&ps.auth).await {
+                Ok(crate::arrival::UseOf::Ours(_)) => {
                     // The receipt is on disk before the pending entry is
                     // removed: a crash in between posts it twice, and the
                     // contract skips the second as already credited. A
@@ -405,7 +426,16 @@ impl<T: JsonRpc> SelfSettle<T> {
                         keep.push(ps);
                     }
                 }
-                Ok(false) => done.push(ps.id),
+                // Used, but the logs do not show the use yet: undecided, kept
+                // until NOT_FOUND_KEEP_SECS past its validBefore (MUT-5-R1).
+                Ok(crate::arrival::UseOf::NotFound)
+                    if now_unix() < ps.auth.valid_before.saturating_add(NOT_FOUND_KEEP_SECS) =>
+                {
+                    keep.push(ps)
+                }
+                // Unused (the payer kept it), spent elsewhere, or not found
+                // long after its window: no receipt.
+                Ok(_) => done.push(ps.id),
                 Err(_) => keep.push(ps),
             }
         }
@@ -809,6 +839,17 @@ mod tests {
         /// The payer's code appears after this many `eth_getCode` reads (a
         /// delegation set between our checks).
         delegate_after: Option<u32>,
+        /// The payer's USDC balance (`None`: 1,000,000).
+        balance: Option<u128>,
+        /// The simulation's `eth_call` fails in transport (no revert).
+        call_transport_err: bool,
+        /// `eth_getLogs` finds nothing even for a used authorization (a
+        /// lagging log backend).
+        logs_empty: bool,
+        /// `eth_getLogs` fails.
+        logs_err: bool,
+        /// `eth_getTransactionReceipt` of a settle fails (set after it).
+        receipt_err: Mutex<bool>,
     }
 
     fn topic(b: &[u8]) -> String {
@@ -860,7 +901,8 @@ mod tests {
                     self.sent.lock().expect("lock").push(params[0].to_string());
                     Ok(json!("0xhash"))
                 }
-                "eth_getLogs" if self.used => {
+                "eth_getLogs" if self.logs_err => Err("node error: logs unavailable".into()),
+                "eth_getLogs" if self.used && !self.logs_empty => {
                     *self.nonce_topic.lock().expect("lock") = params[0]["topics"][2]
                         .as_str()
                         .unwrap_or_default()
@@ -883,6 +925,9 @@ mod tests {
                         "data": topic(&word_u128(2_500)),
                     }]}))
                 }
+                "eth_getTransactionReceipt" if *self.receipt_err.lock().expect("lock") => {
+                    Err("node error: receipt unavailable".into())
+                }
                 "eth_getTransactionReceipt" => match *self.receipt_status.lock().expect("lock") {
                     Some(st) => Ok(json!({
                         "status": st, "blockNumber": "0x10", "gasUsed": "0x1d4c0",
@@ -896,7 +941,12 @@ mod tests {
                     if data.starts_with(&sel("authorizationState(address,bytes32)")) {
                         Ok(json!(format!("0x{:064x}", u8::from(self.used))))
                     } else if data.starts_with(&sel("balanceOf(address)")) {
-                        Ok(json!(format!("0x{:064x}", 1_000_000u64)))
+                        Ok(json!(format!(
+                            "0x{:064x}",
+                            self.balance.unwrap_or(1_000_000)
+                        )))
+                    } else if self.call_transport_err {
+                        Err("node error: connection reset by peer".into())
                     } else if self.used {
                         Err("execution reverted: authorization is used or canceled".into())
                     } else if self.bad_sig {
@@ -1178,9 +1228,20 @@ mod tests {
     #[test]
     fn an_unmined_settle_is_pending_until_it_mines() {
         rt().block_on(async {
-            let f = with(Node::default());
+            // The token's logs would prove the payment arrived: a settle
+            // that mines successfully credited its shard itself, so it must
+            // still queue no receipt (THREATS MUT-5).
+            let f = with(Node {
+                used: true,
+                arrived: true,
+                ..Node::default()
+            });
             let e = f.settle_for(&request(REVENUE), (4, Hash32([9; 32]))).await;
             assert!(e.is_err());
+            assert_eq!(f.pending_settles(), 1);
+            assert_eq!(f.receipts().pending(), 0);
+            // Not mined yet, and younger than PENDING_GIVE_UP: kept, not judged.
+            assert_eq!(f.resolve_pending().await, 0);
             assert_eq!(f.pending_settles(), 1);
             assert_eq!(f.receipts().pending(), 0);
             *f.sender.rpc().receipt_status.lock().expect("lock") = Some("0x1");
@@ -1380,5 +1441,283 @@ mod tests {
         });
     }
 
+    /// THREATS MUT-5: the simulation calldata matches `cast calldata`
+    /// (Foundry 1.8.5) for the same arguments:
+    /// `cast calldata "transferWithAuthorization(address,address,uint256,uint256,uint256,bytes32,bytes)"
+    /// 0x…aa 0x…bb 2500 7 1000 0x…09 0x0102` (every word distinct, so a swap
+    /// of two shows; review MUT-5-R1).
+    #[test]
+    fn transfer_with_authorization_calldata_matches_cast() {
+        let mut to = [0u8; 20];
+        to[19] = 0xbb;
+        let mut from = [0u8; 20];
+        from[19] = 0xaa;
+        let mut nonce = [0u8; 32];
+        nonce[31] = 9;
+        let a = exact_evm::Authorization {
+            from,
+            to: [0u8; 20],
+            value: 2_500,
+            valid_after: 0,
+            valid_before: 1_000,
+            nonce,
+        };
+        let d = transfer_with_authorization_calldata(
+            &exact_evm::Authorization {
+                to,
+                valid_after: 7,
+                ..a
+            },
+            &[1, 2],
+        );
+        assert_eq!(hex::encode(d), CAST_TWA);
+    }
+
+    /// THREATS MUT-5, review MUT-5-R1: the arrival proof looks from
+    /// `validAfter`, but never more than 6 hours before `validBefore` (the
+    /// authorization's own window, not the time of the search).
+    #[test]
+    fn the_arrival_proof_looks_back_at_most_six_hours() {
+        let before = 1_800_000_000;
+        assert_eq!(proof_from(0, before), before - 21_600);
+        assert_eq!(proof_from(before - 60, before), before - 60);
+        assert_eq!(proof_from(0, 1_000), 0);
+    }
+
+    /// Review MUT-5-R1: a pending settle resolved more than 6 h after its
+    /// authorization expired (a restart after an outage) still finds the
+    /// use in the authorization's window and queues its receipt.
+    #[test]
+    fn a_pending_settle_resolved_hours_late_still_finds_its_payment() {
+        rt().block_on(async {
+            let f = with(Node {
+                used: true,
+                arrived: true,
+                ..Node::default()
+            });
+            assert!(f
+                .settle_for(&request(REVENUE), (4, Hash32([9; 32])))
+                .await
+                .is_err());
+            age(&f, 7 * 3600);
+            assert_eq!(f.resolve_pending().await, 1);
+            assert_eq!(f.receipts().pending(), 1);
+            assert_eq!(f.pending_settles(), 0);
+        });
+    }
+
+    /// Review MUT-5-R1: a used authorization whose use the logs do not show
+    /// yet is undecided: kept, until a day past its validBefore.
+    #[test]
+    fn a_use_the_logs_do_not_show_yet_keeps_the_pending_settle() {
+        rt().block_on(async {
+            let f = with(Node {
+                used: true,
+                arrived: true,
+                logs_empty: true,
+                ..Node::default()
+            });
+            assert!(f
+                .settle_for(&request(REVENUE), (4, Hash32([9; 32])))
+                .await
+                .is_err());
+            age(&f, 0);
+            assert_eq!(f.resolve_pending().await, 0);
+            assert_eq!(f.pending_settles(), 1, "undecided: kept");
+            age(&f, NOT_FOUND_KEEP_SECS + 1);
+            assert_eq!(f.resolve_pending().await, 0);
+            assert_eq!(f.pending_settles(), 0, "a day past its window: dropped");
+            assert_eq!(f.receipts().pending(), 0);
+        });
+    }
+
+    /// Review MUT-5-R1: a node error on the settle's receipt or on the
+    /// token's logs keeps the pending settle for the next try.
+    #[test]
+    fn a_node_error_keeps_the_pending_settle() {
+        rt().block_on(async {
+            let f = with(Node::default());
+            assert!(f
+                .settle_for(&request(REVENUE), (4, Hash32([9; 32])))
+                .await
+                .is_err());
+            *f.sender.rpc().receipt_err.lock().expect("lock") = true;
+            assert_eq!(f.resolve_pending().await, 0);
+            assert_eq!(f.pending_settles(), 1, "receipt unreadable: kept");
+            let g = with(Node {
+                used: true,
+                logs_err: true,
+                ..Node::default()
+            });
+            assert!(g
+                .settle_for(&request(REVENUE), (4, Hash32([9; 32])))
+                .await
+                .is_err());
+            age(&g, 0);
+            assert_eq!(g.resolve_pending().await, 0);
+            assert_eq!(g.pending_settles(), 1, "logs unreadable: kept");
+        });
+    }
+
+    /// The pending settle of `f`, past PENDING_GIVE_UP and with its
+    /// authorization expired `expired_secs` ago (0: still valid).
+    fn age(f: &SelfSettle<Node>, expired_secs: u64) {
+        let mut p = f.pending.lock().expect("lock");
+        let past = Instant::now().checked_sub(PENDING_GIVE_UP + Duration::from_secs(1));
+        p.list[0].since = past.expect("an instant past the give-up time");
+        if expired_secs > 0 {
+            p.list[0].auth.valid_before = now_unix() - expired_secs;
+        }
+    }
+
+    /// THREATS MUT-5: an unmined settle older than PENDING_GIVE_UP is judged
+    /// by the token's logs: queued when the payment arrived, dropped when not.
+    #[test]
+    fn an_unmined_settle_past_the_give_up_time_is_judged_by_arrival() {
+        rt().block_on(async {
+            for (arrived, queued) in [(true, 1), (false, 0)] {
+                let f = with(Node {
+                    used: true,
+                    arrived,
+                    ..Node::default()
+                });
+                let e = f.settle_for(&request(REVENUE), (4, Hash32([9; 32]))).await;
+                assert!(e.is_err());
+                assert_eq!(f.pending_settles(), 1);
+                if let Ok(mut p) = f.pending.lock() {
+                    let past = Instant::now().checked_sub(PENDING_GIVE_UP + Duration::from_secs(1));
+                    p.list[0].since = past.expect("an instant 601 s ago");
+                }
+                assert_eq!(f.resolve_pending().await, queued);
+                assert_eq!(f.receipts().pending(), queued);
+                assert_eq!(f.pending_settles(), 0);
+            }
+        });
+    }
+
+    /// THREATS MUT-5: without a journal the pending ids run on, one per
+    /// entry; a failed journal write is counted and closes the journal.
+    #[test]
+    fn pending_ids_run_on_and_a_journal_write_error_is_counted() {
+        let mut p = PendingSet::default();
+        assert_eq!(p.write(&[], &[json!(1), json!(2)]), vec![0, 1]);
+        assert_eq!(p.write(&[], &[json!(3)]), vec![2]);
+        assert_eq!(p.write_errors, 0);
+        // Entries already held (from a journal that closed) are never reused:
+        // the next id is past the highest held one.
+        p.list.push(PendingSettle {
+            id: 9,
+            hash: "0xhash".into(),
+            receipt: Receipt {
+                round: 1,
+                shard: Hash32([1; 32]),
+                amount: 2_500,
+                payer: [0xaa; 20],
+                nonce: [1; 32],
+            },
+            auth: exact_evm::Authorization {
+                from: [0xaa; 20],
+                to: REVENUE,
+                value: 2_500,
+                valid_after: 0,
+                valid_before: 1_000,
+                nonce: [1; 32],
+            },
+            since: Instant::now(),
+        });
+        assert_eq!(p.write(&[], &[json!(4)]), vec![10]);
+        rt().block_on(async {
+            let d = crate::journal::test_dir("pending-write-errors");
+            let f = with(Node::default()).persist(&d).expect("persist");
+            if let Ok(mut p) = f.pending.lock() {
+                p.journal.as_mut().expect("journal").break_for_test();
+            }
+            let e = f.settle_for(&request(REVENUE), (4, Hash32([9; 32]))).await;
+            assert!(e.is_err(), "not mined");
+            assert_eq!(f.pending_settles(), 1, "kept in memory");
+            assert_eq!(f.pending_write_errors(), 1);
+            assert!(f.pending.lock().expect("lock").journal.is_none(), "closed");
+            drop(f);
+            std::fs::remove_dir_all(d).ok();
+        });
+    }
+
+    /// THREATS MUT-5: the facilitator's own address and its debug form.
+    #[test]
+    fn the_facilitator_names_its_revenue_contract() {
+        let f = with(Node::default());
+        assert_eq!(f.revenue(), REVENUE);
+        let d = format!("{f:?}");
+        assert!(d.starts_with("SelfSettle"), "{d}");
+        assert!(
+            d.contains(&hex::encode(REVENUE)) && d.contains(&hex::encode(USDC)),
+            "{d}"
+        );
+    }
+
+    /// THREATS MUT-5: either x402 version wrong is refused, not only both.
+    #[test]
+    fn either_wrong_x402_version_is_refused() {
+        rt().block_on(async {
+            let f = with(Node::default());
+            for which in 0..2 {
+                let mut r = request(REVENUE);
+                if which == 0 {
+                    r.x402_version = X402_VERSION + 1;
+                } else {
+                    r.payment_payload.x402_version = X402_VERSION + 1;
+                }
+                let v = f.verify(&r).await.expect("answer");
+                assert!(!v.is_valid);
+                assert_eq!(v.invalid_reason.as_deref(), Some("invalid_x402_version"));
+            }
+        });
+    }
+
+    /// THREATS MUT-5: a refused simulation is diagnosed at the balance
+    /// edge: a balance equal to the value is enough (the signature is the
+    /// reason), one unit less is insufficient funds.
+    #[test]
+    fn a_refused_payment_is_insufficient_funds_only_below_the_value() {
+        rt().block_on(async {
+            for (balance, reason) in [
+                (2_500, "invalid_exact_evm_payload_signature"),
+                (2_499, "insufficient_funds"),
+            ] {
+                let f = with(Node {
+                    bad_sig: true,
+                    balance: Some(balance),
+                    ..Node::default()
+                });
+                let v = f.verify(&request(REVENUE)).await.expect("answer");
+                assert!(!v.is_valid);
+                assert_eq!(
+                    v.invalid_reason.as_deref(),
+                    Some(reason),
+                    "balance {balance}"
+                );
+            }
+        });
+    }
+
+    /// THREATS MUT-5 (M8-L58-F4): a transport error in the simulation says
+    /// nothing about the payment: unavailable, never the payer's refusal.
+    #[test]
+    fn a_transport_error_in_the_simulation_is_unavailable() {
+        rt().block_on(async {
+            let f = with(Node {
+                call_transport_err: true,
+                ..Node::default()
+            });
+            match f.verify(&request(REVENUE)).await {
+                Err(FacilitatorError::Unavailable(e)) => {
+                    assert!(e.contains("connection reset"), "{e}")
+                }
+                other => panic!("want unavailable, got {other:?}"),
+            }
+        });
+    }
+
+    const CAST_TWA: &str = "cf09299500000000000000000000000000000000000000000000000000000000000000aa00000000000000000000000000000000000000000000000000000000000000bb00000000000000000000000000000000000000000000000000000000000009c4000000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000003e8000000000000000000000000000000000000000000000000000000000000000900000000000000000000000000000000000000000000000000000000000000e000000000000000000000000000000000000000000000000000000000000000020102000000000000000000000000000000000000000000000000000000000000";
     const CAST_SETTLE: &str = "92b4a0d40000000000000000000000000000000000000000000000000000000000000005000000000000000000000000000000000000000000000000000000000000000700000000000000000000000000000000000000000000000000000000000000aa00000000000000000000000000000000000000000000000000000000000009c4000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003e80000000000000000000000000000000000000000000000000000000000000009000000000000000000000000000000000000000000000000000000000000010000000000000000000000000000000000000000000000000000000000000000020102000000000000000000000000000000000000000000000000000000000000";
 }
