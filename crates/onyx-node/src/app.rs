@@ -1097,7 +1097,14 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             )
             .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?
             .with_free_per_minute(b.free_per_minute)
-            .with_erase(b.erase.clone());
+            .with_erase(b.erase.clone())
+            // ADR-0059 amendment 4 item 5a slice 2a: learned removals are a
+            // storage node's (none are learned outside storage mode).
+            .with_removals(
+                c.storage
+                    .as_ref()
+                    .map_or(onyx_api::bulk_serve::RemovalsMode::Off, |s| s.removals),
+            );
             eprintln!(
                 "onyx-node: bulk datasets on (ONYX_BULK_DIR), anchored in signed book {}",
                 hx(&pin.book)
@@ -1147,26 +1154,46 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             sc.contract,
             sc.from_block,
         );
-        let node = Arc::new(onyx_api::storage::StorageNode::new(
-            chain,
-            Arc::new(tx),
-            Arc::new(onyx_api::storage::HyperGet::new(Duration::from_secs(120))),
-            store,
-            onyx_api::storage::StorageNodeConfig {
-                contract: sc.contract,
-                node: me,
-                fetch: sc.fetch,
-                keeper: sc.keeper,
-                fetches_per_tick: sc.fetches_per_tick,
-            },
-        ));
+        let node = Arc::new(
+            onyx_api::storage::StorageNode::new(
+                chain,
+                Arc::new(tx),
+                Arc::new(onyx_api::storage::HyperGet::new(Duration::from_secs(120))),
+                store,
+                onyx_api::storage::StorageNodeConfig {
+                    contract: sc.contract,
+                    node: me,
+                    fetch: sc.fetch,
+                    keeper: sc.keeper,
+                    fetches_per_tick: sc.fetches_per_tick,
+                },
+            )
+            // Slice 2a: its own transport, a short deadline per call.
+            .with_learn(
+                sc.catalog_nodes.clone(),
+                Arc::new(onyx_api::storage::HyperGet::new(
+                    onyx_api::storage::LEARN_CALL_TIMEOUT,
+                )),
+            ),
+        );
         eprintln!(
-            "onyx-node: storage node {me} on (OnyxStorage {}, operator {}, fetch {}, keeper {})",
+            "onyx-node: storage node {me} on (OnyxStorage {}, operator {}, fetch {}, keeper {}, removals {:?} every {} s from {} catalog node(s))",
             hx(&sc.contract),
             hx(&operator),
             if sc.fetch { "on" } else { "off" },
             if sc.keeper { "on" } else { "off" },
+            sc.removals,
+            sc.removals_every_secs,
+            sc.catalog_nodes.len(),
         );
+        // ADR-0059 amendment 4 item 5a slice 2a: a task of its own, so a slow
+        // source never delays a tick.
+        if sc.removals != onyx_api::bulk_serve::RemovalsMode::Off {
+            tokio::spawn(onyx_api::storage::learn_run(
+                node.clone(),
+                Duration::from_secs(sc.removals_every_secs),
+            ));
+        }
         tokio::spawn(onyx_api::storage::run(
             node,
             Duration::from_secs(sc.every_secs),

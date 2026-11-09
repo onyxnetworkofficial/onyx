@@ -10,7 +10,7 @@
 //! every shard byte is checked against that manifest's entry by
 //! [`BulkStore::put_shard`] (the same checks as a publisher's upload).
 
-use crate::bulk_serve::BulkStore;
+use crate::bulk_serve::{BulkStore, RemovalsMode};
 use crate::roots::JsonRpc;
 use crate::x402::BoxFuture;
 use onyx_bulk::manifest::Manifest;
@@ -57,6 +57,13 @@ const SNAPSHOT_TRIES: usize = 2;
 pub const DECLINE_AFTER_FAILED_PASSES: u32 = 3;
 /// Time one pass spends starting shard fetches (answers come first).
 pub const FETCH_BUDGET: Duration = Duration::from_secs(300);
+/// Largest leaf answer a learn pass reads (ADR-0059 amendment 4 item 5a
+/// slice 2a: a leaf, two neighbours and three paths are a few KiB).
+pub const LEARN_ANSWER_BYTES: usize = 64 << 10;
+/// Deadline of one learn call, whatever the transport's own.
+pub const LEARN_CALL_TIMEOUT: Duration = Duration::from_secs(10);
+/// Datasets a learn pass asks about (they take turns).
+pub const LEARN_PER_PASS: usize = 4;
 
 /// HTTP GET transport (shard files, manifests and rows from peers).
 pub trait HttpGet: Send + Sync {
@@ -1147,6 +1154,40 @@ pub struct TickReport {
 /// A node's placement (its (deal, shard) pairs) and the inputs it came from.
 type Placed = (PlacementKey, Vec<(u64, u32)>);
 
+/// One learn pass's results ([`StorageNode::learn_pass`]).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct LearnReport {
+    /// The pass's finalized block (0: no pass ran).
+    pub block: u64,
+    /// Datasets asked about this pass.
+    pub asked: usize,
+    /// Removals kept or moved to a newer catalog this pass.
+    pub learned: usize,
+    /// Datasets asked about again first: the book withdrew their newest
+    /// proof this pass.
+    pub reasked: usize,
+    /// Removals whose newest proof the book withdrew while an older one
+    /// holds (it took the newest's place).
+    pub moved: usize,
+    /// Removals dropped this pass (the book withdrew every kept proof and no
+    /// source gave another).
+    pub dropped: usize,
+    /// Removals kept after the pass.
+    pub kept: usize,
+    /// Placed datasets no source has given a verified answer for since the
+    /// node started (live or removed): a deal whose source and peers hold no
+    /// catalog, with no `ONYX_STORAGE_CATALOG_NODES` that does.
+    pub never_learned: usize,
+}
+
+/// Where a storage node learns of removals (slice 2a).
+struct LearnSetup {
+    /// `ONYX_STORAGE_CATALOG_NODES`, asked first.
+    catalog_nodes: Vec<String>,
+    /// Its own transport (a short timeout); the fetch transport when unset.
+    get: Option<Arc<dyn HttpGet>>,
+}
+
 /// Per (deal, shard or `WHOLE_DEAL`): the epoch of the first failed pass, the
 /// epoch of the last one and the failed passes in that epoch.
 type Failures = (u64, u64, u32);
@@ -1170,6 +1211,15 @@ pub struct StorageNode {
     placed: Mutex<Option<Placed>>,
     /// The contract's version was checked (`StorageChain::check_version`).
     version_ok: AtomicBool,
+    /// The last snapshot a tick read: the learn pass reads no chain view of
+    /// its own and never waits for a tick.
+    snap: Mutex<Option<Arc<Snapshot>>>,
+    learn: LearnSetup,
+    /// Rotates the datasets a learn pass asks about.
+    learn_turn: AtomicUsize,
+    /// Datasets a verified leaf answer named since start.
+    heard: Mutex<BTreeSet<(String, String)>>,
+    learn_last: Mutex<LearnReport>,
 }
 
 impl StorageNode {
@@ -1194,7 +1244,26 @@ impl StorageNode {
             passes: AtomicUsize::new(0),
             placed: Mutex::new(None),
             version_ok: AtomicBool::new(false),
+            snap: Mutex::new(None),
+            learn: LearnSetup {
+                catalog_nodes: Vec::new(),
+                get: None,
+            },
+            learn_turn: AtomicUsize::new(0),
+            heard: Mutex::new(BTreeSet::new()),
+            learn_last: Mutex::new(LearnReport::default()),
         }
+    }
+
+    /// Learn of removals (ADR-0059 amendment 4 item 5a slice 2a) from
+    /// `catalog_nodes` first (`ONYX_STORAGE_CATALOG_NODES`), over `get` (a
+    /// transport with a short timeout).
+    pub fn with_learn(mut self, catalog_nodes: Vec<String>, get: Arc<dyn HttpGet>) -> Self {
+        self.learn = LearnSetup {
+            catalog_nodes,
+            get: Some(get),
+        };
+        self
     }
 
     /// The shards placed here now or next epoch, computed again only when an
@@ -1312,7 +1381,10 @@ impl StorageNode {
             self.chain.check_version().await?;
             self.version_ok.store(true, Ordering::Relaxed);
         }
-        let s = self.chain.snapshot().await?;
+        let s = Arc::new(self.chain.snapshot().await?);
+        if let Ok(mut k) = self.snap.lock() {
+            *k = Some(s.clone());
+        }
         let mut rep = TickReport {
             epoch: s.epoch,
             ..Default::default()
@@ -1781,13 +1853,179 @@ impl StorageNode {
     /// The status JSON the operator CLI and `/v1/health` show.
     pub fn status_json(&self) -> Value {
         let l = self.last();
+        let r = self.learn_last();
         json!({
             "node": self.cfg.node.to_string(), "epoch": l.epoch, "wanted": l.wanted, "held": l.held,
             "fetched": l.fetched, "fetch_failed": l.fetch_failed, "answered": l.answered,
             "seeds": l.seeds, "settled": l.settled, "unanswerable": l.unanswerable,
             "declined": l.declined,
+            "removals": {
+                "mode": format!("{:?}", self.store.removals_mode()).to_lowercase(),
+                "kept": self.store.learned_count(),
+                "never_learned": r.never_learned,
+                "checked_at": r.block,
+            },
         })
     }
+
+    /// The last learn pass's report.
+    pub fn learn_last(&self) -> LearnReport {
+        self.learn_last
+            .lock()
+            .map(|l| l.clone())
+            .unwrap_or_default()
+    }
+
+    /// Where to ask about a dataset the deals `ds` hold: the catalog nodes,
+    /// then each deal's source, then its peers (review CAT-LEARN-R1 H1: a
+    /// deal's source and peers may hold no catalog, or lie). Without a
+    /// snapshot or a deal, the catalog nodes only.
+    fn learn_urls(&self, s: Option<&Snapshot>, ds: &[&DealEntry]) -> Vec<String> {
+        let mut urls: Vec<String> = Vec::new();
+        let mut add = |u: &str| {
+            if !u.is_empty() && !urls.iter().any(|x| x == u) {
+                urls.push(u.to_string());
+            }
+        };
+        for u in &self.learn.catalog_nodes {
+            add(u);
+        }
+        for d in ds {
+            add(&d.source_url);
+        }
+        if let Some(s) = s {
+            for d in ds {
+                for u in manifest_sources(s, d, Some(&self.cfg.node)) {
+                    add(&u);
+                }
+            }
+        }
+        urls
+    }
+
+    /// One learn pass (ADR-0059 amendment 4 item 5a slice 2a): read the kept
+    /// removals again (even before the first tick: review CAT-LEARN-R2 5),
+    /// ask again about every dataset whose newest proof the book withdrew,
+    /// then about a few of the datasets the placed deals' held manifests name
+    /// ([`learn_order`]: those with no record first), every URL in turn until
+    /// one gives a proof that holds (a 404, a 409, a live leaf or a lie never
+    /// ends the search); then drop what the book withdrew and nobody gave
+    /// again. A held catalog of the publisher never stops the learning:
+    /// anyone may hand this node an old anchored one (R2 1). Every chain read
+    /// is at one finalized block; nothing is sent. `Err` is a chain that
+    /// could not be read: nothing is dropped.
+    pub async fn learn_pass(&self) -> Result<LearnReport, String> {
+        if self.store.removals_mode() == RemovalsMode::Off {
+            return Ok(LearnReport::default());
+        }
+        let mut pass = self.store.learn_pass_start().await?;
+        let re = self.store.learn_recheck(&mut pass).await?;
+        let snap = self.snap.lock().ok().and_then(|k| k.clone());
+        let mut by: BTreeMap<(String, String), Vec<&DealEntry>> = BTreeMap::new();
+        if let Some(s) = &snap {
+            let deals: BTreeSet<u64> = self.wanted(s).iter().map(|(d, _)| *d).collect();
+            for id in deals {
+                let Some(d) = s.deal(id) else { continue };
+                let Some((m, _)) = self.store.manifest_record(&d.info.manifest_root) else {
+                    continue;
+                };
+                by.entry((m.header.publisher.0.clone(), m.header.dataset.clone()))
+                    .or_default()
+                    .push(d);
+            }
+        }
+        let reask = pass.reask();
+        let has = |k: &(String, String)| self.store.learned_record(k).ok().flatten().is_some();
+        let (learned, unlearned): (Vec<_>, Vec<_>) = by
+            .keys()
+            .filter(|k| !reask.contains(k))
+            .cloned()
+            .partition(|k| has(k));
+        let turn = self.learn_turn.fetch_add(1, Ordering::Relaxed);
+        let order = learn_order(&reask, &unlearned, &learned, turn, LEARN_PER_PASS);
+        let get = self.learn.get.clone().unwrap_or_else(|| self.get.clone());
+        let mut rep = LearnReport {
+            block: pass.block(),
+            reasked: reask.len(),
+            ..Default::default()
+        };
+        for key in &order {
+            let (p, d) = (&key.0, &key.1);
+            rep.asked += 1;
+            let ds = by.get(key).map(Vec::as_slice).unwrap_or(&[]);
+            for u in self.learn_urls(snap.as_deref(), ds) {
+                let url = join(&u, &format!("/v1/bulk/catalogs/{p}/leaf/{d}"));
+                let body = match tokio::time::timeout(
+                    LEARN_CALL_TIMEOUT,
+                    get.get(&url, LEARN_ANSWER_BYTES),
+                )
+                .await
+                {
+                    Ok(Ok((200, b))) => b,
+                    _ => continue,
+                };
+                let l = self.store.learn_from(&mut pass, p, d, &body, &u).await?;
+                if matches!(l, crate::bulk_serve::Learn::Kept(_)) {
+                    rep.learned += 1;
+                }
+                if l.holds() {
+                    break;
+                }
+            }
+        }
+        rep.dropped = self.store.learn_finish(&mut pass);
+        rep.moved = re.moved;
+        let heard = {
+            let mut h = self.heard.lock().map_err(|_| "lock")?;
+            h.extend(pass.heard.iter().cloned());
+            h.clone()
+        };
+        rep.kept = self.store.learned_count();
+        rep.never_learned = by.keys().filter(|k| !heard.contains(*k) && !has(k)).count();
+        if let Ok(mut l) = self.learn_last.lock() {
+            *l = rep.clone();
+        }
+        Ok(rep)
+    }
+}
+
+/// The datasets a learn pass asks about, in order (review CAT-LEARN-R2 5):
+/// every one in `reask` (the book withdrew its newest proof this pass), then
+/// up to `per` others: datasets with no record first, keeping one place for
+/// one with a record (so a removal still moves to newer catalogs and keys)
+/// when there is one; each group takes turns by `pass`, a window a pass.
+pub(crate) fn learn_order<K: Clone + Ord>(
+    reask: &[K],
+    unlearned: &[K],
+    learned: &[K],
+    pass: usize,
+    per: usize,
+) -> Vec<K> {
+    let mut out: Vec<K> = Vec::new();
+    let push = |k: &K, out: &mut Vec<K>| {
+        if !out.contains(k) {
+            out.push(k.clone());
+        }
+    };
+    for k in reask {
+        push(k, &mut out);
+    }
+    let one = usize::from(!learned.is_empty() && per > 0);
+    let nu = unlearned.len().min(per.saturating_sub(one));
+    let nl = learned.len().min(per - nu);
+    for i in 0..nu {
+        push(
+            &unlearned[(pass.wrapping_mul(nu).wrapping_add(i)) % unlearned.len()],
+            &mut out,
+        );
+    }
+    for i in 0..nl {
+        push(
+            &learned[(pass.wrapping_mul(nl).wrapping_add(i)) % learned.len()],
+            &mut out,
+        );
+    }
+    out
 }
 
 /// Spacing for [`run`]: a xorshift64* stream seeded from the node id, the
@@ -1859,6 +2097,26 @@ pub async fn run(node: Arc<StorageNode>, every: Duration) {
                 }
             }
             Err(e) => eprintln!("onyx-node: storage: tick: {e}"),
+        }
+        tokio::time::sleep(waits.next().unwrap_or(every)).await;
+    }
+}
+
+/// Run the learn pass (ADR-0059 amendment 4 item 5a slice 2a) about every
+/// `every` (`ONYX_STORAGE_REMOVALS_EVERY_SECS`), beside [`run`] and never
+/// delaying its tick, until the process stops; errors are logged and retried
+/// next pass.
+pub async fn learn_run(node: Arc<StorageNode>, every: Duration) {
+    let mut waits = pass_waits(&node.cfg.node, every);
+    tokio::time::sleep(waits.next().unwrap_or(every)).await;
+    loop {
+        match node.learn_pass().await {
+            Ok(r) if r.learned > 0 || r.dropped > 0 => eprintln!(
+                "onyx-node: storage: removals: block {} asked {} learned {} dropped {} kept {} never learned {}",
+                r.block, r.asked, r.learned, r.dropped, r.kept, r.never_learned
+            ),
+            Ok(_) => {}
+            Err(e) => eprintln!("onyx-node: storage: removals: {e}"),
         }
         tokio::time::sleep(waits.next().unwrap_or(every)).await;
     }

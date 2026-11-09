@@ -2507,6 +2507,68 @@
           }
         }
       }
+    },
+    "/v1/bulk/catalogs/{publisher}/leaf/{dataset}": {
+      "get": {
+        "operationId": "getBulkCatalogLeaf",
+        "summary": "A dataset's leaf in the publisher's newest held catalog, with its proof (storage nodes learn of a removal)",
+        "description": "The newest held catalog's header, its signed report and the dataset's leaf with its path and its two neighbours (`removed` when the leaf is a tombstone), so a storage node, which holds its deals' manifests and no catalogs, learns of a removal (ADR-0059 amendment 4 item 5a slice 2a). Built from the newest catalog in memory: no rebuild, no chain read and no fetch on a request. A node with no catalog of the publisher answers from a removal it learned and keeps (`from`: `learned`); a node holding the catalogs always answers from them (`from`: `catalog`). The reader checks everything itself: the header proves the leaf, the report signs the header and reads anchored in the signed book at its own finalized block. 404 `bulk_no_leaf` when the catalog lists no such dataset (or the node holds none), 409 `bulk_publisher_forked` under a fork mark, 500 when the newest catalog is not held whole. Free; rate-limited like the other bulk reads.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "name": "publisher",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Publisher source id (a dotted id)."
+          },
+          {
+            "name": "dataset",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            },
+            "description": "Dataset id (a dotted id)."
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The leaf with its proof, the catalog header and its signed report",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkCatalogLeaf"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
     }
   },
   "components": {
@@ -5540,6 +5602,61 @@
             "description": "0x hex of the Borsh SignedReport over the catalog root."
           }
         }
+      },
+      "BulkCatalogLeaf": {
+        "type": "object",
+        "required": [
+          "publisher",
+          "dataset",
+          "number",
+          "root",
+          "removed",
+          "header",
+          "leaf",
+          "report",
+          "from"
+        ],
+        "properties": {
+          "publisher": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "number": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "The catalog's number."
+          },
+          "root": {
+            "type": "string",
+            "description": "The catalog's root."
+          },
+          "removed": {
+            "type": "boolean",
+            "description": "The leaf is a tombstone (ADR-0059 amendment 4): the dataset is removed from that catalog on."
+          },
+          "header": {
+            "type": "string",
+            "description": "0x hex of the Borsh CatalogHeader."
+          },
+          "leaf": {
+            "type": "string",
+            "description": "0x hex of the Borsh LeafProof: the leaf, its path and its neighbours with theirs."
+          },
+          "report": {
+            "type": "string",
+            "description": "0x hex of the Borsh SignedReport over the catalog root."
+          },
+          "from": {
+            "type": "string",
+            "enum": [
+              "catalog",
+              "learned"
+            ],
+            "description": "`catalog`: this node's newest held catalog; `learned`: a removal this node learned from another node and keeps."
+          }
+        }
       }
     },
     "parameters": {
@@ -6573,13 +6690,17 @@
       "status": 404,
       "description": "This node holds no such bulk catalog."
     },
+    "bulk_no_leaf": {
+      "status": 404,
+      "description": "`GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`: the publisher's newest catalog on this node lists no such dataset, or the node holds no catalog of the publisher and keeps no learned removal of it."
+    },
     "bulk_busy": {
       "status": 503,
       "description": "`GET /v1/bulk/catalogs/{publisher}/files`: two answers are being sent already; try again after `retry-after` (10 s)."
     },
     "bulk_dataset_removed": {
       "status": 410,
-      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back. On rows and info, `erase` (when this node keeps a record of the removal) gives its `phase` (waiting, erasing, erased) and the chain time it is `due` (item 5a): until then its files stay fetchable by root on the peer routes; manifests and catalogs always do."
+      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back. On rows and info, `erase` (when this node keeps a record of the removal) gives its `phase` (waiting, erasing, erased) and the chain time it is `due` (item 5a): until then its files stay fetchable by root on the peer routes; manifests and catalogs always do. On a storage node, `learned` (`number`, `root`, `checked_at`: the catalog whose tombstone it learned from another node and the finalized block it last read anchored at, slice 2a) when the removal is learned rather than from a held catalog; the shards stay readable by root there."
     },
     "bulk_shard_removed": {
       "status": 410,

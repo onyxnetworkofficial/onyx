@@ -106,6 +106,7 @@ The node serves these routes (OpenAPI 3.1: [docs/api/openapi.json](docs/api/open
 | `POST` | `/v1/bulk/catalogs` | Hand a node an anchored catalog | free |
 | `GET` | `/v1/bulk/catalogs/{publisher}/files` | A publisher's stored catalogs from a number on (history check) | free |
 | `GET` | `/v1/bulk/catalogs/{publisher}/{n}` | A held catalog by publisher and number | free |
+| `GET` | `/v1/bulk/catalogs/{publisher}/leaf/{dataset}` | A dataset's leaf in the publisher's newest held catalog, with its proof (storage nodes learn of a removal) | free |
 <!-- /generated:routes -->
 
 ## Quickstart

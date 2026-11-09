@@ -166,7 +166,7 @@ impl JsonRpc for Node {
 impl Node {
     /// The book withdraws `r` (its key compromised from before it): the
     /// fact no longer holds a value.
-    fn withdraw(&self, r: &SignedReport) {
+    pub(crate) fn withdraw(&self, r: &SignedReport) {
         let mut c = self.0.lock().expect("ok");
         let fact = keccak256(&r.payload.digest().0);
         c.facts.insert(fact, (0, Hash32::ZERO, 0));
@@ -200,7 +200,7 @@ impl Node {
     }
 
     /// Record and accept `r`, signed with `secret`'s key.
-    fn anchor_by(&self, r: &SignedReport, secret: &[u8; 32]) {
+    pub(crate) fn anchor_by(&self, r: &SignedReport, secret: &[u8; 32]) {
         let signer = onyx_bulk::anchor::address_of(secret).expect("ok");
         self.0
             .lock()
@@ -4960,4 +4960,1042 @@ async fn cat_3_erase_a_root_stored_again_is_served_and_erased_bytes_leave_the_qu
     );
     assert!(again.holds_shard(&roots[2]));
     let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Storage nodes learn of a removal (ADR-0059 amendment 4 item 5a slice 2a; review CAT-LEARN-R1)
+
+const LP: &str = "example.publisher";
+const LD: &str = "synthetic.metrics";
+
+/// A leaf answer as `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}` gives
+/// it, for `dataset`'s leaf of `c` signed by `r`.
+pub(crate) fn leaf_answer_of(c: &Catalog, r: &SignedReport, dataset: &str) -> Vec<u8> {
+    let lp = c
+        .leaf_proof(c.find(dataset).expect("listed"))
+        .expect("proof");
+    leaf_body_of(&c.header, &lp, r)
+}
+
+fn leaf_body_of(h: &CatalogHeader, lp: &LeafProof, r: &SignedReport) -> Vec<u8> {
+    serde_json::to_vec(&json!({
+        "publisher": h.publisher.0, "dataset": lp.leaf.dataset, "number": h.number,
+        "root": h.root().to_string(), "removed": lp.leaf.is_tombstone(),
+        "header": hex0x(&borsh::to_vec(h).expect("ok")),
+        "leaf": hex0x(&borsh::to_vec(lp).expect("ok")),
+        "report": hex0x(&borsh::to_vec(r).expect("ok")),
+        "from": "catalog",
+    }))
+    .expect("ok")
+}
+
+/// Catalog 0 of the publisher removing `m`'s dataset (beside the live
+/// `synthetic.other`), anchored in `w`'s book and taken by `w` (which holds
+/// `m` by its own report).
+pub(crate) async fn removed_in_catalog(w: &World, m: &Manifest) -> (Catalog, SignedReport) {
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![
+            CatalogLeaf::of(&m.header).tombstone().expect("t"),
+            other_leaf("synthetic.other"),
+        ],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("c0").0,
+        StatusCode::CREATED
+    );
+    (c0, r0)
+}
+
+/// Catalog 0 listing `m` live, then catalog 1 removing its dataset, both
+/// anchored in `w`'s book and taken by `w` (which holds `m` by its own report).
+pub(crate) async fn live_then_removed(
+    w: &World,
+    m: &Manifest,
+) -> ((Catalog, SignedReport), (Catalog, SignedReport)) {
+    let (c0, r0) = live_catalog(m, T0 + 10);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![CatalogLeaf::of(&m.header).tombstone().expect("t")],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1).await.expect("c1").0,
+        StatusCode::CREATED
+    );
+    ((c0, r0), (c1, r1))
+}
+
+/// A catalog listing `m` live, signed (not anchored anywhere).
+pub(crate) fn live_catalog(m: &Manifest, created: u64) -> (Catalog, SignedReport) {
+    let c = catalog_of(None, created, vec![CatalogLeaf::of(&m.header)]);
+    let r = sign_catalog(&c);
+    (c, r)
+}
+
+/// A catalog removing `m`'s dataset, signed (not anchored anywhere).
+pub(crate) fn tombstone_catalog(m: &Manifest, created: u64) -> (Catalog, SignedReport) {
+    let c = catalog_of(
+        None,
+        created,
+        vec![CatalogLeaf::of(&m.header).tombstone().expect("t")],
+    );
+    let r = sign_catalog(&c);
+    (c, r)
+}
+
+/// A catalog node `cat` (own-report version 1 of `synthetic.metrics`, then
+/// catalog 0 removing it) and a storage node `sto` holding version 1 and its
+/// shards by its own report and no catalog; `sto`'s book anchors catalog 0.
+struct Learning {
+    cat: World,
+    sto: World,
+    m: Manifest,
+    files: Vec<Vec<u8>>,
+    c0: Catalog,
+    r0: SignedReport,
+}
+
+async fn learning() -> Learning {
+    let cat = world();
+    let (m, files) = published(&cat).await;
+    let sto = world();
+    let r = sign(&m);
+    sto.node.anchor(&r);
+    sto.post(&m, &r).await.expect("v1");
+    sto.upload_all(&m, &files).await;
+    let (c0, r0) = removed_in_catalog(&cat, &m).await;
+    sto.node.anchor(&r0);
+    Learning {
+        cat,
+        sto,
+        m,
+        files,
+        c0,
+        r0,
+    }
+}
+
+impl Learning {
+    fn clean(&self) {
+        let _ = std::fs::remove_dir_all(&self.cat.dir);
+        let _ = std::fs::remove_dir_all(&self.sto.dir);
+    }
+}
+
+/// `GET /v1/bulk/catalogs/{p}/leaf/{d}` on `w`, checked against the spec.
+async fn leaf_get(w: &World, p: &str, d: &str) -> (StatusCode, Value, Vec<u8>) {
+    let uri = format!("/v1/bulk/catalogs/{p}/leaf/{d}");
+    let r = peer_routes(w.store.clone())
+        .oneshot(Request::get(&uri).body(Body::empty()).expect("ok"))
+        .await
+        .expect("ok");
+    let status = r.status();
+    let b = r
+        .into_body()
+        .collect()
+        .await
+        .expect("ok")
+        .to_bytes()
+        .to_vec();
+    let v: Value = serde_json::from_slice(&b).unwrap_or(Value::Null);
+    crate::openapi_check::check("GET", &uri, status.as_u16(), &v);
+    (status, v, b)
+}
+
+impl World {
+    /// One answer for `synthetic.metrics` in a pass of its own.
+    async fn learn(&self, body: &[u8]) -> Learn {
+        let mut pass = self.store.learn_pass_start().await.expect("pass");
+        self.store
+            .learn_from(&mut pass, LP, LD, body, "test")
+            .await
+            .expect("read")
+    }
+
+    /// A pass that only reads the kept proofs again: (what the recheck did,
+    /// records dropped at its end).
+    async fn recheck(&self) -> Result<(Recheck, usize), String> {
+        let mut pass = self.store.learn_pass_start().await?;
+        let re = self.store.learn_recheck(&mut pass).await?;
+        Ok((re, self.store.learn_finish(&mut pass)))
+    }
+
+    fn learned(&self) -> Option<learn::Learned> {
+        self.store
+            .learned_record(&(LP.to_string(), LD.to_string()))
+            .expect("lock")
+    }
+
+    /// This world's store opened again on its folder with `mode`.
+    pub(crate) fn with_mode(self, mode: RemovalsMode) -> World {
+        let c = self.clock.clone();
+        let store = BulkStore::open(
+            pin(),
+            self.node.clone(),
+            Arc::new(move || c.load(Ordering::Relaxed)),
+            &self.dir,
+            &self.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("ok")
+        .with_free_per_minute(10_000)
+        .with_removals(mode);
+        World {
+            node: self.node,
+            store: Arc::new(store),
+            clock: self.clock,
+            dir: self.dir,
+        }
+    }
+}
+
+fn is_gone(e: &ApiError) -> bool {
+    e.status == StatusCode::GONE && e.code == "bulk_dataset_removed"
+}
+
+/// Slice 2a's route: the newest held catalog's leaf with its proof, from
+/// memory (no chain read); removed true and false; 404 `bulk_no_leaf` for a
+/// dataset or publisher it does not list; a node with no catalog answers
+/// from a learned proof only; 409 under a fork mark; 500 when the newest
+/// catalog is not held whole. Every answer checks against the spec.
+#[tokio::test]
+async fn cat_3_learn_the_route_answers_the_newest_leaf_with_its_proof() {
+    let l = learning().await;
+    let reads = l.cat.node.reads();
+    let (s, v, _) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["removed"], json!(true));
+    assert_eq!(v["from"], json!("catalog"));
+    assert_eq!(v["number"], json!(0));
+    assert_eq!(v["root"], json!(l.c0.header.root().to_string()));
+    let h = CatalogHeader::try_from_slice(
+        &onyx_bulk::wire::hex_field(&v["header"], "header").expect("hex"),
+    )
+    .expect("header");
+    let lp =
+        LeafProof::try_from_slice(&onyx_bulk::wire::hex_field(&v["leaf"], "leaf").expect("hex"))
+            .expect("leaf");
+    let rep = SignedReport::try_from_slice(
+        &onyx_bulk::wire::hex_field(&v["report"], "report").expect("hex"),
+    )
+    .expect("report");
+    assert_eq!(h, l.c0.header);
+    h.proves(&lp).expect("proves");
+    assert!(lp.leaf.is_tombstone() && lp.leaf.dataset == LD);
+    assert_eq!(rep, l.r0);
+    let (s, v, _) = leaf_get(&l.cat, LP, "synthetic.other").await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["removed"], json!(false));
+    for (p, d) in [(LP, "synthetic.none"), ("other.publisher", LD)] {
+        let (s, v, _) = leaf_get(&l.cat, p, d).await;
+        assert_eq!(s, StatusCode::NOT_FOUND, "{p}/{d}");
+        assert_eq!(v["error"]["code"], json!("bulk_no_leaf"));
+    }
+    let (s, _, _) = leaf_get(&l.cat, LP, "bad..id").await;
+    assert_eq!(s, StatusCode::BAD_REQUEST);
+    assert_eq!(l.cat.node.reads(), reads, "no chain read on a request");
+    // A storage node with no catalog: nothing, then its learned proof.
+    let (s, v, _) = leaf_get(&l.sto, LP, LD).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    assert_eq!(v["error"]["code"], json!("bulk_no_leaf"));
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(l.sto.learn(&body).await, Learn::Kept(0));
+    let (s, v, b2) = leaf_get(&l.sto, LP, LD).await;
+    assert_eq!(s, StatusCode::OK);
+    assert_eq!(v["from"], json!("learned"));
+    assert_eq!(v["removed"], json!(true));
+    // A third node takes the relayed proof as it is.
+    let third = world();
+    let r = sign(&l.m);
+    third.node.anchor(&r);
+    third.post(&l.m, &r).await.expect("v1");
+    third.node.anchor(&l.r0);
+    assert_eq!(third.learn(&b2).await, Learn::Kept(0));
+    let _ = std::fs::remove_dir_all(&third.dir);
+    // A node holding the catalogs never answers from a learned proof: the
+    // catalog node's live leaf of another dataset stays its own.
+    assert!(l.cat.learned().is_none());
+    // Under a fork mark: 409.
+    let (cx, rx) = live_catalog(&l.m, T0 + 11);
+    l.cat
+        .store
+        .mark_fork(&Fork {
+            held: (l.c0.header.clone(), l.r0.clone()),
+            other: (cx.header.clone(), rx),
+            why: "test".into(),
+        })
+        .expect("marked");
+    let (s, v, _) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert_eq!(v["error"]["code"], json!("bulk_publisher_forked"));
+    l.cat.store.forks.write().expect("ok").clear();
+    // The newest catalog not held whole: 500, never "no leaf".
+    l.cat
+        .store
+        .catalogs
+        .write()
+        .expect("ok")
+        .get_mut(LP)
+        .and_then(|m| m.values_mut().next_back())
+        .expect("held")
+        .body = None;
+    let (s, _, _) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(s, StatusCode::INTERNAL_SERVER_ERROR);
+    l.clean();
+}
+
+/// The leaf route and the shard `PUT` share the node's router (the read,
+/// upload and peer routes merged as the node does): the leaf answers, a shard
+/// `PUT` still reaches its route (here its 410 with `learned`, and for a
+/// publisher named `catalogs` its 404), and a `PUT` on the leaf path is 405.
+#[tokio::test]
+async fn cat_3_learn_the_leaf_route_and_the_shard_put_share_the_router() {
+    let l = learning().await;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(l.sto.learn(&body).await, Learn::Kept(0));
+    let s = l.sto.store.clone();
+    let app = routes(s.clone())
+        .merge(upload_routes(s.clone()))
+        .merge(peer_routes(s));
+    let send = |req: Request<Body>| {
+        let app = app.clone();
+        async move {
+            let (m, u) = (req.method().to_string(), req.uri().to_string());
+            let r = app.oneshot(req).await.expect("ok");
+            let status = r.status();
+            let b = r.into_body().collect().await.expect("ok").to_bytes();
+            let v = serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null);
+            crate::openapi_check::check(&m, &u, status.as_u16(), &v);
+            (status, v)
+        }
+    };
+    let leaf = format!("/v1/bulk/catalogs/{LP}/leaf/{LD}");
+    let (st, v) = send(Request::get(&leaf).body(Body::empty()).expect("ok")).await;
+    assert_eq!(st, StatusCode::OK);
+    assert_eq!(v["from"], json!("learned"));
+    let root = l.m.shards[0].root;
+    let (st, v) = send(
+        Request::put(format!("/v1/bulk/{LP}/{LD}/shards/{root}"))
+            .body(Body::from(l.files[0].clone()))
+            .expect("ok"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::GONE);
+    assert_eq!(v["learned"]["number"], json!(0));
+    let (st, v) = send(
+        Request::put(format!("/v1/bulk/catalogs/leaf/shards/{root}"))
+            .body(Body::from(l.files[0].clone()))
+            .expect("ok"),
+    )
+    .await;
+    assert_eq!(st, StatusCode::NOT_FOUND);
+    assert_eq!(v["error"]["code"], json!("bulk_unknown_dataset"));
+    let (st, _) = send(Request::put(&leaf).body(Body::empty()).expect("ok")).await;
+    assert_eq!(st, StatusCode::METHOD_NOT_ALLOWED);
+    l.clean();
+}
+
+/// A verified tombstone stops rows, info and the listing with 410 and
+/// `learned`, and the public uploads; `removed()` stays catalog-only; the
+/// storage node's own fetch paths (a manifest, a shard), the shard and
+/// manifest routes by root still answer.
+#[tokio::test]
+async fn cat_3_learn_a_verified_tombstone_stops_rows_info_and_listing_not_the_storage_paths() {
+    let l = learning().await;
+    let w = &l.sto;
+    w.rows("from=0&to=3").await.expect("served before");
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    assert_eq!(w.store.removed(LP, LD).expect("read"), None, "catalog-only");
+    let e = w.rows("from=0&to=3").await.expect_err("removed");
+    assert!(is_gone(&e));
+    let read = routes(w.store.clone());
+    let up = upload_routes(w.store.clone());
+    let peer = peer_routes(w.store.clone());
+    let send = |app: Router, req: Request<Body>| async move {
+        let (m, u) = (req.method().to_string(), req.uri().to_string());
+        let r = app.oneshot(req).await.expect("ok");
+        let status = r.status();
+        let b = r.into_body().collect().await.expect("ok").to_bytes();
+        let v = serde_json::from_slice::<Value>(&b).unwrap_or(Value::Null);
+        if v != Value::Null {
+            crate::openapi_check::check(&m, &u, status.as_u16(), &v);
+        }
+        (status, v)
+    };
+    let get = |u: String| Request::get(u).body(Body::empty()).expect("ok");
+    for uri in [
+        format!("/v1/bulk/{LP}/{LD}"),
+        format!("/v1/bulk/{LP}/{LD}/rows?from=0&to=3"),
+    ] {
+        let (s, v) = send(read.clone(), get(uri.clone())).await;
+        assert_eq!(s, StatusCode::GONE, "{uri}");
+        assert_eq!(v["error"]["code"], json!("bulk_dataset_removed"));
+        assert_eq!(v["catalog"], json!(0));
+        assert_eq!(
+            v["learned"],
+            json!({
+                "number": 0,
+                "root": l.c0.header.root().to_string(),
+                "checked_at": {"number": 100, "hash": hex0x(&FIN)},
+            })
+        );
+    }
+    let (s, v) = send(read.clone(), get("/v1/bulk".into())).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(!v.to_string().contains(LD), "left out of the list");
+    // The public uploads.
+    let own = json!({"manifest": hex0x(&l.m.to_bytes()), "report": hex0x(&borsh::to_vec(&sign(&l.m)).expect("ok"))});
+    for body in [
+        own,
+        json!({"manifest": hex0x(&l.m.to_bytes()), "catalog": 0}),
+    ] {
+        let (s, v) = send(
+            up.clone(),
+            Request::post("/v1/bulk/manifests")
+                .body(Body::from(body.to_string()))
+                .expect("ok"),
+        )
+        .await;
+        assert_eq!(s, StatusCode::GONE);
+        assert_eq!(v["learned"]["number"], json!(0));
+    }
+    assert!(is_gone(&w.post_in(&l.m, 0).await.expect_err("removed")));
+    let (s, _) = send(
+        up.clone(),
+        Request::put(format!("/v1/bulk/{LP}/{LD}/shards/{}", l.m.shards[0].root))
+            .body(Body::from(l.files[0].clone()))
+            .expect("ok"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::GONE);
+    // The storage node's own fetches and the peer routes by root.
+    let r = sign(&l.m);
+    w.post(&l.m, &r)
+        .await
+        .expect("its own fetch of a deal's manifest");
+    w.store
+        .put_shard(LP, LD, &l.m.shards[0].root, l.files[0].clone())
+        .await
+        .expect("its own fetch of a deal's shard");
+    let (s, _) = send(
+        peer.clone(),
+        get(format!("/v1/bulk/manifests/{}", l.m.header.root())),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, _) = send(
+        peer.clone(),
+        get(format!("/v1/bulk/shards/{}", l.m.shards[0].root)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    // The erase pass reads catalogs only: nothing recorded.
+    w.store.erase_pass().await.expect("pass");
+    assert!(w.store.erase_json(LP, LD).is_none());
+    l.clean();
+}
+
+/// A restart keeps a learned removal (loaded before any route serves); a
+/// stray temporary file is no record.
+#[tokio::test]
+async fn cat_3_learn_a_restart_keeps_it() {
+    let l = learning().await;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(l.sto.learn(&body).await, Learn::Kept(0));
+    let dir = l.sto.dir.join("learned").join(LP);
+    assert!(dir.join(format!("{LD}.bin")).exists());
+    std::fs::write(dir.join(format!("{LD}.tmp")), b"cut short").expect("ok");
+    let again = l.sto.reopen().expect("starts");
+    assert!(again.learned_removal(LP, LD).expect("ok").is_some());
+    let e = again
+        .rows(LP, LD, &parse_rows_query(Some("from=0&to=3")).expect("q"))
+        .await
+        .expect_err("removed");
+    assert!(is_gone(&e));
+    l.clean();
+}
+
+/// Review CAT-LEARN-R2 2: a damaged learned record, a record at another
+/// dataset's path, a stray file beside the publishers' folders and a file
+/// that is no `.bin` never stop the start, whatever the mode: a bad record
+/// moves to `learned/<publisher>/damaged/` and the good ones load.
+#[tokio::test]
+async fn cat_3_learn_a_damaged_record_is_set_aside_never_stopping_the_start() {
+    let l = learning().await;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(l.sto.learn(&body).await, Learn::Kept(0));
+    let top = l.sto.dir.join("learned");
+    let dir = top.join(LP);
+    std::fs::write(dir.join("synthetic.junk.bin"), b"junk").expect("ok");
+    std::fs::copy(
+        dir.join(format!("{LD}.bin")),
+        dir.join("synthetic.copy.bin"),
+    )
+    .expect("ok");
+    std::fs::write(top.join("stray.bin"), b"not a folder").expect("ok");
+    std::fs::write(dir.join("notes.txt"), b"not a record").expect("ok");
+    for mode in [RemovalsMode::Off, RemovalsMode::On] {
+        let s = l
+            .sto
+            .reopen()
+            .expect("a learned record never stops the start");
+        let s = s.with_removals(mode);
+        assert_eq!(s.learned_count(), 1, "{mode:?}: the good record loads");
+        assert_eq!(
+            s.learned_removal(LP, LD).expect("ok").is_some(),
+            mode == RemovalsMode::On
+        );
+    }
+    let damaged = dir.join("damaged");
+    assert!(damaged.join("synthetic.junk.bin").exists());
+    assert!(damaged.join("synthetic.copy.bin").exists());
+    assert!(!dir.join("synthetic.junk.bin").exists());
+    assert!(top.join("stray.bin").exists() && dir.join("notes.txt").exists());
+    l.clean();
+}
+
+/// Review CAT-LEARN-R2 3: records are written outside the state's lock; a
+/// write that fails keeps the removal in memory (fail closed) and is written
+/// at the next recheck; `checked` moves in memory only; and a write that
+/// fails never stops a drop: the dataset serves again, and the file left
+/// behind is read at start and dropped again.
+#[tokio::test]
+async fn cat_3_learn_a_write_failure_never_stops_a_drop_or_a_removal() {
+    let l = learning().await;
+    let w = &l.sto;
+    let file = w.dir.join("learned").join(LP).join(format!("{LD}.bin"));
+    let fault = |on: bool| w.store.learn_fault.store(on, Ordering::Relaxed);
+    fault(true);
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    assert!(!file.exists());
+    assert!(is_gone(
+        &w.rows("from=0&to=3").await.expect_err("kept in memory")
+    ));
+    assert_eq!(w.recheck().await.expect("read").0.kept, 1);
+    fault(false);
+    w.recheck().await.expect("read");
+    assert!(file.exists(), "written at the next recheck");
+    let bytes = std::fs::read(&file).expect("ok");
+    w.node.at(200, T0 + 100);
+    w.recheck().await.expect("read");
+    assert_eq!(
+        std::fs::read(&file).expect("ok"),
+        bytes,
+        "not written for `checked`"
+    );
+    let (_, v) = w.store.learned_removal(LP, LD).expect("ok").expect("kept");
+    assert_eq!(v["checked_at"]["number"], json!(200));
+    fault(true);
+    w.node.withdraw(&l.r0);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!((re.withdrawn, dropped), (1, 1));
+    w.rows("from=0&to=3").await.expect("served again");
+    assert!(file.exists(), "the move failed");
+    fault(false);
+    let again = Arc::new(w.reopen().expect("starts"));
+    assert_eq!(again.learned_count(), 1, "read again at start");
+    let mut pass = again.learn_pass_start().await.expect("pass");
+    again.learn_recheck(&mut pass).await.expect("read");
+    assert_eq!(again.learn_finish(&mut pass), 1, "and dropped again");
+    assert!(!file.exists());
+    again
+        .rows(LP, LD, &parse_rows_query(Some("from=0&to=3")).expect("q"))
+        .await
+        .expect("served");
+    l.clean();
+}
+
+/// Review CAT-LEARN-R2 4: every kept proof is read again each pass, each
+/// key's first included, and goes only on its own withdrawal: a first that
+/// goes leaves the newest; a newest that goes leaves the older proof that
+/// holds (served as removed, asked again).
+#[tokio::test]
+async fn cat_3_learn_each_proof_is_read_again_and_goes_only_on_its_own_withdrawal() {
+    for gone in ["first", "newest"] {
+        let l = learning().await;
+        let w = &l.sto;
+        let (_, _, body0) = leaf_get(&l.cat, LP, LD).await;
+        assert_eq!(w.learn(&body0).await, Learn::Kept(0));
+        let c1 = catalog_of(
+            Some(&l.c0),
+            T0 + 20,
+            vec![
+                CatalogLeaf::of(&l.m.header).tombstone().expect("t"),
+                other_leaf("synthetic.other"),
+            ],
+        );
+        let r1 = sign_catalog(&c1);
+        w.node.anchor(&r1);
+        assert_eq!(w.learn(&leaf_answer_of(&c1, &r1, LD)).await, Learn::Kept(1));
+        assert_eq!(w.learned().expect("kept").first().number(), 0);
+        w.node.withdraw(if gone == "first" { &l.r0 } else { &r1 });
+        let mut pass = w.store.learn_pass_start().await.expect("pass");
+        let re = w.store.learn_recheck(&mut pass).await.expect("read");
+        let reask = pass.reask();
+        assert_eq!(w.store.learn_finish(&mut pass), 0, "{gone}");
+        drop(pass);
+        let r = w.learned().expect("kept");
+        if gone == "first" {
+            assert_eq!((re.firsts_gone, re.moved), (1, 0));
+            assert_eq!((r.newest.number(), r.first().number()), (1, 1));
+            assert!(reask.is_empty());
+        } else {
+            assert_eq!((re.firsts_gone, re.moved), (0, 1));
+            assert_eq!((r.newest.number(), r.first().number()), (0, 0));
+            assert_eq!(reask, vec![(LP.to_string(), LD.to_string())]);
+        }
+        assert!(r.firsts.is_empty());
+        assert!(is_gone(&w.rows("from=0&to=3").await.expect_err("removed")));
+        l.clean();
+    }
+}
+
+/// Review CAT-LEARN-R2 4: when the book withdraws the only kept proof, the
+/// dataset stays removed while the pass asks about it again; a proof that
+/// holds (here the publisher's replacement catalog 0, with the withdrawn
+/// one's number) replaces it, the withdrawn record is kept aside, and the
+/// dataset never served in between. Without one, the end of the pass drops it.
+#[tokio::test]
+async fn cat_3_learn_a_withdrawn_newest_is_asked_again_before_serving_resumes() {
+    let l = learning().await;
+    let w = &l.sto;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    // The publisher's replacement under its next key, anchored.
+    let (cb, _) = tombstone_catalog(&l.m, T0 + 15);
+    let rb = cat::sign(&SECRET2, &cb.header).expect("ok");
+    w.node.anchor_by(&rb, &SECRET2);
+    w.node.withdraw(&l.r0);
+    let mut pass = w.store.learn_pass_start().await.expect("pass");
+    let re = w.store.learn_recheck(&mut pass).await.expect("read");
+    assert_eq!(re.withdrawn, 1);
+    assert_eq!(pass.reask(), vec![(LP.to_string(), LD.to_string())]);
+    assert!(is_gone(
+        &w.rows("from=0&to=3").await.expect_err("still removed")
+    ));
+    assert_eq!(
+        w.store
+            .learn_from(&mut pass, LP, LD, &body, "test")
+            .await
+            .expect("read"),
+        Learn::Refused(
+            "its catalog does not read anchored (fact_not_accepted_on_this_report)".into()
+        ),
+        "the withdrawn proof again"
+    );
+    assert_eq!(
+        w.store
+            .learn_from(&mut pass, LP, LD, &leaf_answer_of(&cb, &rb, LD), "test")
+            .await
+            .expect("read"),
+        Learn::Kept(0)
+    );
+    assert_eq!(w.store.learn_finish(&mut pass), 0);
+    drop(pass);
+    let r = w.learned().expect("kept");
+    assert_eq!(r.newest.header.root(), cb.header.root());
+    assert_eq!(r.first().key(), rb.payload.key);
+    assert!(is_gone(&w.rows("from=0&to=3").await.expect_err("removed")));
+    assert!(w
+        .dir
+        .join("learned")
+        .join(LP)
+        .join("withdrawn")
+        .read_dir()
+        .expect("kept aside")
+        .next()
+        .is_some());
+    // Withdrawn too, and nobody gives another: dropped at the pass's end.
+    w.node.withdraw(&rb);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!((re.withdrawn, dropped), (1, 1));
+    w.rows("from=0&to=3").await.expect("served again");
+    l.clean();
+}
+
+/// Review CAT-LEARN-R2 6: a catalog with the kept proof's number and another
+/// root is not kept (one number, two catalogs: the kept one stays).
+#[tokio::test]
+async fn cat_3_learn_another_catalog_with_the_kept_number_is_not_kept() {
+    let l = learning().await;
+    let w = &l.sto;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    let (cb, rb) = tombstone_catalog(&l.m, T0 + 15);
+    w.node.anchor(&rb);
+    assert_eq!(
+        w.learn(&leaf_answer_of(&cb, &rb, LD)).await,
+        Learn::Refused("another catalog with the kept one's number".into())
+    );
+    assert_eq!(
+        w.learned().expect("kept").newest.header.root(),
+        l.c0.header.root()
+    );
+    l.clean();
+}
+
+/// Each forgery changes nothing: another dataset's or another publisher's
+/// tombstone, a live leaf, a bad path, a bad signature, an unanchored report,
+/// a `prev` that is not the held version 1's root, an answer that is no JSON.
+#[tokio::test]
+async fn cat_3_learn_each_forgery_changes_nothing() {
+    let l = learning().await;
+    let w = &l.sto;
+    let gone_leaf = |publisher: SourceId, dataset: &str, prev: Hash32| CatalogLeaf {
+        publisher,
+        dataset: dataset.into(),
+        version: 2,
+        prev,
+        root: Hash32::ZERO,
+    };
+    let anchored = |c: &Catalog| {
+        let r = cat::sign(&SECRET, &c.header).expect("ok");
+        w.node.anchor(&r);
+        r
+    };
+    let mroot = l.m.header.root();
+    // (what, the answer, the reason it is refused for)
+    let mut forged: Vec<(&str, Vec<u8>, &str)> = Vec::new();
+    // Another dataset's tombstone, anchored.
+    let ca = catalog_of(
+        None,
+        T0 + 30,
+        vec![gone_leaf(publisher(), "synthetic.gone", Hash32([5; 32]))],
+    );
+    let ra = anchored(&ca);
+    forged.push((
+        "another dataset",
+        leaf_answer_of(&ca, &ra, "synthetic.gone"),
+        "the leaf names another dataset",
+    ));
+    // Another publisher's tombstone of this dataset id, anchored.
+    let other = SourceId("other.publisher".into());
+    let cb = Catalog::build(
+        other.clone(),
+        None,
+        T0 + 30,
+        vec![gone_leaf(other, LD, mroot)],
+    )
+    .expect("catalog");
+    let rb = anchored(&cb);
+    forged.push((
+        "another publisher",
+        leaf_answer_of(&cb, &rb, LD),
+        "another publisher's",
+    ));
+    // A live leaf, anchored.
+    let (cl, rl) = live_catalog(&l.m, T0 + 30);
+    w.node.anchor(&rl);
+    forged.push(("a live leaf", leaf_answer_of(&cl, &rl, LD), "live"));
+    // The real tombstone with a bad path, a bad index, a bad signature.
+    let real = l.c0.leaf_proof(l.c0.find(LD).expect("listed")).expect("p");
+    let mut bad = real.clone();
+    bad.proof.siblings[0].0[0] ^= 1;
+    forged.push((
+        "a bad path",
+        leaf_body_of(&l.c0.header, &bad, &l.r0),
+        "catalog proof",
+    ));
+    let mut bad = real.clone();
+    bad.proof.index += 1;
+    forged.push((
+        "a bad index",
+        leaf_body_of(&l.c0.header, &bad, &l.r0),
+        "catalog proof",
+    ));
+    let mut sig = l.r0.clone();
+    sig.signature[5] ^= 1;
+    forged.push((
+        "a bad signature",
+        leaf_body_of(&l.c0.header, &real, &sig),
+        "the report:",
+    ));
+    // A tombstone whose report the book does not hold.
+    let (cu, ru) = tombstone_catalog(&l.m, T0 + 40);
+    forged.push((
+        "an unanchored report",
+        leaf_answer_of(&cu, &ru, LD),
+        "does not read anchored",
+    ));
+    // A tombstone at version 2 naming another version 1 than the held one.
+    let cf = catalog_of(
+        None,
+        T0 + 50,
+        vec![gone_leaf(publisher(), LD, Hash32([7; 32]))],
+    );
+    let rf = anchored(&cf);
+    forged.push(("a fork", leaf_answer_of(&cf, &rf, LD), "a fork"));
+    // Tombstones at version 1 or with no previous root, in hand-made
+    // catalogs (`Catalog::build` refuses them), anchored.
+    for (version, what) in [
+        (1, "a tombstone at version 1"),
+        (2, "a tombstone with no previous root"),
+    ] {
+        let leaves = vec![CatalogLeaf {
+            publisher: publisher(),
+            dataset: LD.into(),
+            version,
+            prev: Hash32::ZERO,
+            root: Hash32::ZERO,
+        }];
+        let c = Catalog {
+            header: CatalogHeader {
+                format: cat::FORMAT,
+                publisher: publisher(),
+                number: 0,
+                prev: Hash32::ZERO,
+                created_unix: T0 + 60 + u64::from(version),
+                leaf_count: 1,
+                leaves_root: cat::leaves_tree(&leaves).root(),
+            },
+            leaves,
+        };
+        let r = anchored(&c);
+        forged.push((what, leaf_answer_of(&c, &r, LD), "a tombstone at version 1"));
+    }
+    forged.push(("no JSON", b"<html>".to_vec(), "not JSON"));
+    for (what, body, why) in &forged {
+        match w.learn(body).await {
+            Learn::Refused(r) => assert!(r.contains(why), "{what}: refused for {r:?}"),
+            Learn::Live(n) => assert_eq!((*why, n), ("live", 0), "{what}"),
+            got => panic!("{what}: {got:?}"),
+        }
+        assert!(w.learned().is_none(), "{what}: kept");
+        assert_eq!(w.store.learned_count(), 0, "{what}");
+        w.rows("from=0&to=3").await.expect(what);
+    }
+    assert!(!w
+        .dir
+        .join("learned")
+        .join(LP)
+        .join(format!("{LD}.bin"))
+        .exists());
+    l.clean();
+}
+
+/// The book's final word on the kept proof's catalog drops it (moved aside)
+/// and the dataset serves again; the same answer is not kept again.
+#[tokio::test]
+async fn cat_3_learn_a_withdrawn_catalog_drops_it_and_serving_resumes() {
+    let l = learning().await;
+    let w = &l.sto;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    assert!(is_gone(&w.rows("from=0&to=3").await.expect_err("removed")));
+    w.node.withdraw(&l.r0);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!((re.kept, re.withdrawn, dropped), (0, 1, 1));
+    w.rows("from=0&to=3").await.expect("served again");
+    assert!(w.learned().is_none());
+    assert!(w
+        .dir
+        .join("learned")
+        .join(LP)
+        .join("withdrawn")
+        .read_dir()
+        .expect("moved aside")
+        .next()
+        .is_some());
+    assert!(matches!(w.learn(&body).await, Learn::Refused(_)));
+    let (s, _, _) = leaf_get(w, LP, LD).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    // Withdrawn for good: a restart does not bring it back.
+    assert!(w
+        .reopen()
+        .expect("starts")
+        .learned_removal(LP, LD)
+        .expect("ok")
+        .is_none());
+    l.clean();
+}
+
+/// A suspended key, an open dispute, a retired key and a chain that cannot
+/// be read keep the removal (review CAT-LEARN-R1 M2: only the book's final
+/// word drops it).
+#[tokio::test]
+async fn cat_3_learn_a_suspension_a_dispute_a_retired_key_or_a_failed_read_keeps_it() {
+    let l = learning().await;
+    let w = &l.sto;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body).await, Learn::Kept(0));
+    w.node.suspend(&l.r0, true);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!((re.kept, re.open, dropped), (1, 1, 0));
+    assert!(is_gone(&w.rows("from=0&to=3").await.expect_err("kept")));
+    w.node.suspend(&l.r0, false);
+    w.node.life(&l.r0, 2);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!(
+        (re.kept, dropped),
+        (1, 0),
+        "a retired key's past catalog stays"
+    );
+    w.node.life(&l.r0, 1);
+    w.node.dispute(&l.r0);
+    let (re, dropped) = w.recheck().await.expect("read");
+    assert_eq!((re.kept, re.open, dropped), (1, 1, 0));
+    w.node.anchor(&l.r0);
+    w.node.0.lock().expect("ok").down = true;
+    assert!(w.recheck().await.is_err());
+    w.node.0.lock().expect("ok").down = false;
+    assert!(w.learned().is_some());
+    assert!(is_gone(&w.rows("from=0&to=3").await.expect_err("kept")));
+    l.clean();
+}
+
+/// Held versions at or after the tombstone's do not stop it (the publisher's
+/// fault, logged; review CAT-LEARN-R1 M1), and a node that does not hold the
+/// version before it takes it too (dataset ids are final, item 2).
+#[tokio::test]
+async fn cat_3_learn_held_versions_at_or_after_the_tombstone_do_not_stop_it() {
+    let cat = world();
+    let (m1, m2) = own_two(&cat).await;
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m1.header).tombstone().expect("t")],
+    );
+    let r0 = sign_catalog(&c0);
+    cat.node.anchor(&r0);
+    cat.post_catalog(&c0, &r0)
+        .await
+        .expect("taken over version 2");
+    let sto = world();
+    own_two(&sto).await;
+    sto.node.anchor(&r0);
+    let (_, _, body) = leaf_get(&cat, LP, LD).await;
+    assert_eq!(sto.learn(&body).await, Learn::Kept(0));
+    assert!(is_gone(
+        &sto.rows("from=0&to=3").await.expect_err("removed")
+    ));
+    // Version 3 removed while this node holds version 1 only.
+    let one = world();
+    let r1 = sign(&m1);
+    one.node.anchor(&r1);
+    one.post(&m1, &r1).await.expect("v1");
+    let c = catalog_of(
+        None,
+        T0 + 20,
+        vec![CatalogLeaf::of(&m2.header).tombstone().expect("t")],
+    );
+    let r = sign_catalog(&c);
+    one.node.anchor(&r);
+    assert_eq!(one.learn(&leaf_answer_of(&c, &r, LD)).await, Learn::Kept(0));
+    for w in [&cat, &sto, &one] {
+        let _ = std::fs::remove_dir_all(&w.dir);
+    }
+}
+
+/// `first` stays while `newest` moves to later catalogs under the same key
+/// (review CAT-LEARN-R1 M3); an older proof changes nothing; a newer one
+/// under another key starts that key's `first`, and keys taking turns (A, B,
+/// A) never restart it: slice 1's rule, the first catalog under the newest
+/// key (review CAT-LEARN-R2 4).
+#[tokio::test]
+async fn cat_3_learn_first_stays_while_newest_moves() {
+    let l = learning().await;
+    let w = &l.sto;
+    let (_, _, body0) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(w.learn(&body0).await, Learn::Kept(0));
+    let r = w.learned().expect("kept");
+    let f = r.first();
+    assert_eq!((f.number(), f.seen_at, r.newest.number()), (0, T0, 0));
+    assert_eq!(f.key(), l.r0.payload.key);
+    // Later, catalog 1 keeps the tombstone.
+    w.node.at(200, T0 + 1_000);
+    let c1 = catalog_of(
+        Some(&l.c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&l.m.header).tombstone().expect("t"),
+            other_leaf("synthetic.more"),
+            other_leaf("synthetic.other"),
+        ],
+    );
+    let r1 = sign_catalog(&c1);
+    l.cat.node.anchor(&r1);
+    l.cat.post_catalog(&c1, &r1).await.expect("c1");
+    w.node.anchor(&r1);
+    let (_, v, body1) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(v["number"], json!(1));
+    assert_eq!(w.learn(&body1).await, Learn::Kept(1));
+    let r = w.learned().expect("kept");
+    let f = r.first();
+    assert_eq!((f.number(), f.seen_at, r.newest.number()), (0, T0, 1));
+    assert_eq!(r.checked.0, 200);
+    assert_eq!(w.learn(&body0).await, Learn::Older(0));
+    assert_eq!(w.learn(&body1).await, Learn::Same(1));
+    assert_eq!(w.learned().expect("kept").newest.number(), 1);
+    // Catalog 2 under the publisher's next key B: B's `first` starts.
+    w.node.at(300, T0 + 2_000);
+    let c2 = catalog_of(Some(&c1), T0 + 30, c1.leaves.clone());
+    let r2 = cat::sign(&SECRET2, &c2.header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    assert_eq!(w.learn(&leaf_answer_of(&c2, &r2, LD)).await, Learn::Kept(2));
+    let r = w.learned().expect("kept");
+    assert_eq!((r.first().number(), r.first().seen_at), (2, T0 + 2_000));
+    assert_eq!(r.first().key(), r2.payload.key);
+    // Catalog 3 under key A again: A's first (catalog 0) is the first again.
+    w.node.at(400, T0 + 3_000);
+    let c3 = catalog_of(Some(&c2), T0 + 40, c1.leaves.clone());
+    let r3 = sign_catalog(&c3);
+    w.node.anchor(&r3);
+    assert_eq!(w.learn(&leaf_answer_of(&c3, &r3, LD)).await, Learn::Kept(3));
+    let r = w.learned().expect("kept");
+    assert_eq!((r.first().number(), r.first().seen_at), (0, T0));
+    assert_eq!(
+        r.firsts.iter().map(|p| p.number()).collect::<Vec<_>>(),
+        vec![0, 2],
+        "each key's first, nothing else"
+    );
+    // A restart keeps every first with its report.
+    let again = w.reopen().expect("starts");
+    let back = again
+        .learned_record(&(LP.to_string(), LD.to_string()))
+        .expect("lock")
+        .expect("kept");
+    assert_eq!((back.first().number(), back.newest.number()), (0, 3));
+    l.clean();
+}
+
+/// `log` keeps records and logs, nothing served changes; `off` uses no
+/// record (rows serve, the route has no learned leaf); `on` again stops rows.
+#[tokio::test]
+async fn cat_3_learn_log_and_off_modes() {
+    let l = learning().await;
+    let Learning { cat, sto, c0, .. } = l;
+    let sto = sto.with_mode(RemovalsMode::Log);
+    let (_, _, body) = leaf_get(&cat, LP, LD).await;
+    assert_eq!(sto.learn(&body).await, Learn::Kept(0));
+    assert_eq!(sto.store.learned_count(), 1);
+    sto.rows("from=0&to=3").await.expect("log: served");
+    assert!(sto.store.learned_removal(LP, LD).expect("ok").is_none());
+    let list = sto
+        .store
+        .list(&parse_list_query(None).expect("q"))
+        .expect("ok");
+    assert!(list.to_string().contains(LD), "log: listed");
+    let (s, v, _) = leaf_get(&sto, LP, LD).await;
+    assert_eq!((s, v["from"].clone()), (StatusCode::OK, json!("learned")));
+    let sto = sto.with_mode(RemovalsMode::Off);
+    assert_eq!(sto.store.learned_count(), 1, "loaded, not used");
+    sto.rows("from=0&to=3").await.expect("off: served");
+    let (s, _, _) = leaf_get(&sto, LP, LD).await;
+    assert_eq!(s, StatusCode::NOT_FOUND);
+    let sto = sto.with_mode(RemovalsMode::On);
+    let e = sto.rows("from=0&to=3").await.expect_err("on");
+    assert!(is_gone(&e));
+    assert_eq!(e.status, StatusCode::GONE);
+    assert_eq!(c0.header.number, 0);
+    let _ = std::fs::remove_dir_all(&cat.dir);
+    let _ = std::fs::remove_dir_all(&sto.dir);
 }

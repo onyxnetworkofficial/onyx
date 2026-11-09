@@ -1926,3 +1926,500 @@ fn passes_are_spaced_at_random_around_the_interval() {
     let ys: Vec<Duration> = (0..8).map(|_| y.around(every)).collect();
     assert_ne!(xs, ys);
 }
+
+// --- Storage nodes learn of a removal (ADR-0059 amendment 4 item 5a slice 2a; review CAT-LEARN-R1)
+
+use crate::bulk_serve::tests::{
+    leaf_answer_of, live_catalog, live_then_removed, removed_in_catalog, tombstone_catalog,
+};
+use crate::bulk_serve::RemovalsMode;
+
+/// How a URL answers a leaf request.
+#[derive(Clone)]
+enum LeafPeer {
+    Down,
+    /// Through a real store's peer routes.
+    Store(Arc<BulkStore>),
+    /// A fixed answer.
+    Says(u16, Vec<u8>),
+}
+
+struct Leaves {
+    peers: BTreeMap<String, LeafPeer>,
+    calls: Mutex<Vec<String>>,
+}
+
+impl Leaves {
+    fn calls(&self) -> Vec<String> {
+        self.calls.lock().expect("lock").clone()
+    }
+}
+
+impl HttpGet for Leaves {
+    fn get<'a>(
+        &'a self,
+        url: &'a str,
+        max: usize,
+    ) -> BoxFuture<'a, Result<(u16, Vec<u8>), String>> {
+        Box::pin(async move {
+            use http_body_util::BodyExt as _;
+            use tower::ServiceExt as _;
+            if let Ok(mut c) = self.calls.lock() {
+                c.push(url.to_string());
+            }
+            assert_eq!(max, LEARN_ANSWER_BYTES, "answers are capped at 64 KiB");
+            let base = url.split("/v1/").next().unwrap_or_default();
+            let path = &url[base.len()..];
+            match self.peers.get(base).cloned().unwrap_or(LeafPeer::Down) {
+                LeafPeer::Down => Err("connection refused".into()),
+                LeafPeer::Says(s, b) => Ok((s, b)),
+                LeafPeer::Store(st) => {
+                    let req = axum::http::Request::get(path)
+                        .body(axum::body::Body::empty())
+                        .map_err(|e| e.to_string())?;
+                    let r = crate::bulk_serve::peer_routes(st)
+                        .oneshot(req)
+                        .await
+                        .map_err(|e| e.to_string())?;
+                    let status = r.status().as_u16();
+                    let b = r
+                        .into_body()
+                        .collect()
+                        .await
+                        .map_err(|e| e.to_string())?
+                        .to_bytes();
+                    Ok((status, b.to_vec()))
+                }
+            }
+        })
+    }
+}
+
+fn leaves(peers: &[(&str, LeafPeer)]) -> Arc<Leaves> {
+    Arc::new(Leaves {
+        peers: peers
+            .iter()
+            .map(|(u, p)| (u.to_string(), p.clone()))
+            .collect(),
+        calls: Mutex::new(Vec::new()),
+    })
+}
+
+const LEAF_URL: &str = "/v1/bulk/catalogs/example.publisher/leaf/synthetic.metrics";
+
+/// `setup(5)`'s deal, the publisher's node holding catalog 0 that removes
+/// the dataset, and node 0's own store (`own`, in `mode`) whose book anchors
+/// the deal's manifest and that catalog.
+async fn removed_deal(mode: RemovalsMode) -> (Setup, World, SignedReport) {
+    let s = setup(5).await;
+    let own = world().with_mode(mode);
+    own.node.anchor(&sign(&s.manifest));
+    let (_, r0) = removed_in_catalog(&s.publisher, &s.manifest).await;
+    own.node.anchor(&r0);
+    (s, own, r0)
+}
+
+/// Node 0 over `own`: its ticks fetch from the publisher; it learns over
+/// `lv` from `catalog_nodes` first.
+fn learner(
+    s: &Setup,
+    own: &World,
+    catalog_nodes: &[&str],
+    lv: Arc<Leaves>,
+) -> (StorageNode, Arc<Sent>) {
+    let tx = Arc::new(Sent::default());
+    let node = StorageNode::new(
+        reader(s),
+        tx.clone(),
+        net(s, &[("http://publisher", Peer::Good)]),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: s.nodes[0],
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 8,
+        },
+    )
+    .with_learn(catalog_nodes.iter().map(|u| u.to_string()).collect(), lv);
+    (node, tx)
+}
+
+fn clean(s: &Setup, own: &World) {
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review CAT-LEARN-R1 H1: a deal's source may be dead or hostile and its
+/// peers hold no catalogs, so the configured catalog node is asked first:
+/// the node learns the removal from it (one call: the proof holds), rows
+/// stop with 410, and its storage paths (manifest, shards, challenges) are
+/// untouched. Without a catalog node, `never_learned` counts the dataset.
+#[tokio::test]
+async fn cat_3_learn_a_storage_node_learns_from_a_catalog_node_when_the_deals_source_is_dead() {
+    let (s, own, _) = removed_deal(RemovalsMode::On).await;
+    let lv = leaves(&[
+        ("http://publisher", LeafPeer::Down),
+        ("http://catalog", LeafPeer::Store(s.publisher.store.clone())),
+    ]);
+    let (node, _) = learner(&s, &own, &["http://catalog"], lv.clone());
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!(
+        (r.block, r.asked),
+        (100, 0),
+        "before a tick's snapshot: the recheck only"
+    );
+    let t = node.tick().await.expect("tick");
+    assert!(t.wanted > 0 && t.held == t.wanted);
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.asked, r.learned, r.kept, r.never_learned), (1, 1, 1, 0));
+    assert_eq!(lv.calls(), vec![format!("http://catalog{LEAF_URL}")]);
+    assert!(own
+        .store
+        .learned_removal("example.publisher", "synthetic.metrics")
+        .expect("ok")
+        .is_some());
+    let e = own
+        .store
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=0&to=3")).expect("q"),
+        )
+        .await
+        .expect_err("removed");
+    assert_eq!(e.code, "bulk_dataset_removed");
+    let v = node.status_json();
+    assert_eq!(v["removals"]["kept"], json!(1));
+    assert_eq!(v["removals"]["never_learned"], json!(0));
+    // The storage paths: the next tick still holds every placed shard, and
+    // they serve by root.
+    let t = node.tick().await.expect("tick");
+    assert_eq!(t.held, t.wanted);
+    for e in &s.manifest.shards {
+        if own.store.holds_shard(&e.root) {
+            assert!(own.store.shard_file(&e.root).await.is_some());
+        }
+    }
+    // Another node with no catalog node and a dead source learns nothing,
+    // and says so.
+    let other = world();
+    other.node.anchor(&sign(&s.manifest));
+    let lv2 = leaves(&[("http://publisher", LeafPeer::Down)]);
+    let (n2, _) = learner(&s, &other, &[], lv2.clone());
+    n2.tick().await.expect("tick");
+    let r = n2.learn_pass().await.expect("pass");
+    assert_eq!((r.learned, r.kept, r.never_learned), (0, 0, 1));
+    assert_eq!(lv2.calls()[0], format!("http://publisher{LEAF_URL}"));
+    assert_eq!(n2.status_json()["removals"]["never_learned"], json!(1));
+    let _ = std::fs::remove_dir_all(&other.dir);
+    clean(&s, &own);
+}
+
+/// A 404, a live leaf of an anchored catalog and an unanchored tombstone
+/// from the catalog nodes do not end the search: the deal's source, asked
+/// next, gives the proof that holds.
+#[tokio::test]
+async fn cat_3_learn_a_lying_source_does_not_stop_the_search() {
+    let (s, own, _) = removed_deal(RemovalsMode::On).await;
+    let (cl, rl) = live_catalog(&s.manifest, T0_LEARN);
+    own.node.anchor(&rl);
+    let (ct, rt) = tombstone_catalog(&s.manifest, T0_LEARN + 1);
+    let unanchored = leaf_answer_of(&ct, &rt, "synthetic.metrics");
+    let lv = leaves(&[
+        ("http://liar-404", LeafPeer::Says(404, b"{}".to_vec())),
+        (
+            "http://liar-live",
+            LeafPeer::Says(200, leaf_answer_of(&cl, &rl, "synthetic.metrics")),
+        ),
+        ("http://liar-unanchored", LeafPeer::Says(200, unanchored)),
+        (
+            "http://publisher",
+            LeafPeer::Store(s.publisher.store.clone()),
+        ),
+    ]);
+    let (node, _) = learner(
+        &s,
+        &own,
+        &[
+            "http://liar-404",
+            "http://liar-live",
+            "http://liar-unanchored",
+        ],
+        lv.clone(),
+    );
+    node.tick().await.expect("tick");
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.learned, r.kept), (1, 1));
+    assert_eq!(
+        lv.calls(),
+        [
+            "http://liar-404",
+            "http://liar-live",
+            "http://liar-unanchored",
+            "http://publisher"
+        ]
+        .iter()
+        .map(|u| format!("{u}{LEAF_URL}"))
+        .collect::<Vec<_>>()
+    );
+    clean(&s, &own);
+}
+
+/// The learn task reads only (the book at one finalized block, peers' leaf
+/// answers): learning, keeping and dropping send no transaction, and with
+/// `ONYX_STORAGE_REMOVALS=off` it asks nobody.
+#[tokio::test]
+async fn cat_3_learn_the_learn_task_never_sends_a_transaction() {
+    let (s, own, r0) = removed_deal(RemovalsMode::On).await;
+    let lv = leaves(&[("http://catalog", LeafPeer::Store(s.publisher.store.clone()))]);
+    let (node, tx) = learner(&s, &own, &["http://catalog"], lv.clone());
+    node.tick().await.expect("tick");
+    let sent = tx.0.lock().expect("lock").len();
+    assert_eq!(node.learn_pass().await.expect("pass").learned, 1);
+    assert_eq!(node.learn_pass().await.expect("pass").kept, 1);
+    own.node.withdraw(&r0);
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.dropped, r.kept), (1, 0));
+    assert_eq!(tx.0.lock().expect("lock").len(), sent, "no transaction");
+    // Off: nobody is asked.
+    let off = world().with_mode(RemovalsMode::Off);
+    off.node.anchor(&sign(&s.manifest));
+    let lv2 = leaves(&[("http://catalog", LeafPeer::Store(s.publisher.store.clone()))]);
+    let (n2, tx2) = learner(&s, &off, &["http://catalog"], lv2.clone());
+    n2.tick().await.expect("tick");
+    let before = tx2.0.lock().expect("lock").len();
+    assert_eq!(n2.learn_pass().await.expect("pass"), LearnReport::default());
+    assert!(lv2.calls().is_empty());
+    assert_eq!(tx2.0.lock().expect("lock").len(), before);
+    let _ = std::fs::remove_dir_all(&off.dir);
+    clean(&s, &own);
+}
+
+const T0_LEARN: u64 = 1_800_000_100;
+
+/// A pass of `own`'s store learning the publisher's leaf of the dataset (as
+/// a pass would), outside any node.
+async fn learn_directly(s: &Setup, own: &World) {
+    let leaf = s
+        .publisher
+        .store
+        .leaf_answer("example.publisher", "synthetic.metrics")
+        .expect("leaf");
+    let body = serde_json::to_vec(&leaf).expect("json");
+    let mut pass = own.store.learn_pass_start().await.expect("pass");
+    let l = own
+        .store
+        .learn_from(
+            &mut pass,
+            "example.publisher",
+            "synthetic.metrics",
+            &body,
+            "test",
+        )
+        .await
+        .expect("read");
+    assert_eq!(l, crate::bulk_serve::Learn::Kept(0));
+}
+
+async fn rows_of(own: &World) -> Result<Value, crate::ApiError> {
+    own.store
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=0&to=3")).expect("q"),
+        )
+        .await
+}
+
+/// Review CAT-LEARN-R2 1: anyone may post an old anchored catalog of the
+/// publisher (here its catalog 0, the dataset still live) to a storage
+/// node's public catalog route. Learning goes on (a held catalog no longer
+/// skips the publisher), rows stop with 410 although `removed()` reads the
+/// old catalog as live, and the leaf route relays the newer learned proof,
+/// not the old live leaf.
+#[tokio::test]
+async fn cat_3_learn_an_old_catalog_handed_to_a_storage_node_does_not_stop_learning() {
+    use http_body_util::BodyExt as _;
+    use tower::ServiceExt as _;
+    let s = setup(5).await;
+    let ((c0, r0), (c1, r1)) = live_then_removed(&s.publisher, &s.manifest).await;
+    let own = world();
+    for r in [&sign(&s.manifest), &r0, &r1] {
+        own.node.anchor(r);
+    }
+    let lv = leaves(&[("http://catalog", LeafPeer::Store(s.publisher.store.clone()))]);
+    let (node, _) = learner(&s, &own, &["http://catalog"], lv.clone());
+    node.tick().await.expect("tick");
+    // The attack: catalog 0, through the node's public upload route.
+    let body = json!({
+        "catalog": hex0x(&borsh::to_vec(&c0).expect("ok")),
+        "report": hex0x(&borsh::to_vec(&r0).expect("ok")),
+    });
+    let r = crate::bulk_serve::upload_routes(own.store.clone())
+        .oneshot(
+            axum::http::Request::post("/v1/bulk/catalogs")
+                .body(axum::body::Body::from(body.to_string()))
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(
+        r.status(),
+        axum::http::StatusCode::CREATED,
+        "the old catalog is taken"
+    );
+    assert_eq!(
+        own.store
+            .removed("example.publisher", "synthetic.metrics")
+            .expect("ok"),
+        None
+    );
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.asked, r.learned, r.kept, r.never_learned), (1, 1, 1, 0));
+    assert_eq!(
+        rows_of(&own).await.expect_err("removed").code,
+        "bulk_dataset_removed"
+    );
+    let leaf = crate::bulk_serve::peer_routes(own.store.clone())
+        .oneshot(
+            axum::http::Request::get(LEAF_URL)
+                .body(axum::body::Body::empty())
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(leaf.status(), axum::http::StatusCode::OK);
+    let v: Value =
+        serde_json::from_slice(&leaf.into_body().collect().await.expect("ok").to_bytes())
+            .expect("json");
+    crate::openapi_check::check("GET", LEAF_URL, 200, &v);
+    assert_eq!(v["from"], json!("learned"));
+    assert_eq!(v["number"], json!(1));
+    assert_eq!(v["root"], json!(c1.header.root().to_string()));
+    assert_eq!(v["removed"], json!(true));
+    // A later pass still asks, and the removal stays.
+    assert_eq!(node.learn_pass().await.expect("pass").asked, 1);
+    assert!(own
+        .store
+        .learned_removal("example.publisher", "synthetic.metrics")
+        .expect("ok")
+        .is_some());
+    clean(&s, &own);
+}
+
+/// Review CAT-LEARN-R2 5: a pass reads the kept removals again before any
+/// tick has given it a snapshot (the book's withdrawal drops one, asked again
+/// of the catalog nodes only, in vain).
+#[tokio::test]
+async fn cat_3_learn_a_pass_rechecks_before_any_tick() {
+    let (s, own, r0) = removed_deal(RemovalsMode::On).await;
+    own.store
+        .accept_manifest(
+            &s.manifest.to_bytes(),
+            &borsh::to_vec(&sign(&s.manifest)).expect("ok"),
+        )
+        .await
+        .expect("held");
+    learn_directly(&s, &own).await;
+    assert_eq!(
+        rows_of(&own).await.expect_err("removed").code,
+        "bulk_dataset_removed"
+    );
+    let lv = leaves(&[("http://catalog", LeafPeer::Down)]);
+    let (node, _) = learner(&s, &own, &["http://catalog"], lv.clone());
+    own.node.withdraw(&r0);
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.reasked, r.asked, r.dropped, r.kept), (1, 1, 1, 0));
+    assert_eq!(lv.calls(), vec![format!("http://catalog{LEAF_URL}")]);
+    // Served again (this node holds no shard of it: not removed, missing).
+    assert_eq!(
+        rows_of(&own).await.expect_err("no shard here").code,
+        "bulk_shard_missing"
+    );
+    clean(&s, &own);
+}
+
+/// Review CAT-LEARN-R2 4: a removal whose kept proof the book withdraws is
+/// asked about again in the same pass, first; a proof that holds (the
+/// publisher's replacement under its next key) replaces it and rows never
+/// serve in between.
+#[tokio::test]
+async fn cat_3_learn_a_withdrawn_removal_is_asked_again_in_the_same_pass() {
+    let (s, own, r0) = removed_deal(RemovalsMode::On).await;
+    let next_key = [0x43; 32];
+    let (cb, _) = tombstone_catalog(&s.manifest, T0_LEARN + 5);
+    let rb = onyx_bulk::catalog::sign(&next_key, &cb.header).expect("ok");
+    let lv = leaves(&[("http://catalog", LeafPeer::Store(s.publisher.store.clone()))]);
+    let (node, _) = learner(&s, &own, &["http://catalog"], lv.clone());
+    node.tick().await.expect("tick");
+    assert_eq!(node.learn_pass().await.expect("pass").learned, 1);
+    // The book withdraws catalog 0 and records the replacement.
+    own.node.withdraw(&r0);
+    own.node.anchor_by(&rb, &next_key);
+    let lv2 = leaves(&[(
+        "http://catalog",
+        LeafPeer::Says(200, leaf_answer_of(&cb, &rb, "synthetic.metrics")),
+    )]);
+    let (node2, _) = learner(&s, &own, &["http://catalog"], lv2.clone());
+    node2.tick().await.expect("tick");
+    let r = node2.learn_pass().await.expect("pass");
+    assert_eq!((r.reasked, r.learned, r.dropped, r.kept), (1, 1, 0, 1));
+    assert_eq!(lv2.calls()[0], format!("http://catalog{LEAF_URL}"));
+    assert_eq!(
+        rows_of(&own).await.expect_err("still removed").code,
+        "bulk_dataset_removed"
+    );
+    clean(&s, &own);
+}
+
+/// Review CAT-LEARN-R2 6: with every source down, the URLs go in tiers: the
+/// catalog nodes, the deal's source, then its peers (the holders of its first
+/// shard now and last epoch).
+#[tokio::test]
+async fn cat_3_learn_the_peers_are_asked_after_the_catalog_nodes_and_the_source() {
+    let (s, own, _) = removed_deal(RemovalsMode::On).await;
+    let lv = leaves(&[]);
+    let (node, _) = learner(&s, &own, &["http://catalog"], lv.clone());
+    node.tick().await.expect("tick");
+    let r = node.learn_pass().await.expect("pass");
+    assert_eq!((r.learned, r.never_learned), (0, 1));
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal");
+    let peers: Vec<String> = manifest_sources(&snap, d, Some(&s.nodes[0]))
+        .into_iter()
+        .filter(|u| u != "http://publisher")
+        .collect();
+    assert!(!peers.is_empty());
+    let mut want = vec!["http://catalog".to_string(), "http://publisher".to_string()];
+    want.extend(peers);
+    assert_eq!(
+        lv.calls(),
+        want.iter()
+            .map(|u| format!("{u}{LEAF_URL}"))
+            .collect::<Vec<_>>()
+    );
+    clean(&s, &own);
+}
+
+/// Review CAT-LEARN-R2 5: the order of a pass: every dataset to ask again,
+/// then those with no record (taking turns, a window a pass), keeping one
+/// place for one with a record; so with more than four placed datasets each
+/// is asked within a few passes, and the unlearned never wait for the learned.
+#[test]
+fn cat_3_learn_the_order_asks_again_then_the_unlearned_then_one_learned() {
+    let un: Vec<u32> = (0..7).collect();
+    let le: Vec<u32> = (100..103).collect();
+    assert_eq!(learn_order(&[50], &un, &le, 0, 4), vec![50, 0, 1, 2, 100]);
+    let mut seen = BTreeSet::new();
+    for pass in 0..3 {
+        let o = learn_order(&[], &un, &le, pass, 4);
+        assert_eq!(o.len(), 4);
+        assert!(o[..3].iter().all(|k| *k < 100) && o[3] >= 100, "{o:?}");
+        seen.extend(o);
+    }
+    assert_eq!(seen.len(), 10, "every one within three passes");
+    assert_eq!(learn_order(&[], &un, &[], 1, 4), vec![4, 5, 6, 0]);
+    assert_eq!(learn_order(&[], &[7], &le, 0, 4), vec![7, 100, 101, 102]);
+    assert_eq!(learn_order(&[100], &[], &le, 0, 4), vec![100, 101, 102]);
+}

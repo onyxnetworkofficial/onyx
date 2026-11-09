@@ -136,6 +136,21 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   time; the dataset counts toward the cap but not the byte quota. A set-aside of the tombstone's
   catalog after erasure moves the record aside and the publisher's shard uploads restore every
   version.
+- R-BULK-15 (storage nodes learn of a removal, ADR-0059 amendment 4 item 5a, slice 2a):
+  `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}` gives the newest held catalog's header, its
+  report and the dataset's leaf with its path and neighbours, from memory (no chain read, no
+  fetch); a node with no catalog of the publisher answers from a learned proof it keeps (`from`).
+  A storage node keeps a tombstone for a dataset its placed deals' manifests name only when, at one
+  finalized block, the header is the held manifest's publisher's and proves the leaf, the leaf is a
+  tombstone of that dataset at version 2 or later, the report signs the header and reads anchored,
+  and a held version `t - 1` is the tombstone's `prev` (held versions at `t` or later are the
+  publisher's fault and do not stop it). It keeps the newest proof and each key's first (the
+  first under the newest key starts slice 2b's grace; keys taking turns never restart it), reads
+  every one again each pass and drops each only on the book's final word on its own catalog; a
+  dataset whose last proof goes is asked about again in the same pass before it serves. A catalog
+  the node holds never stops the learning, and the route prefers a newer learned proof. While kept, rows, info and listing answer `410 bulk_dataset_removed` with
+  `learned` and the public uploads are refused; `removed` stays catalog-only and the node's own
+  fetches, challenges and peer routes by root are untouched.
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
@@ -143,7 +158,7 @@ word of `q`, `limit` at a time in id order, `after` the `next` of the page befor
 the matches), `GET /v1/bulk/{publisher}/{dataset}`,
 `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`, `POST /v1/bulk/manifests`,
 `POST /v1/bulk/catalogs`, `GET /v1/bulk/catalogs/{publisher}/{n}`,
-`GET /v1/bulk/catalogs/{publisher}/files?from=`,
+`GET /v1/bulk/catalogs/{publisher}/files?from=`, `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`,
 `PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`: docs/api/openapi.json and
 docs/spec/delivery.md "Bulk datasets".
 

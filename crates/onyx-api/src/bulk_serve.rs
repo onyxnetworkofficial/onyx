@@ -32,6 +32,9 @@
 //!   `{manifest, catalog: n}` then takes a manifest that catalog n lists, as if
 //!   it had its own report. `GET /v1/bulk/catalogs/{publisher}/{n}` serves a
 //!   held catalog.
+//! - `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}` (a peer route): the
+//!   newest held catalog's leaf of a dataset with its proof, so storage nodes
+//!   learn of a removal (ADR-0059 amendment 4 item 5a slice 2a, `bulk_learn.rs`).
 //!
 //! The upload routes are mounted outside the server guard's 12 s deadline
 //! (a 64 MiB body may take longer): they have their own concurrency limit
@@ -954,6 +957,15 @@ pub struct BulkStore {
     /// CAT-ERASE-R1 H1). Always taken before a publisher lock.
     erase_lock: tokio::sync::RwLock<()>,
     erase: Mutex<erase::EraseState>,
+    /// How learned removals are used (`ONYX_STORAGE_REMOVALS`, slice 2a).
+    removals_mode: RemovalsMode,
+    /// Removals a storage node learned (`<bulk dir>/learned/`).
+    learned: Mutex<learn::LearnState>,
+    /// One learn pass at a time (each writes the records it changes).
+    learn_one: Arc<tokio::sync::Mutex<()>>,
+    /// Tests: every learned-record write fails.
+    #[cfg(test)]
+    learn_fault: std::sync::atomic::AtomicBool,
     /// Tests: an erase stops after this many file removals (a crash).
     #[cfg(test)]
     erase_stop: Mutex<Option<usize>>,
@@ -1165,6 +1177,11 @@ impl BulkStore {
             erase_cfg: EraseConfig::default(),
             erase_lock: tokio::sync::RwLock::new(()),
             erase: Mutex::new(erase::EraseState::default()),
+            removals_mode: RemovalsMode::On,
+            learned: Mutex::new(learn::LearnState::default()),
+            learn_one: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(test)]
+            learn_fault: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
             erase_stop: Mutex::new(None),
         };
@@ -1178,6 +1195,7 @@ impl BulkStore {
         s.load_catalogs()?;
         s.load_manifests()?;
         s.load_removals()?;
+        s.load_learned()?;
         let now = (s.now)();
         if let Ok(mut t) = s.touched.lock() {
             for (r, _) in s.tiers.bulk_tiers() {
@@ -1650,6 +1668,9 @@ impl BulkStore {
     pub async fn info_checked(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
         if let Some(n) = self.removed(publisher, dataset)? {
             return Err(self.gone(publisher, dataset, n));
+        }
+        if let Some(e) = self.learned_gone(publisher, dataset)? {
+            return Err(e);
         }
         self.fork_stands(publisher).await?;
         self.info(publisher, dataset)
@@ -2571,6 +2592,11 @@ impl BulkStore {
             if let Some(n) = self.removed(&m.header.publisher.0, &m.header.dataset)? {
                 return Err(dataset_removed(n));
             }
+            // A removal this node learned (slice 2a) too; a storage node's
+            // own fetch never asks.
+            if let Some(e) = self.learned_gone(&m.header.publisher.0, &m.header.dataset)? {
+                return Err(e);
+            }
         }
         if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
             return Err(publisher_forked(&f));
@@ -2595,6 +2621,9 @@ impl BulkStore {
         // catalog (ADR-0059 amendment 4 item 3, review CAT-TOMB-R1 H1).
         if let Some(n) = self.removed(&m.header.publisher.0, &m.header.dataset)? {
             return Err(dataset_removed(n));
+        }
+        if let Some(e) = self.learned_gone(&m.header.publisher.0, &m.header.dataset)? {
+            return Err(e);
         }
         if let Some(f) = self.fork_stands(&m.header.publisher.0).await? {
             return Err(publisher_forked(&f));
@@ -3295,6 +3324,9 @@ impl BulkStore {
         if let Some(n) = self.removed(&key.0, &key.1)? {
             return Err(self.gone(&key.0, &key.1, n));
         }
+        if let Some(e) = self.learned_gone(&key.0, &key.1)? {
+            return Err(e);
+        }
         let (versions, in_catalog): (Vec<Version>, bool) = {
             let ds = self.datasets.read().map_err(|_| internal("lock"))?;
             let d = ds.get(key).ok_or_else(unknown_dataset)?;
@@ -3385,6 +3417,8 @@ impl BulkStore {
             .collect();
         // Removed datasets are left out (ADR-0059 amendment 4 item 3).
         let removals = self.removals()?;
+        // And those this node learned of (slice 2a), before any other lock.
+        let learned = self.learned_keys()?;
         // Records waiting and datasets erased (item 5a), before any other lock.
         let erase = self.erase_counts();
         // Each publisher's newest held catalog, so a watch sees a refresh
@@ -3420,7 +3454,10 @@ impl BulkStore {
         let mut page = Vec::new();
         for ((p, d), x) in ds.iter() {
             let Some(h) = x.latest() else { continue };
-            if !matches(p, d) || removals.get(p).is_some_and(|b| b.removed.contains(d)) {
+            if !matches(p, d)
+                || removals.get(p).is_some_and(|b| b.removed.contains(d))
+                || learned.contains(&(p.clone(), d.clone()))
+            {
                 continue;
             }
             total += 1;
@@ -4036,6 +4073,10 @@ pub fn peer_routes(store: Arc<BulkStore>) -> Router {
             get(get_catalog_files),
         )
         .route("/v1/bulk/catalogs/{publisher}/{n}", get(get_catalog))
+        .route(
+            "/v1/bulk/catalogs/{publisher}/leaf/{dataset}",
+            get(get_leaf),
+        )
         .route("/v1/bulk/shards/{root}", get(get_shard))
         .with_state(store)
 }
@@ -4186,6 +4227,9 @@ async fn post_manifest(State(store): State<Arc<BulkStore>>, body: Body) -> Respo
         let h = decode_manifest(&m)?.header;
         if let Some(n) = s.removed(&h.publisher.0, &h.dataset)? {
             return Err(dataset_removed(n));
+        }
+        if let Some(e) = s.learned_gone(&h.publisher.0, &h.dataset)? {
+            return Err(e);
         }
         if let Some(n) = v.get("catalog").filter(|c| !c.is_null()) {
             let n = n
@@ -4357,6 +4401,26 @@ async fn get_catalog(
     }
 }
 
+/// `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`: `{publisher, dataset,
+/// number, root, removed, header, leaf, report, from}` (Borsh hex), from the
+/// newest held catalog in memory or a kept learned proof
+/// ([`BulkStore::leaf_answer`]).
+async fn get_leaf(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<(String, String)>, PathRejection>,
+) -> Response {
+    let r = (|| {
+        limited(&store, client)?;
+        let (p, d) = path_ids(path)?;
+        store.leaf_answer(&p, &d)
+    })();
+    match r {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    }
+}
+
 async fn put_shard(
     State(store): State<Arc<BulkStore>>,
     path: Result<Path<(String, String, String)>, PathRejection>,
@@ -4375,6 +4439,9 @@ async fn put_shard(
         }
         if let Some(n) = s.removed(&p, &d)? {
             return Err(dataset_removed(n));
+        }
+        if let Some(e) = s.learned_gone(&p, &d)? {
+            return Err(e);
         }
         s.accept_shard(&p, &d, &root, &headers, body).await
     })
@@ -4744,6 +4811,10 @@ async fn get_shard(
 #[path = "bulk_erase.rs"]
 mod erase;
 pub use erase::{EraseConfig, EraseMode, ErasePass, MAX_SHARDS_PER_PASS, MIN_GRACE_DAYS};
+
+#[path = "bulk_learn.rs"]
+mod learn;
+pub use learn::{Learn, LearnPass, Recheck, RemovalsMode};
 
 #[cfg(test)]
 #[path = "bulk_serve_tests.rs"]

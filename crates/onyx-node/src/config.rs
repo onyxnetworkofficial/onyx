@@ -925,7 +925,20 @@ pub struct StorageConfig {
     pub keeper: bool,
     /// `ONYX_STORAGE_FETCHES_PER_TICK` (default 8): repair pace.
     pub fetches_per_tick: usize,
+    /// `ONYX_STORAGE_REMOVALS` (`on` default, `log`, `off`): learn of the
+    /// publishers' removals (ADR-0059 amendment 4 item 5a slice 2a); `log`
+    /// keeps records and logs only, `off` learns nothing.
+    pub removals: onyx_api::bulk_serve::RemovalsMode,
+    /// `ONYX_STORAGE_CATALOG_NODES`: nodes holding the publishers' catalogs,
+    /// asked first (comma separated; https, or http to loopback).
+    pub catalog_nodes: Vec<String>,
+    /// `ONYX_STORAGE_REMOVALS_EVERY_SECS` (default 3600, 300..=86400):
+    /// seconds between learn passes.
+    pub removals_every_secs: u64,
 }
+
+/// Most `ONYX_STORAGE_CATALOG_NODES` (each is asked about every dataset).
+pub const MAX_CATALOG_NODES: usize = 8;
 
 impl StorageConfig {
     fn from_env(get: &impl Fn(&str) -> Option<String>) -> Result<Option<StorageConfig>, String> {
@@ -937,6 +950,9 @@ impl StorageConfig {
             "ONYX_STORAGE_FETCH",
             "ONYX_STORAGE_KEEPER",
             "ONYX_STORAGE_FETCHES_PER_TICK",
+            "ONYX_STORAGE_REMOVALS",
+            "ONYX_STORAGE_CATALOG_NODES",
+            "ONYX_STORAGE_REMOVALS_EVERY_SECS",
         ];
         let Some(contract) = get("ONYX_STORAGE_CONTRACT")
             .map(|v| v.trim().to_string())
@@ -992,6 +1008,38 @@ impl StorageConfig {
                 Some(v) => Err(format!("{k} must be on or off, not {v:?}")),
             }
         };
+        use onyx_api::bulk_serve::RemovalsMode;
+        let removals = match get("ONYX_STORAGE_REMOVALS").as_deref().map(str::trim) {
+            None | Some("on") => RemovalsMode::On,
+            Some("log") => RemovalsMode::Log,
+            Some("off") => RemovalsMode::Off,
+            Some(v) => {
+                return Err(format!(
+                    "ONYX_STORAGE_REMOVALS must be on, log or off, not {v:?}"
+                ))
+            }
+        };
+        let mut catalog_nodes: Vec<String> = Vec::new();
+        for u in get("ONYX_STORAGE_CATALOG_NODES")
+            .unwrap_or_default()
+            .split(',')
+        {
+            let u = u.trim().trim_end_matches('/');
+            if u.is_empty() {
+                continue;
+            }
+            onyx_api::x402::check_facilitator_url(u).map_err(|_| {
+                format!("ONYX_STORAGE_CATALOG_NODES: {u:?} must be https:// (http:// only to localhost, 127.0.0.1 or [::1])")
+            })?;
+            if !catalog_nodes.iter().any(|x| x == u) {
+                catalog_nodes.push(u.to_string());
+            }
+        }
+        if catalog_nodes.len() > MAX_CATALOG_NODES {
+            return Err(format!(
+                "ONYX_STORAGE_CATALOG_NODES: at most {MAX_CATALOG_NODES} nodes"
+            ));
+        }
         Ok(Some(StorageConfig {
             contract,
             node,
@@ -1001,6 +1049,9 @@ impl StorageConfig {
             fetch: switch("ONYX_STORAGE_FETCH", true)?,
             keeper: switch("ONYX_STORAGE_KEEPER", false)?,
             fetches_per_tick: num("ONYX_STORAGE_FETCHES_PER_TICK", 8, 1, 1_000)? as usize,
+            removals,
+            catalog_nodes,
+            removals_every_secs: num("ONYX_STORAGE_REMOVALS_EVERY_SECS", 3_600, 300, 86_400)?,
         }))
     }
 }

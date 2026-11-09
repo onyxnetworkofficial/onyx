@@ -111,6 +111,96 @@ fn cat_3_erase_settings() {
     assert!(load(&m).expect("a dry run is fine").storage.is_some());
 }
 
+/// ADR-0059 amendment 4 item 5a slice 2a: a storage node learns of removals
+/// by default (`on`; `log` and `off`), from https catalog nodes (http only to
+/// loopback) first, hourly within 300..=86400 s; every setting is refused
+/// without `ONYX_STORAGE_CONTRACT`.
+#[test]
+fn cat_3_learn_settings() {
+    use onyx_api::bulk_serve::RemovalsMode;
+    let mut m = base();
+    m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk");
+    for k in [
+        "ONYX_STORAGE_REMOVALS",
+        "ONYX_STORAGE_CATALOG_NODES",
+        "ONYX_STORAGE_REMOVALS_EVERY_SECS",
+    ] {
+        let mut x = m.clone();
+        x.insert(k, "on");
+        let e = load(&x).expect_err("no contract");
+        assert!(
+            e.contains(&format!("{k} is set but ONYX_STORAGE_CONTRACT is not")),
+            "{e}"
+        );
+    }
+    m.insert(
+        "ONYX_STORAGE_CONTRACT",
+        "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    );
+    m.insert(
+        "ONYX_STORAGE_NODE_ID",
+        "0x0101010101010101010101010101010101010101010101010101010101010101",
+    );
+    m.insert("ONYX_STORAGE_KEY_FILE", "/run/credentials/onyx/storage-key");
+    let s = load(&m).expect("on").storage.expect("storage");
+    assert_eq!(s.removals, RemovalsMode::On);
+    assert!(s.catalog_nodes.is_empty());
+    assert_eq!(s.removals_every_secs, 3_600);
+    for (v, mode) in [
+        ("on", RemovalsMode::On),
+        ("log", RemovalsMode::Log),
+        ("off", RemovalsMode::Off),
+    ] {
+        m.insert("ONYX_STORAGE_REMOVALS", v);
+        assert_eq!(load(&m).expect("ok").storage.expect("s").removals, mode);
+    }
+    m.insert("ONYX_STORAGE_REMOVALS", "yes");
+    assert!(load(&m).expect_err("bad").contains("on, log or off"));
+    m.insert("ONYX_STORAGE_REMOVALS", "on");
+    m.insert(
+        "ONYX_STORAGE_CATALOG_NODES",
+        " https://api.example.test/ , http://127.0.0.1:8080,https://api.example.test,",
+    );
+    let s = load(&m).expect("ok").storage.expect("s");
+    assert_eq!(
+        s.catalog_nodes,
+        vec![
+            "https://api.example.test".to_string(),
+            "http://127.0.0.1:8080".to_string()
+        ]
+    );
+    for bad in [
+        "http://api.example.test",
+        "ftp://api.example.test",
+        "https://api.example.test/?x=1",
+        "api.example.test",
+    ] {
+        m.insert("ONYX_STORAGE_CATALOG_NODES", bad);
+        assert!(
+            load(&m)
+                .expect_err("bad url")
+                .contains("ONYX_STORAGE_CATALOG_NODES"),
+            "{bad}"
+        );
+    }
+    let many: Vec<String> = (0..=MAX_CATALOG_NODES)
+        .map(|i| format!("https://n{i}.example.test"))
+        .collect();
+    let many: &'static str = Box::leak(many.join(",").into_boxed_str());
+    m.insert("ONYX_STORAGE_CATALOG_NODES", many);
+    assert!(load(&m).expect_err("many").contains("at most"));
+    m.remove("ONYX_STORAGE_CATALOG_NODES");
+    for (v, ok) in [
+        ("299", false),
+        ("300", true),
+        ("86400", true),
+        ("86401", false),
+    ] {
+        m.insert("ONYX_STORAGE_REMOVALS_EVERY_SECS", v);
+        assert_eq!(load(&m).is_ok(), ok, "{v}");
+    }
+}
+
 /// ADR-0060: the storage-node mode is off unless `ONYX_STORAGE_CONTRACT`
 /// is set, needs the bulk store, a node id and a key file, and its
 /// settings are bounded and refused when it is off.

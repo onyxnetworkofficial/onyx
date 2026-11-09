@@ -441,24 +441,52 @@ taken below.
      finds no other holder fails its challenges and declines. A new deal on a removed own-report
      manifest costs each placed node one decline (THREATS CAT-ERASE-2) until OnyxStorage v2
      (with CAT-2) refuses such deals.
-   - **Slice 2a: storage nodes learn of a removal** (draft 1, 2026-11-09, for a design review; not
-     built). No chain write. A catalog node serves `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`
-     (a peer route, no chain read): the newest held catalog's header, its signed report and the
-     dataset's leaf with its proof (or a learned proof it keeps, whichever has the higher number);
-     404 when it lists none, 409 under a fork mark. A storage node, in a paced task of its own beside
-     its tick (hourly, a few datasets a pass, capped answers), asks each placed deal's source and
-     then its peers for the leaf of each (publisher, dataset) its held manifests name, and keeps a
-     proof only when, read at one finalized block: the header is the publisher's and proves the leaf,
-     the leaf is that dataset's tombstone (version 2 or later) and ends a version at or after the
-     newest held one (`prev` is its root when it is the next), the report verifies, reads anchored
-     and its key is active and not suspended. A kept proof (`<bulk dir>/learned/`) makes rows,
-     info and listing answer `410 bulk_dataset_removed` with `learned`; each pass reads it again,
-     and a withdrawal, a held later version that still reads anchored, or a key no longer active
-     stops it at once (serving resumes; doubt serves). A forged or replayed proof cannot stop a
-     storage node serving; a source that withholds the leaf only delays. Challenges, shard routes
-     and earnings are untouched. `ONYX_STORAGE_REMOVALS` = `on` (default), `log` or `off`.
+   - **Slice 2a: storage nodes learn of a removal** (draft 2, 2026-11-09, after design review
+     CAT-LEARN-R1, built 2026-11-09). No chain write. Kept apart from `removed()`, which stays catalog-only
+     (the erase pass reads it); a storage node's own fetches (manifests, shards) never consult it, so
+     challenges and earnings are untouched, and shards stay readable by root (THREATS CAT-ERASE-2).
+     - *The route.* `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}` (a peer route, `limited()`):
+       the newest held catalog's header, its signed report and the dataset's leaf with its proof,
+       built from the newest in-memory catalog body (no rebuild, no chain read, no fetch on a
+       request, so nothing loops or amplifies); a node with no catalog of the publisher answers
+       from a learned proof it keeps. `404 bulk_no_leaf` when it lists none, `409
+       bulk_publisher_forked` under a fork mark (`fork_marked()`), 500 when the newest catalog is not
+       held whole. A node holding the catalogs answers from them, never from a learned proof.
+     - *Sources* (CAT-LEARN-R1 H1). A paced task beside the storage tick (hourly, a few datasets a
+       pass, answers capped at 64 KiB, a short per-call timeout) asks, for each (publisher, dataset)
+       its placed deals' held manifests name: first `ONYX_STORAGE_CATALOG_NODES` (the deploy sets
+       the hosted query node), then each deal's source, then its peers; every URL until one gives a
+       proof that holds (a 404, 409 or live leaf from one never ends the search). `status_json`
+       counts datasets never learned.
+     - *What it keeps* (CAT-LEARN-R1 M1, L1). Read at one finalized block, every check spelled out:
+       the header's publisher is the held manifest's; the header proves the leaf (`proves`: path,
+       index, count, neighbours); the leaf's publisher and dataset are the asked ones and it is a
+       tombstone (root zero, version 2 or later); the report verifies against the header
+       (`cat::verify`) and reads anchored at that block (`read_anchor_at`, which already refuses a
+       catalog under a key compromised from before it). Whatever versions it holds: dataset ids are
+       final (item 2). Only one version rule: if it holds version t - 1, that root must be the
+       tombstone's `prev`, otherwise it is a fork, not kept, and logged. Held versions at t or later
+       are logged as the publisher's fault (item 6) and do not stop the removal.
+     - *Keeping it* (CAT-LEARN-R1 M2, M3). Each pass reads the kept proof again (one reading per
+       report digest, shared by all its tombstones). It is dropped only on the book's final word
+       (`Reading.withdrawn`: a withdrawal, another signature); a failed read, a suspension or a
+       retired key keeps the last state, as a catalog node keeps a taken catalog. The record keeps
+       `first` (number, root, key, recorded time, the time of the block this node first verified it
+       at), replaced only on a withdrawal or a new key, beside `newest` (the highest-numbered proof
+       that holds), so slice 2b's grace cannot be restarted by newer catalogs. Records live under
+       `<bulk dir>/learned/` (a temporary file, synced, renamed; `.bin` only; loaded before any route
+       serves). While a proof is kept, rows, info and listing answer `410 bulk_dataset_removed`
+       with `learned`.
+     - *Config.* `ONYX_STORAGE_REMOVALS` = `on` (default), `log` (records and logs only) or `off`;
+       `ONYX_STORAGE_CATALOG_NODES`; both refused without `ONYX_STORAGE_CONTRACT`.
+     - *Build review CAT-LEARN-R2.* `first` is kept per key with its report and read again each
+       pass (slice 1's rule: the first under the newest key; keys taking turns never restart it); a
+       dataset whose last proof goes is asked again in the same pass before it serves; a held catalog
+       never stops the learning (anyone may post an old anchored one), and the route prefers a newer
+       learned proof; a damaged record moves aside and never stops the start.
    - **Slice 2b (outline).** Declines of each deal on a due removal (`decline(deal, WHOLE_DEAL,
-     node)`, paid by the operator, with the ADR-0060 notice), never before the grace, and only once
+     node)`, paid by the operator, with the ADR-0060 notice), never before the grace counted from
+     `first`, with the key active (life 1, as slice 1 needs for anything irreversible), and only once
      no fork stands (a relay can hand out one forked side); erasure only once every placement on a
      root is out.
 

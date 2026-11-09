@@ -312,6 +312,8 @@ install)
     # One pass a minute, not every 15 s: the five nodes share this host's address on the public
     # endpoint, which answers HTTP 429 past its rate limit (THREATS STORAGE-S15-4). An epoch is
     # 24 minutes (7,200 blocks of 0.2 s), so answers still go out in the epoch's first minutes.
+    # The query node on this host holds the publishers' catalogs: each storage node asks it first
+    # whether a placed dataset was removed (ADR-0059 amendment 4 item 5a, slice 2a).
     cat >"$stage/$n.env" <<EOF
 ONYX_ENV=testnet
 ONYX_RIGHTS=fallback
@@ -330,6 +332,7 @@ ONYX_STORAGE_NODE_ID=$id
 ONYX_STORAGE_FROM_BLOCK=$(get block)
 ONYX_STORAGE_KEEPER=$keeper
 ONYX_STORAGE_EVERY_SECS=60
+ONYX_STORAGE_CATALOG_NODES=https://$domain
 EOF
     install -m 0600 "$keys/storage-$n.key" "$stage/$n.key"
   done

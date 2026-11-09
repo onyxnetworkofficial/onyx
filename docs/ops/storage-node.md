@@ -35,6 +35,15 @@ shards per pass, checks every byte against the deal's anchored manifest, records
 when nobody has and a deal is checked in that epoch, answers its challenges, and with `ONYX_STORAGE_KEEPER=on` reports other nodes'
 misses.
 
+**Removals** (ADR-0059 amendment 4 item 5a slice 2a). About hourly (`ONYX_STORAGE_REMOVALS_EVERY_SECS`)
+a separate task asks for the publisher's newest catalog leaf of a few placed datasets, first from
+`ONYX_STORAGE_CATALOG_NODES` (set it to the hosted query node), then each deal's source, then its
+peers, and keeps a removal only when its tombstone and catalog report check at one finalized block.
+While kept (`ONYX_STORAGE_REMOVALS=on`, the default) the dataset's rows, info and listing answer 410
+`bulk_dataset_removed` with `learned`; the node still holds, proves and serves its shards by root, so
+its deals' checks are untouched. Only the book's withdrawal of that catalog drops it. The task sends
+no transaction; declining such deals is slice 2b.
+
 **Match the node to the contract.** From ADR-0060 amendment 1 each holder proves its own row;
 amendment 2 adds a notice on declines and names the shard in `Answered`. A node of this release
 reads the contract's `RULES_VERSION()` (3) first and sends nothing (no seed, answer, settle or
