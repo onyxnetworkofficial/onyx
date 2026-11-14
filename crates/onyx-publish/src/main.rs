@@ -353,6 +353,56 @@ struct Built {
     input_rows: u64,
 }
 
+/// `prev_dir` for `manifest.json`: the `--prev` folder relative to the
+/// `--out` folder (created here if it is new). `manifest.json` sits next to
+/// the published files, and an absolute path would name the machine's home
+/// folder (2026-11-14: the publisher's anonymity scan caught that), so the
+/// path stays relative, and a path that would climb above the home folder is
+/// refused.
+fn prev_dir_for(prev: &str, out: &str) -> Res<String> {
+    let abs = std::fs::canonicalize(prev).map_err(|e| format!("--prev: {e}"))?;
+    std::fs::create_dir_all(out).map_err(|e| format!("--out: {e}"))?;
+    let here = std::fs::canonicalize(out).map_err(|e| format!("--out: {e}"))?;
+    let home = std::env::var_os("HOME").and_then(|h| std::fs::canonicalize(h).ok());
+    let rel = relative_to(&here, &abs, home.as_deref()).ok_or(
+        "--prev and --out must sit under one folder below the root and, when either is in the home folder, both in it: the previous folder is kept as a path relative to --out, and that path must not name a folder above them",
+    )?;
+    Ok(rel.display().to_string())
+}
+
+/// `target` as a path relative to `base` (both canonical, so `..` steps
+/// match how the system resolves them), or `None` when the path would name
+/// a folder above where they meet: they share only the root, or `target`
+/// is in `home` and they meet above it.
+fn relative_to(base: &Path, target: &Path, home: Option<&Path>) -> Option<PathBuf> {
+    let b: Vec<_> = base.components().collect();
+    let t: Vec<_> = target.components().collect();
+    let common = b.iter().zip(&t).take_while(|(x, y)| x == y).count();
+    if !b[..common]
+        .iter()
+        .any(|c| matches!(c, std::path::Component::Normal(_)))
+    {
+        return None;
+    }
+    let meet: PathBuf = b[..common].iter().collect();
+    if let Some(h) = home {
+        if (target.starts_with(h) || base.starts_with(h)) && !meet.starts_with(h) {
+            return None;
+        }
+    }
+    let mut r = PathBuf::new();
+    for _ in common..b.len() {
+        r.push("..");
+    }
+    for c in &t[common..] {
+        r.push(c.as_os_str());
+    }
+    if r.as_os_str().is_empty() {
+        r.push(".");
+    }
+    Some(r)
+}
+
 fn shard_path(dir: &Path, root: &Hash32) -> PathBuf {
     dir.join("shards").join(format!("{}.bin", root.to_hex()))
 }
@@ -518,6 +568,13 @@ fn build_cmd(o: &Opts) -> Res<()> {
         .opt("prev")
         .map(|p| read_manifest(Path::new(p)))
         .transpose()?;
+    // The folder of the previous version, for `manifest.json` (see below):
+    // found before anything is written, so a refusal leaves no half-built
+    // folder.
+    let prev_dir = o
+        .opt("prev")
+        .map(|p| prev_dir_for(p, o.req("out")?))
+        .transpose()?;
     // ADR-0059 amendment 5 item 7: a later version keeps the schema unless
     // `--widen` widens it on purpose.
     let widen = o.flag("widen");
@@ -585,9 +642,8 @@ fn build_cmd(o: &Opts) -> Res<()> {
     let mut summary = summary;
     // The folder of the previous version: `upload` steps back to it when a
     // node lacks that version (ADR-0059 amendment 5 item 8).
-    if let Some(p) = o.opt("prev") {
-        let abs = std::fs::canonicalize(p).map_err(|e| format!("--prev: {e}"))?;
-        summary["prev_dir"] = json!(abs.display().to_string());
+    if let Some(rel) = prev_dir {
+        summary["prev_dir"] = json!(rel);
     }
     std::fs::write(out.join("manifest.json"), format!("{summary:#}\n"))
         .map_err(|e| e.to_string())?;
@@ -1449,9 +1505,17 @@ fn previous_version(dir: &Path, m: &Manifest) -> Res<(PathBuf, Option<u64>)> {
         .ok()
         .and_then(|t| serde_json::from_str(&t).ok())
         .unwrap_or(Value::Null);
-    let prev = summary["prev_dir"].as_str().map(PathBuf::from).ok_or_else(|| {
+    // Relative to `dir` (an absolute one, from a build before 2026-11-14,
+    // replaces it); made canonical so a chain of steps back keeps short paths.
+    let named = summary["prev_dir"].as_str().ok_or_else(|| {
         format!(
             "{lacks}, and {} does not name its folder (built without --prev, or by an older onyx-publish): upload that version first",
+            dir.display()
+        )
+    })?;
+    let prev = std::fs::canonicalize(dir.join(named)).map_err(|e| {
+        format!(
+            "{lacks}: its folder {named} (from {}) is gone: {e}",
             dir.display()
         )
     })?;
@@ -1839,6 +1903,42 @@ async fn catalog_upload_cmd(o: &Opts) -> Res<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `build --prev` keeps the previous folder relative to the new one, so
+    /// `manifest.json` names no absolute path (2026-11-14).
+    #[test]
+    fn relative_to_steps_up_then_down() {
+        let rh = |a: &str, b: &str, h: Option<&str>| {
+            relative_to(Path::new(a), Path::new(b), h.map(Path::new))
+                .map(|p| p.display().to_string())
+        };
+        let r = |a: &str, b: &str| rh(a, b, None);
+        assert_eq!(r("/x/r1/ds", "/x/v1/ds").as_deref(), Some("../../v1/ds"));
+        assert_eq!(r("/x/v2", "/x/v1").as_deref(), Some("../v1"));
+        assert_eq!(r("/x/a", "/x/a/b").as_deref(), Some("b"));
+        assert_eq!(r("/x/a/b", "/x/a").as_deref(), Some(".."));
+        assert_eq!(r("/x/a", "/x/a").as_deref(), Some("."));
+        assert_eq!(r("a", "/x"), None, "no shared root");
+        // Meeting only at the root would name every folder down to target.
+        assert_eq!(r("/run/user/1000/r/ds", "/home/u/v1/ds"), None);
+        assert_eq!(r("/a/ds", "/b/ds"), None);
+        // Meeting above the home folder would name it.
+        let h = Some("/home/u");
+        assert_eq!(rh("/home/other/r/ds", "/home/u/v1/ds", h), None);
+        assert_eq!(rh("/home/u/r/ds", "/home/other/v1/ds", h), None);
+        assert_eq!(
+            rh("/home/u/p/r1/ds", "/home/u/p/v1/ds", h).as_deref(),
+            Some("../../v1/ds")
+        );
+        assert_eq!(
+            rh("/home/u/r/ds", "/home/u/v1/ds", h).as_deref(),
+            Some("../../v1/ds")
+        );
+        assert_eq!(
+            rh("/srv/p/r/ds", "/srv/p/v1/ds", h).as_deref(),
+            Some("../../v1/ds")
+        );
+    }
 
     /// A node's passing answers are tried again, a not-final anchor is
     /// waited for within `--wait-secs`, a 503 that will not clear and the
@@ -2312,13 +2412,14 @@ mod tests {
         )
         .expect("json");
         assert_eq!(summary["format"], json!(2));
-        assert_eq!(
-            summary["prev_dir"],
-            json!(std::fs::canonicalize(dir.join("v1"))
-                .expect("abs")
-                .display()
-                .to_string())
-        );
+        // The previous folder, relative: no absolute path in manifest.json.
+        assert_eq!(summary["prev_dir"], json!("../v1"));
+        let text = std::fs::read_to_string(dir.join("v2").join("manifest.json")).expect("r");
+        let abs = std::fs::canonicalize(&dir)
+            .expect("abs")
+            .display()
+            .to_string();
+        assert!(!text.contains(&abs), "{text}");
         // Every new shard checks under the newest schema, the old under theirs.
         for e in &v2.shards[v1.shards.len()..] {
             let f = std::fs::read(shard_path(&dir.join("v2"), &e.root)).expect("shard");
@@ -2528,9 +2629,17 @@ mod tests {
         .expect("w");
         std::fs::write(dir.join("a.csv"), "t,v\n1,1.5\n").expect("w");
         std::fs::write(dir.join("b.csv"), "t,v\n2,2.5\n").expect("w");
+        std::fs::write(dir.join("c.csv"), "t,v\n3,3.5\n").expect("w");
         build_in(&dir, "s.json", "a.csv", "v1", None, false, 10).expect("v1");
         build_in(&dir, "s.json", "b.csv", "v2", Some("v1"), false, 20).expect("v2");
-        for v in ["v1", "v2"] {
+        // As the publisher lays them out: a day's folder beside the others.
+        build_in(&dir, "s.json", "c.csv", "r3/ds", Some("v2"), false, 30).expect("v3");
+        let summary: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("r3/ds/manifest.json")).expect("r"),
+        )
+        .expect("json");
+        assert_eq!(summary["prev_dir"], json!("../../v2"));
+        for v in ["v1", "v2", "r3/ds"] {
             let m = read_manifest(&dir.join(v)).expect("m");
             let r = onyx_bulk::anchor::sign(&[0x22; 32], &m.header).expect("signs");
             std::fs::write(
@@ -2540,37 +2649,61 @@ mod tests {
             .expect("w");
         }
         let taken = r#"{"error":{"code":"bulk_not_successor","message":"versions are taken in order: upload the previous version first"}}"#;
-        let (url, seen, bodies) = scripted_node_log(vec![
-            (409, taken),
-            (201, r#"{"missing":[]}"#),
-            (201, r#"{"missing":[]}"#),
-        ])
-        .await;
+        let done = r#"{"missing":[]}"#;
         let pause = Duration::from_millis(1);
-        upload_dir(
-            &client(),
-            &url,
-            &dir.join("v2"),
-            None,
-            Duration::ZERO,
-            pause,
-            MAX_STEPS_BACK,
+        // Uploads `top` against a node that answers `answers`; the versions
+        // of the manifests it was sent, in order.
+        let run = |top: PathBuf, answers: Vec<(u16, &'static str)>| async move {
+            let n = answers.len();
+            let (url, seen, bodies) = scripted_node_log(answers).await;
+            upload_dir(
+                &client(),
+                &url,
+                &top,
+                None,
+                Duration::ZERO,
+                pause,
+                MAX_STEPS_BACK,
+            )
+            .await
+            .expect("uploaded");
+            assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), n);
+            let sent: Vec<u32> = bodies
+                .lock()
+                .expect("lock")
+                .iter()
+                .map(|b| {
+                    let v: Value = serde_json::from_slice(b).expect("json");
+                    let m = onyx_bulk::wire::hex_field(&v["manifest"], "m").expect("hex");
+                    Manifest::from_bytes(&m).expect("manifest").header.version
+                })
+                .collect();
+            sent
+        };
+        // Two steps back, across the two top folders.
+        let sent = run(
+            dir.join("r3/ds"),
+            vec![
+                (409, taken),
+                (409, taken),
+                (201, done),
+                (201, done),
+                (201, done),
+            ],
         )
-        .await
-        .expect("uploaded");
-        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 3);
-        let manifests: Vec<u32> = bodies
-            .lock()
-            .expect("lock")
-            .iter()
-            .map(|b| {
-                let v: Value = serde_json::from_slice(b).expect("json");
-                let m = onyx_bulk::wire::hex_field(&v["manifest"], "m").expect("hex");
-                Manifest::from_bytes(&m).expect("manifest").header.version
-            })
-            .collect();
-        assert_eq!(manifests, vec![2, 1, 2]);
-        for v in ["v1", "v2"] {
+        .await;
+        assert_eq!(sent, vec![3, 2, 1, 2, 3]);
+        // A folder built before 2026-11-14 names its previous one absolutely.
+        let abs = std::fs::canonicalize(dir.join("v1")).expect("abs");
+        let mut old: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("v2/manifest.json")).expect("r"),
+        )
+        .expect("json");
+        old["prev_dir"] = json!(abs.display().to_string());
+        std::fs::write(dir.join("v2/manifest.json"), old.to_string()).expect("w");
+        let sent = run(dir.join("v2"), vec![(409, taken), (201, done), (201, done)]).await;
+        assert_eq!(sent, vec![2, 1, 2]);
+        for v in ["v1", "v2", "r3/ds"] {
             let u: Value = serde_json::from_str(
                 &std::fs::read_to_string(dir.join(v).join(UPLOADED)).expect("r"),
             )

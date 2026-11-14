@@ -701,7 +701,7 @@ in the decoder's cap (item 1), so it answers `422 bulk_bad_manifest` ("at most 8
 root it followed and the manifest to start with them, else the node is at fault; `schema-fit` keeps a column whose
 input fits its scale (the narrowest widening), types an added column by its values (int, decimal at the fit
 scale, else text) and caps the fit scale so the longest value stays within 80 characters (an added column gets
-the same checks as a widened one; review BULK-WIDEN-R2 finding 4); `build --prev` records the previous folder in `manifest.json` (`prev_dir`) and `upload` records the
+the same checks as a widened one; review BULK-WIDEN-R2 finding 4); `build --prev` records the previous folder in `manifest.json` (`prev_dir`, relative to the new folder, so the file names no absolute path) and `upload` records the
 catalog it used (`uploaded.json`), which the step back reads.
 
 **Alternatives considered.** Re-encode old shards under the new schema (every root changes, every
