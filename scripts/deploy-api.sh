@@ -33,8 +33,11 @@
 #   ONYX_API_MCP       the agent connector at https://<domain>/mcp: apps/agent in /opt/onyx-mcp
 #                      run by deploy/systemd/onyx-mcp.service (proposals on; skipped with a note when
 #                      the host has no Node 20 or later)
-#   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 20 GiB in all,
-#                      12 GiB per publisher (SCALE-4), when the export's deployment.json pins a signed book
+#   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 24 GiB in all,
+#                      16 GiB per publisher (SCALE-4), when the export's deployment.json pins a signed book
+#   ONYX_API_BULK_FORMAT2  1 takes format-2 (widened) manifests (ONYX_BULK_FORMAT2=on, ADR-0059
+#                      amendment 5); default 0. Turn it on only once the live release already reads
+#                      format 2, so a rollback to the kept release still starts (review BULK-WIDEN-R1 M2)
 #   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (32 connections per address on 443),
 #                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
@@ -79,12 +82,14 @@ conn_cap=${ONYX_API_CONN_CAP:-1}
 [ "$intake" = 0 ] || echo "ONYX_SUBMISSIONS=/var/lib/onyx/state/submissions.journal" >>"$stage/node.env"
 # Publishers' large datasets (contributor loop CL5, ADR-0059, docs/ops/bulk-publish.md): on when the
 # export's manifest pins a signed book (the node takes only manifests anchored there), off with
-# ONYX_API_BULK=0. The limits fit the host's disk (about 34 GB free on 2026-10-30): 16 GiB for every
-# publisher together, 8 GiB for one; up to 10,000 datasets per publisher (one per chain and metric; the first publisher's next phase
-# brings it to about 9,050, ADR-0059 amendment 1).
+# ONYX_API_BULK=0. The limits fit the host's disk (38 GB, about 27 GB free on 2026-11-14): 24 GiB for every
+# publisher together, 16 GiB for one (raised from 20 and 12 on 2026-11-14: the first publisher held 6.7 GB and its
+# source's backfill brings about 5.4 GB in one day, THREATS BULK-SRC-1); up to 50,000 datasets per publisher (the first
+# has about 9,050, ADR-0059 amendment 1). The health watch alerts below 10% or 2 GiB of free disk (OBS-DISK-1).
 bulk=${ONYX_API_BULK:-1}
 if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
-  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=20 ONYX_BULK_QUOTA_GIB=12 ONYX_BULK_MAX_DATASETS=50000 >>"$stage/node.env"
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=24 ONYX_BULK_QUOTA_GIB=16 ONYX_BULK_MAX_DATASETS=50000 >>"$stage/node.env"
+  if [ "${ONYX_API_BULK_FORMAT2:-0}" = 1 ]; then echo ONYX_BULK_FORMAT2=on >>"$stage/node.env"; fi
 fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
 # pinned by <export>/observations/pins (metric=0x<template id>, one per line); the node checks

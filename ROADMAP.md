@@ -1131,7 +1131,23 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       rows do not fit the schema"). Not needed yet: the first publisher's two refused datasets fit
       their schema, and the refusal was its exporter's check (BULK-SCHEMA-1). Design: a widening
       successor (a decimal scale may grow, a nullable column may be added at the end) with each shard
-      checked under the schema it was built with, and a successor link from the ended id to the new one
+      checked under the schema it was built with, and a successor link from the ended id to the new one.
+      Widening successors built 2026-11-14 (ADR-0059 amendment 5 draft 2 after review BULK-WIDEN-R1;
+      THREATS BULK-WIDEN-1 to BULK-WIDEN-6): format 2 keeps each earlier schema with the shard index
+      it ends at, a decimal's scale may grow, a non-key int may become decimal, nullable columns may be
+      added at the end (at most 8 schemas); readers check and decode each shard under its own schema
+      and show rows in the newest; nodes take format 2 with `ONYX_BULK_FORMAT2=on`; `onyx-check`
+      reads it (a newer format is exit 3 only when its root is signed); `onyx-publish schema-fit` and
+      `build --widen`; `upload` steps back for a node that lacks a version. Left: the successor link
+      from an ended id to a new one; storage deals on a widened dataset (a new OnyxStorage)
+- [ ] S26 Early-contributor record (early contributors may be rewarded later;
+      no reward is promised): a daily, append-only list of accepted testnet work, one row per
+      event, each with the chain reference of the work and of its acceptance (miner roots,
+      validator verdicts, level-2 agreement, storage proofs and miss reports, signed reports,
+      correct staked claims, found corrections), from final blocks only; the operator's own and
+      public test keys in a separate exclusion dataset; published as a bulk dataset under a
+      publisher id of its own (never `onchain-archive`). Design 2026-11-14 (to become an ADR);
+      THREATS EARLY-1 to EARLY-12 with it. v1: an optional signed claim address on submissions
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);
@@ -1182,6 +1198,11 @@ on-chain state is public. Entities only, never individuals. No build until the r
 - [ ] F11 Longer Bitcoin history (months), with roots on chain, sized by measured cost
 - [ ] F12 SEC Form 13F data sets (N5): per-security aggregates only, never per-filer rows
 - [ ] F13 Lightning graph aggregates (N18): parked until a Lightning node exists; never aliases
+- [ ] F14 A Mesh (formerly Rosetta) source adapter: one adapter reads the Mesh Data API of any
+      chain with a Mesh node (docs/research/2026-11-14-mesh-rosetta.md). At least two nodes of
+      independent operators per chain, a value they disagree on is refused, final blocks only (a
+      depth rule per chain), entities only; a rights record first. Also: a shared conformance check
+      for adapters, like `mesh-cli check:data`
 
 ## Phase G: long-term health (one item whenever A-F are blocked or waiting)
 

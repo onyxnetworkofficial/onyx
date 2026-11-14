@@ -89,8 +89,9 @@ pub fn canonical_decimal(s: &str, scale: u8) -> Result<String, String> {
         ));
     }
     if frac.len() > scale && frac[scale..].bytes().any(|c| c != b'0') {
+        let needs = frac.trim_end_matches('0').len();
         return Err(format!(
-            "{s:?} has more than {scale} decimal places (values are never rounded)"
+            "{s:?} needs {needs} decimal places, more than {scale} (values are never rounded)"
         ));
     }
     let int = int.trim_start_matches('0');
@@ -213,6 +214,51 @@ pub fn cells_json(schema: &Schema, cells: &[Cell]) -> Value {
     Value::Object(m)
 }
 
+/// Show the cells of a row stored under `from` as a row of `to`, a schema
+/// `from` widens to, directly or through others (ADR-0059 amendment 5 item
+/// 4): a decimal gets fraction zeros up to `to`'s scale, an int in a column
+/// that became decimal is written with zero fraction digits (`7` as
+/// `7.000`), and every column `from` lacks is null. Nothing is rounded and
+/// nothing fails; a cell `to` would not widen is left as it is. The shown
+/// cells are for display and checks only, never input: a padded decimal may
+/// pass [`MAX_DECIMAL_CHARS`], which bounds stored cells.
+pub fn present(from: &Schema, to: &Schema, cells: &[Cell]) -> Vec<Cell> {
+    to.columns
+        .iter()
+        .enumerate()
+        .map(|(i, col)| {
+            let cell = match (i < from.columns.len()).then(|| cells.get(i)).flatten() {
+                Some(c) => c,
+                None => return Cell::Null,
+            };
+            match (cell, col.kind) {
+                (Cell::Int(v), ColumnKind::Decimal { scale }) => {
+                    Cell::Decimal(pad_fraction(&format!("{v}."), scale))
+                }
+                (Cell::Decimal(d), ColumnKind::Decimal { scale }) => {
+                    Cell::Decimal(pad_fraction(d, scale))
+                }
+                (c, _) => c.clone(),
+            }
+        })
+        .collect()
+}
+
+/// `d` (digits and one point) with zeros after its fraction up to `scale`
+/// places; one with as many or more places is returned unchanged.
+fn pad_fraction(d: &str, scale: u8) -> String {
+    let have = d.split_once('.').map_or(0, |(_, f)| f.len());
+    let mut out = d.to_string();
+    if !d.contains('.') {
+        out.push('.');
+    }
+    out.extend(std::iter::repeat_n(
+        '0',
+        usize::from(scale).saturating_sub(have),
+    ));
+    out
+}
+
 /// Parse one input field of a column from text (CSV, or a JSON string).
 /// `None` is an absent or empty field.
 pub fn parse_field(kind: ColumnKind, nullable: bool, field: Option<&str>) -> Result<Cell, String> {
@@ -325,6 +371,138 @@ mod tests {
             encode_row(&wide, &cells),
             Err(RowError::TooLarge(_))
         ));
+    }
+
+    fn widen(json: Value) -> Schema {
+        Schema::from_json(&json).expect("ok")
+    }
+
+    /// The three schemas of a dataset that widened twice (ADR-0059
+    /// amendment 5): `value` from 2 to 7 to 38 places, `n` from int to
+    /// decimal, and a column added at each step.
+    fn three() -> [Schema; 3] {
+        [
+            widen(json!({"columns":[
+                {"name":"t","kind":"int"},
+                {"name":"value","kind":"decimal","scale":2,"nullable":true},
+                {"name":"n","kind":"int"}
+            ],"key":"t"})),
+            widen(json!({"columns":[
+                {"name":"t","kind":"int"},
+                {"name":"value","kind":"decimal","scale":7,"nullable":true},
+                {"name":"n","kind":"decimal","scale":3},
+                {"name":"a","kind":"text","nullable":true}
+            ],"key":"t"})),
+            widen(json!({"columns":[
+                {"name":"t","kind":"int"},
+                {"name":"value","kind":"decimal","scale":38,"nullable":true},
+                {"name":"n","kind":"decimal","scale":5},
+                {"name":"a","kind":"text","nullable":true},
+                {"name":"b","kind":"int","nullable":true}
+            ],"key":"t"})),
+        ]
+    }
+
+    /// `present` pads with zeros only: the shown value is the stored one with
+    /// fraction zeros added (its number never changes), an int gets zero
+    /// fraction digits, added columns read null, and a value that already
+    /// has the places is left alone. A stored decimal at the 80-character cap
+    /// shows at 80 plus the added places (display only, never cut).
+    #[test]
+    fn present_pads_exactly_and_never_rounds() {
+        let [s0, s1, s2] = three();
+        assert_eq!(Schema::widens(&s0, &s1), Ok(()));
+        assert_eq!(Schema::widens(&s1, &s2), Ok(()));
+        let stored = vec![Cell::Int(5), Cell::Decimal("-711.54".into()), Cell::Int(-3)];
+        assert!(check_cells(&s0, &stored).is_ok());
+        let shown = present(&s0, &s1, &stored);
+        assert_eq!(
+            shown,
+            vec![
+                Cell::Int(5),
+                Cell::Decimal("-711.5400000".into()),
+                Cell::Decimal("-3.000".into()),
+                Cell::Null
+            ]
+        );
+        // The shown row fits the newer schema and is the same number.
+        assert!(check_cells(&s1, &shown).is_ok());
+        assert_eq!(
+            canonical_decimal("-711.54", 7).as_deref(),
+            Ok("-711.5400000")
+        );
+        // Zero and null stay what they are.
+        let zero = vec![Cell::Int(0), Cell::Null, Cell::Int(0)];
+        assert_eq!(
+            present(&s0, &s2, &zero),
+            vec![
+                Cell::Int(0),
+                Cell::Null,
+                Cell::Decimal("0.00000".into()),
+                Cell::Null,
+                Cell::Null
+            ]
+        );
+        // Under its own schema a row shows as stored.
+        assert_eq!(present(&s0, &s0, &stored), stored);
+        // A long stored value: 80 characters at scale 2 shows as 116 at 38.
+        let long = format!("{}.25", "9".repeat(77));
+        assert_eq!(long.len(), MAX_DECIMAL_CHARS);
+        let row = vec![Cell::Int(1), Cell::Decimal(long.clone()), Cell::Int(1)];
+        assert!(check_cells(&s0, &row).is_ok());
+        let Cell::Decimal(d) = &present(&s0, &s2, &row)[1] else {
+            panic!("decimal");
+        };
+        assert_eq!(d.len(), MAX_DECIMAL_CHARS + 36);
+        assert!(d.starts_with(&long) && d[long.len()..].bytes().all(|c| c == b'0'));
+        // Never rounds: a value with more places than the target keeps them.
+        let many = vec![
+            Cell::Int(1),
+            Cell::Decimal("1.2345678".into()),
+            Cell::Int(1),
+        ];
+        assert_eq!(
+            present(&s1, &s0, &many)[1],
+            Cell::Decimal("1.2345678".into())
+        );
+        // A row shorter than its schema: the missing cells read null.
+        assert_eq!(present(&s0, &s1, &[Cell::Int(1)])[1], Cell::Null);
+        // The JSON keys are the newest schema's, in its names.
+        assert_eq!(
+            cells_json(&s1, &shown),
+            json!({"t":"5","value":"-711.5400000","n":"-3.000","a":null})
+        );
+    }
+
+    /// `present` composes (`validate` checks adjacent pairs only): showing a
+    /// row of schema 0 at schema 2 equals showing it at 1 and then at 2.
+    #[test]
+    fn present_composes_across_widenings() {
+        let [s0, s1, s2] = three();
+        for stored in [
+            vec![Cell::Int(1), Cell::Decimal("0.01".into()), Cell::Int(7)],
+            vec![Cell::Int(-9), Cell::Null, Cell::Int(i128::MIN)],
+            vec![
+                Cell::Int(2),
+                Cell::Decimal("-123456.78".into()),
+                Cell::Int(0),
+            ],
+        ] {
+            assert!(check_cells(&s0, &stored).is_ok());
+            let direct = present(&s0, &s2, &stored);
+            let stepped = present(&s1, &s2, &present(&s0, &s1, &stored));
+            assert_eq!(direct, stepped, "{stored:?}");
+        }
+        let at1 = vec![
+            Cell::Int(3),
+            Cell::Decimal("1.2345678".into()),
+            Cell::Decimal("4.125".into()),
+            Cell::Text("x".into()),
+        ];
+        assert!(check_cells(&s1, &at1).is_ok());
+        let shown = present(&s1, &s2, &at1);
+        assert!(check_cells(&s2, &shown).is_ok());
+        assert_eq!(present(&s2, &s2, &shown), shown);
     }
 
     #[test]

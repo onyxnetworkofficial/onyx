@@ -11,8 +11,10 @@
 //!            [--history https://node [--keys 0x…,0x…] [--scan-keys-from N [--logs-range N]]]
 //! ```
 //! Writes one JSON report to stdout. Exit 0 verified (or payable), 1 refused,
-//! 2 usage error, 3 nothing decided (your node could not be read, or your
-//! settings are wrong), 4 (`--history` only) every check held but the
+//! 2 usage error, 3 nothing decided (your node could not be read, your
+//! settings are wrong, or `--bulk` met a manifest header format newer than
+//! this check whose root the publisher signed: update onyx-check), 4
+//! (`--history` only) every check held but the
 //! publisher has since removed the dataset with a tombstone (ADR-0059
 //! amendment 4).
 

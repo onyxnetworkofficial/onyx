@@ -59,6 +59,15 @@ fn bad(s: impl Into<String>) -> SchemaError {
     SchemaError::Bad(s.into())
 }
 
+/// A kind as the schema file writes it: `int`, `decimal(8)`, `text`.
+pub fn kind_text(k: ColumnKind) -> String {
+    match k {
+        ColumnKind::Int => "int".into(),
+        ColumnKind::Decimal { scale } => format!("decimal({scale})"),
+        ColumnKind::Text => "text".into(),
+    }
+}
+
 /// True for a column name: `[a-z][a-z0-9_]*`, 1..=63 bytes.
 pub fn is_column_name(s: &str) -> bool {
     let b = s.as_bytes();
@@ -103,6 +112,66 @@ impl Schema {
                 "key column {} must be int and not nullable",
                 key.name
             )));
+        }
+        Ok(())
+    }
+
+    /// Whether `new` widens `old` (ADR-0059 amendment 5 item 2), so a later
+    /// version may build its new shards under `new` while every earlier
+    /// shard keeps `old`. Allowed at an old column's position: a decimal's
+    /// scale grows, or a non-key `int` becomes `decimal`; after the old
+    /// columns, new nullable ones. Names, order, nullability, text columns
+    /// and the key never change, and at least one change is required. Both
+    /// schemas must be valid.
+    pub fn widens(old: &Schema, new: &Schema) -> Result<(), SchemaError> {
+        old.validate()?;
+        new.validate()?;
+        if new.key != old.key {
+            return Err(bad("widening: the key column stays the same"));
+        }
+        if new.columns.len() < old.columns.len() {
+            return Err(bad(
+                "widening: no column is dropped (new columns go after the old ones)",
+            ));
+        }
+        for (i, (o, n)) in old.columns.iter().zip(&new.columns).enumerate() {
+            if o.name != n.name {
+                return Err(bad(format!(
+                    "widening: column {i} is {} and stays {} (no renaming or reordering)",
+                    n.name, o.name
+                )));
+            }
+            if o.nullable != n.nullable {
+                return Err(bad(format!(
+                    "widening: column {}: nullability never changes",
+                    o.name
+                )));
+            }
+            match (o.kind, n.kind) {
+                (a, b) if a == b => {}
+                (ColumnKind::Decimal { scale: a }, ColumnKind::Decimal { scale: b }) if b > a => {}
+                (ColumnKind::Int, ColumnKind::Decimal { .. }) if i != usize::from(old.key) => {}
+                (a, b) => {
+                    return Err(bad(format!(
+                        "widening: column {}: {} cannot become {} (only a decimal's scale grows, or a non-key int becomes decimal)",
+                        o.name,
+                        kind_text(a),
+                        kind_text(b)
+                    )))
+                }
+            }
+        }
+        if let Some(c) = new.columns[old.columns.len()..]
+            .iter()
+            .find(|c| !c.nullable)
+        {
+            return Err(bad(format!(
+                "widening: the added column {} must be nullable",
+                c.name
+            )));
+        }
+        if old == new {
+            return Err(bad("widening: nothing changes"));
         }
         Ok(())
     }
@@ -261,6 +330,140 @@ mod tests {
             .map(|i| json!({"name": format!("c{i}"), "kind": "int"}))
             .collect();
         assert!(Schema::from_json(&json!({"columns": ok, "key": "c0"})).is_ok());
+    }
+
+    fn widened(f: impl FnOnce(&mut Schema)) -> Schema {
+        let mut s = sample();
+        f(&mut s);
+        s
+    }
+
+    fn col(name: &str, kind: ColumnKind, nullable: bool) -> Column {
+        Column {
+            name: name.into(),
+            kind,
+            nullable,
+        }
+    }
+
+    /// ADR-0059 amendment 5 item 2: a decimal's scale grows (up to 38), a
+    /// non-key int becomes decimal, and nullable columns are added after the
+    /// old ones, alone or together.
+    #[test]
+    fn widen_2_scale_int_to_decimal_nullable_and_appended_columns_widen() {
+        let old = sample();
+        let scale = widened(|s| s.columns[2].kind = ColumnKind::Decimal { scale: 16 });
+        let max = widened(|s| {
+            s.columns[2].kind = ColumnKind::Decimal {
+                scale: MAX_DECIMAL_SCALE,
+            }
+        });
+        let int = widened(|s| s.columns[3].kind = ColumnKind::Decimal { scale: 1 });
+        let added = widened(|s| {
+            s.columns.push(col("extra", ColumnKind::Text, true));
+            s.columns
+                .push(col("more", ColumnKind::Decimal { scale: 4 }, true));
+        });
+        let all = widened(|s| {
+            s.columns[2].kind = ColumnKind::Decimal { scale: 9 };
+            s.columns[3].kind = ColumnKind::Decimal { scale: 38 };
+            s.columns.push(col("extra", ColumnKind::Int, true));
+        });
+        for (name, new) in [
+            ("scale", &scale),
+            ("scale 38", &max),
+            ("int to decimal", &int),
+            ("added", &added),
+            ("all", &all),
+        ] {
+            assert_eq!(Schema::widens(&old, new), Ok(()), "{name}");
+        }
+        // Widening twice: each step on its own.
+        assert_eq!(Schema::widens(&scale, &max), Ok(()));
+        // Up to 64 columns.
+        let full = widened(|s| {
+            for i in s.columns.len()..MAX_COLUMNS {
+                s.columns.push(col(&format!("c{i}"), ColumnKind::Int, true));
+            }
+        });
+        assert_eq!(Schema::widens(&old, &full), Ok(()));
+    }
+
+    /// Everything else is refused: renaming, reordering or dropping a column,
+    /// a smaller or equal scale, decimal to int, any change to or from text,
+    /// any change of nullability (review BULK-WIDEN-R1 finding 3), a
+    /// required added column, a change to the key, no change at all, more
+    /// than 64 columns.
+    #[test]
+    fn widen_3_every_other_change_is_refused() {
+        let old = sample();
+        let mut cases: Vec<(&str, Schema)> = vec![
+            ("rename", widened(|s| s.columns[1].name = "label".into())),
+            ("reorder", widened(|s| s.columns.swap(1, 3))),
+            (
+                "drop",
+                widened(|s| {
+                    s.columns.pop();
+                }),
+            ),
+            (
+                "smaller scale",
+                widened(|s| s.columns[2].kind = ColumnKind::Decimal { scale: 7 }),
+            ),
+            (
+                "decimal to int",
+                widened(|s| s.columns[2].kind = ColumnKind::Int),
+            ),
+            (
+                "decimal to text",
+                widened(|s| s.columns[2].kind = ColumnKind::Text),
+            ),
+            (
+                "int to text",
+                widened(|s| s.columns[3].kind = ColumnKind::Text),
+            ),
+            (
+                "text to decimal",
+                widened(|s| s.columns[1].kind = ColumnKind::Decimal { scale: 2 }),
+            ),
+            (
+                "text to int",
+                widened(|s| s.columns[1].kind = ColumnKind::Int),
+            ),
+            ("to nullable", widened(|s| s.columns[1].nullable = true)),
+            ("to not null", widened(|s| s.columns[2].nullable = false)),
+            (
+                "required added column",
+                widened(|s| s.columns.push(col("extra", ColumnKind::Int, false))),
+            ),
+            (
+                "key to decimal",
+                widened(|s| s.columns[0].kind = ColumnKind::Decimal { scale: 2 }),
+            ),
+            ("no change", sample()),
+        ];
+        // Another key column (the key moves to `count`, an int, not null).
+        cases.push(("other key", widened(|s| s.key = 3)));
+        // An added column first, the old ones after it.
+        cases.push((
+            "added first",
+            widened(|s| s.columns.insert(0, col("extra", ColumnKind::Int, true))),
+        ));
+        for (name, new) in &cases {
+            assert!(Schema::widens(&old, new).is_err(), "{name}");
+        }
+        // An invalid schema never widens anything (65 columns, scale 39).
+        let over = widened(|s| {
+            for i in s.columns.len()..=MAX_COLUMNS {
+                s.columns.push(col(&format!("c{i}"), ColumnKind::Int, true));
+            }
+        });
+        assert!(Schema::widens(&old, &over).is_err());
+        let scale_39 = widened(|s| s.columns[2].kind = ColumnKind::Decimal { scale: 39 });
+        assert!(Schema::widens(&old, &scale_39).is_err());
+        // The reverse of every widening is refused too.
+        let wide = widened(|s| s.columns[2].kind = ColumnKind::Decimal { scale: 9 });
+        assert!(Schema::widens(&wide, &old).is_err());
     }
 
     #[test]

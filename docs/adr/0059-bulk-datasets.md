@@ -6,7 +6,7 @@ Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) acce
 on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
 amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
 CAT-DIFF-R1, built 2026-11-04; amendment 3 (a client check of a publisher's catalog history)
-draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion; its item 5a (erasure) draft 2 after design review CAT-ERASE-R1, slice 1 built 2026-11-09 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion; its item 5a (erasure) draft 2 after design review CAT-ERASE-R1, slice 1 built 2026-11-09; amendment 5 (widening successors) draft 2 after review BULK-WIDEN-R1, built 2026-11-14 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -509,6 +509,208 @@ taken below.
 dataset from catalogs already signed (the history check needs them). Until a node runs item 5a
 with `ONYX_BULK_ERASE=on`, and on every storage node until slice 2, a removed dataset's bytes stay
 and anyone can still fetch its files by root; only its rows, its info and its listing stop.
+
+## Amendment 5 (2026-11-14, draft 2 after review BULK-WIDEN-R1, built 2026-11-14): widening successors (a schema that grows)
+
+**Why** (ROADMAP S23, THREATS BULK-SCHEMA-1, BULK-SRC-1). Item 5 keeps a dataset's schema for good
+(`Manifest::check_successor`, crates/onyx-bulk/src/manifest.rs:307-309). A decimal is canonical at
+exactly one scale, and extra places are refused, never rounded (`canonical_decimal`, row.rs:70-110).
+Each shard is checked against one schema (`check_shard`, shard.rs:142). Since 2026-11-14 the first
+publisher's source writes full binary-float digits (`711.5473167999999` where it wrote
+`711.5473168`), so 467 datasets' new rows need more places than their version-1 schemas allow, a
+few gained a column, and none can be refreshed.
+
+**Decision.** A version may widen the schema for its new shards. Every earlier shard keeps its
+bytes, its root, its entry and the schema it was checked under.
+
+1. **Format 2** (`onyx-bulk`).
+   - The header (manifest.rs:67-99) keeps every format-1 field in the same order. `schema` is the
+     newest schema: new shards are built under it, and answers show values in it.
+   - Format 2 adds one field right after `schema` (review BULK-WIDEN-R1 finding 1: `OnyxStorageLib.readHeader` reads
+     `shard_count`..`shards_root` as the header's last 84 bytes and refuses any format byte but 1, so that tail stays last):
+     `earlier: Vec<EarlierSchema>`, with
+     `EarlierSchema { until: u32, schema: Schema }`, oldest first. An entry covers the shards from
+     the previous entry's `until` (or 0) up to its own `until`; the newest schema covers
+     `[last until, shard_count)`. `schema_of(i)` gives the schema of shard i.
+   - `validate` requires: format 1 has no `earlier`; format 2 has 1 to 7 earlier schemas; `until`
+     strictly increasing, at least 1 and below `shard_count`; every schema valid; each schema widens
+     to the next (item 2), and the last earlier one widens to `schema`.
+   - Borsh: a hand-written impl writes and reads the tail only in format 2. Format-1 bytes stay
+     exactly as today, so every existing manifest, and every dataset that never widens, keeps its
+     bytes, root and readers. A manifest with one schema is always format 1.
+   - The root formula stays `keccak256("onyx-bulk-manifest-v1" ‖ borsh(header))`
+     (manifest.rs:103-107); its first byte is the format, which keeps format-1 and format-2
+     preimages apart. Anchors (anchor.rs:74-84), sequences and catalog leaves do not change.
+   - A widened dataset cannot back a storage deal until an OnyxStorage that accepts format 2 is deployed (the
+     deployed contract is immutable and refuses it); storage nodes refuse a deal on one rather than fail its checks.
+   - `validate` refuses more than 7 earlier schemas before decoding them, and a shard root that appears in two
+     schema ranges (the node checks an upload against the first index that names a root, bulk_serve.rs:3021-3042).
+   - Shard entries do not change (84 bytes): a shard's schema follows from its index, and the entry
+     proof binds the index (`proves_entry`, manifest.rs:157-162).
+
+2. **Widening rule** (`Schema::widens(old, new)`).
+   - Allowed at an old column's position: a decimal's scale grows (up to 38, schema.rs:12); a
+     non-key `int` becomes `decimal`. Nothing else: nullability stays (review finding 3: a not-null text column
+     stores an empty field as `""`, a nullable one as null, input.rs:97-98, so relaxing it would change how the same
+     source value is stored).
+   - Allowed after the old columns: new columns, each nullable, up to 64 in all (schema.rs:8).
+   - At least one change is required.
+   - Refused: renaming, reordering or dropping a column; a smaller scale; decimal to int; any change
+     to or from text; any change of nullability; an appended column that is not nullable; any change
+     to the key column or its index (schema.rs:97-106).
+   - Why this is safe: every row of an old shard maps by one exact rule (item 4's `present`) to a
+     row shown under `new`, and no value changes: fraction zeros are added (input already pads this
+     way, row.rs:96-101); an int is written with zero fraction digits; a column the row lacked reads
+     null. Shown rows are for display and checks only: a padded decimal can pass the 80-character cap of stored
+     cells (row.rs:72-77), so nothing validates shown cells as input (review finding 5). `present` composes:
+     showing s0 at s2 equals showing s0 at s1 and then at s2 (a test), since `validate` checks only adjacent pairs. Names and positions never move, so `values` keys (`cells_json`, row.rs:203-214) and the
+     key (`key_of`, row.rs:194-199) read the same under every schema of a dataset. Text has no exact
+     widening. The key stays a non-null `int` for range reads and shard order.
+
+3. **Successor rule** (replaces manifest.rs:307-309; the rest of `check_successor` stays).
+   - If `schema` equals the previous version's, `earlier` must equal the previous `earlier`.
+   - Otherwise `widens(prev.schema, schema)` must hold, and `earlier` must be the previous `earlier`
+     followed by exactly `{until: prev.shard_count, schema: prev.schema}`.
+   - So earlier schemas and their boundaries stay byte for byte, an old shard can never be
+     relabelled, and a version widens at most once. The newest schema covers the version's new
+     shards (at least one is required, manifest.rs:316-320). `Manifest::build` (manifest.rs:219-248)
+     derives `earlier` from `prev`. Nodes take versions in order through this check
+     (bulk_serve.rs:2753-2768) and recheck chains at start (bulk_serve.rs:2505).
+
+4. **Readers.** Each shard is checked and decoded under `schema_of(index)`, never under the newest
+   schema. `row::present(from, to, cells)` then shows its rows under `schema`: a decimal is padded to
+   the new scale; an int is written as `i.000…`; appended columns are null. Showing a value this way
+   never rounds and never fails. `MAX_DECIMAL_CHARS` (80, row.rs:14) bounds stored cells only, so a
+   shown decimal can reach 117 characters (80 plus 37 places); readers must not cut it. Without the
+   change, decoding an old shard under the newest schema fails loudly at `check_shard`; it never
+   silently gives wrong values.
+   - *Node.* `entry_of` returns `schema_of(entry.index)` of the version that names the root
+     (bulk_serve.rs:3042), which covers the publisher's `PUT`, a peer's `put_shard`, and the restore
+     after a withdrawn tombstone (amendment 4 item 5a). `rows` loads each shard under that schema
+     (bulk_serve.rs:3586), so the load cache key `(root, schema hash)` (bulk_serve.rs:905-906, 3239)
+     stays the same across widenings and no shard is reloaded. `row_json` (wire.rs:120-130) decodes
+     under that schema, presents under `schema`, and in format 2 adds `"schema": k` (the shard's
+     schema index). `header_json` (bulk_serve.rs:3643-3664) adds `format` and `schemas` (each
+     `until` with its schema); `schema` stays the newest. Storage `read_rows` checks each shard under
+     `schema_of(e.index)` (storage.rs:3324-3336).
+   - *Client check* (`check_rows_answer`, wire.rs:156-287; `onyx-check --bulk`,
+     crates/onyx-check/src/lib.rs:813). `validate` (wire.rs:164) checks the whole schema chain. Each
+     row is decoded under the schema of its proven shard index (wire.rs:245). `values`, if sent, must
+     equal `cells_json(schema, present(...))`; `schema`, if sent, must equal the index. So every
+     `values` object in an answer fits `manifest.schema`, and a node can neither show an old row
+     under another schema nor choose between the stored and padded forms.
+   - *Padding at serve time.* Proofs cover `row`, the stored bytes. `values` was always derived from
+     them and checked against them (wire.rs:247-253), so every proof stays verifiable. Across
+     versions a value's text may gain zeros (`711.5473168`, later `711.5473168000000`); its number
+     never changes.
+   - *Website.* `apps/web/verify` has no bulk check (its Cargo.toml has no `onyx-bulk`). The
+     datasets page shows `values` by `manifest.schema.columns` (apps/web/src/lib/datasets.ts:144-160)
+     and trims padding zeros first (`trimDec`, datasets.ts:133-135), so padded and stored forms look
+     alike and its 80-character cut (datasets.ts:158) never meets a padded value. A future bulk
+     check in the WASM verifier must call `check_rows_answer`.
+   - *AI connector.* It passes on the node's answer and checks it with the `onyx-check` binary
+     (apps/agent/src/check.mjs:1-2).
+
+5. **Proofs, roots, catalogs.** The header root covers every schema and boundary, so the publisher's
+   one signature fixes the schema of every shard. A row of an old shard is checked against the
+   newest manifest as before (row to shard root, unchanged entry to `shards_root`, header to root,
+   root to the signature); only the decoding schema changes, and the proven index chooses it.
+   Amendments 1 to 4 are not affected: a leaf names a manifest by its root (catalog.rs:49-60,
+   98-100); catalog successors, diffs, tombstones and erasure work by roots; the history walk decodes
+   own-report manifests with `Manifest::from_bytes` (bulk_history.rs:285).
+
+6. **Limits.** At most 8 schemas per dataset (7 widenings, at most one per version). A schema is at
+   most 4,486 Borsh bytes (64 columns of 70 bytes), so a header stays under 40 KB (80 KB as hex in
+   each rows answer) and a manifest well under 8 MiB (manifest.rs:24). Scales stay within 1 to 38. A
+   publisher that widens every day hits `bulk_not_successor` ("8 schemas") within a week and must
+   start a new id; the tool suggests headroom so that one widening lasts. Each widening closes the
+   old schema's last shard, possibly small: at most 7 short shards per dataset.
+
+7. **Tool.** `onyx-publish build --prev DIR --schema new.json` refuses a schema that differs from
+   the previous version's unless `--widen` is given; the refusal names the first column and the
+   decimal places its rows need. New: `onyx-publish schema-fit --prev DIR --input FILE --out new.json`
+   writes one widening meant to last (review finding 4: binary-float text needs more places as values get
+   smaller, so headroom 2 would spend the 7 widenings): a decimal column gets the places 17 significant digits need
+   at the column's smallest non-zero magnitude in the input, plus 2, at most 38; new input columns are appended as
+   nullable; rows no widening can take (a value past 38 places or 80 characters) are named.
+
+8. **Rollout.** (0) A release that reads format 2 but refuses a format-2 upload unless
+   `ONYX_BULK_FORMAT2=on` (review finding 2: `BulkStore::open` decodes every held manifest and stops the start on any
+   error, bulk_serve.rs:1136-1137, so a node that took one format-2 manifest cannot be rolled back to a format-1
+   binary); the flag goes on only once that release is the rollback target. (1) Nodes first, query and storage: they
+   take format 2 and serve format 1 byte for byte as today. A node not yet upgraded refuses a format-2 manifest (manifest.rs:112-114); it
+   still takes the catalog (leaves only) and keeps serving the earlier version, so that dataset lags;
+   there is no fork. (2) Then `onyx-check` and the connector's binary: an older check refuses an
+   honest format-2 answer (wire.rs:161-163, exit 1), so the publisher guide says so; from now on a
+   header format the check does not know gives exit 3, "update onyx-check", but only when the raw header's root
+   verifies against the signed report (review finding 6: else any node could turn a refusal into "undecided" with a
+   fake format byte) and, on the reader's node, the book holds that report for the publisher's registered key
+   (review BULK-WIDEN-R2 finding 1: any fresh key verifies off chain; `--unchecked` says it was not read on chain);
+   the history walk (bulk_history.rs:283-286) treats an unknown format the same way (finding 7), its bytes tied to
+   the root by the header the manifest answer carries (`header`; review BULK-WIDEN-R2 finding 2).
+   A node that upgrades after a widening refuses later versions ("versions are taken in order",
+   bulk_serve.rs:2779-2785) until the missed widened version is uploaded again with its catalog number; `upload`
+   steps back on that 409 (finding 9). (3) Then publishers: the
+   first publisher widens the 467 datasets in one catalog (one `postReport`). Storage nodes must
+   upgrade before a widened own-report manifest backs a deal; catalog-only datasets cannot back deals
+   yet (CAT-2).
+
+**Tests.** `onyx-bulk`: `widen_1_format_1_bytes_and_roots_are_unchanged` (a golden format-1 root;
+refuses a format-1 header with a tail and a format-2 header with no earlier schema),
+`widen_2_scale_int_to_decimal_nullable_and_appended_columns_widen`,
+`widen_3_every_other_change_is_refused`, `widen_4_earlier_schemas_and_boundaries_are_kept_exactly`,
+`widen_5_a_ninth_schema_is_refused`, `present_pads_exactly_and_never_rounds`,
+`widen_6_an_answer_across_three_schemas_checks`,
+`widen_7_rows_under_another_schema_or_unpadded_values_are_refused`. `onyx-api`:
+`widen_old_shards_load_under_their_own_schema_without_reload`,
+`widen_shard_put_and_restore_check_an_old_root_under_its_schema`,
+`widen_a_relabelling_successor_is_refused_409`, `widen_a_restart_rechecks_a_format_2_chain`,
+`widen_storage_read_rows_checks_each_shard_under_its_schema`. `onyx-publish`:
+`build_widen_needs_the_flag_and_writes_format_2`, `schema_fit_writes_the_narrowest_widening`.
+`onyx-check`: `bulk_widened_answer_verifies_and_an_unknown_format_is_undecided`,
+`bulk_an_unknown_format_with_a_wrong_root_is_refused`. Fuzz: `bulk_parsers` arm 0 asserts that a decoded manifest
+encodes back to the same bytes (the hand-written Borsh). Website: `sample` of
+a widened answer shows the same text as before.
+
+**THREATS** (beside BULK-SCHEMA-1): BULK-WIDEN-1 (a successor relabels an earlier shard's schema or
+boundary), BULK-WIDEN-2 (a node decodes an old shard under another schema or sends `values` that are
+not the proven row's; High), BULK-WIDEN-3 (a padded value rounded or cut), BULK-WIDEN-4 (header
+growth), BULK-WIDEN-5 (older readers refuse an honest format-2 answer; accepted with item 8's
+order), BULK-WIDEN-6 (a reader that typed a column as int or not null meets decimals or nulls;
+accepted, each answer's `schema` describes every value).
+
+**Not in this amendment.** S23's link from an ended id to a new one; dropping or renaming columns;
+narrowing a schema.
+
+**Built** (2026-11-14) as decided, with every test named above, plus: `format_2_validate_checks_the_schema_chain`,
+`present_composes_across_widenings` and `an_unknown_format_is_undecided_only_when_its_root_is_signed` (`onyx-bulk`),
+`widen_a_format_2_upload_is_refused_until_the_flag_is_on`,
+`widen_the_history_walk_blames_unknown_format_bytes_that_are_not_the_root`,
+`widen_an_unknown_format_is_undecided_only_when_its_header_is_the_root` and
+`widen_with_the_flag_off_a_held_format_2_version_answers_200_and_its_fork_is_recorded` (`onyx-api`),
+`bulk_an_unknown_format_signed_by_another_key_is_refused_on_chain` (`onyx-check`), `widen_format_2_uploads_are_off_until_set_on` (`onyx-node`) and
+`upload_steps_back_when_a_node_lacks_the_previous_version` (`onyx-publish`). Choices the text left open: a format-2
+upload with the setting off is `422 bulk_format_not_taken`, checked only where a manifest would be stored (a new
+version, or one in a withdrawn version's place): the same manifest again is still `200`, and a second anchored
+manifest for a held version still marks the dataset forked (the mark and `forked.txt`, never that manifest; review
+BULK-WIDEN-R2 finding 3); `header_json` names `schemas` for format 1 too (one
+entry); a ninth schema is refused by `Manifest::build` and `check_successor` ("8 schemas"), but a node meets it first
+in the decoder's cap (item 1), so it answers `422 bulk_bad_manifest` ("at most 8 schemas"), not item 6's
+`bulk_not_successor`; the history walk cannot split an unknown format's header from its shard list, so
+`GET /v1/bulk/manifests/{root}` carries the header's own bytes (`header`) and the walk requires them to hash to the
+root it followed and the manifest to start with them, else the node is at fault; `schema-fit` keeps a column whose
+input fits its scale (the narrowest widening), types an added column by its values (int, decimal at the fit
+scale, else text) and caps the fit scale so the longest value stays within 80 characters (an added column gets
+the same checks as a widened one; review BULK-WIDEN-R2 finding 4); `build --prev` records the previous folder in `manifest.json` (`prev_dir`) and `upload` records the
+catalog it used (`uploaded.json`), which the step back reads.
+
+**Alternatives considered.** Re-encode old shards under the new schema (every root changes, every
+served proof, storage deal, erasure record and own-report history breaks, GBs uploaded again;
+rejected). A new dataset id and a tombstone (the whole history of 467 datasets uploaded again,
+every link to the old id breaks; kept for the changes item 2 refuses). Round to the old scale
+(changes the source's values; forbidden). A schema index in each shard entry (changes the entry
+layout and every carried-over leaf, while the proven index already fixes the schema; rejected).
+Show stored forms unpadded (one column would mix scales within an answer; rejected).
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and

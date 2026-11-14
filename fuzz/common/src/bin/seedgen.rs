@@ -886,7 +886,7 @@ fn bulk(o: &mut Out) {
             publisher: onyx_core::SourceId("example.publisher".into()),
             created_unix: 1_700_000_000,
             schema: schema.clone(),
-            rights,
+            rights: rights.clone(),
         },
         None,
         vec![ShardEntry::new(0, &c.summary)],
@@ -895,6 +895,32 @@ fn bulk(o: &mut Out) {
         return;
     };
     o.sel("bulk_parsers", "manifest", 0, &m.to_bytes());
+    // A format-2 manifest (ADR-0059 amendment 5): version 2 widens `v` to 4
+    // places for its new shard; shard 0 keeps the version-1 schema.
+    let mut wide = schema.clone();
+    wide.columns[1].kind = onyx_bulk::ColumnKind::Decimal { scale: 4 };
+    let wide_rows: Vec<Vec<u8>> = (20..30i128)
+        .filter_map(|t| encode_row(&wide, &[Cell::Int(t), Cell::Decimal(format!("{t}.1250"))]).ok())
+        .collect();
+    let wide_file = onyx_bulk::shard::encode_shard(&wide_rows);
+    let widened = onyx_bulk::shard::check_shard(&wide, &wide_file).ok().and_then(|c2| {
+        Manifest::build(
+            NewVersion {
+                dataset: "synthetic.metrics".into(),
+                publisher: onyx_core::SourceId("example.publisher".into()),
+                created_unix: 1_700_000_050,
+                schema: wide.clone(),
+                rights,
+            },
+            Some(&m),
+            vec![m.shards[0], ShardEntry::new(1, &c2.summary)],
+        )
+        .ok()
+    });
+    match widened {
+        Some(m2) => o.sel("bulk_parsers", "manifest-format-2", 0, &m2.to_bytes()),
+        None => eprintln!("seedgen: bulk format-2 manifest"),
+    }
     let secret = onyx_core::keccak256(b"onyx fuzz seed catalog key").0;
     let leaf = CatalogLeaf::of(&m.header);
     let other = CatalogLeaf {

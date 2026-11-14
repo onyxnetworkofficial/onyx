@@ -7,7 +7,8 @@
 //! onyx-publish keys-doc --key publisher.key --publisher <source id> [--out onyx-source-keys.json]
 //! onyx-publish synth    --out data.csv --schema-out schema.json --mib 100   # clearly synthetic test rows
 //! onyx-publish build    --schema schema.json --input data.csv --dataset <id> --publisher <source id>
-//!                       --license CC0-1.0 [--attribution TEXT] --out DIR [--prev DIR] [--shard-mib 8]
+//!                       --license CC0-1.0 [--attribution TEXT] --out DIR [--prev DIR [--widen]] [--shard-mib 8]
+//! onyx-publish schema-fit --prev DIR --input data.csv --out new.json   # one widening for new rows
 //! onyx-publish sign     --key publisher.key --dir DIR
 //! onyx-publish anchor   --dir DIR --rpc URL --chain-id N --book 0x… --gas-key FILE
 //! onyx-publish upload   --dir DIR --node URL [--wait-secs N] [--catalog N]
@@ -26,6 +27,14 @@
 //! own report. The catalog's report goes next to it as `FILE.report`.
 //! `--remove` ends each named dataset with a tombstone (ADR-0059 amendment 4):
 //! nodes stop serving it, and a later folder of it in LIST is skipped.
+//!
+//! A later version keeps the previous version's schema unless `build --widen`
+//! widens it (ADR-0059 amendment 5): a decimal's scale grows, a non-key int
+//! becomes decimal, nullable columns are added at the end; earlier shards keep
+//! theirs. `schema-fit` writes the one widening new rows need, with room so it
+//! lasts (a dataset has at most 8 schemas). `upload` steps back to the
+//! previous version's folder when a node lacks it ("versions are taken in
+//! order").
 //!
 //! Keys are read from files that only their owner can read and are never
 //! printed. Exit 0 done, 1 refused or failed, 2 usage.
@@ -49,7 +58,7 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 const USAGE: &str =
-    "usage: onyx-publish <keygen|address|keys-doc|synth|build|sign|anchor|upload|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
+    "usage: onyx-publish <keygen|address|keys-doc|synth|build|schema-fit|sign|anchor|upload|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
 see the header of crates/onyx-publish/src/main.rs or docs/ops/bulk-publish.md";
 
 type Res<T> = Result<T, String>;
@@ -83,6 +92,7 @@ fn main() -> ExitCode {
         "keys-doc" => keys_doc(&opts),
         "synth" => synth(&opts),
         "build" => build_cmd(&opts),
+        "schema-fit" => schema_fit_cmd(&opts),
         "sign" => sign_cmd(&opts),
         "anchor" => rt.block_on(anchor_cmd(&opts)),
         "upload" => rt.block_on(upload_cmd(&opts)),
@@ -107,6 +117,11 @@ fn main() -> ExitCode {
 
 struct Opts(BTreeMap<String, String>);
 
+/// Options that take no value.
+const FLAGS: &[&str] = &["widen"];
+/// What a flag stores in [`Opts`] (it is given, with no value).
+static FLAG_ON: String = String::new();
+
 fn parse_opts(a: &[String]) -> Res<Opts> {
     let mut m = BTreeMap::new();
     let mut it = a.iter();
@@ -114,7 +129,11 @@ fn parse_opts(a: &[String]) -> Res<Opts> {
         let name = k
             .strip_prefix("--")
             .ok_or_else(|| format!("unexpected {k}"))?;
-        let v = it.next().ok_or_else(|| format!("{k} needs a value"))?;
+        let v = if FLAGS.contains(&name) {
+            &FLAG_ON
+        } else {
+            it.next().ok_or_else(|| format!("{k} needs a value"))?
+        };
         if m.insert(name.to_string(), v.clone()).is_some() {
             return Err(format!("{k} given twice"));
         }
@@ -123,6 +142,9 @@ fn parse_opts(a: &[String]) -> Res<Opts> {
 }
 
 impl Opts {
+    fn flag(&self, k: &str) -> bool {
+        self.0.contains_key(k)
+    }
     fn req(&self, k: &str) -> Res<&str> {
         self.0
             .get(k)
@@ -362,13 +384,17 @@ fn build(
     dir: &Path,
 ) -> Res<Built> {
     std::fs::create_dir_all(dir.join("shards")).map_err(|e| format!("{}: {e}", dir.display()))?;
-    let mut records = Records::new(input, schema.clone(), format).map_err(|e| e.to_string())?;
+    let mut records = Records::new(input, schema.clone(), format)
+        .map_err(|e| fit_hint(e.to_string(), prev.is_some()))?;
     let mut b = ShardBuilder::new(target);
     let mut entries: Vec<ShardEntry> = prev.map(|p| p.shards.clone()).unwrap_or_default();
     let mut new_shards = Vec::new();
     let mut rows = 0u64;
     let floor = prev.map(|p| p.header.key_max);
-    while let Some((line, cells)) = records.next_record().map_err(|e| e.to_string())? {
+    while let Some((line, cells)) = records
+        .next_record()
+        .map_err(|e| fit_hint(e.to_string(), prev.is_some()))?
+    {
         let row = encode_row(schema, &cells).map_err(|e| format!("line {line}: {e}"))?;
         let key =
             onyx_bulk::row::key_of(schema, &cells).ok_or_else(|| format!("line {line}: no key"))?;
@@ -405,6 +431,50 @@ fn build(
     })
 }
 
+/// A successor's input that does not fit the schema because it needs more
+/// decimal places or has another column: how to widen (ADR-0059 amendment 5
+/// item 7). The error already names the line, the column and the places.
+fn fit_hint(e: String, successor: bool) -> String {
+    let widen = [
+        "decimal places",
+        "header has",
+        "header must name",
+        "unknown column",
+    ];
+    if successor && widen.iter().any(|w| e.contains(w)) {
+        format!(
+            "{e}; to widen the schema for the new rows: onyx-publish schema-fit --prev DIR --input FILE --out new.json, then build --schema new.json --widen (ADR-0059 amendment 5)"
+        )
+    } else {
+        e
+    }
+}
+
+/// The first column where `new` differs from `old`, in words.
+fn first_difference(old: &Schema, new: &Schema) -> String {
+    use onyx_bulk::schema::kind_text;
+    let n = old.columns.len().max(new.columns.len());
+    for i in 0..n {
+        match (old.columns.get(i), new.columns.get(i)) {
+            (Some(o), Some(c)) if o != c => {
+                return format!(
+                    "column {}: {}{} before, column {}: {}{} now",
+                    o.name,
+                    kind_text(o.kind),
+                    if o.nullable { " nullable" } else { "" },
+                    c.name,
+                    kind_text(c.kind),
+                    if c.nullable { " nullable" } else { "" }
+                )
+            }
+            (None, Some(c)) => return format!("column {} added", c.name),
+            (Some(o), None) => return format!("column {} dropped", o.name),
+            _ => {}
+        }
+    }
+    "the key column differs".into()
+}
+
 fn read_manifest(dir: &Path) -> Res<Manifest> {
     let p = dir.join("manifest.bin");
     let b = std::fs::read(&p).map_err(|e| format!("{}: {e}", p.display()))?;
@@ -421,6 +491,7 @@ fn build_cmd(o: &Opts) -> Res<()> {
         "attribution",
         "out",
         "prev",
+        "widen",
         "created",
         "shard-mib",
     ])?;
@@ -447,6 +518,28 @@ fn build_cmd(o: &Opts) -> Res<()> {
         .opt("prev")
         .map(|p| read_manifest(Path::new(p)))
         .transpose()?;
+    // ADR-0059 amendment 5 item 7: a later version keeps the schema unless
+    // `--widen` widens it on purpose.
+    let widen = o.flag("widen");
+    match &prev {
+        None if widen => return Err("--widen needs --prev (version 1 has nothing to widen)".into()),
+        Some(p) if p.header.schema != schema && !widen => {
+            return Err(format!(
+                "the schema differs from version {}'s ({}): a later version keeps it unless --widen widens it (onyx-publish schema-fit writes a widening that fits the new rows; ADR-0059 amendment 5)",
+                p.header.version,
+                first_difference(&p.header.schema, &schema)
+            ))
+        }
+        Some(p) if p.header.schema != schema => {
+            Schema::widens(&p.header.schema, &schema).map_err(|e| {
+                format!(
+                    "--widen: the schema does not widen version {}'s: {e}",
+                    p.header.version
+                )
+            })?;
+        }
+        _ => {}
+    }
     let created = o.num("created", now_unix())?;
     let out = PathBuf::from(o.req("out")?);
     if out.join("manifest.bin").exists() {
@@ -486,12 +579,22 @@ fn build_cmd(o: &Opts) -> Res<()> {
         "key_min": m.header.key_min.to_string(),
         "key_max": m.header.key_max.to_string(),
         "license": m.header.rights.license,
+        "format": m.header.format,
+        "schemas": m.header.schemas().len(),
     });
+    let mut summary = summary;
+    // The folder of the previous version: `upload` steps back to it when a
+    // node lacks that version (ADR-0059 amendment 5 item 8).
+    if let Some(p) = o.opt("prev") {
+        let abs = std::fs::canonicalize(p).map_err(|e| format!("--prev: {e}"))?;
+        summary["prev_dir"] = json!(abs.display().to_string());
+    }
     std::fs::write(out.join("manifest.json"), format!("{summary:#}\n"))
         .map_err(|e| e.to_string())?;
     println!(
-        "BUILT version={} rows={} new_rows={} shards={} new_shards={} bytes={} secs={:.1} root={}",
+        "BUILT version={} format={} rows={} new_rows={} shards={} new_shards={} bytes={} secs={:.1} root={}",
         m.header.version,
+        m.header.format,
         m.header.row_count,
         built.input_rows,
         m.header.shard_count,
@@ -500,6 +603,469 @@ fn build_cmd(o: &Opts) -> Res<()> {
         t.elapsed().as_secs_f64(),
         m.header.root()
     );
+    Ok(())
+}
+
+// ------------------------------------------------------------------ schema-fit
+
+/// Significant digits of a binary64 value written in full: the places a
+/// decimal column needs to hold its smallest value's digits.
+const FLOAT_DIGITS: i64 = 17;
+/// Places added above that, so one widening lasts (ADR-0059 amendment 5
+/// item 7, review BULK-WIDEN-R1 finding 4).
+const FIT_HEADROOM: i64 = 2;
+/// Lines `schema-fit` names per kind of misfit (the rest are counted).
+const UNFIT_SHOWN: usize = 20;
+
+/// Some lines, the first [`UNFIT_SHOWN`] kept and all counted.
+#[derive(Default)]
+struct Lines {
+    first: Vec<u64>,
+    count: u64,
+}
+
+impl Lines {
+    fn push(&mut self, line: u64) {
+        self.count += 1;
+        if self.first.len() < UNFIT_SHOWN {
+            self.first.push(line);
+        }
+    }
+}
+
+/// Values no widening can take: the first lines of each kind with why
+/// (line 0: a whole column), and how many in all.
+#[derive(Default)]
+struct Unfit {
+    named: Vec<(u64, String)>,
+    count: u64,
+}
+
+impl Unfit {
+    fn lines(&mut self, l: &Lines, why: String) {
+        self.count += l.count;
+        self.named.extend(l.first.iter().map(|x| (*x, why.clone())));
+    }
+    fn one(&mut self, line: u64, why: String) {
+        self.count += 1;
+        self.named.push((line, why));
+    }
+}
+
+/// One input field: its text, and whether it came as a JSON number.
+type Field = Option<(String, bool)>;
+
+/// What one input column's values need.
+#[derive(Default)]
+struct Need {
+    /// Non-empty values.
+    values: u64,
+    /// Values that are not whole numbers.
+    not_int: Lines,
+    /// Values that are not decimals (`-?digits[.digits]`).
+    not_number: Lines,
+    /// Values given as JSON numbers: whole, and with a fraction.
+    json_ints: Lines,
+    json_fractions: Lines,
+    /// Empty fields.
+    empty: Lines,
+    /// Values longer than a stored decimal may be (80 characters).
+    too_long: Lines,
+    /// Most fraction places a value needs (trailing zeros dropped).
+    places: usize,
+    /// Exponent of the first significant digit of the smallest non-zero
+    /// value (`0.00012` is -4, `711.5` is 2).
+    min_exp: Option<i64>,
+    /// Values whose integer part (with its sign) may pass 80 characters at
+    /// some scale: (line, length); a few at most in any real input.
+    long: Vec<(u64, usize)>,
+    /// The longest integer part (with its sign) of a value.
+    max_int: usize,
+}
+
+impl Need {
+    fn add(&mut self, line: u64, f: &Field) {
+        let Some((v, json)) = f else {
+            self.empty.push(line);
+            return;
+        };
+        self.values += 1;
+        if v.len() > onyx_bulk::row::MAX_DECIMAL_CHARS {
+            self.too_long.push(line);
+        }
+        let whole = onyx_bulk::row::parse_int(v).is_ok();
+        if !whole {
+            self.not_int.push(line);
+        }
+        if *json {
+            if whole {
+                self.json_ints.push(line);
+            } else {
+                self.json_fractions.push(line);
+            }
+        }
+        let body = v.strip_prefix('-').unwrap_or(v);
+        let (int, frac) = body.split_once('.').unwrap_or((body, ""));
+        let digits = |x: &str| x.bytes().all(|c| c.is_ascii_digit());
+        if int.is_empty()
+            || !digits(int)
+            || !digits(frac)
+            || (body.contains('.') && frac.is_empty())
+        {
+            self.not_number.push(line);
+            return;
+        }
+        let frac = frac.trim_end_matches('0');
+        let int = int.trim_start_matches('0');
+        self.places = self.places.max(frac.len());
+        let exp = if !int.is_empty() {
+            Some(int.len() as i64 - 1)
+        } else {
+            frac.bytes()
+                .position(|c| c != b'0')
+                .map(|p| -(p as i64) - 1)
+        };
+        if let Some(e) = exp {
+            self.min_exp = Some(self.min_exp.map_or(e, |m| m.min(e)));
+        }
+        let int_len = int.len().max(1) + usize::from(v.starts_with('-'));
+        self.max_int = self.max_int.max(int_len);
+        if int_len + 1 + usize::from(MAX_DECIMAL_SCALE) > onyx_bulk::row::MAX_DECIMAL_CHARS
+            && self.long.len() < 10_000
+        {
+            self.long.push((line, int_len));
+        }
+    }
+
+    /// The scale meant to last: the places 17 significant digits need at the
+    /// smallest non-zero magnitude, plus 2, but no more than lets the
+    /// longest integer part stay within 80 characters (review BULK-WIDEN-R2
+    /// finding 4), and at least the places the values need now; 1 to 38.
+    fn fit_scale(&self) -> u8 {
+        let float = self
+            .min_exp
+            .map_or(0, |e| (FLOAT_DIGITS - 1 - e).max(0) + FIT_HEADROOM);
+        let room = onyx_bulk::row::MAX_DECIMAL_CHARS.saturating_sub(self.max_int + 1) as i64;
+        let want = float
+            .min(room)
+            .max(self.places as i64)
+            .clamp(1, i64::from(MAX_DECIMAL_SCALE));
+        u8::try_from(want).unwrap_or(MAX_DECIMAL_SCALE)
+    }
+
+    /// Name the values of a column of kind decimal at `scale` that `build`
+    /// would still refuse: written longer than 80 characters, given as JSON
+    /// numbers, or past 80 characters at that scale.
+    fn decimal_misfits(&self, name: &str, scale: u8, unfit: &mut Unfit) {
+        unfit.lines(
+            &self.too_long,
+            format!("column {name}: longer than 80 characters"),
+        );
+        let why = format!("column {name}: a JSON number: write decimals as strings");
+        unfit.lines(&self.json_ints, why.clone());
+        unfit.lines(&self.json_fractions, why);
+        for (l, len) in &self.long {
+            if len + 1 + usize::from(scale) > onyx_bulk::row::MAX_DECIMAL_CHARS {
+                unfit.one(
+                    *l,
+                    format!("column {name}: past 80 characters at {scale} places"),
+                );
+            }
+        }
+    }
+}
+
+use onyx_bulk::schema::{kind_text, Column, ColumnKind, MAX_DECIMAL_SCALE};
+
+/// Read every record of `path`, passing each one's fields by name index to
+/// `f`; returns the column names. CSV goes through the build's own reader
+/// (quoting and line ends read exactly as `build` reads them; the header
+/// gives the names); JSON Lines object by object, starting from `known` (a
+/// name absent from a record is an empty field).
+fn each_record(
+    path: &str,
+    format: Format,
+    known: &[String],
+    f: &mut dyn FnMut(usize, u64, &[Field]),
+) -> Res<Vec<String>> {
+    let open = || std::fs::File::open(path).map_err(|e| format!("{path}: {e}"));
+    match format {
+        Format::Csv => {
+            let mut head = String::new();
+            BufReader::new(open()?)
+                .read_line(&mut head)
+                .map_err(|e| format!("{path}: {e}"))?;
+            let names = onyx_bulk::input::csv_header_names(&head)
+                .map_err(|e| format!("{path}: line 1: {e}"))?;
+            // Every column as nullable text: each field is kept as written
+            // (an empty one as null) and nothing else is checked.
+            let text = Schema {
+                columns: names
+                    .iter()
+                    .map(|n| Column {
+                        name: n.clone(),
+                        kind: ColumnKind::Text,
+                        nullable: true,
+                    })
+                    .collect(),
+                key: 0,
+            };
+            let mut r = Records::new(
+                BufReader::with_capacity(1 << 20, open()?),
+                text,
+                Format::Csv,
+            )
+            .map_err(|e| e.to_string())?;
+            while let Some((line, cells)) = r.next_record().map_err(|e| e.to_string())? {
+                let fields: Vec<Field> = cells
+                    .into_iter()
+                    .map(|c| match c {
+                        onyx_bulk::Cell::Text(t) => Some((t, false)),
+                        _ => None,
+                    })
+                    .collect();
+                f(names.len(), line, &fields);
+            }
+            Ok(names)
+        }
+        Format::JsonLines => {
+            let mut names: Vec<String> = known.to_vec();
+            for (i, l) in BufReader::with_capacity(1 << 20, open()?)
+                .lines()
+                .enumerate()
+            {
+                let line = i as u64 + 1;
+                let l = l.map_err(|e| format!("{path}: line {line}: {e}"))?;
+                if l.trim().is_empty() {
+                    continue;
+                }
+                let v: Value =
+                    serde_json::from_str(&l).map_err(|e| format!("line {line}: not JSON: {e}"))?;
+                let obj = v
+                    .as_object()
+                    .ok_or_else(|| format!("line {line}: not a JSON object"))?;
+                let mut fields: Vec<Field> = vec![None; names.len()];
+                for (k, x) in obj {
+                    let i = names.iter().position(|n| n == k).unwrap_or_else(|| {
+                        names.push(k.clone());
+                        fields.push(None);
+                        names.len() - 1
+                    });
+                    fields[i] = match x {
+                        Value::Null => None,
+                        Value::String(s) => Some((s.clone(), false)),
+                        Value::Number(n) => Some((n.to_string(), true)),
+                        _ => {
+                            return Err(format!("line {line}: column {k}: not a string or number"))
+                        }
+                    };
+                }
+                f(names.len(), line, &fields);
+            }
+            Ok(names)
+        }
+    }
+}
+
+/// `schema-fit --prev DIR --input FILE --out new.json`: the one widening of
+/// version `DIR`'s schema the rows of FILE need (ADR-0059 amendment 5 item
+/// 7). A decimal column whose values need more places than its scale, and a
+/// non-key int column holding fractions, get [`Need::fit_scale`]; a column of
+/// FILE the schema lacks is added as nullable (int, decimal at the fit
+/// scale, or text, by its values); every other column stays as it is, so it
+/// is the narrowest widening that takes the rows and lasts. Values no
+/// widening can take (more than 38 places, past 80 characters, not a number,
+/// a JSON number where `build` wants a string, empty where the column is not
+/// nullable) are named with their lines; the schema is written for the rest
+/// and the command then fails (exit 1).
+fn schema_fit_cmd(o: &Opts) -> Res<()> {
+    o.only(&["prev", "input", "out"])?;
+    let prev = read_manifest(Path::new(o.req("prev")?))?;
+    let old = &prev.header.schema;
+    let input = o.req("input")?;
+    let format = Format::from_path(input).ok_or("--input must end in .csv, .jsonl or .ndjson")?;
+    let out = o.req("out")?;
+    let known: Vec<String> = old.columns.iter().map(|c| c.name.clone()).collect();
+    let mut needs: Vec<Need> = Vec::new();
+    let mut rows = 0u64;
+    let names = each_record(input, format, &known, &mut |n, line, fields| {
+        if needs.len() < n {
+            needs.resize_with(n, Need::default);
+        }
+        for (need, f) in needs.iter_mut().zip(fields) {
+            need.add(line, f);
+        }
+        rows += 1;
+    })?;
+    needs.resize_with(names.len(), Need::default);
+    if let Some(c) = old.columns.iter().find(|c| !names.contains(&c.name)) {
+        return Err(format!(
+            "the input has no column {}: no widening drops a column (a new dataset id does)",
+            c.name
+        ));
+    }
+    let mut unfit = Unfit::default();
+    let mut changed: Vec<String> = Vec::new();
+    let mut columns = old.columns.clone();
+    let key = usize::from(old.key);
+    for (i, c) in columns.iter_mut().enumerate() {
+        let p = names.iter().position(|n| *n == c.name).unwrap_or_default();
+        let n = &needs[p];
+        let before = c.kind;
+        if !c.nullable && c.kind != ColumnKind::Text {
+            unfit.lines(
+                &n.empty,
+                format!(
+                    "column {}: empty, and the column is not nullable (nullability never changes)",
+                    c.name
+                ),
+            );
+        }
+        if c.kind == ColumnKind::Text {
+            unfit.lines(
+                &n.json_ints,
+                format!(
+                    "column {}: a JSON number in a text column: write it as a string",
+                    c.name
+                ),
+            );
+            unfit.lines(
+                &n.json_fractions,
+                format!(
+                    "column {}: a JSON number in a text column: write it as a string",
+                    c.name
+                ),
+            );
+            continue;
+        }
+        unfit.lines(&n.not_number, format!("column {}: not a number", c.name));
+        if n.not_int.count > 0 && i == key {
+            unfit.lines(
+                &n.not_int,
+                format!("column {}: not a whole number (the key stays int)", c.name),
+            );
+            continue;
+        }
+        let scale = match c.kind {
+            ColumnKind::Decimal { scale } => scale,
+            _ => 0,
+        };
+        // Values with a point but no fraction places ("5.0"): an int column
+        // that holds them becomes decimal too.
+        let fractions = n.not_int.count > n.not_number.count;
+        if n.places > usize::from(MAX_DECIMAL_SCALE) {
+            unfit.one(
+                0,
+                format!(
+                    "column {}: a value needs {} decimal places, more than 38",
+                    c.name, n.places
+                ),
+            );
+        } else if n.places > usize::from(scale) || (c.kind == ColumnKind::Int && fractions) {
+            c.kind = ColumnKind::Decimal {
+                scale: n.fit_scale(),
+            };
+        }
+        match c.kind {
+            ColumnKind::Decimal { scale } => n.decimal_misfits(&c.name, scale, &mut unfit),
+            _ => unfit.lines(
+                &n.json_fractions,
+                format!("column {}: a JSON number with a fraction", c.name),
+            ),
+        }
+        if c.kind != before {
+            changed.push(format!(
+                "WIDEN {}: {} -> {} (its values need {} places)",
+                c.name,
+                kind_text(before),
+                kind_text(c.kind),
+                n.places
+            ));
+        }
+    }
+    for (p, name) in names.iter().enumerate() {
+        if old.index_of(name).is_some() {
+            continue;
+        }
+        if !onyx_bulk::schema::is_column_name(name) {
+            return Err(format!(
+                "the input's column {name:?} is not a column name ([a-z][a-z0-9_]*)"
+            ));
+        }
+        let n = &needs[p];
+        let numbers = n.values > 0 && n.not_number.count == 0;
+        let kind = if numbers && n.not_int.count == 0 {
+            ColumnKind::Int
+        } else if numbers
+            && n.places <= usize::from(MAX_DECIMAL_SCALE)
+            && n.json_ints.count + n.json_fractions.count == 0
+        {
+            ColumnKind::Decimal {
+                scale: n.fit_scale(),
+            }
+        } else {
+            ColumnKind::Text
+        };
+        if n.values == 0 {
+            eprintln!("note: column {name} holds no value: added as nullable text (edit {out} if it will hold numbers)");
+        }
+        match kind {
+            ColumnKind::Text => {
+                let why =
+                    format!("column {name}: a JSON number in a text column: write it as a string");
+                unfit.lines(&n.json_ints, why.clone());
+                unfit.lines(&n.json_fractions, why);
+            }
+            // The same checks as a widened column (review BULK-WIDEN-R2
+            // finding 4).
+            ColumnKind::Decimal { scale } => n.decimal_misfits(name, scale, &mut unfit),
+            ColumnKind::Int => {}
+        }
+        changed.push(format!("ADD {name}: {} (nullable)", kind_text(kind)));
+        columns.push(Column {
+            name: name.clone(),
+            kind,
+            nullable: true,
+        });
+    }
+    let new = Schema {
+        columns,
+        key: old.key,
+    };
+    if new != *old {
+        Schema::widens(old, &new).map_err(|e| format!("no widening takes this input: {e}"))?;
+    }
+    std::fs::write(out, format!("{:#}\n", new.to_json())).map_err(|e| format!("{out}: {e}"))?;
+    for c in &changed {
+        println!("{c}");
+    }
+    let count = unfit.count;
+    let mut unfit = unfit.named;
+    unfit.sort();
+    for (l, why) in &unfit {
+        match l {
+            0 => println!("UNFIT {why}"),
+            l => println!("UNFIT line {l}: {why}"),
+        }
+    }
+    let schemas = prev.header.schemas().len() + usize::from(new != *old);
+    println!(
+        "FIT version={} rows={rows} changes={} schemas={schemas} (at most {}) unfit={count} out={out}",
+        prev.header.version,
+        changed.len(),
+        onyx_bulk::manifest::MAX_EARLIER + 1,
+    );
+    if new == *old {
+        println!(
+            "the rows fit version {}'s schema: no widening needed",
+            prev.header.version
+        );
+    }
+    if count > 0 {
+        return Err(format!(
+            "{count} value(s) no widening can take (the first named above); {out} holds the widening for the rest"
+        ));
+    }
     Ok(())
 }
 
@@ -838,39 +1404,120 @@ async fn send_until(
     }
 }
 
+/// The node's refusal of a version whose predecessor it lacks
+/// (`bulk_not_successor`).
+const TAKEN_IN_ORDER: &str = "versions are taken in order";
+/// Versions `upload` steps back at most (one per version a node lacks).
+const MAX_STEPS_BACK: u32 = 64;
+/// What `upload` records in a version folder once a node took the version:
+/// the catalog number it was uploaded with (a step back uploads the
+/// version again with the same one).
+const UPLOADED: &str = "uploaded.json";
+
 async fn upload_cmd(o: &Opts) -> Res<()> {
     o.only(&["dir", "node", "wait-secs", "catalog"])?;
     let dir = PathBuf::from(o.req("dir")?);
-    let m = read_manifest(&dir)?;
     let node = o.req("node")?.trim_end_matches('/').to_string();
     let wait = Duration::from_secs(o.num("wait-secs", 0)?);
-    let c = client();
-    let body = match o.opt("catalog") {
-        Some(n) => {
-            let n: u64 = n.parse().map_err(|_| "--catalog: a catalog number")?;
-            json!({"manifest": hx(&m.to_bytes()), "catalog": n})
-        }
+    let catalog = o
+        .opt("catalog")
+        .map(|n| n.parse::<u64>().map_err(|_| "--catalog: a catalog number"))
+        .transpose()?;
+    upload_dir(
+        &client(),
+        &node,
+        &dir,
+        catalog,
+        wait,
+        Duration::from_secs(RETRY_SECS),
+        MAX_STEPS_BACK,
+    )
+    .await
+}
+
+/// The folder and catalog number of the version before `m` (in folder
+/// `dir`): the folder `build --prev` named, which must hold `m`'s previous
+/// root, and the catalog its own upload used (`uploaded.json`), else its own
+/// report.
+fn previous_version(dir: &Path, m: &Manifest) -> Res<(PathBuf, Option<u64>)> {
+    let lacks = format!(
+        "the node lacks version {} of {}",
+        m.header.version.saturating_sub(1),
+        m.header.dataset
+    );
+    let summary: Value = std::fs::read_to_string(dir.join("manifest.json"))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let prev = summary["prev_dir"].as_str().map(PathBuf::from).ok_or_else(|| {
+        format!(
+            "{lacks}, and {} does not name its folder (built without --prev, or by an older onyx-publish): upload that version first",
+            dir.display()
+        )
+    })?;
+    let pm = read_manifest(&prev)?;
+    if pm.header.root() != m.header.prev {
+        return Err(format!(
+            "{lacks}: {} holds another root than this version's prev",
+            prev.display()
+        ));
+    }
+    let uploaded: Value = std::fs::read_to_string(prev.join(UPLOADED))
+        .ok()
+        .and_then(|t| serde_json::from_str(&t).ok())
+        .unwrap_or(Value::Null);
+    let catalog = match uploaded["catalog"].as_u64() {
+        Some(n) => Some(n),
+        None if prev.join("report.bin").exists() => None,
         None => {
-            let r = read_report(&dir)?;
+            return Err(format!(
+                "{lacks}: {} has no report and no record of the catalog it was uploaded with: upload it with --catalog <the number of the catalog that lists it> first",
+                prev.display()
+            ))
+        }
+    };
+    Ok((prev, catalog))
+}
+
+/// Upload the version in `dir`: its manifest (its own report, or catalog
+/// `catalog`), then every shard the node misses, then the manifest again,
+/// for at most [`UPLOAD_ROUNDS`]. A node that lacks the previous version
+/// ("versions are taken in order": it upgraded after a widening it then
+/// refused, ADR-0059 amendment 5 item 8) gets that version first from its
+/// folder, at most `steps` versions back, and then this one again.
+async fn upload_dir(
+    c: &Client,
+    node: &str,
+    dir: &Path,
+    catalog: Option<u64>,
+    wait: Duration,
+    pause: Duration,
+    steps: u32,
+) -> Res<()> {
+    let m = read_manifest(dir)?;
+    let body = match catalog {
+        Some(n) => json!({"manifest": hx(&m.to_bytes()), "catalog": n}),
+        None => {
+            let r = read_report(dir)?;
             json!({"manifest": hx(&m.to_bytes()), "report": hx(&borsh::to_vec(&r).map_err(|e| e.to_string())?)})
         }
     };
     let t = Instant::now();
     let manifest_url = format!("{node}/v1/bulk/manifests");
     let body = hyper::body::Bytes::from(body.to_string().into_bytes());
-    let pause = Duration::from_secs(RETRY_SECS);
-    let answer = match send_until(
-        &c,
-        hyper::Method::POST,
-        &manifest_url,
-        "application/json",
-        body.clone(),
-        wait,
-        pause,
-        "manifest",
-    )
-    .await
-    {
+    let post = || {
+        send_until(
+            c,
+            hyper::Method::POST,
+            &manifest_url,
+            "application/json",
+            body.clone(),
+            wait,
+            pause,
+            "manifest",
+        )
+    };
+    let answer = match post().await {
         // The publisher removed the dataset (ADR-0059 amendment 4): nothing
         // to send, and nothing left to do.
         Err(e) if e.contains("bulk_dataset_removed") => {
@@ -880,6 +1527,30 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
                 m.header.root()
             );
             return Ok(());
+        }
+        Err(e) if e.contains(TAKEN_IN_ORDER) && m.header.version > 1 => {
+            if steps == 0 {
+                return Err(format!(
+                    "{e}: the node lacks more than {MAX_STEPS_BACK} versions before this one"
+                ));
+            }
+            let (prev, prev_catalog) = previous_version(dir, &m)?;
+            eprintln!(
+                "the node lacks version {}: uploading it first from {}",
+                m.header.version - 1,
+                prev.display()
+            );
+            Box::pin(upload_dir(
+                c,
+                node,
+                &prev,
+                prev_catalog,
+                wait,
+                pause,
+                steps - 1,
+            ))
+            .await?;
+            post().await?
         }
         a => a?,
     };
@@ -898,7 +1569,7 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
         for e in &missing {
             let root = e["root"].as_str().ok_or("node answer: missing[].root")?;
             let h = onyx_bulk::wire::hash_field(&e["root"], "root").map_err(|e| e.to_string())?;
-            let p = shard_path(&dir, &h);
+            let p = shard_path(dir, &h);
             let file = std::fs::read(&p).map_err(|err| {
                 format!("shard {root} is not in {} ({err}); upload it from the folder of the version that added it", p.display())
             })?;
@@ -908,7 +1579,7 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
             );
             let n = file.len() as u64;
             send_until(
-                &c,
+                c,
                 hyper::Method::PUT,
                 &url,
                 "application/octet-stream",
@@ -924,7 +1595,7 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
         // Ask again: a shard the node answered "stored" for must no longer be
         // missing (review BULK-LOSS-1: two of 8,849 were not, once).
         let v = send_until(
-            &c,
+            c,
             hyper::Method::POST,
             &manifest_url,
             "application/json",
@@ -942,6 +1613,9 @@ async fn upload_cmd(o: &Opts) -> Res<()> {
             );
         }
     }
+    let record = json!({"version": m.header.version, "root": m.header.root().to_string(), "catalog": catalog});
+    std::fs::write(dir.join(UPLOADED), format!("{record}\n"))
+        .map_err(|e| format!("{}: {e}", dir.join(UPLOADED).display()))?;
     println!(
         "UPLOADED version={} shards_sent={sent} bytes_sent={bytes} manifest_secs={:.1} shard_secs={:.1} rounds={rounds} root={}",
         m.header.version,
@@ -1202,7 +1876,24 @@ mod tests {
     async fn scripted_node(
         answers: Vec<(u16, &'static str)>,
     ) -> (String, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+        let (url, seen, _) = scripted_node_log(answers).await;
+        (url, seen)
+    }
+
+    /// The bodies of the requests a scripted node got, in order.
+    type Bodies = std::sync::Arc<std::sync::Mutex<Vec<Vec<u8>>>>;
+
+    /// [`scripted_node`], keeping each request's body too.
+    async fn scripted_node_log(
+        answers: Vec<(u16, &'static str)>,
+    ) -> (
+        String,
+        std::sync::Arc<std::sync::atomic::AtomicUsize>,
+        Bodies,
+    ) {
         use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let bodies: Bodies = Default::default();
+        let log = bodies.clone();
         let l = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
             .expect("bind");
@@ -1241,6 +1932,9 @@ mod tests {
                     buf.extend_from_slice(&b[..n]);
                 }
                 count.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+                if let Ok(mut b) = log.lock() {
+                    b.push(buf[head_end..].to_vec());
+                }
                 let resp = format!(
                     "HTTP/1.1 {status} X\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                     body.len()
@@ -1249,7 +1943,7 @@ mod tests {
                 let _ = s.shutdown().await;
             }
         });
-        (url, seen)
+        (url, seen, bodies)
     }
 
     async fn post(url: &str, wait: Duration) -> Res<Value> {
@@ -1505,6 +2199,402 @@ mod tests {
             assert!(e.contains(why), "{e}");
             assert!(!dir.join("cx.bin").exists());
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// A temporary folder for one test, and a way to run a command in it.
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("onyx-publish-{name}-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        dir
+    }
+
+    fn args(v: &[&str]) -> Vec<String> {
+        v.iter().map(|s| s.to_string()).collect()
+    }
+
+    /// `build` of `input` under `schema` into `out` (after `prev`, with
+    /// `--widen` if `widen`), all in `dir`.
+    fn build_in(
+        dir: &Path,
+        schema: &str,
+        input: &str,
+        out: &str,
+        prev: Option<&str>,
+        widen: bool,
+        created: u64,
+    ) -> Res<()> {
+        let p = |n: &str| dir.join(n).display().to_string();
+        let mut a = args(&[
+            "--schema",
+            &p(schema),
+            "--input",
+            &p(input),
+            "--dataset",
+            "synthetic.test",
+            "--publisher",
+            "example.publisher",
+            "--license",
+            "CC0-1.0",
+            "--out",
+            &p(out),
+            "--created",
+            &created.to_string(),
+        ]);
+        if let Some(prev) = prev {
+            a.extend(args(&["--prev", &p(prev)]));
+        }
+        if widen {
+            a.push("--widen".into());
+        }
+        build_cmd(&parse_opts(&a).expect("opts"))
+    }
+
+    /// ADR-0059 amendment 5 item 7: new rows that need more places are
+    /// refused under the previous schema (naming the column and the places),
+    /// a different schema needs `--widen`, `--widen` needs `--prev` and a
+    /// schema that widens, and a widened build writes format 2 with the
+    /// previous schema up to the previous shard count; the next version
+    /// under the same schema stays format 2 without the flag.
+    #[test]
+    fn build_widen_needs_the_flag_and_writes_format_2() {
+        let dir = scratch("widen");
+        let old = json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":2},{"name":"n","kind":"int"}],"key":"t"});
+        let new = json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":9},{"name":"n","kind":"decimal","scale":2},{"name":"note","kind":"text","nullable":true}],"key":"t"});
+        let narrow = json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":1},{"name":"n","kind":"int"}],"key":"t"});
+        for (f, v) in [
+            ("old.json", &old),
+            ("new.json", &new),
+            ("narrow.json", &narrow),
+        ] {
+            std::fs::write(dir.join(f), v.to_string()).expect("w");
+        }
+        std::fs::write(dir.join("v1.csv"), "t,v,n\n1,1.25,3\n2,2.5,4\n").expect("w");
+        std::fs::write(dir.join("v2.csv"), "t,v,n\n3,3.1234567,5\n").expect("w");
+        std::fs::write(
+            dir.join("v2w.csv"),
+            "t,v,n,note\n3,3.1234567,5.5,x\n4,4,6,\n",
+        )
+        .expect("w");
+        std::fs::write(dir.join("v3.csv"), "t,v,n,note\n5,5.5,7,y\n").expect("w");
+        build_in(&dir, "old.json", "v1.csv", "v1", None, false, 10).expect("v1");
+        let e =
+            build_in(&dir, "old.json", "v2.csv", "v2a", Some("v1"), false, 20).expect_err("places");
+        assert!(
+            e.contains("column v")
+                && e.contains("needs 7 decimal places")
+                && e.contains("schema-fit"),
+            "{e}"
+        );
+        let e = build_in(&dir, "new.json", "v2w.csv", "v2b", Some("v1"), false, 20)
+            .expect_err("no flag");
+        assert!(e.contains("--widen") && e.contains("column v"), "{e}");
+        let e = build_in(&dir, "new.json", "v2w.csv", "v2c", None, true, 20).expect_err("no prev");
+        assert!(e.contains("--widen needs --prev"), "{e}");
+        let e = build_in(&dir, "narrow.json", "v1.csv", "v2d", Some("v1"), true, 20)
+            .expect_err("narrower");
+        assert!(e.contains("does not widen"), "{e}");
+        build_in(&dir, "new.json", "v2w.csv", "v2", Some("v1"), true, 20).expect("widened");
+        let v1 = read_manifest(&dir.join("v1")).expect("v1");
+        let v2 = read_manifest(&dir.join("v2")).expect("v2");
+        assert_eq!(v2.header.format, onyx_bulk::manifest::FORMAT_2);
+        assert_eq!(
+            v2.header.earlier,
+            vec![onyx_bulk::EarlierSchema {
+                until: v1.header.shard_count,
+                schema: v1.header.schema.clone(),
+            }]
+        );
+        assert_eq!(v2.header.schema, Schema::from_json(&new).expect("ok"));
+        let summary: Value = serde_json::from_str(
+            &std::fs::read_to_string(dir.join("v2").join("manifest.json")).expect("r"),
+        )
+        .expect("json");
+        assert_eq!(summary["format"], json!(2));
+        assert_eq!(
+            summary["prev_dir"],
+            json!(std::fs::canonicalize(dir.join("v1"))
+                .expect("abs")
+                .display()
+                .to_string())
+        );
+        // Every new shard checks under the newest schema, the old under theirs.
+        for e in &v2.shards[v1.shards.len()..] {
+            let f = std::fs::read(shard_path(&dir.join("v2"), &e.root)).expect("shard");
+            assert_eq!(
+                check_shard(v2.header.schema_of(e.index), &f)
+                    .expect("ok")
+                    .summary
+                    .root,
+                e.root
+            );
+            assert!(check_shard(&v1.header.schema, &f).is_err());
+        }
+        // Version 3 under the same schema: no flag needed, format 2 kept.
+        build_in(&dir, "new.json", "v3.csv", "v3", Some("v2"), false, 30).expect("v3");
+        let v3 = read_manifest(&dir.join("v3")).expect("v3");
+        assert_eq!(
+            (v3.header.format, &v3.header.earlier),
+            (2, &v2.header.earlier)
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Item 7 (review BULK-WIDEN-R1 finding 4): `schema-fit` widens only
+    /// what the rows need, to a scale that lasts for binary-float text (17
+    /// significant digits at the column's smallest non-zero magnitude, plus
+    /// 2), adds new input columns as nullable, keeps columns that fit, says
+    /// so when nothing needs widening, and names the values no widening can
+    /// take (with the schema written for the rest).
+    #[test]
+    fn schema_fit_writes_the_narrowest_widening() {
+        let dir = scratch("fit");
+        let p = |n: &str| dir.join(n).display().to_string();
+        let v1 = json!({"columns":[
+            {"name":"t","kind":"int"},
+            {"name":"v","kind":"decimal","scale":7},
+            {"name":"n","kind":"int"},
+            {"name":"s","kind":"text"},
+            {"name":"z","kind":"decimal","scale":3,"nullable":true}
+        ],"key":"t"});
+        std::fs::write(dir.join("v1.json"), v1.to_string()).expect("w");
+        std::fs::write(dir.join("v1.csv"), "t,v,n,s,z\n1,711.5473168,3,a,1.5\n").expect("w");
+        build_in(&dir, "v1.json", "v1.csv", "v1", None, false, 10).expect("v1");
+        // The source now writes full binary-float digits, and two columns more.
+        std::fs::write(
+            dir.join("v2.csv"),
+            "t,v,n,s,z,extra,more\n2,711.5473167999999,4,b,,7,2.5\n3,0.0001234567890123456,5,c,0.125,8,\n",
+        )
+        .expect("w");
+        let fit = |input: &str, prev: &str, out: &str| {
+            schema_fit_cmd(
+                &parse_opts(&args(&[
+                    "--prev",
+                    &p(prev),
+                    "--input",
+                    &p(input),
+                    "--out",
+                    &p(out),
+                ]))
+                .expect("opts"),
+            )
+        };
+        fit("v2.csv", "v1", "fit.json").expect("fits");
+        let got = Schema::from_json(
+            &serde_json::from_str::<Value>(
+                &std::fs::read_to_string(dir.join("fit.json")).expect("r"),
+            )
+            .expect("json"),
+        )
+        .expect("schema");
+        // v: the smallest value's first digit is at 10^-4, so 17 digits need
+        // 20 places, plus 2; n and z fit as they are; extra holds whole
+        // numbers, more a decimal at 10^0 (16 places plus 2).
+        let want = Schema::from_json(&json!({"columns":[
+            {"name":"t","kind":"int"},
+            {"name":"v","kind":"decimal","scale":22},
+            {"name":"n","kind":"int"},
+            {"name":"s","kind":"text"},
+            {"name":"z","kind":"decimal","scale":3,"nullable":true},
+            {"name":"extra","kind":"int","nullable":true},
+            {"name":"more","kind":"decimal","scale":18,"nullable":true}
+        ],"key":"t"}))
+        .expect("ok");
+        assert_eq!(got, want);
+        assert_eq!(
+            Schema::widens(&Schema::from_json(&v1).expect("ok"), &got),
+            Ok(())
+        );
+        // The fitted schema builds the new rows as version 2.
+        build_in(&dir, "fit.json", "v2.csv", "v2", Some("v1"), true, 20).expect("v2");
+        assert_eq!(read_manifest(&dir.join("v2")).expect("v2").header.format, 2);
+        // Rows that fit version 2's schema: no widening, the same schema.
+        std::fs::write(
+            dir.join("v3.csv"),
+            "t,v,n,s,z,extra,more\n4,1.5,6,d,0.5,9,0.25\n",
+        )
+        .expect("w");
+        fit("v3.csv", "v2", "same.json").expect("fits as is");
+        assert_eq!(
+            std::fs::read_to_string(dir.join("same.json")).expect("r"),
+            std::fs::read_to_string(dir.join("fit.json")).expect("r")
+        );
+        // Values no widening takes: 39 places, a word in a decimal column, an
+        // empty field in a column that is not nullable. Named; schema written.
+        std::fs::write(
+            dir.join("bad.csv"),
+            format!("t,v,n,s,z\n5,1.{},6,d,abc\n6,2.5,,e,\n", "1".repeat(39)),
+        )
+        .expect("w");
+        let e = fit("bad.csv", "v1", "bad.json").expect_err("unfit");
+        assert!(e.contains("3 value(s)"), "{e}");
+        assert!(dir.join("bad.json").exists());
+        // JSON Lines: a decimal given as a JSON number is named too (build
+        // wants it as a string); an absent column reads null.
+        std::fs::write(
+            dir.join("v2.jsonl"),
+            "{\"t\":7,\"v\":\"2.123456789\",\"n\":8,\"s\":\"f\"}\n{\"t\":8,\"v\":1.5,\"n\":9,\"s\":\"g\"}\n",
+        )
+        .expect("w");
+        let e = fit("v2.jsonl", "v1", "j.json").expect_err("a JSON number");
+        assert!(e.contains("1 value(s)"), "{e}");
+        let got = Schema::from_json(
+            &serde_json::from_str::<Value>(
+                &std::fs::read_to_string(dir.join("j.json")).expect("r"),
+            )
+            .expect("json"),
+        )
+        .expect("schema");
+        assert_eq!(
+            got.columns[1].kind,
+            onyx_bulk::ColumnKind::Decimal { scale: 18 }
+        );
+        // An int column given "6.0" becomes decimal (build would refuse it as
+        // int); the fit scale follows its magnitude (10^0: 16 places plus 2).
+        std::fs::write(dir.join("point.csv"), "t,v,n,s,z\n10,1.5,6.0,h,\n").expect("w");
+        fit("point.csv", "v1", "point.json").expect("fits");
+        let got = Schema::from_json(
+            &serde_json::from_str::<Value>(
+                &std::fs::read_to_string(dir.join("point.json")).expect("r"),
+            )
+            .expect("json"),
+        )
+        .expect("schema");
+        assert_eq!(
+            got.columns[2].kind,
+            onyx_bulk::ColumnKind::Decimal { scale: 18 }
+        );
+        assert_eq!(
+            got.columns[1].kind,
+            onyx_bulk::ColumnKind::Decimal { scale: 7 }
+        );
+        // An added decimal column is held to the 80 characters of a stored
+        // decimal too (review BULK-WIDEN-R2 finding 4): with a 60-digit
+        // integer part the fit scale drops from 22 to 19 so its values fit,
+        // and build then takes them; a 77-digit one cannot fit at the 4
+        // places its smallest value needs, and is named.
+        std::fs::write(
+            dir.join("big.csv"),
+            format!(
+                "t,v,n,s,z,big\n11,1.5,7,i,,{}\n12,1.5,8,j,,0.0001\n",
+                "1".repeat(60)
+            ),
+        )
+        .expect("w");
+        fit("big.csv", "v1", "big.json").expect("fits within 80 characters");
+        let got = Schema::from_json(
+            &serde_json::from_str::<Value>(
+                &std::fs::read_to_string(dir.join("big.json")).expect("r"),
+            )
+            .expect("json"),
+        )
+        .expect("schema");
+        assert_eq!(
+            got.columns[5].kind,
+            onyx_bulk::ColumnKind::Decimal { scale: 19 }
+        );
+        build_in(&dir, "big.json", "big.csv", "vbig", Some("v1"), true, 30)
+            .expect("build takes it");
+        std::fs::write(
+            dir.join("huge.csv"),
+            format!(
+                "t,v,n,s,z,huge\n13,1.5,7,k,,{}\n14,1.5,8,l,,0.0001\n",
+                "9".repeat(77)
+            ),
+        )
+        .expect("w");
+        let e = fit("huge.csv", "v1", "huge.json").expect_err("past 80");
+        assert!(e.contains("1 value(s)"), "{e}");
+        // A column the input lacks is never dropped.
+        std::fs::write(dir.join("short.csv"), "t,v,n\n9,1.5,1\n").expect("w");
+        assert!(fit("short.csv", "v1", "x.json")
+            .expect_err("dropped")
+            .contains("no column s"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// Item 8 (review BULK-WIDEN-R1 finding 9): a node that lacks the
+    /// previous version answers 409 "versions are taken in order"; `upload`
+    /// then uploads that version from the folder `build --prev` recorded, and
+    /// this one again.
+    #[tokio::test]
+    async fn upload_steps_back_when_a_node_lacks_the_previous_version() {
+        let dir = scratch("stepback");
+        std::fs::write(
+            dir.join("s.json"),
+            json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":2}],"key":"t"}).to_string(),
+        )
+        .expect("w");
+        std::fs::write(dir.join("a.csv"), "t,v\n1,1.5\n").expect("w");
+        std::fs::write(dir.join("b.csv"), "t,v\n2,2.5\n").expect("w");
+        build_in(&dir, "s.json", "a.csv", "v1", None, false, 10).expect("v1");
+        build_in(&dir, "s.json", "b.csv", "v2", Some("v1"), false, 20).expect("v2");
+        for v in ["v1", "v2"] {
+            let m = read_manifest(&dir.join(v)).expect("m");
+            let r = onyx_bulk::anchor::sign(&[0x22; 32], &m.header).expect("signs");
+            std::fs::write(
+                dir.join(v).join("report.bin"),
+                borsh::to_vec(&r).expect("ok"),
+            )
+            .expect("w");
+        }
+        let taken = r#"{"error":{"code":"bulk_not_successor","message":"versions are taken in order: upload the previous version first"}}"#;
+        let (url, seen, bodies) = scripted_node_log(vec![
+            (409, taken),
+            (201, r#"{"missing":[]}"#),
+            (201, r#"{"missing":[]}"#),
+        ])
+        .await;
+        let pause = Duration::from_millis(1);
+        upload_dir(
+            &client(),
+            &url,
+            &dir.join("v2"),
+            None,
+            Duration::ZERO,
+            pause,
+            MAX_STEPS_BACK,
+        )
+        .await
+        .expect("uploaded");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 3);
+        let manifests: Vec<u32> = bodies
+            .lock()
+            .expect("lock")
+            .iter()
+            .map(|b| {
+                let v: Value = serde_json::from_slice(b).expect("json");
+                let m = onyx_bulk::wire::hex_field(&v["manifest"], "m").expect("hex");
+                Manifest::from_bytes(&m).expect("manifest").header.version
+            })
+            .collect();
+        assert_eq!(manifests, vec![2, 1, 2]);
+        for v in ["v1", "v2"] {
+            let u: Value = serde_json::from_str(
+                &std::fs::read_to_string(dir.join(v).join(UPLOADED)).expect("r"),
+            )
+            .expect("json");
+            assert_eq!(u["catalog"], Value::Null);
+        }
+        // A folder that does not name its previous one: the refusal says what to do.
+        std::fs::write(dir.join("v2").join("manifest.json"), "{}").expect("w");
+        let (url, _) = scripted_node(vec![(409, taken)]).await;
+        let e = upload_dir(
+            &client(),
+            &url,
+            &dir.join("v2"),
+            None,
+            Duration::ZERO,
+            pause,
+            MAX_STEPS_BACK,
+        )
+        .await
+        .expect_err("no previous folder");
+        assert!(
+            e.contains("lacks version 1") && e.contains("upload that version first"),
+            "{e}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 

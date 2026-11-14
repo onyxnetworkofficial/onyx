@@ -23,9 +23,22 @@ fuzz_target!(|data: &[u8]| {
     };
     match sel % 8 {
         0 => {
+            // The header's Borsh is written by hand (ADR-0059 amendment 5:
+            // `earlier` only in format 2): every manifest that decodes,
+            // valid or not, encodes back to exactly its bytes.
+            if let Ok(m) = Manifest::try_from_slice(b) {
+                assert_eq!(
+                    m.to_bytes(),
+                    b,
+                    "a decoded manifest re-encodes to its bytes"
+                );
+            }
             if let Ok(m) = Manifest::from_bytes(b) {
                 let _ = m.header.root();
                 let _ = m.header.validate();
+                for i in 0..m.header.shard_count.min(4) {
+                    let _ = (m.header.schema_of(i), m.header.schema_index(i));
+                }
             }
         }
         1 => {

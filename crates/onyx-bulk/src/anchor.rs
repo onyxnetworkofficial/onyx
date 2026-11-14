@@ -91,13 +91,42 @@ pub fn address_of(secret: &[u8; 32]) -> Result<[u8; 20], AnchorError> {
 /// Sign `header` with `secret`.
 pub fn sign(secret: &[u8; 32], header: &ManifestHeader) -> Result<SignedReport, AnchorError> {
     let signer = address_of(secret)?;
-    let p = payload(header, &signer);
+    sign_payload(secret, payload(header, &signer))
+}
+
+/// Sign payload `p` with `secret` (EIP-191 over its message).
+pub fn sign_payload(secret: &[u8; 32], p: SignedPayload) -> Result<SignedReport, AnchorError> {
     let signature =
         eip191_sign_with(secret, p.message().as_bytes()).ok_or(AnchorError::BadSecret)?;
     Ok(SignedReport {
         payload: p,
         signature,
     })
+}
+
+/// Check that `report` is a manifest anchor of `root` whatever the header's
+/// format (ADR-0059 amendment 5 item 8): the metric, the value, a sequence
+/// that is not the reserved one, the signature and the key. Returns the
+/// signer. The source, subject and sequence are not tied to a header here:
+/// the caller compares them with what it asked. For a header format this
+/// crate cannot read, whose fields it therefore cannot see.
+pub fn verify_root(root: &Hash32, report: &SignedReport) -> Result<[u8; 20], AnchorError> {
+    let p = &report.payload;
+    if p.metric.0 != ANCHOR_METRIC {
+        return Err(AnchorError::Mismatch("metric"));
+    }
+    if p.value != Value::Bytes(root.0.to_vec()) {
+        return Err(AnchorError::Mismatch("value (manifest root)"));
+    }
+    if p.sequence == u64::MAX {
+        return Err(AnchorError::ReservedSequence);
+    }
+    let signer = eip191_recover(p.message().as_bytes(), &report.signature)
+        .ok_or(AnchorError::BadSignature)?;
+    if key_id(&p.source, &signer) != p.key {
+        return Err(AnchorError::WrongKey);
+    }
+    Ok(signer)
 }
 
 /// Check that `report` signs exactly `header`'s root for its publisher and

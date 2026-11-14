@@ -6027,3 +6027,618 @@ async fn cat_3_learn_log_and_off_modes() {
     let _ = std::fs::remove_dir_all(&cat.dir);
     let _ = std::fs::remove_dir_all(&sto.dir);
 }
+
+// --- Widening successors (ADR-0059 amendment 5; THREATS BULK-WIDEN-1..6) ---------------------------
+
+/// A store that takes format-2 manifests (`ONYX_BULK_FORMAT2=on`).
+pub(crate) fn world_format2() -> World {
+    world_with(BulkLimits {
+        format2: true,
+        ..BulkLimits::default()
+    })
+}
+
+/// [`schema`] widened: `v` from 2 to 4 places, and a nullable text column
+/// `note` added after it.
+pub(crate) fn wide_schema() -> Schema {
+    Schema::from_json(&json!({"columns":[
+        {"name":"t","kind":"int"},
+        {"name":"v","kind":"decimal","scale":4},
+        {"name":"note","kind":"text","nullable":true}
+    ],"key":"t"}))
+    .expect("ok")
+}
+
+/// Shard files under [`wide_schema`] of `per` rows each over `keys`.
+pub(crate) fn wide_files(keys: std::ops::Range<i128>, per: usize) -> Vec<Vec<u8>> {
+    let rows: Vec<Vec<u8>> = keys
+        .map(|t| {
+            let note = if t % 2 == 0 {
+                Cell::Text(format!("n{t}"))
+            } else {
+                Cell::Null
+            };
+            encode_row(
+                &wide_schema(),
+                &[Cell::Int(t), Cell::Decimal(format!("{t}.1250")), note],
+            )
+            .expect("ok")
+        })
+        .collect();
+    rows.chunks(per).map(encode_shard).collect()
+}
+
+/// The successor of `prev` under `schema` adding `files` (built under it).
+pub(crate) fn manifest_under(
+    schema: &Schema,
+    files: &[Vec<u8>],
+    prev: &Manifest,
+    created: u64,
+) -> Manifest {
+    let mut entries = prev.shards.clone();
+    let base = entries.len();
+    for (i, f) in files.iter().enumerate() {
+        let c = check_shard(schema, f).expect("fits its schema");
+        entries.push(ShardEntry::new((base + i) as u32, &c.summary));
+    }
+    Manifest::build(
+        NewVersion {
+            dataset: "synthetic.metrics".into(),
+            publisher: SourceId("example.publisher".into()),
+            created_unix: created,
+            schema: schema.clone(),
+            rights: rights(),
+        },
+        Some(prev),
+        entries,
+    )
+    .expect("a successor")
+}
+
+/// Post `m` with its own anchored report and upload `files` (its new shards).
+pub(crate) async fn post_and_upload(w: &World, m: &Manifest, files: &[Vec<u8>]) {
+    let r = sign(m);
+    w.node.anchor(&r);
+    assert_eq!(w.post(m, &r).await.expect("taken").0, StatusCode::CREATED);
+    let new = &m.shards[m.shards.len() - files.len()..];
+    for (f, e) in files.iter().zip(new) {
+        assert_eq!(
+            w.put(&e.root, f.clone()).await.expect("stored").0,
+            StatusCode::CREATED
+        );
+    }
+}
+
+/// Version 2 of [`published`]: `v` widened to 4 places and `note` added,
+/// one new shard (keys 30..40).
+pub(crate) async fn widened(w: &World, v1: &Manifest) -> (Manifest, Vec<Vec<u8>>) {
+    let files = wide_files(30..40, 10);
+    let v2 = manifest_under(&wide_schema(), &files, v1, T0 + 60);
+    assert_eq!(v2.header.format, onyx_bulk::manifest::FORMAT_2);
+    post_and_upload(w, &v2, &files).await;
+    (v2, files)
+}
+
+/// ADR-0059 amendment 5 item 4: after a widening, old shards are loaded and
+/// checked under their own schema, so the loads made before it (keyed by
+/// root and schema hash) are used as they are; rows of both schemas check
+/// and show under the newest.
+#[tokio::test]
+async fn widen_old_shards_load_under_their_own_schema_without_reload() {
+    let w = world_format2();
+    let (v1, _) = published(&w).await;
+    let a = w.rows("from=0&to=29").await.expect("v1 rows");
+    onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(29)).expect("checks");
+    let before = w.store.loaded.lock().expect("lock").clone();
+    assert_eq!(before.len(), 3);
+    let old_hash = keccak256(&borsh::to_vec(&schema()).expect("ok"));
+    assert!(before.iter().all(|(k, _)| k.1 == old_hash));
+    let (v2, _) = widened(&w, &v1).await;
+    let a = w.rows("from=0&to=39").await.expect("v2 rows");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(39)).expect("checks");
+    assert_eq!(c.header.root(), v2.header.root());
+    assert_eq!(c.rows.len(), 40);
+    // Old rows shown padded, with the added column null; new rows as stored.
+    assert_eq!(
+        a["rows"][3]["values"],
+        json!({"t":"3","v":"3.5000","note":null})
+    );
+    assert_eq!(a["rows"][3]["schema"], json!(0));
+    assert_eq!(
+        a["rows"][30]["values"],
+        json!({"t":"30","v":"30.1250","note":"n30"})
+    );
+    assert_eq!(a["rows"][30]["schema"], json!(1));
+    assert_eq!(a["manifest"]["format"], json!(2));
+    assert_eq!(a["manifest"]["schema"], wide_schema().to_json());
+    assert_eq!(
+        a["manifest"]["schemas"],
+        json!([{"until": 3, "schema": schema().to_json()}, {"until": 4, "schema": wide_schema().to_json()}])
+    );
+    // The three old loads are the very same ones; one new load, under the
+    // new schema's hash.
+    let after = w.store.loaded.lock().expect("lock").clone();
+    assert_eq!(after.len(), 4);
+    for (k, l) in &before {
+        assert!(
+            after.iter().any(|(k2, l2)| k2 == k && Arc::ptr_eq(l, l2)),
+            "shard {} was loaded again",
+            k.0
+        );
+    }
+    let new_hash = keccak256(&borsh::to_vec(&wide_schema()).expect("ok"));
+    assert!(after
+        .iter()
+        .any(|(k, _)| k.0 == v2.shards[3].root && k.1 == new_hash));
+    // The info route names every schema too.
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.metrics")
+        .expect("info");
+    assert_eq!(info["manifest"]["schemas"], a["manifest"]["schemas"]);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Item 4: every path that stores a shard by root (the publisher's `PUT`, a
+/// peer's `put_shard`, the restore after a withdrawn tombstone, amendment 4
+/// item 5a) checks an old root under the schema its index was built under.
+#[tokio::test]
+async fn widen_shard_put_and_restore_check_an_old_root_under_its_schema() {
+    let w = world_format2();
+    let (v1, files) = published(&w).await;
+    let (v2, wide) = widened(&w, &v1).await;
+    // Sent again by the publisher and by a peer: each checked under schema 0
+    // (a held root answers 200, after the same checks).
+    assert_eq!(
+        w.put(&v1.shards[0].root, files[0].clone())
+            .await
+            .expect("put")
+            .0,
+        StatusCode::OK
+    );
+    w.store
+        .put_shard(
+            "example.publisher",
+            "synthetic.metrics",
+            &v1.shards[1].root,
+            files[1].clone(),
+        )
+        .await
+        .expect("peer put");
+    w.store
+        .put_shard(
+            "example.publisher",
+            "synthetic.metrics",
+            &v2.shards[3].root,
+            wide[0].clone(),
+        )
+        .await
+        .expect("peer put of the new shard");
+    // Under the newest schema the old file does not check: that is what the
+    // node would have refused.
+    assert!(check_shard(&wide_schema(), &files[0]).is_err());
+    let _ = std::fs::remove_dir_all(&w.dir);
+
+    // The restore: the widened dataset in catalogs, removed by a tombstone,
+    // erased, the tombstone's catalog withdrawn and replaced; the publisher
+    // then sends the erased shards again (old and new schema).
+    let w = {
+        let base = world_format2();
+        let c = base.clock.clone();
+        let store = BulkStore::open(
+            pin(),
+            base.node.clone(),
+            Arc::new(move || c.load(Ordering::Relaxed)),
+            &base.dir,
+            &base.dir.join("warm"),
+            BulkLimits {
+                format2: true,
+                ..BulkLimits::default()
+            },
+        )
+        .expect("ok")
+        .with_free_per_minute(10_000)
+        .with_erase(erase_cfg(EraseMode::On));
+        World {
+            node: base.node,
+            store: Arc::new(store),
+            clock: base.clock,
+            dir: base.dir,
+        }
+    };
+    let s = &w.store;
+    let files = shard_files(0..30, 10);
+    let v1 = manifest(&files, None, T0);
+    let wide = wide_files(30..40, 10);
+    let v2 = manifest_under(&wide_schema(), &wide, &v1, T0 + 5);
+    let other = manifest_of("synthetic.other", &files[..1], T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&v1.header), CatalogLeaf::of(&other.header)],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&v1, 0).await.expect("v1");
+    w.post_in(&other, 0).await.expect("other");
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![CatalogLeaf::of(&v2.header), CatalogLeaf::of(&other.header)],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    w.post_in(&v2, 1).await.expect("v2 (format 2)");
+    let all: Vec<Vec<u8>> = files.iter().chain(&wide).cloned().collect();
+    w.upload_all(&v2, &all).await;
+    w.rows("from=0&to=39").await.expect("served");
+    let c2 = catalog_of(
+        Some(&c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&v2.header).tombstone().expect("t"),
+            CatalogLeaf::of(&other.header),
+        ],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    assert_eq!(
+        w.post_catalog(&c2, &r2).await.expect("c2").0,
+        StatusCode::CREATED
+    );
+    let due = T0 + 30 * DAY;
+    let pass = |b: u64, ts: u64| {
+        w.node.at(b, ts);
+        s.erase_pass()
+    };
+    pass(100, T0).await.expect("pass");
+    pass(101, due).await.expect("pass");
+    assert_eq!(pass(102, due + 3_600).await.expect("pass").erased, 1);
+    let roots: Vec<Hash32> = v2.shards.iter().map(|e| e.root).collect();
+    // Shard 0 is the other dataset's too: kept; the rest erased.
+    assert!(s.holds_shard(&roots[0]));
+    assert!(roots[1..].iter().all(|r| !s.holds_shard(r)));
+    w.node.withdraw(&r2);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    w.node.at(103, due + 4_000);
+    let c2b = catalog_of(
+        Some(&c1),
+        T0 + 50,
+        vec![CatalogLeaf::of(&v2.header), CatalogLeaf::of(&other.header)],
+    );
+    let r2b = cat::sign(&SECRET2, &c2b.header).expect("ok");
+    w.node.anchor_by(&r2b, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&c2b, &r2b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(pass(104, due + 5_000).await.expect("pass").erased, 0);
+    assert!(roots.iter().all(|r| !s.erased_root(r)));
+    // The restore: shards 1 and 2 under schema 0, shard 3 under schema 1.
+    for (i, f) in all.iter().enumerate().skip(1) {
+        assert_eq!(
+            w.put(&roots[i], f.clone()).await.expect("restored").0,
+            StatusCode::CREATED,
+            "shard {i}"
+        );
+    }
+    let a = w.rows("from=0&to=39").await.expect("served again");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(39)).expect("checks");
+    assert_eq!(c.rows.len(), 40);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Item 3 (THREATS BULK-WIDEN-1): a successor that moves a boundary,
+/// relabels an earlier shard's schema, or drops the earlier schemas is not a
+/// successor (409), and the node keeps serving the version it holds.
+#[tokio::test]
+async fn widen_a_relabelling_successor_is_refused_409() {
+    let w = world_format2();
+    let (v1, _) = published(&w).await;
+    let (v2, _) = widened(&w, &v1).await;
+    let more = wide_files(40..50, 10);
+    let v3 = manifest_under(&wide_schema(), &more, &v2, T0 + 120);
+    let mut moved = v3.clone();
+    moved.header.earlier[0].until = 2;
+    let mut relabelled = v3.clone();
+    relabelled.header.earlier[0].schema = Schema::from_json(&json!({"columns":[
+        {"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":3}
+    ],"key":"t"}))
+    .expect("ok");
+    let mut dropped = v3.clone();
+    dropped.header.earlier.clear();
+    dropped.header.format = onyx_bulk::manifest::FORMAT;
+    for (name, m) in [
+        ("moved", &moved),
+        ("relabelled", &relabelled),
+        ("dropped", &dropped),
+    ] {
+        m.validate().expect("valid on its own");
+        let r = sign(m);
+        w.node.anchor(&r);
+        let e = w.post(m, &r).await.expect_err("refused");
+        assert_eq!(
+            (e.status, e.code),
+            (StatusCode::CONFLICT, "bulk_not_successor"),
+            "{name}"
+        );
+    }
+    let a = w.rows("from=0&to=39").await.expect("still served");
+    assert_eq!(a["manifest"]["version"], json!(2));
+    // The honest version 3 is taken.
+    post_and_upload(&w, &v3, &more).await;
+    let a = w.rows("from=35&to=45").await.expect("v3");
+    onyx_bulk::wire::check_rows_answer(&a, Some(35), Some(45)).expect("checks");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Item 8 (review BULK-WIDEN-R1 finding 2): a node refuses a format-2
+/// upload unless `ONYX_BULK_FORMAT2` is on, through its own report or a
+/// catalog, and keeps serving the earlier version.
+#[tokio::test]
+async fn widen_a_format_2_upload_is_refused_until_the_flag_is_on() {
+    let w = world();
+    let (v1, _) = published(&w).await;
+    let files = wide_files(30..40, 10);
+    let v2 = manifest_under(&wide_schema(), &files, &v1, T0 + 60);
+    let r = sign(&v2);
+    w.node.anchor(&r);
+    let e = w.post(&v2, &r).await.expect_err("refused");
+    assert_eq!(
+        (e.status, e.code),
+        (StatusCode::UNPROCESSABLE_ENTITY, "bulk_format_not_taken")
+    );
+    // Through a catalog: the catalog (leaves only) is taken, the manifest not.
+    let c0 = catalog_of(None, T0 + 100, vec![CatalogLeaf::of(&v2.header)]);
+    let rc = sign_catalog(&c0);
+    w.node.anchor(&rc);
+    w.post_catalog(&c0, &rc)
+        .await
+        .expect("the catalog is taken");
+    let e = w.post_in(&v2, 0).await.expect_err("refused");
+    assert_eq!(e.code, "bulk_format_not_taken");
+    let a = w.rows("from=0&to=29").await.expect("v1 still served");
+    assert_eq!(a["manifest"]["version"], json!(1));
+    assert_eq!(a["manifest"]["format"], json!(1));
+    assert!(a["rows"][0].get("schema").is_none());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Item 3 and 8: a restart decodes and checks a held format-2 chain again
+/// (successor rule included), with `ONYX_BULK_FORMAT2` off too, and serves
+/// it; a held version that relabels the one before stops the start.
+#[tokio::test]
+async fn widen_a_restart_rechecks_a_format_2_chain() {
+    let w = world_format2();
+    let (v1, _) = published(&w).await;
+    let (v2, _) = widened(&w, &v1).await;
+    let more = wide_files(40..50, 10);
+    let v3 = manifest_under(&wide_schema(), &more, &v2, T0 + 120);
+    post_and_upload(&w, &v3, &more).await;
+    let open = |limits: BulkLimits| {
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0 + 200),
+            &w.dir,
+            &w.dir.join("warm"),
+            limits,
+        )
+    };
+    let again = open(BulkLimits::default()).expect("reads format 2 with the flag off");
+    let a = again
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=25&to=45")).expect("ok"),
+        )
+        .await
+        .expect("served");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(25), Some(45)).expect("checks");
+    assert_eq!((c.header.version, c.rows.len()), (3, 21));
+    // The restarted node with the flag off takes no new format-2 version.
+    let more4 = wide_files(50..60, 10);
+    let v4 = manifest_under(&wide_schema(), &more4, &v3, T0 + 180);
+    let r4 = sign(&v4);
+    w.node.anchor(&r4);
+    let e = again
+        .accept_manifest(&v4.to_bytes(), &borsh::to_vec(&r4).expect("ok"))
+        .await
+        .expect_err("refused");
+    assert_eq!(e.code, "bulk_format_not_taken");
+    // A held version 3 that moves version 2's boundary (signed: only the
+    // successor rule can tell) stops the start.
+    let mut bad = v3.clone();
+    bad.header.earlier[0].until = 2;
+    bad.validate().expect("valid on its own");
+    let rb = sign(&bad);
+    let anchor = w
+        .store
+        .datasets
+        .read()
+        .expect("lock")
+        .get(&(
+            "example.publisher".to_string(),
+            "synthetic.metrics".to_string(),
+        ))
+        .and_then(|d| d.versions.get(2).map(|h| h.anchor.clone()))
+        .expect("held v3");
+    let dir = w
+        .store
+        .dataset_dir("example.publisher", "synthetic.metrics");
+    write_version(&dir, &bad, &rb, &anchor, None).expect("written");
+    let e = open(BulkLimits::default()).err().expect("the start stops");
+    assert!(e.contains("not a successor"), "{e}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Item 8 (reviews BULK-WIDEN-R1 finding 7, BULK-WIDEN-R2 finding 2): the
+/// history walk meets an own-report manifest in a header format it does not
+/// read. A manifest answer carries its header's own bytes; bytes that are not
+/// the root's (a flipped format byte, a header of another root, no header)
+/// are the node's fault even under the publisher's own report. The honest
+/// case, a header that hashes to the root, is undecided:
+/// `bulk_history::tests::widen_an_unknown_format_is_undecided_only_when_its_header_is_the_root`.
+#[tokio::test]
+async fn widen_the_history_walk_blames_unknown_format_bytes_that_are_not_the_root() {
+    let w = world();
+    let (m1, _) = published(&w).await;
+    let f2 = shard_files(30..40, 10);
+    let m2 = manifest(&f2, Some(&m1), T0 + 5);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m2.header), other_leaf("synthetic.other")],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m2, 0).await.expect("v2");
+    w.upload_all(&m2, &f2).await;
+    let ck = checked_rows(&w).await;
+    let root1 = m1.header.root();
+    let path = format!("/v1/bulk/manifests/{root1}");
+    // The node's own answer names the header, and it hashes to the root.
+    let app = peer_routes(w.store.clone());
+    let r = app
+        .oneshot(
+            Request::get(path.as_str())
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("answer");
+    assert_eq!(r.status(), StatusCode::OK);
+    let v: Value = serde_json::from_slice(&r.into_body().collect().await.expect("body").to_bytes())
+        .expect("json");
+    let hb = hex_of(&v["header"]).expect("header");
+    assert_eq!(hb, m1.header.to_bytes());
+    assert_eq!(onyx_bulk::manifest::root_of_header_bytes(&hb), root1);
+    // Flipped bytes under the publisher's own report.
+    let mut newer = m1.to_bytes();
+    newer[0] = 3;
+    let hlen = hb.len();
+    let real = hb.clone();
+    let answer = |header: Option<&[u8]>| {
+        let mut a = json!({"root": root1.to_string(), "manifest": hex0x(&newer), "report": hex0x(&borsh::to_vec(&sign(&m1)).expect("ok"))});
+        if let Some(h) = header {
+            a["header"] = json!(hex0x(h));
+        }
+        a.to_string().into_bytes()
+    };
+    for (name, body) in [
+        ("no header", answer(None)),
+        ("the flipped header", answer(Some(&newer[..hlen]))),
+        ("the root's header, other bytes", answer(Some(&real))),
+    ] {
+        let p = path.clone();
+        let get = HookGet {
+            inner: RouterGet(peer_routes(w.store.clone())),
+            hook: move |u: &str| u.ends_with(&p).then(|| (200, body.clone())),
+        };
+        let (fault, why) = refused(history_with(&w, &ck, &get).await);
+        assert_eq!(fault, "node", "{name}: {why}");
+        assert!(why.contains("format 3"), "{name}: {why}");
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review BULK-WIDEN-R2 finding 3: with `ONYX_BULK_FORMAT2` off, the gate
+/// stops only a format-2 manifest that would be stored (a new version, or one
+/// in a withdrawn version's place). A held format-2 manifest posted again is
+/// still the idempotent 200, and a second anchored manifest for a held
+/// format-2 version still marks the dataset forked, writing only the
+/// `forked.txt` note, never that manifest.
+#[tokio::test]
+async fn widen_with_the_flag_off_a_held_format_2_version_answers_200_and_its_fork_is_recorded() {
+    let off = |w: &World| {
+        Arc::new(
+            BulkStore::open(
+                pin(),
+                w.node.clone(),
+                Arc::new(|| T0 + 200),
+                &w.dir,
+                &w.dir.join("warm"),
+                BulkLimits::default(),
+            )
+            .expect("opens with the flag off"),
+        )
+    };
+    let post = |s: &Arc<BulkStore>, m: &Manifest, r: &SignedReport| {
+        let (m, r) = (m.to_bytes(), borsh::to_vec(r).expect("ok"));
+        let s = s.clone();
+        async move { s.accept_manifest(&m, &r).await }
+    };
+    // The idempotent 200, then a fork of version 2.
+    let w = world_format2();
+    let (v1, _) = published(&w).await;
+    let (v2, wide) = widened(&w, &v1).await;
+    let s = off(&w);
+    let (st, body) = post(&s, &v2, &sign(&v2)).await.expect("held");
+    assert_eq!((st, body["missing"].clone()), (StatusCode::OK, json!([])));
+    let v3 = manifest_under(&wide_schema(), &wide_files(40..50, 10), &v2, T0 + 120);
+    let r3 = sign(&v3);
+    w.node.anchor(&r3);
+    assert_eq!(
+        post(&s, &v3, &r3).await.expect_err("new").code,
+        "bulk_format_not_taken"
+    );
+    let dir = s.dataset_dir("example.publisher", "synthetic.metrics");
+    let held_v2 = std::fs::read(dir.join("v2.bin")).expect("v2");
+    let fork = manifest_under(&wide_schema(), &wide, &v1, T0 + 61);
+    assert_ne!(fork.header.root(), v2.header.root());
+    let rf = sign(&fork);
+    w.node.anchor(&rf);
+    let e = post(&s, &fork, &rf).await.expect_err("forked");
+    assert_eq!(e.code, "bulk_dataset_forked");
+    assert!(dir.join("forked.txt").is_file());
+    assert_eq!(std::fs::read(dir.join("v2.bin")).expect("v2"), held_v2);
+    let mut files: Vec<String> = std::fs::read_dir(&dir)
+        .expect("dir")
+        .flatten()
+        .map(|f| f.file_name().to_string_lossy().into_owned())
+        .collect();
+    files.sort();
+    assert_eq!(files, vec!["forked.txt", "v1.bin", "v2.bin"]);
+    let e = s
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=0&to=5")).expect("ok"),
+        )
+        .await
+        .expect_err("not served");
+    assert_eq!(e.code, "bulk_dataset_forked");
+    let _ = std::fs::remove_dir_all(&w.dir);
+    // A withdrawn format-2 version is not replaced by another format-2
+    // manifest while the flag is off: the held one stays as it was.
+    let w = world_format2();
+    let (v1, _) = published(&w).await;
+    let (v2, wide) = widened(&w, &v1).await;
+    let s = off(&w);
+    w.node.withdraw(&sign(&v2));
+    let other = manifest_under(&wide_schema(), &wide, &v1, T0 + 61);
+    let ro = sign(&other);
+    w.node.anchor(&ro);
+    assert_eq!(
+        post(&s, &other, &ro)
+            .await
+            .expect_err("would be stored")
+            .code,
+        "bulk_format_not_taken"
+    );
+    let dir = s.dataset_dir("example.publisher", "synthetic.metrics");
+    let kept = Manifest::from_bytes(
+        &<(Vec<u8>, Vec<u8>, Vec<u8>)>::try_from_slice(
+            &std::fs::read(dir.join("v2.bin")).expect("v2"),
+        )
+        .expect("record")
+        .0,
+    )
+    .expect("manifest");
+    assert_eq!(kept.header.root(), v2.header.root());
+    assert!(!dir.join("withdrawn").exists());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}

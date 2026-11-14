@@ -745,15 +745,31 @@ pub enum BulkOutcome {
     Refused(String),
     /// The caller's node could not be read (exit 3).
     Undecided(String),
+    /// The manifest header is in a format this check does not read, its raw
+    /// root verifies against the signed report for the publisher and dataset
+    /// asked and, with a node, the book holds that report for the
+    /// publisher's registered key at the caller's finalized block: nothing
+    /// decided, update onyx-check (exit 3; ADR-0059 amendment 5 item 8,
+    /// review BULK-WIDEN-R2 finding 1). A root that does not verify, or a
+    /// report the book does not hold, is refused instead (exit 1). Without a
+    /// node (`--unchecked`) the signer is not read on chain, as for every
+    /// unchecked answer: `chain_checked` is false and the report says so.
+    Outdated {
+        /// What happened.
+        why: String,
+        /// Whether the report was read anchored on the caller's node.
+        chain_checked: bool,
+    },
 }
 
 impl BulkOutcome {
-    /// Exit code: 0 verified, 1 refused, 3 undecided.
+    /// Exit code: 0 verified, 1 refused, 3 undecided (or a header format
+    /// newer than this check).
     pub fn code(&self) -> i32 {
         match self {
             BulkOutcome::Verified { .. } => 0,
             BulkOutcome::Refused(_) => 1,
-            BulkOutcome::Undecided(_) => 3,
+            BulkOutcome::Undecided(_) | BulkOutcome::Outdated { .. } => 3,
         }
     }
 
@@ -796,7 +812,71 @@ impl BulkOutcome {
                 "error": e,
                 "retryLater": matches!(self, BulkOutcome::Undecided(_)),
             }),
+            BulkOutcome::Outdated { why, chain_checked } => {
+                let mut r = json!({
+                    "ok": false,
+                    "decided": false,
+                    "code": "bulk_unknown_format",
+                    "error": why,
+                    "retryLater": false,
+                    "update": "onyx-check",
+                    "chainChecked": chain_checked,
+                });
+                if !chain_checked {
+                    r["warning"] = json!(UNKNOWN_FORMAT_UNCHECKED);
+                }
+                r
+            }
         }
+    }
+}
+
+/// The warning of an unknown header format checked without a node.
+pub const UNKNOWN_FORMAT_UNCHECKED: &str = "not checked on chain (--unchecked): any key can sign a report naming this publisher, so this says nothing about the answer; run with --rpc to learn whether the publisher signed it";
+
+/// A rows answer whose header format this check does not read
+/// ([`onyx_bulk::wire::WireError::UnknownFormat`]): refused unless it names
+/// the publisher and dataset asked and, with a node, the book holds its
+/// report (the manifest's own or its catalog's) for the recovered signer at
+/// the caller's finalized block; then exit 3, "update onyx-check".
+async fn newer_format(
+    n: &onyx_bulk::wire::NewerHeader,
+    asked: &BulkAsked,
+    node: Option<(&dyn JsonRpc, u64, [u8; 20])>,
+) -> BulkOutcome {
+    if n.publisher != asked.publisher || n.dataset != asked.dataset {
+        return BulkOutcome::Refused(format!(
+            "the answer is about {}/{}, not the {}/{} asked",
+            n.publisher, n.dataset, asked.publisher, asked.dataset
+        ));
+    }
+    let what = if n.catalog {
+        "catalog report"
+    } else {
+        "report"
+    };
+    let Some((rpc, chain_id, book)) = node else {
+        return BulkOutcome::Outdated {
+            why: format!(
+                "the manifest header is format {}, newer than this onyx-check; its root verifies against the {what} off chain only: update onyx-check; nothing was decided",
+                n.format
+            ),
+            chain_checked: false,
+        };
+    };
+    match onyx_api::bulk_serve::read_anchor(rpc, chain_id, &book, &n.report, &n.signer).await {
+        Err(e) => BulkOutcome::Undecided(e),
+        Ok(onyx_api::bulk_serve::AnchorState::Not(why)) => BulkOutcome::Refused(format!(
+            "the manifest header is format {}, which this onyx-check does not read, and its signed {what} is not anchored in your book at your finalized block ({why}): not the publisher's",
+            n.format
+        )),
+        Ok(onyx_api::bulk_serve::AnchorState::Anchored(_)) => BulkOutcome::Outdated {
+            why: format!(
+                "the manifest header is format {}, newer than this onyx-check; the publisher's {what} for it is anchored in your book: update onyx-check; nothing was decided",
+                n.format
+            ),
+            chain_checked: true,
+        },
     }
 }
 
@@ -812,6 +892,13 @@ pub async fn check_bulk(
 ) -> BulkOutcome {
     let checked = match onyx_bulk::wire::check_rows_answer(answer, asked.from, asked.to) {
         Ok(c) => c,
+        // A newer header format whose root the signed report verifies: not
+        // this check's to decide, but only for the dataset asked (review
+        // BULK-WIDEN-R1 finding 6) and only when the book holds that report
+        // for the publisher's key (review BULK-WIDEN-R2 finding 1).
+        Err(onyx_bulk::wire::WireError::UnknownFormat(n)) => {
+            return newer_format(&n, asked, node).await
+        }
         Err(e) => return BulkOutcome::Refused(e.to_string()),
     };
     if checked.header.publisher.0 != asked.publisher || checked.header.dataset != asked.dataset {

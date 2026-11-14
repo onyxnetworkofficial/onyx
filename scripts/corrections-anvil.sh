@@ -3,13 +3,21 @@
 # A published value, a market on it, bets on both sides, a recheck round that disagrees,
 # settlement and payouts, checked to the wei on chain:
 # 1. OnyxRegistry (owner: anvil's dev account; coordinator: a fresh key through a stand-in
-#    ledger), the tONYX test token and OnyxCorrections are deployed.
+#    ledger), the tONYX test token (minter: a fresh key, as the deployer is on Base Sepolia) and
+#    OnyxCorrections are deployed.
 # 2. The live manifest source us.treasury.tga_total_deposits and its paired `.recheck` metric
 #    are registered with their real template ids (`onyx-source recheck`, onyx_core::recheck_of)
 #    and paired on OnyxCorrections with the recheck template's tolerance.
 # 3. The coordinator records the original round (record date 2026-10-28: 18463 million USD).
-# 4. An opener opens the value's market; two bettors say Yes ("accurate"), two say No; an
-#    insider's bet and a forged value are refused; a market opened after the recheck is refused.
+# 4. The opener opens the value's market the way `scripts/corrections-sepolia.sh open --close-at
+#    2026-11-16T00:00:00Z` does (DeployCorrections.openMarket, blocks from
+#    scripts/corrections-blocks.py) on a chain whose clock reaches the recheck days: one block an
+#    hour from 2026-11-14 06:00 UTC. It holds no tONYX, so the minter mints it the open fee; it
+#    approves the fee and opens; a forged value is refused before anything is sent and a second
+#    run sends nothing. Two bettors say Yes ("accurate"), two say No, the way `bet` does
+#    (DeployCorrections.placeBet; one bettor holds nothing and gets its stake minted); an
+#    insider's bet is refused by the script and on chain, a forged value on chain, a bet after
+#    the close by the script; a market opened after the recheck is refused.
 # 5. After the close the coordinator draws and records the recheck round: 18470 (the source now
 #    says otherwise). Resolving with the original round is refused; with the recheck it settles No.
 # 6. The No bettors withdraw their stakes plus the Yes pool pro rata less the 2% fee; Yes gets
@@ -52,7 +60,9 @@ tolerance=$(id tolerance); subject=$(id subject_key)
 for v in "$metric" "$template" "$rmetric" "$rtemplate" "$tolerance" "$subject"; do
   [ -n "$v" ] || fail "onyx-source recheck printed no ids"
 done
-(cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 >"$work/anvil.log" 2>&1) &
+# The chain starts on 2026-11-13 00:00 UTC whatever today is: the market opens on the first
+# recheck day of the record date 2026-10-28 (2026-11-14 to 2026-11-20).
+(cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 --timestamp 1794528000 >"$work/anvil.log" 2>&1) &
 anvil_pid=$!
 port=""
 for _ in $(seq 200); do
@@ -69,7 +79,7 @@ deployer=$(c rpc eth_accounts | python3 -I -c 'import json,sys; print(json.load(
 newkey() { python3 -I -c 'import secrets; print("0x" + secrets.token_hex(32))'; }
 addr() { (cd "$work" && "$FOUNDRY_BIN/cast" wallet address --private-key "$1"); }
 declare -A K A
-for who in coord opener yes1 yes2 no1 no2 treasury; do
+for who in coord opener yes1 yes2 no1 no2 treasury minter; do
   K[$who]=$(newkey)
   A[$who]=$(addr "${K[$who]}")
   c rpc anvil_setBalance "${A[$who]}" 0x56BC75E2D63100000 >/dev/null
@@ -93,7 +103,7 @@ refused() { # error signature, key name, then the send arguments
 call() { c call "$@" | awk '{print $1}'; }
 ledger=$(deploy OnyxObservedFacts.t.sol/CoordinatorLedger.json "$(enc 'f(address)' "${A[coord]}")")
 registry=$(deploy OnyxRegistry.sol/OnyxRegistry.json "$(enc 'f(address,address)' "$deployer" "$ledger")")
-token=$(deploy OnyxTestToken.sol/OnyxTestToken.json "$(enc 'f(address)' "$deployer")")
+token=$(deploy OnyxTestToken.sol/OnyxTestToken.json "$(enc 'f(address)' "${A[minter]}")")
 # Demo windows in blocks: trading >= 5, the recheck >= 5, a market <= 200 blocks, 10 grace blocks.
 corrections=$(deploy OnyxCorrections.sol/OnyxCorrections.json "$(enc \
   'f(address,address,address,(uint128,uint128,uint128,uint128,uint32,uint32,uint32,uint32,uint32))' \
@@ -125,22 +135,84 @@ round() { # metric, round id, value
 oround=$(kk "original round"); rround=$(kk "recheck round")
 round "$metric" "$oround" 18463
 echo "value: us.treasury.tga_total_deposits 2026-10-28 = 18463 (million USD), recorded"
-# 4. The market and the bets.
-for who in opener yes1 yes2 no1 no2; do
-  sendu "$token" 'mint(address,uint256)' "${A[$who]}" 100000000000000000000
+# 4. The market and the bets. The bettors (and the insider) get their tONYX first.
+for who in yes1 yes2 no1; do
+  sendk minter "$token" 'mint(address,uint256)' "${A[$who]}" 100000000000000000000
   sendk "$who" "$token" 'approve(address,uint256)' "$corrections" 100000000000000000000
 done
-b=$(c block-number); close=$(( b + 12 )); resolve=$(( close + 40 ))
-refused 'WrongValue()' opener "$corrections" 'open(bytes32,bytes32,uint64,bytes32,int128,uint64,uint64)' "$metric" "$subject" "$window" "$oround" 18464 "$close" "$resolve"
-sendk opener "$corrections" 'open(bytes32,bytes32,uint64,bytes32,int128,uint64,uint64)' "$metric" "$subject" "$window" "$oround" 18463 "$close" "$resolve"
-sendk yes1 "$corrections" 'bet(uint256,uint8,uint128)' 1 1 30000000000000000000
-sendk yes2 "$corrections" 'bet(uint256,uint8,uint128)' 1 1 10000000000000000000
-sendk no1 "$corrections" 'bet(uint256,uint8,uint128)' 1 2 15000000000000000000
-sendk no2 "$corrections" 'bet(uint256,uint8,uint128)' 1 2 5000000000000000000
-sendu "$token" 'mint(address,uint256)' "${A[coord]}" 1000000000000000000
+sendk minter "$token" 'mint(address,uint256)' "${A[coord]}" 1000000000000000000
 sendk coord "$token" 'approve(address,uint256)' "$corrections" 1000000000000000000
+# The chain's clock reaches the first recheck day; from here one block is an hour.
+start=1794636000 # 2026-11-14T06:00:00Z
+c rpc evm_setNextBlockTimestamp "$start" >/dev/null
+c rpc evm_mine >/dev/null
+c rpc anvil_setBlockTimestampInterval 3600 >/dev/null
+head=$(c block-number)
+[ "$(c block "$head" --field timestamp)" = "$start" ] || fail "the chain's clock did not move to $start"
+last_day=$(awk '$1 == "recheck_days" {print $4}' "$work/ids.txt")
+# The demo contract's trading >= 5 and recheck >= 5 blocks; 10 blocks for the sends to land; the
+# close at 2026-11-16 00:00 UTC (a close a day before the last recheck day starts is the latest).
+python3 -I scripts/corrections-blocks.py "$head" "$start" 3600000 5 5 10 "$last_day" 2026-11-19T12:00:00Z \
+  >/dev/null 2>&1 && fail "corrections-blocks took a close inside the last two recheck days"
+blocks=$(python3 -I scripts/corrections-blocks.py "$head" "$start" 3600000 5 5 10 "$last_day" 2026-11-16T00:00:00Z) \
+  || fail "corrections-blocks"
+bk() { awk -v k="$1" '$1 == k {print $2}' <<<"$blocks"; }
+close=$(bk close_block); resolve=$(bk resolve_block)
+# forge runs in a copy of the built contracts: its broadcast record and cache stay out of the repo.
+cp -a contracts "$work/contracts"
+rm -rf "$work/contracts/broadcast" "$work/contracts/.env"
+sed -i "s#$repo/contracts#$work/contracts#g" "$work/contracts/cache/solidity-files-cache.json"
+open_market() { # value; the keys reach forge in its environment only
+  (cd "$work/contracts" && ONYX_OPENER_KEY=${K[opener]} BASE_SEPOLIA_PRIVATE_KEY=${K[minter]} \
+    ONYX_CORRECTIONS=$corrections ONYX_METRIC_KEY=$metric ONYX_SUBJECT_KEY=$subject \
+    ONYX_WINDOW_END=$window ONYX_ROUND_ID=$oround ONYX_VALUE=$1 ONYX_CLOSE_BLOCK=$close \
+    ONYX_RESOLVE_BLOCK=$resolve ONYX_RECHECK_END=$(bk recheck_end) ONYX_BLOCK_MS=3600000 \
+    ONYX_RECHECK_METRIC_KEY=$rmetric ONYX_RECHECK_TEMPLATE=$rtemplate \
+    "$FOUNDRY_BIN/forge" script script/DeployCorrections.s.sol:DeployCorrections --sig 'openMarket()' \
+    --rpc-url "$RPC" --broadcast --slow 2>&1)
+}
+place_bet() { # bettor, side, tONYX wei
+  (cd "$work/contracts" && ONYX_BETTOR_KEY=${K[$1]} BASE_SEPOLIA_PRIVATE_KEY=${K[minter]} \
+    ONYX_CORRECTIONS=$corrections ONYX_MARKET_ID=1 ONYX_SIDE=$2 ONYX_AMOUNT=$3 \
+    "$FOUNDRY_BIN/forge" script script/DeployCorrections.s.sol:DeployCorrections --sig 'placeBet()' \
+    --rpc-url "$RPC" --broadcast --slow 2>&1)
+}
+bet() { out=$(place_bet "$@") || { echo "$out"; fail "placeBet $*"; }; }
+count() { call "$corrections" 'marketCount()(uint256)'; }
+if out=$(open_market 18464); then fail "openMarket opened a forged value"; fi
+grep -q NotTheRecordedValue <<<"$out" || fail "openMarket refused a forged value for another reason: $out"
+[ "$(count)" = 0 ] || fail "a refused openMarket sent something"
+refused 'WrongValue()' opener "$corrections" 'open(bytes32,bytes32,uint64,bytes32,int128,uint64,uint64)' "$metric" "$subject" "$window" "$oround" 18464 "$close" "$resolve"
+out=$(open_market 18463) || { echo "$out"; fail "openMarket"; }
+grep -q "corrections: the minter grants 0 wei of gas, mints 5000000000000000000 tONYX wei" <<<"$out" \
+  || { echo "$out"; fail "openMarket did not mint the open fee"; }
+market_sig='market(uint256)((bytes32,bytes32,bytes32,bytes32,address,uint64,uint64,uint64,uint8,uint8,uint8,uint32,uint32,int128,int128,uint128,uint128,uint128,uint128,uint128,uint128,uint128[2],uint32[2]))'
+c call "$corrections" "$market_sig" 1 --json | python3 -I -c '
+import json, sys
+m = json.load(sys.stdin)[0]
+opener, close, resolve, fact = sys.argv[1:5]
+assert m[4].lower() == opener.lower() and (m[6], m[7]) == (int(close), int(resolve)), m
+assert (m[2], m[8], str(m[13]), str(m[16])) == (fact, 1, "18463", "5000000000000000000"), m
+' "${A[opener]}" "$close" "$resolve" "$(call "$registry" 'factKey(bytes32,bytes32,uint64)(bytes32)' "$metric" "$subject" "$window")" \
+  || fail "market 1 is not the one openMarket was given"
+bal() { call "$token" 'balanceOf(address)(uint256)' "$1"; }
+[ "$(bal "${A[opener]}")" = 0 ] && [ "$(bal "$corrections")" = 5000000000000000000 ] \
+  && [ "$(call "$token" 'allowance(address,address)(uint256)' "${A[opener]}" "$corrections")" = 0 ] \
+  || fail "the open fee did not go from the minter through the opener to the contract"
+out=$(open_market 18463) || { echo "$out"; fail "openMarket, run again"; }
+grep -q "market 1 of this value exists; nothing sent" <<<"$out" && [ "$(count)" = 1 ] \
+  || { echo "$out"; fail "openMarket run again sent something"; }
+echo "market 1 opened by openMarket: the minter minted the 5 tONYX fee, the opener approved it; close block $close (~$(awk '$1 == "close_time" {print $3}' <<<"$blocks")), deadline block $resolve (~$(awk '$1 == "resolve_time" {print $3}' <<<"$blocks"), the day after the last recheck day $last_day); a forged value refused before sending; run again, nothing sent"
+bet yes1 1 30000000000000000000
+bet yes2 1 10000000000000000000
+bet no1 2 15000000000000000000
+bet no2 2 5000000000000000000
+grep -q "corrections: the minter grants 0 wei of gas, mints 5000000000000000000 tONYX wei" <<<"$out" \
+  || { echo "$out"; fail "placeBet did not mint no2's stake"; }
+if out=$(place_bet coord 2 1000000000000000000); then fail "placeBet let an insider bet"; fi
+grep -q BettorIsInsider <<<"$out" || fail "placeBet refused the insider for another reason: $out"
 refused 'NotAllowed()' coord "$corrections" 'bet(uint256,uint8,uint128)' 1 2 1000000000000000000
-echo "market 1 open until block $close: Yes 40 tONYX (2 bettors), No 20 tONYX (2 bettors); insider refused"
+echo "market 1 open until block $close: Yes 40 tONYX (2 bettors), No 20 tONYX (2 bettors) by placeBet (no2's 5 minted); insider refused"
 # The recheck runner's plan (onyx_level2::corrections) while trading is open: the value's markets
 # and every bettor read from the contract's lists (no log scan), the pair and the registered
 # recheck template checked; it waits for the close.
@@ -152,6 +224,8 @@ python3 -I -c 'import json,sys; p=json.loads(sys.argv[1]); assert (p["state"], p
 echo "recheck plan: wait for block $close (1 market, 4 bettors read from the contract)"
 # 5. After the close: the recheck round disagrees.
 now=$(c block-number); [ "$now" -lt "$close" ] && c rpc anvil_mine "$(printf '0x%x' $(( close - now + 1 )))" >/dev/null
+if out=$(place_bet yes1 1 1000000000000000000); then fail "placeBet bet after the close"; fi
+grep -q MarketClosed <<<"$out" || fail "placeBet refused a late bet for another reason: $out"
 round "$rmetric" "$rround" 18470
 # The original round never settles its own market.
 refused 'WrongValue()' opener "$corrections" 'resolve(uint256,bytes32,int128)' 1 "$oround" 18463
@@ -161,7 +235,6 @@ echo "recheck: 18470, outside the tolerance $tolerance: settled No"
 b=$(c block-number)
 refused 'RecheckStarted()' opener "$corrections" 'open(bytes32,bytes32,uint64,bytes32,int128,uint64,uint64)' "$metric" "$subject" "$window" "$oround" 18463 $(( b + 12 )) $(( b + 40 ))
 # 6. Payouts, to the wei.
-bal() { call "$token" 'balanceOf(address)(uint256)' "$1"; }
 for who in yes1 yes2 no1 no2; do
   if [ "${who:0:2}" = no ]; then sendk "$who" "$corrections" 'withdraw(uint256)' 1
   else refused 'NothingOwed()' "$who" "$corrections" 'withdraw(uint256)' 1; fi
@@ -181,7 +254,7 @@ p1 = 15 * E + 15 * E * dist // no
 p2 = 5 * E + 5 * E * dist // no
 dust = (no + dist) - p1 - p2
 assert y1 == start - 30 * E and y2 == start - 10 * E, (y1, y2)
-assert n1 == start - 15 * E + p1 and n2 == start - 5 * E + p2, (n1, n2, p1, p2)
+assert n1 == start - 15 * E + p1 and n2 == p2, (n1, n2, p1, p2)  # no2 held only its minted stake
 assert tr == fee + dust + 5 * E, (tr, fee, dust)   # trading fee, dust, the open fee
 assert held == 0, held
 assert (p1 + p2) + fee + dust == yes + no

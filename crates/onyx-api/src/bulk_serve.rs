@@ -139,6 +139,12 @@ pub struct BulkLimits {
     /// other as the leaves that differ from the one before (ADR-0059
     /// amendment 2 draft 4).
     pub catalog_checkpoint: u64,
+    /// Whether format-2 (widened) manifests are taken (`ONYX_BULK_FORMAT2`,
+    /// ADR-0059 amendment 5 item 8): off, every format-2 upload is refused;
+    /// held format-2 manifests are read and served either way. It goes on
+    /// only once a release that reads format 2 is the rollback target: a
+    /// node holding one cannot start an older binary.
+    pub format2: bool,
 }
 
 impl Default for BulkLimits {
@@ -149,6 +155,7 @@ impl Default for BulkLimits {
             max_total_bytes: 256 << 30,
             warm_after_secs: 7 * 86_400,
             catalog_checkpoint: CATALOG_CHECKPOINT,
+            format2: false,
         }
     }
 }
@@ -2751,8 +2758,11 @@ impl BulkStore {
             }
             let latest = held.and_then(Dataset::latest).map(|x| &x.manifest);
             match (h.version, latest) {
-                (1, None) => {}
+                // A new version is stored: the format gate applies (and to a
+                // replacement of a withdrawn version, below).
+                (1, None) => self.format_gate(h)?,
                 (v, Some(prev)) if v == prev.header.version + 1 => {
+                    self.format_gate(h)?;
                     m.check_successor(prev).map_err(|e| {
                         ApiError::new(StatusCode::CONFLICT, "bulk_not_successor", e.to_string())
                     })?;
@@ -2864,6 +2874,8 @@ impl BulkStore {
         let d = ds.entry(key.clone()).or_default();
         let dir = self.dataset_dir(&key.0, &key.1);
         if let Some(other_root) = withdraw {
+            // This manifest would be stored in the withdrawn one's place.
+            self.format_gate(h)?;
             let i = h.version as usize - 1;
             if d.versions.get(i).map(|o| o.manifest.header.root()) == Some(other_root) {
                 // Newest first, memory after the files: a crash leaves
@@ -2930,6 +2942,29 @@ impl BulkStore {
             catalog,
         });
         Ok((StatusCode::CREATED, body))
+    }
+
+    /// A widened dataset's manifest is stored only once the operator allows
+    /// it (ADR-0059 amendment 5 item 8, review BULK-WIDEN-R1 finding 2): with
+    /// `ONYX_BULK_FORMAT2` off, a node that stored one could not start an
+    /// older binary. Checked only where a manifest would be stored (a new
+    /// version, or one in a withdrawn version's place; review BULK-WIDEN-R2
+    /// finding 3): the same manifest again still answers 200, a held one is
+    /// re-anchored, and a second anchored manifest for a held version still
+    /// marks the dataset forked (the mark and `forked.txt`, a text note: the
+    /// format-2 manifest itself is never written).
+    fn format_gate(&self, h: &onyx_bulk::ManifestHeader) -> Result<(), ApiError> {
+        if h.format != onyx_bulk::manifest::FORMAT && !self.limits.format2 {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bulk_format_not_taken",
+                format!(
+                    "this node does not take format-{} (widened) manifests yet (ONYX_BULK_FORMAT2 is off); it keeps serving the earlier versions",
+                    h.format
+                ),
+            ));
+        }
+        Ok(())
     }
 
     fn check_quota(
@@ -3039,7 +3074,9 @@ impl BulkStore {
                     "this root is in no held manifest of the dataset",
                 )
             })?;
-        Ok((e, h.manifest.header.schema.clone()))
+        // The schema the shard was built under: its index in the version that
+        // names the root (ADR-0059 amendment 5 item 4).
+        Ok((e, h.manifest.header.schema_of(e.index).clone()))
     }
 
     /// Take a shard file (see the module docs).
@@ -3583,7 +3620,9 @@ impl BulkStore {
                 skip -= e.rows;
                 continue;
             }
-            let l = self.load(e, &manifest.header.schema).await?;
+            // Each shard under its own schema: the load key `(root, schema
+            // hash)` stays the same across widenings (amendment 5 item 4).
+            let l = self.load(e, manifest.header.schema_of(e.index)).await?;
             let lo = l.keys.partition_point(|k| *k < from) as u64;
             let hi = l.keys.partition_point(|k| *k <= to) as u64;
             let count = hi.saturating_sub(lo);
@@ -3644,11 +3683,13 @@ fn header_json(m: &Manifest) -> Value {
     let h = &m.header;
     json!({
         "root": h.root().to_string(),
-        "header": hex0x(&borsh::to_vec(h).unwrap_or_default()),
+        "header": hex0x(&h.to_bytes()),
+        "format": h.format,
         "version": h.version,
         "prev": h.prev.to_string(),
         "created_unix": h.created_unix,
         "schema": h.schema.to_json(),
+        "schemas": onyx_bulk::wire::schemas_json(h),
         "rights": {
             "license": h.rights.license,
             "attribution": h.rights.attribution,
@@ -4457,8 +4498,9 @@ fn root_of(p: Result<Path<String>, PathRejection>) -> Result<Hash32, ApiError> {
     Ok(root)
 }
 
-/// `GET /v1/bulk/manifests/{root}`: `{root, manifest, report}` (Borsh hex),
-/// the body `POST /v1/bulk/manifests` takes. Encoded once and shared while
+/// `GET /v1/bulk/manifests/{root}`: `{root, manifest, header, report}`
+/// (Borsh hex; `header` the manifest's header alone), the body
+/// `POST /v1/bulk/manifests` takes. Encoded once and shared while
 /// the held report stays the same (SERVE-WRITE-2).
 async fn get_manifest(
     State(store): State<Arc<BulkStore>>,
@@ -4487,9 +4529,13 @@ async fn get_manifest(
             return Ok(a);
         }
         let (m, rep) = store.manifest_record(&root).ok_or_else(not_held)?;
+        // `header`: the header's own bytes, so a reader that cannot decode a
+        // header format still ties the manifest bytes to the root (ADR-0059
+        // amendment 5 item 8, review BULK-WIDEN-R2 finding 2).
         let v = json!({
             "root": root.to_string(),
             "manifest": hex0x(&m.to_bytes()),
+            "header": hex0x(&m.header.to_bytes()),
             "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
         });
         let body = json_bytes(&v)?;

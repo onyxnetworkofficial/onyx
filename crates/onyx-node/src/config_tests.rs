@@ -111,6 +111,33 @@ fn cat_3_erase_settings() {
     assert!(load(&m).expect("a dry run is fine").storage.is_some());
 }
 
+/// ADR-0059 amendment 5 item 8: format-2 manifests are refused until
+/// `ONYX_BULK_FORMAT2=on`; the setting needs `ONYX_BULK_DIR`.
+#[test]
+fn widen_format_2_uploads_are_off_until_set_on() {
+    let mut m = base();
+    m.insert("ONYX_BULK_FORMAT2", "on");
+    assert!(load(&m)
+        .expect_err("no bulk")
+        .contains("ONYX_BULK_FORMAT2 is set but ONYX_BULK_DIR is not"));
+    m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk");
+    let mut off = m.clone();
+    off.remove("ONYX_BULK_FORMAT2");
+    assert!(!load(&off).expect("ok").bulk.expect("bulk").limits.format2);
+    for (v, on) in [("on", true), ("off", false), (" on ", true)] {
+        m.insert("ONYX_BULK_FORMAT2", v);
+        assert_eq!(
+            load(&m).expect("ok").bulk.expect("bulk").limits.format2,
+            on,
+            "{v}"
+        );
+    }
+    m.insert("ONYX_BULK_FORMAT2", "yes");
+    assert!(load(&m)
+        .expect_err("bad")
+        .contains("ONYX_BULK_FORMAT2 must be on or off"));
+}
+
 /// ADR-0059 amendment 4 item 5a slice 2a: a storage node learns of removals
 /// by default (`on`; `log` and `off`), from https catalog nodes (http only to
 /// loopback) first, hourly within 300..=86400 s; every setting is refused

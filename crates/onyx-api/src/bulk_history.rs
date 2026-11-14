@@ -23,7 +23,7 @@ use onyx_bulk::catalog::{
     sequence_for_catalog, CatalogFile, CatalogFiles, CatalogLeaf, WalkError, Walker,
     MAX_CATALOG_BYTES, MAX_FILES_BYTES,
 };
-use onyx_bulk::manifest::Manifest;
+use onyx_bulk::manifest::{root_of_header_bytes, Manifest, FORMAT, FORMAT_2};
 use onyx_bulk::wire::{hex0x, hex_field, Checked};
 use onyx_core::{keccak256, Hash32, SignedReport, SourceId, Value as Val};
 use serde_json::{json, Value};
@@ -280,14 +280,31 @@ impl State<'_> {
                     })?;
                     let a: Value = serde_json::from_slice(&body)
                         .map_err(|_| node("a manifest answer is not JSON"))?;
-                    let m = hex_field(&a["manifest"], "manifest")
-                        .ok()
-                        .and_then(|b| Manifest::from_bytes(&b).ok())
-                        .ok_or_else(|| node("a manifest answer does not decode"))?;
+                    let mb = hex_field(&a["manifest"], "manifest")
+                        .map_err(|_| node("a manifest answer does not decode"))?;
                     let rep = hex_field(&a["report"], "report")
                         .ok()
                         .and_then(|b| SignedReport::try_from_slice(&b).ok())
                         .ok_or_else(|| node("a manifest report does not decode"))?;
+                    if let Some(&f) = mb.first().filter(|f| **f != FORMAT && **f != FORMAT_2) {
+                        let header = hex_field(&a["header"], "header").ok();
+                        return Err(
+                            match unknown_format_verdict(
+                                &self.publisher,
+                                &self.dataset,
+                                (&root, v),
+                                f,
+                                header.as_deref(),
+                                &mb,
+                                &rep,
+                            ) {
+                                Ok(why) => undecided(why),
+                                Err(why) => node(why),
+                            },
+                        );
+                    }
+                    let m = Manifest::from_bytes(&mb)
+                        .map_err(|_| node("a manifest answer does not decode"))?;
                     let h = m.header;
                     if h.root() != root
                         || h.version != v
@@ -369,6 +386,49 @@ impl State<'_> {
         }
         Ok(false)
     }
+}
+
+/// The verdict on a manifest answer for `root` (version `v` of `dataset`)
+/// whose header is in a format this check does not read (ADR-0059 amendment
+/// 5 item 8; reviews BULK-WIDEN-R1 finding 7 and BULK-WIDEN-R2 finding 2):
+/// `Ok` (undecided, "update onyx-check") only when the answer's `header`
+/// hashes to `root` (the root the walk followed: the answer's, a verified
+/// `prev`, or a listed leaf), the manifest bytes start with it, and the
+/// report is the publisher's for that root and version; anything else is
+/// `Err`, the node's fault (bytes that are not the root's, or no header to
+/// tie them to it).
+pub(crate) fn unknown_format_verdict(
+    publisher: &SourceId,
+    dataset: &str,
+    (root, v): (&Hash32, u32),
+    format: u8,
+    header: Option<&[u8]>,
+    manifest: &[u8],
+    rep: &SignedReport,
+) -> Result<String, String> {
+    let Some(h) = header else {
+        return Err(format!(
+            "manifest {root} (version {v}) is in format {format}, unknown to this check, and the answer carries no header to tie its bytes to the root"
+        ));
+    };
+    if h.is_empty() || root_of_header_bytes(h) != *root || !manifest.starts_with(h) {
+        return Err(format!(
+            "manifest {root} (version {v}) is in format {format}, unknown to this check, and its bytes are not the root's (the header does not hash to the root, or the manifest does not start with it)"
+        ));
+    }
+    let p = &rep.payload;
+    let own = onyx_bulk::anchor::verify_root(root, rep).is_ok()
+        && p.source == *publisher
+        && p.subject == onyx_core::Subject::Aggregate(dataset.to_string())
+        && p.sequence == sequence_for(dataset, v);
+    if !own {
+        return Err(format!(
+            "manifest {root} (version {v}) is in an unknown format {format} and its report is not the publisher's for it"
+        ));
+    }
+    Ok(format!(
+        "version {v}: manifest {root} is format {format}, newer than this check: update onyx-check"
+    ))
 }
 
 /// Run the history check of `checked` (an answer `check_bulk` verified) on
@@ -824,5 +884,122 @@ mod tests {
         assert_eq!(log_source(&d).as_deref(), Some("a.b"));
         assert_eq!(log_source(&d[..100]), None);
         assert_eq!(log_source(&[]), None);
+    }
+
+    /// Review BULK-WIDEN-R2 finding 2: a manifest of a header format this
+    /// check does not read is undecided only when the answer's header hashes
+    /// to the root the walk followed, the bytes start with it, and the report
+    /// is the publisher's for that root and version; else it is the node's.
+    #[test]
+    fn widen_an_unknown_format_is_undecided_only_when_its_header_is_the_root() {
+        use onyx_bulk::manifest::{Manifest, NewVersion, ShardEntry};
+        let secret = [0x42u8; 32];
+        let publisher = SourceId("example.publisher".into());
+        let schema =
+            onyx_bulk::Schema::from_json(&json!({"columns":[{"name":"t","kind":"int"}],"key":"t"}))
+                .expect("schema");
+        let entry = ShardEntry {
+            index: 0,
+            root: Hash32([7; 32]),
+            rows: 1,
+            bytes: 100,
+            key_min: 1,
+            key_max: 1,
+        };
+        let m = Manifest::build(
+            NewVersion {
+                dataset: "synthetic.metrics".into(),
+                publisher: publisher.clone(),
+                created_unix: 1_800_000_000,
+                schema,
+                rights: onyx_core::DataRights {
+                    license: "CC0-1.0".into(),
+                    redistribution: onyx_core::Redistribution::Allowed,
+                    source: publisher.clone(),
+                    attribution: None,
+                    terms: String::new(),
+                },
+            },
+            None,
+            vec![entry],
+        )
+        .expect("v1");
+        // A format-3 header (a format this check does not read) and its
+        // manifest bytes; the root the walk follows is the header's.
+        let mut h3 = m.header.to_bytes();
+        h3[0] = 3;
+        let root3 = root_of_header_bytes(&h3);
+        let mut m3 = h3.clone();
+        m3.extend_from_slice(&m.to_bytes()[m.header.to_bytes().len()..]);
+        let signer = onyx_bulk::anchor::address_of(&secret).expect("key");
+        let sign_for = |root: &Hash32, dataset: &str| {
+            let mut p = onyx_bulk::anchor::payload(&m.header, &signer);
+            p.value = onyx_core::Value::Bytes(root.0.to_vec());
+            p.subject = onyx_core::Subject::Aggregate(dataset.into());
+            onyx_bulk::anchor::sign_payload(&secret, p).expect("signs")
+        };
+        let own = sign_for(&root3, "synthetic.metrics");
+        let verdict = |root: &Hash32, header: Option<&[u8]>, bytes: &[u8], rep: &SignedReport| {
+            unknown_format_verdict(
+                &publisher,
+                "synthetic.metrics",
+                (root, 1),
+                3,
+                header,
+                bytes,
+                rep,
+            )
+        };
+        let why = verdict(&root3, Some(&h3), &m3, &own).expect("undecided");
+        assert!(why.contains("update onyx-check"), "{why}");
+        // The node's: no header, a header of another root, bytes that do not
+        // start with the header, a report for another dataset or root.
+        let root1 = m.header.root();
+        let mut flipped = m.to_bytes();
+        flipped[0] = 3;
+        let other = sign_for(&root1, "synthetic.metrics");
+        // Shorter than the header: cannot start with it.
+        let short = m3[..h3.len() - 1].to_vec();
+        for (name, root, header, bytes, rep) in [
+            ("no header", &root3, None, &m3, &own),
+            ("flipped bytes, no header", &root1, None, &flipped, &other),
+            (
+                "flipped header for the old root",
+                &root1,
+                Some(&flipped[..h3.len()]),
+                &flipped,
+                &other,
+            ),
+            (
+                "the old root's header, flipped bytes",
+                &root1,
+                Some(&m.header.to_bytes()[..]),
+                &flipped,
+                &other,
+            ),
+            (
+                "bytes that do not start with the header",
+                &root3,
+                Some(&h3[..]),
+                &short,
+                &own,
+            ),
+            (
+                "a report for another dataset",
+                &root3,
+                Some(&h3[..]),
+                &m3,
+                &sign_for(&root3, "synthetic.other"),
+            ),
+            (
+                "a report for another root",
+                &root3,
+                Some(&h3[..]),
+                &m3,
+                &other,
+            ),
+        ] {
+            assert!(verdict(root, header, bytes, rep).is_err(), "{name}");
+        }
     }
 }

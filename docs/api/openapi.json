@@ -1741,7 +1741,7 @@
       "get": {
         "operationId": "getBulkRows",
         "summary": "Rows in a key range, each with its proofs",
-        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6).",
+        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A dataset whose schema widened (format 2) shows every row under the newest schema; each row's `schema` names the schema it is stored under (BulkRows). A header format your onyx-check does not read is undecided there (exit 3, update onyx-check) only when its root verifies against the signed report and your own node shows the book holding that report for the publisher's key (with `--unchecked`: exit 3 with `chainChecked: false`); anything else is refused.",
         "tags": [
           "Bulk"
         ],
@@ -1842,7 +1842,7 @@
       "post": {
         "operationId": "postBulkManifest",
         "summary": "Hand a node an anchored manifest",
-        "description": "Taken only when the node's finalized block shows the signed report recorded in the pinned OnyxSignedBook, the fact accepted on exactly that report and the key active. Version 1 opens a dataset; later versions must keep every earlier shard and add at least one. Returns the shards the node still needs. Outside the 12 s request deadline (300 s, two uploads at a time). Instead of its own report, a manifest may name a held catalog that lists it (`catalog`, ADR-0059 amendment 1): then the book must hold no other report under the manifest's own sequence. Refused (`bulk_publisher_forked`) while the publisher's catalogs are forked (THREATS CAT-6).",
+        "description": "Taken only when the node's finalized block shows the signed report recorded in the pinned OnyxSignedBook, the fact accepted on exactly that report and the key active. Version 1 opens a dataset; later versions must keep every earlier shard and add at least one, and keep the schema or widen it (ADR-0059 amendment 5: a format-2 manifest keeps every earlier schema and its boundary exactly; at most 8 schemas). A format-2 manifest is stored (as a new version, or in a withdrawn version's place) only on a node with `ONYX_BULK_FORMAT2=on` (else 422 `bulk_format_not_taken`; the same manifest again is still 200, and a second anchored manifest for a held version still marks the dataset forked); one whose predecessor the node lacks is refused as 409 `bulk_not_successor` (versions are taken in order). Returns the shards the node still needs. Outside the 12 s request deadline (300 s, two uploads at a time). Instead of its own report, a manifest may name a held catalog that lists it (`catalog`, ADR-0059 amendment 1): then the book must hold no other report under the manifest's own sequence. Refused (`bulk_publisher_forked`) while the publisher's catalogs are forked (THREATS CAT-6).",
         "tags": [
           "Bulk"
         ],
@@ -5288,11 +5288,11 @@
       },
       "BulkDataset": {
         "type": "object",
-        "description": "`manifest` (root, Borsh `header`, version, schema, rights, counts, key range, shards_root), `anchor` (signed report, digest, report_hash, fact, key, signer, sequence, chain_id, book, recorded_at, accepted_at, checked_at), `versions`, `shards` (entry, proof, tier)."
+        "description": "`manifest` (root, Borsh `header`, `format` (1, or 2 for a dataset whose schema widened, ADR-0059 amendment 5), version, `schema` (the newest), `schemas` (every schema of the dataset, oldest first, each as {until, schema}: it covers the shards from the previous `until` (or 0) up to its own; the newest ends at `shard_count`), rights, counts, key range, shards_root), `anchor` (signed report, digest, report_hash, fact, key, signer, sequence, chain_id, book, recorded_at, accepted_at, checked_at), `versions`, `shards` (entry, proof, tier)."
       },
       "BulkRows": {
         "type": "object",
-        "description": "`manifest`, `anchor` (as BulkDataset), `query`, `shards` (entry with proof under `shards_root`), `rows` ({shard, index, key, row (Borsh hex), values, proof}), `next_page`, `proof` (what each proof binds). docs/spec/bulk-datasets.md."
+        "description": "`manifest`, `anchor` (as BulkDataset), `query`, `shards` (entry with proof under `shards_root`), `rows` ({shard, index, key, row (Borsh hex), values, schema, proof}), `next_page`, `proof` (what each proof binds). Each row is stored, proven and decoded under its shard's schema (`schema_of` the proven shard index); `values` shows it under the newest `manifest.schema` (ADR-0059 amendment 5): a decimal padded with zeros to the newest scale, an int in a column that became decimal with zero fraction digits, a column added later null. Shown values are for display and checks only (a padded decimal may pass the 80 characters of a stored one; never cut it); the proofs cover `row`. `schema` (format 2 only) is the index of the row's schema in `manifest.schemas`. docs/spec/bulk-datasets.md."
       },
       "BulkManifestUpload": {
         "type": "object",
@@ -5739,6 +5739,10 @@
           "manifest": {
             "type": "string",
             "description": "0x hex of the Borsh Manifest."
+          },
+          "header": {
+            "type": "string",
+            "description": "0x hex of the Borsh ManifestHeader alone (the manifest's first bytes; its root is the manifest root), so a reader that cannot decode the header's format still ties the bytes to the root (ADR-0059 amendment 5, review BULK-WIDEN-R2). Absent from nodes before amendment 5."
           },
           "report": {
             "type": "string",
@@ -6381,6 +6385,10 @@
       "status": 422,
       "description": "A bulk manifest that does not decode or validate (format, ids, counts, shards_root, rights and the rights statement), or a report that does not sign its root for its key (ADR-0059)."
     },
+    "bulk_format_not_taken": {
+      "status": 422,
+      "description": "A format-2 bulk manifest (a dataset whose schema widened, ADR-0059 amendment 5) on a node with `ONYX_BULK_FORMAT2` off; the node keeps serving the earlier version."
+    },
     "bulk_chain_unavailable": {
       "status": 503,
       "description": "The chain node could not be read for the bulk anchor; retry."
@@ -6411,7 +6419,7 @@
     },
     "bulk_not_successor": {
       "status": 409,
-      "description": "A bulk version out of order, or one that drops or changes an earlier shard, schema or rights."
+      "description": "A bulk version out of order, or one that drops or changes an earlier shard or the rights, or changes the schema other than by a widening that keeps every earlier schema and boundary (ADR-0059 amendment 5; at most 8 schemas)."
     },
     "bulk_quota_exceeded": {
       "status": 413,

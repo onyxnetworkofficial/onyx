@@ -11,7 +11,10 @@
 //! the level-3 scheme of ADR-0028 ([`anchor`]) and the signed report goes on
 //! chain in `OnyxSignedBook` with one `postReport` per manifest version.
 //! Versions are append-only: a new version keeps every earlier shard and
-//! adds at least one.
+//! adds at least one. A version may widen the schema for its new shards
+//! (ADR-0059 amendment 5, format 2): every earlier shard keeps its bytes,
+//! root, entry and the schema it was built under ([`Schema::widens`],
+//! [`ManifestHeader::schema_of`], [`row::present`]).
 //!
 //! [`wire`] holds the JSON form a node serves and the client check of it:
 //! row to shard root, shard entry to manifest root, manifest root to the
@@ -29,7 +32,9 @@ pub mod wire;
 
 pub use anchor::{AnchorError, ANCHOR_METRIC};
 pub use catalog::{Catalog, CatalogError, CatalogHeader, CatalogLeaf, LeafProof, CATALOG_METRIC};
-pub use manifest::{Manifest, ManifestError, ManifestHeader, ShardEntry, RIGHTS_STATEMENT};
+pub use manifest::{
+    EarlierSchema, Manifest, ManifestError, ManifestHeader, ShardEntry, RIGHTS_STATEMENT,
+};
 pub use row::{Cell, RowError};
 pub use schema::{Column, ColumnKind, Schema, SchemaError};
 pub use shard::{ShardError, ShardSummary};

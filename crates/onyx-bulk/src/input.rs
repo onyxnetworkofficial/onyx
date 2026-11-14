@@ -118,6 +118,18 @@ fn csv_fields(rec: &str) -> Result<Vec<Option<String>>, String> {
     Ok(out)
 }
 
+/// The column names of a CSV header line, as [`Records::new`] reads them
+/// (line end and a byte-order mark dropped).
+pub fn csv_header_names(line: &str) -> Result<Vec<String>, String> {
+    let head = line
+        .trim_end_matches(['\r', '\n'])
+        .trim_start_matches('\u{feff}');
+    Ok(csv_fields(head)?
+        .into_iter()
+        .map(Option::unwrap_or_default)
+        .collect())
+}
+
 impl<R: BufRead> Records<R> {
     /// A reader over `r`. For CSV the header line is read now and must name
     /// every schema column exactly once and nothing else (any order).

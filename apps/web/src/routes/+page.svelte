@@ -4,6 +4,9 @@
 	import Database from '@lucide/svelte/icons/database';
 	import Link from '@lucide/svelte/icons/link';
 	import ChartNoAxesCombined from '@lucide/svelte/icons/chart-no-axes-combined';
+	import Table from '@lucide/svelte/icons/table';
+	import Code from '@lucide/svelte/icons/code';
+	import ShieldCheck from '@lucide/svelte/icons/shield-check';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 </script>
 
@@ -43,6 +46,14 @@
 			<li><span class="step-number" aria-hidden="true">03</span><h3>Keep track of the next step</h3><p>Send it from this site, an AI assistant or the API, and you get a receipt to follow its review.</p></li>
 		</ol>
 	</section>
+	<section class="section users" aria-labelledby="users-title" data-testid="data-users">
+		<div class="section-heading"><p class="eyebrow">For data users</p><h2 id="users-title">One place, one API, one format.</h2><p>Thousands of datasets from public sources, all in the same shape. No keys to juggle. Each row comes with a proof that a free check tool verifies against a record on chain. Reading is free on the test network today.</p></div>
+		<ul>
+			<li><a href={resolve('/datasets')} data-testid="users-datasets"><Table size={22} /><span><h3>Browse every dataset</h3><p>Search by name and read the newest rows of any dataset.</p></span><ArrowRight size={18} /></a></li>
+			<li><a href={resolve('/api')} data-testid="users-api"><Code size={22} /><span><h3>Query the API</h3><p>The same data over HTTP, from a script or a notebook.</p></span><ArrowRight size={18} /></a></li>
+			<li><a href={resolve('/how-it-works')} data-testid="users-check"><ShieldCheck size={22} /><span><h3>Check it yourself</h3><p>See how a row is proven, and run a check in your browser.</p></span><ArrowRight size={18} /></a></li>
+		</ul>
+	</section>
 	<section class="learn" aria-labelledby="learn-title">
 		<div><p class="eyebrow">Curious about the checks?</p><h2 id="learn-title">See how trust is earned.</h2><p>Explore the verification methods, run the browser checks, and inspect the testnet demo.</p></div>
 		<a class="btn ghost" href={resolve('/how-it-works')} data-testid="home-technical">How it works <ArrowRight size={18} /></a>
@@ -76,6 +87,12 @@
 	.next ol { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-7); padding: 0; margin: 0; list-style: none; }
 	.next li { border-top: 1px solid var(--line); padding-top: var(--sp-6); }
 	.step-number { display: block; font: var(--text-sm)/var(--lh-body) var(--mono); color: var(--muted); margin-bottom: var(--sp-4); }
+	.users ul { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-6); padding: 0; margin: 0 0 var(--sp-9); list-style: none; }
+	.users a { display: flex; align-items: flex-start; gap: var(--sp-4); min-height: 44px; height: 100%; padding: var(--sp-6); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); color: inherit; text-decoration: none; }
+	.users a:hover, .users a:focus-visible { border-color: var(--muted); }
+	.users a > span { flex: 1; }
+	.users :global(a > svg) { flex-shrink: 0; margin-top: var(--sp-1); color: var(--muted); }
+	.users a p { font-size: var(--text-base); color: var(--muted); line-height: var(--lh-body); margin: 0; }
 	.learn, .market-preview { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-7); padding-block: var(--sp-9); border-top: 1px solid var(--line); margin-bottom: var(--sp-7); }
 	.learn > div { max-width: 62ch; }
 	.learn > a { flex-shrink: 0; }
@@ -85,5 +102,5 @@
 	.market-preview p:last-child { color:var(--muted); line-height:var(--lh-body); }
 	.market-preview > a { flex-shrink:0; }
 	@media (max-width: 1000px) { .welcome { gap: var(--sp-7); grid-template-columns: 1.2fr 1fr; } .starting-point { padding: var(--sp-6); } }
-	@media (max-width: 760px) { .welcome { grid-template-columns: 1fr; padding-block: var(--sp-8); } .next ol { grid-template-columns: 1fr; gap: var(--sp-6); } .learn, .market-preview { align-items: flex-start; flex-direction: column; } }
+	@media (max-width: 760px) { .welcome { grid-template-columns: 1fr; padding-block: var(--sp-8); } .users ul { grid-template-columns: 1fr; gap: var(--sp-4); } .next ol { grid-template-columns: 1fr; gap: var(--sp-6); } .learn, .market-preview { align-items: flex-start; flex-direction: column; } }
 </style>

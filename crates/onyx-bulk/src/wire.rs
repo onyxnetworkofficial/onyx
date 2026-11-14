@@ -9,8 +9,15 @@
 //!                "catalog": {"header": "0x<borsh CatalogHeader>", "leaf": "0x<borsh LeafProof>"}},
 //!   "shards": [ {"index": i, "entry": "0x<borsh ShardEntry>", "proof": {...}, ...} ],
 //!   "rows":   [ {"shard": i, "index": j, "key": "…", "row": "0x<borsh cells>",
-//!                "values": {...}, "proof": {"index": j, "leaf_count": n, "siblings": [...]}} ] }
+//!                "values": {...}, "schema": k,
+//!                "proof": {"index": j, "leaf_count": n, "siblings": [...]}} ] }
 //! ```
+//!
+//! A row is stored under the schema of its shard
+//! ([`ManifestHeader::schema_of`] the proven index, ADR-0059 amendment 5);
+//! `values` shows it under the newest schema ([`present`]: decimals padded,
+//! ints in a widened column with zero fraction digits, added columns null)
+//! and `schema` (format 2 only) is the index of the shard's schema.
 //!
 //! [`check_rows_answer`] proves each row to its shard root, each shard entry
 //! to the header's `shards_root`, the header to the manifest root, and the
@@ -26,10 +33,10 @@
 
 use crate::anchor;
 use crate::catalog::{self, CatalogHeader, LeafProof};
-use crate::manifest::{ManifestHeader, ShardEntry};
-use crate::row::{cells_json, decode_row, key_of};
+use crate::manifest::{root_of_header_bytes, ManifestHeader, ShardEntry, FORMAT, FORMAT_2};
+use crate::row::{cells_json, decode_row, key_of, present};
 use borsh::BorshDeserialize;
-use onyx_core::{Hash32, SignedReport};
+use onyx_core::{Hash32, SignedReport, Subject};
 use onyx_merkle::Proof;
 use serde_json::{json, Value};
 
@@ -42,6 +49,36 @@ pub enum WireError {
     /// A proof or signature does not hold.
     #[error("{0}")]
     False(String),
+    /// The header is in a format this check does not read, and its raw root
+    /// verifies against the signed report (the manifest's own, or its
+    /// catalog's leaf) off chain. That alone decides nothing: any fresh key
+    /// can sign a report naming any publisher (review BULK-WIDEN-R2 finding
+    /// 1). The caller compares the publisher and dataset with what it asked
+    /// and reads the report and signer on its own chain node: only a report
+    /// the book holds for that key makes it an answer of a newer format
+    /// (ADR-0059 amendment 5 item 8).
+    #[error("manifest header format {} is newer than this check: update onyx-check", .0.format)]
+    UnknownFormat(Box<NewerHeader>),
+}
+
+/// A header of a format this crate does not read, whose raw root verifies
+/// off chain against the answer's signed report ([`WireError::UnknownFormat`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewerHeader {
+    /// The header's format byte.
+    pub format: u8,
+    /// The publisher the signed report (or catalog leaf) names.
+    pub publisher: String,
+    /// The dataset it names.
+    pub dataset: String,
+    /// The report that signs the root: the manifest's own, or the catalog's
+    /// whose leaf names the root.
+    pub report: SignedReport,
+    /// The signer recovered from it (not yet known to be the publisher's
+    /// registered key: that is the caller's chain read).
+    pub signer: [u8; 20],
+    /// Whether the report is a catalog's.
+    pub catalog: bool,
 }
 
 fn field(s: impl Into<String>) -> WireError {
@@ -116,17 +153,98 @@ pub fn shard_json(e: &ShardEntry, p: &Proof) -> Value {
     })
 }
 
-/// A served row.
+/// A served row of shard `shard`: decoded under that shard's schema,
+/// `values` shown under the newest ([`present`]), and in format 2 `schema`,
+/// the index of the shard's schema.
 pub fn row_json(header: &ManifestHeader, shard: u32, row: &[u8], p: &Proof) -> Value {
-    let cells = decode_row(&header.schema, row).unwrap_or_default();
-    json!({
+    let from = header.schema_of(shard);
+    let cells = decode_row(from, row).unwrap_or_default();
+    let mut v = json!({
         "shard": shard,
         "index": p.index,
-        "key": key_of(&header.schema, &cells).map(|k| k.to_string()),
+        "key": key_of(from, &cells).map(|k| k.to_string()),
         "row": hex0x(row),
-        "values": cells_json(&header.schema, &cells),
+        "values": cells_json(&header.schema, &present(from, &header.schema, &cells)),
         "proof": proof_json(p),
-    })
+    });
+    if header.format != FORMAT {
+        v["schema"] = json!(header.schema_index(shard));
+    }
+    v
+}
+
+/// Every schema of a header with the index it ends at, oldest first (the
+/// newest ends at `shard_count`): `[{"until": n, "schema": {...}}, ...]`.
+pub fn schemas_json(header: &ManifestHeader) -> Value {
+    Value::Array(
+        header
+            .schemas()
+            .into_iter()
+            .map(|(until, s)| json!({"until": until, "schema": s.to_json()}))
+            .collect(),
+    )
+}
+
+/// A header whose format byte this crate does not read: whether its raw
+/// root verifies against the answer's signed report (review BULK-WIDEN-R1
+/// finding 6: else any node could turn a refusal into "undecided" with a
+/// false format byte). The report's key is the caller's to read on chain.
+fn unknown_format(answer: &Value, hb: &[u8], format: u8) -> WireError {
+    let root = root_of_header_bytes(hb);
+    match unknown_format_names(answer, &root, format) {
+        Ok(n) => WireError::UnknownFormat(Box::new(n)),
+        Err(why) => falsity(format!(
+            "manifest header format {format} is unknown to this check, and its root does not verify against the signed report: {why}"
+        )),
+    }
+}
+
+/// The publisher, dataset, report and signer the signed report (or its
+/// catalog leaf) names for manifest root `root`, if it verifies off chain.
+fn unknown_format_names(answer: &Value, root: &Hash32, format: u8) -> Result<NewerHeader, String> {
+    if hash_field(&answer["manifest"]["root"], "manifest.root").map_err(|e| e.to_string())? != *root
+    {
+        return Err("manifest.root is not the header's root".into());
+    }
+    let rb = hex_field(&answer["anchor"]["report"], "anchor.report").map_err(|e| e.to_string())?;
+    let report = SignedReport::try_from_slice(&rb).map_err(|_| "anchor.report (borsh)")?;
+    match answer["anchor"].get("catalog") {
+        None | Some(Value::Null) => {
+            let signer = anchor::verify_root(root, &report)
+                .map_err(|e| format!("publisher signature: {e}"))?;
+            let Subject::Aggregate(d) = &report.payload.subject else {
+                return Err("the report's subject is not a dataset".into());
+            };
+            Ok(NewerHeader {
+                format,
+                publisher: report.payload.source.0.clone(),
+                dataset: d.clone(),
+                signer,
+                report,
+                catalog: false,
+            })
+        }
+        Some(c) => {
+            let cb = hex_field(&c["header"], "anchor.catalog.header").map_err(|e| e.to_string())?;
+            let ch = CatalogHeader::try_from_slice(&cb).map_err(|_| "anchor.catalog.header")?;
+            let lb = hex_field(&c["leaf"], "anchor.catalog.leaf").map_err(|e| e.to_string())?;
+            let lp = LeafProof::try_from_slice(&lb).map_err(|_| "anchor.catalog.leaf")?;
+            ch.proves(&lp).map_err(|e| format!("catalog leaf: {e}"))?;
+            if lp.leaf.root != *root || lp.leaf.publisher != ch.publisher {
+                return Err("the catalog leaf does not name this root".into());
+            }
+            let signer = catalog::verify(&ch, &report)
+                .map_err(|e| format!("publisher signature over the catalog: {e}"))?;
+            Ok(NewerHeader {
+                format,
+                publisher: lp.leaf.publisher.0.clone(),
+                dataset: lp.leaf.dataset.clone(),
+                report,
+                signer,
+                catalog: true,
+            })
+        }
+    }
 }
 
 /// What an answer proved off chain.
@@ -159,6 +277,9 @@ pub fn check_rows_answer(
     to: Option<i128>,
 ) -> Result<Checked, WireError> {
     let hb = hex_field(&answer["manifest"]["header"], "manifest.header")?;
+    if let Some(&f) = hb.first().filter(|f| **f != FORMAT && **f != FORMAT_2) {
+        return Err(unknown_format(answer, &hb, f));
+    }
     let header =
         ManifestHeader::try_from_slice(&hb).map_err(|_| field("manifest.header (borsh)"))?;
     header
@@ -242,16 +363,29 @@ pub fn check_rows_answer(
         if p.leaf_count != e.rows || !onyx_merkle::verify(&e.root, &bytes, &p) {
             return Err(falsity(format!("row {i} is not in shard {shard}")));
         }
-        let cells = decode_row(&header.schema, &bytes)
-            .map_err(|e| falsity(format!("row {i} does not fit the schema: {e}")))?;
+        // Decoded under its proven shard's schema, never the newest
+        // (ADR-0059 amendment 5 item 4).
+        let schema = header.schema_of(shard);
+        let cells = decode_row(schema, &bytes).map_err(|e| {
+            falsity(format!(
+                "row {i} does not fit the schema of shard {shard}: {e}"
+            ))
+        })?;
         if let Some(v) = r.get("values") {
-            if *v != cells_json(&header.schema, &cells) {
+            if *v != cells_json(&header.schema, &present(schema, &header.schema, &cells)) {
                 return Err(falsity(format!(
-                    "row {i}: values differ from the proven row"
+                    "row {i}: values differ from the proven row shown under the newest schema"
                 )));
             }
         }
-        let key = key_of(&header.schema, &cells).ok_or_else(|| falsity("row without a key"))?;
+        if let Some(k) = r.get("schema") {
+            if k.as_u64() != Some(header.schema_index(shard) as u64) {
+                return Err(falsity(format!(
+                    "row {i}: schema is not the index of shard {shard}'s schema"
+                )));
+            }
+        }
+        let key = key_of(schema, &cells).ok_or_else(|| falsity("row without a key"))?;
         if from.is_some_and(|f| key < f) || to.is_some_and(|t| key > t) {
             return Err(falsity(format!(
                 "row {i} (key {key}) is outside the asked range"
@@ -301,7 +435,7 @@ pub fn catalog_json(header: &CatalogHeader, lp: &LeafProof) -> Value {
 mod tests {
     use super::*;
     use crate::manifest::tests::rights;
-    use crate::manifest::{shards_tree, Manifest, NewVersion};
+    use crate::manifest::{root_of_header_bytes, shards_tree, Manifest, NewVersion};
     use crate::row::{encode_row, Cell};
     use crate::schema::Schema;
     use crate::shard::{check_shard, encode_shard};
@@ -444,6 +578,266 @@ mod tests {
             .expect("object")
             .remove("catalog");
         assert!(check_rows_answer(&bare, Some(3), Some(6)).is_err());
+    }
+
+    /// The schemas of a dataset that widened twice (ADR-0059 amendment 5):
+    /// `v` from 2 to 7 to 38 places, `n` from int to decimal, a column
+    /// added at each step.
+    fn three_schemas() -> [Schema; 3] {
+        let s = |v: Value| Schema::from_json(&v).expect("ok");
+        [
+            s(
+                json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":2},{"name":"n","kind":"int"}],"key":"t"}),
+            ),
+            s(
+                json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":7},{"name":"n","kind":"decimal","scale":3},{"name":"a","kind":"text","nullable":true}],"key":"t"}),
+            ),
+            s(
+                json!({"columns":[{"name":"t","kind":"int"},{"name":"v","kind":"decimal","scale":38},{"name":"n","kind":"decimal","scale":5},{"name":"a","kind":"text","nullable":true},{"name":"b","kind":"int","nullable":true}],"key":"t"}),
+            ),
+        ]
+    }
+
+    /// Versions 1 to 3, one shard each (keys 0..5, 5..10, 10..15), shard i
+    /// built under schema i; an answer of version 3 over keys 3..=11.
+    fn widened_fixture() -> (Value, Manifest) {
+        let schemas = three_schemas();
+        let cells = |k: usize, t: i128| -> Vec<Cell> {
+            match k {
+                0 => vec![
+                    Cell::Int(t),
+                    Cell::Decimal(format!("{t}.25")),
+                    Cell::Int(t * 10),
+                ],
+                1 => vec![
+                    Cell::Int(t),
+                    Cell::Decimal(format!("{t}.1234567")),
+                    Cell::Decimal(format!("{t}.500")),
+                    Cell::Text(format!("x{t}")),
+                ],
+                _ => vec![
+                    Cell::Int(t),
+                    Cell::Decimal(format!("{t}.{}", "7".repeat(38))),
+                    Cell::Decimal(format!("{t}.00001")),
+                    Cell::Null,
+                    Cell::Int(t),
+                ],
+            }
+        };
+        let mut files = Vec::new();
+        let mut m: Option<Manifest> = None;
+        for (k, schema) in schemas.iter().enumerate() {
+            let lo = 5 * k as i128;
+            let rows: Vec<Vec<u8>> = (lo..lo + 5)
+                .map(|t| encode_row(schema, &cells(k, t)).expect("fits its own schema"))
+                .collect();
+            let f = encode_shard(&rows);
+            let c = check_shard(schema, &f).expect("ok");
+            let mut entries = m.as_ref().map(|p| p.shards.clone()).unwrap_or_default();
+            entries.push(ShardEntry::new(k as u32, &c.summary));
+            files.push(f);
+            m = Some(
+                Manifest::build(
+                    NewVersion {
+                        dataset: "synthetic.test".into(),
+                        publisher: SourceId("example.publisher".into()),
+                        created_unix: 1_700_000_000 + k as u64,
+                        schema: schema.clone(),
+                        rights: rights("example.publisher"),
+                    },
+                    m.as_ref(),
+                    entries,
+                )
+                .expect("widens"),
+            );
+        }
+        let m = m.expect("built");
+        let report = anchor::sign(&SECRET, &m.header).expect("ok");
+        let tree = shards_tree(&m.shards);
+        let mut rows = Vec::new();
+        for (s, idx) in [
+            (0u32, 3u64),
+            (0, 4),
+            (1, 0),
+            (1, 1),
+            (1, 2),
+            (1, 3),
+            (1, 4),
+            (2, 0),
+            (2, 1),
+        ] {
+            let c = check_shard(m.header.schema_of(s), &files[s as usize]).expect("ok");
+            rows.push(row_json(
+                &m.header,
+                s,
+                c.rows[idx as usize],
+                &c.tree.proof(idx).expect("ok"),
+            ));
+        }
+        let answer = json!({
+            "manifest": {"root": m.header.root().to_string(), "header": hex0x(&m.header.to_bytes())},
+            "anchor": {"report": hex0x(&borsh::to_vec(&report).expect("ok")), "digest": report.payload.digest().to_string()},
+            "shards": (0..3).map(|i| shard_json(&m.shards[i], &tree.proof(i as u64).expect("ok"))).collect::<Vec<_>>(),
+            "rows": rows,
+        });
+        (answer, m)
+    }
+
+    /// ADR-0059 amendment 5 item 4: every row is decoded under its proven
+    /// shard's schema and shown under the newest; `schema` names the shard's
+    /// schema; the answer checks across all three.
+    #[test]
+    fn widen_6_an_answer_across_three_schemas_checks() {
+        let (a, m) = widened_fixture();
+        assert_eq!(
+            (m.header.format, m.header.earlier.len()),
+            (crate::manifest::FORMAT_2, 2)
+        );
+        let c = check_rows_answer(&a, Some(3), Some(11)).expect("checks");
+        assert_eq!(
+            c.rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+            (3..=11).collect::<Vec<i128>>()
+        );
+        assert_eq!(c.header, m.header);
+        let rows = a["rows"].as_array().expect("rows");
+        assert_eq!(
+            rows.iter()
+                .map(|r| r["schema"].as_u64())
+                .collect::<Vec<_>>(),
+            [0, 0, 1, 1, 1, 1, 1, 2, 2].map(Some).to_vec()
+        );
+        let z = |n: usize| "0".repeat(n);
+        // Schema 0: v padded from 2 to 38 places, n an int with 5 zeros, a and b null.
+        assert_eq!(
+            rows[0]["values"],
+            json!({"t":"3","v": format!("3.25{}", z(36)),"n":"30.00000","a":null,"b":null})
+        );
+        // Schema 1: padded from 7 and 3; a kept.
+        assert_eq!(
+            rows[2]["values"],
+            json!({"t":"5","v": format!("5.1234567{}", z(31)),"n":"5.50000","a":"x5","b":null})
+        );
+        // Schema 2: as stored.
+        assert_eq!(
+            rows[7]["values"],
+            json!({"t":"10","v": format!("10.{}", "7".repeat(38)),"n":"10.00001","a":null,"b":"10"})
+        );
+        // Every values object fits the newest schema's columns.
+        for r in rows {
+            let keys: Vec<&String> = r["values"].as_object().expect("obj").keys().collect();
+            assert_eq!(keys.len(), m.header.schema.columns.len());
+        }
+        // Without `values` and `schema` the rows still check (both optional).
+        let mut bare = a.clone();
+        for r in bare["rows"].as_array_mut().expect("rows") {
+            let o = r.as_object_mut().expect("obj");
+            o.remove("values");
+            o.remove("schema");
+        }
+        check_rows_answer(&bare, Some(3), Some(11)).expect("checks");
+        // A format-1 answer carries no `schema` field.
+        let (one, _) = fixture();
+        assert!(one["rows"][0].get("schema").is_none());
+    }
+
+    /// A node can neither show an old row under another schema nor choose
+    /// between the stored and the padded form (THREATS BULK-WIDEN-2): a
+    /// wrong `schema`, stored-form or otherwise changed `values`, and a
+    /// header whose ranges relabel a shard are refused.
+    #[test]
+    fn widen_7_rows_under_another_schema_or_unpadded_values_are_refused() {
+        let (a, m) = widened_fixture();
+        let mut wrong_index = a.clone();
+        wrong_index["rows"][0]["schema"] = json!(2);
+        let mut unpadded = a.clone();
+        unpadded["rows"][0]["values"] = json!({"t":"3","v":"3.25","n":"30","a":null,"b":null});
+        let mut old_columns = a.clone();
+        old_columns["rows"][0]["values"] = json!({"t":"3","v":"3.25","n":"30"});
+        let mut rounded = a.clone();
+        rounded["rows"][7]["values"]["v"] = json!(format!("10.{}8", "7".repeat(37)));
+        // The same rows under a header that says shard 0 is schema 1: its root
+        // is not the signed one.
+        let mut relabelled = a.clone();
+        let mut h = m.header.clone();
+        h.earlier.remove(0);
+        relabelled["manifest"]["header"] = json!(hex0x(&h.to_bytes()));
+        relabelled["manifest"]["root"] = json!(h.root().to_string());
+        let mut relabelled_kept_root = relabelled.clone();
+        relabelled_kept_root["manifest"]["root"] = json!(m.header.root().to_string());
+        for (name, bad) in [
+            ("schema index", &wrong_index),
+            ("stored form", &unpadded),
+            ("old columns", &old_columns),
+            ("rounded", &rounded),
+            ("relabelled", &relabelled),
+            ("relabelled, signed root", &relabelled_kept_root),
+        ] {
+            assert!(
+                matches!(
+                    check_rows_answer(bad, Some(3), Some(11)),
+                    Err(WireError::False(_))
+                ),
+                "{name}"
+            );
+        }
+    }
+
+    /// Item 8 (review BULK-WIDEN-R1 finding 6): a header format this check
+    /// does not read is `UnknownFormat` (nothing decided) only when the raw
+    /// header's root verifies against the signed report; otherwise refused.
+    #[test]
+    fn an_unknown_format_is_undecided_only_when_its_root_is_signed() {
+        let (a, m) = widened_fixture();
+        let mut hb = m.header.to_bytes();
+        hb[0] = 3;
+        let raw = root_of_header_bytes(&hb);
+        let signer = anchor::address_of(&SECRET).expect("ok");
+        let mut p = anchor::payload(&m.header, &signer);
+        p.value = onyx_core::Value::Bytes(raw.0.to_vec());
+        let r = anchor::sign_payload(&SECRET, p).expect("signs");
+        let mut newer = a.clone();
+        newer["manifest"]["header"] = json!(hex0x(&hb));
+        newer["manifest"]["root"] = json!(raw.to_string());
+        newer["anchor"]["report"] = json!(hex0x(&borsh::to_vec(&r).expect("ok")));
+        newer["anchor"]["digest"] = json!(r.payload.digest().to_string());
+        // Off chain the root verifies; the report and its signer go to the
+        // caller, who must read them on its own chain node (review
+        // BULK-WIDEN-R2 finding 1).
+        assert_eq!(
+            check_rows_answer(&newer, None, None),
+            Err(WireError::UnknownFormat(Box::new(NewerHeader {
+                format: 3,
+                publisher: "example.publisher".into(),
+                dataset: "synthetic.test".into(),
+                report: r.clone(),
+                signer,
+                catalog: false,
+            })))
+        );
+        // The format byte changed under the original report: refused.
+        let mut forged = a.clone();
+        forged["manifest"]["header"] = json!(hex0x(&hb));
+        forged["manifest"]["root"] = json!(raw.to_string());
+        assert!(matches!(
+            check_rows_answer(&forged, None, None),
+            Err(WireError::False(_))
+        ));
+        // A root field that is not the raw header's: refused.
+        let mut other_root = newer.clone();
+        other_root["manifest"]["root"] = json!(m.header.root().to_string());
+        assert!(matches!(
+            check_rows_answer(&other_root, None, None),
+            Err(WireError::False(_))
+        ));
+        // A bad signature over the right root: refused.
+        let mut bad_sig = newer.clone();
+        let mut r2 = r.clone();
+        r2.signature[5] ^= 1;
+        bad_sig["anchor"]["report"] = json!(hex0x(&borsh::to_vec(&r2).expect("ok")));
+        assert!(matches!(
+            check_rows_answer(&bad_sig, None, None),
+            Err(WireError::False(_))
+        ));
     }
 
     #[test]

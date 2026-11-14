@@ -117,20 +117,66 @@ columns to drop (duplicates, all-empty) over the whole history, as for version 1
 
 ### When new rows do not fit the schema
 
-A dataset keeps the schema of its version 1 for good: `build --prev` refuses rows that need more
-decimal places than a column's `scale`, or a column version 1 did not have (values are padded,
-never rounded). So:
+`build --prev` refuses rows that need more decimal places than a column's `scale`, or a column the
+schema lacks (values are padded, never rounded); the refusal names the line, the column and the
+places its value needs. A later version may **widen** the schema for its new rows (ADR-0059
+amendment 5): every earlier shard keeps its bytes, its root and the schema it was built under.
 
 1. At version 1, give each decimal column a few more decimal places than the data needs today (the
-   padding costs a few bytes a value). A source that writes floats can gain digits later. Later,
-   check new rows against the places their values need, not against the scale your exporter would
-   pick for a new dataset (with its headroom): a value with fewer places is padded and fits.
-2. If new rows still do not fit, start a **new dataset id** (for example `<dataset id>-2`): build its
-   version 1 from the whole history with the wider schema, list it in your next catalog, and end
-   the old id in the same catalog with a tombstone (`onyx-publish catalog-build ... --remove <old id>`,
-   ADR-0059 amendment 4). Readers of the old id see it removed; nodes erase its files after the
-   grace period. Onyx has no link from the old id to the new one yet (ROADMAP S23), so say it
-   wherever you announce your data.
+   padding costs a few bytes a value). Later, check new rows against the places their values need,
+   not against the scale your exporter would pick for a new dataset: a value with fewer places is
+   padded and fits.
+2. If new rows still do not fit, widen first:
+   `onyx-publish schema-fit --prev <last version folder> --input new-rows.csv --out new.json`
+   writes the narrowest widening that takes the rows and lasts: a decimal column whose values need
+   more places gets the places 17 significant digits need at its smallest non-zero value, plus 2
+   (at most 38, and no more than keeps its longest value within the 80 characters of a stored
+   decimal), so a source that writes full binary-float digits does not need another widening
+   next week; a non-key `int` column that now holds fractions becomes `decimal`; a column the input
+   has and the schema lacks is added at the end as nullable. Columns that fit stay as they are. It
+   names every value no widening can take (more than 38 places, past 80 characters, not a number,
+   empty in a column that is not nullable) and then exits 1; fix those rows first.
+3. Then `onyx-publish build --prev <last version folder> --schema new.json --widen ...` (without
+   `--widen` a different schema is refused), and sign, anchor and upload as usual. The version is
+   format 2; the next versions under the same schema need no flag.
+4. Limits: at most 8 schemas per dataset (7 widenings, at most one per version); the eighth widening
+   is refused by `build` ("at most 8 schemas"), and a node refuses such a manifest as
+   `bulk_bad_manifest` (its header is refused before the schemas are read). Widening never renames, reorders or drops a
+   column, never changes a column's nullability, a text column or the key column, and never
+   narrows a scale. For those changes, and after 8 schemas, start a **new dataset id** (for example
+   `<dataset id>-2`): build its version 1 from the whole history with the new schema, list it in
+   your next catalog, and end the old id in the same catalog with a tombstone
+   (`onyx-publish catalog-build ... --remove <old id>`, ADR-0059 amendment 4). Onyx has no link
+   from the old id to the new one yet (ROADMAP S23), so say it wherever you announce your data.
+5. Who can read a widened dataset: nodes store a format-2 manifest only with `ONYX_BULK_FORMAT2=on`
+   (docs/ops/config.md); a node that does not yet keeps serving your earlier version, and a node
+   that upgrades later refuses your next versions ("versions are taken in order") until it gets the
+   widened one: `onyx-publish upload` then uploads the previous version from the folder `build --prev`
+   recorded (with the catalog number it was uploaded with) and tries again. Readers need an
+   `onyx-check` that reads format 2: an older one refuses an honest widened answer (exit 1); from
+   this one on, a header format newer than the check is exit 3 ("update onyx-check") only when its
+   root verifies against a report your registered key signed and the reader's own chain node shows
+   the book holds it (with `--unchecked` it is exit 3 marked `chainChecked: false`, like every
+   unchecked answer); anything else is refused. Answers show every row in the newest schema (old decimals padded with
+   zeros, added columns null; each row's `schema` names the schema it is stored under).
+6. A widened dataset cannot back a storage deal yet: the deployed OnyxStorage reads format-1
+   headers only, and storage nodes refuse a deal on a format-2 manifest. Deals on widened datasets
+   need a new OnyxStorage.
+
+### When your source changes
+
+A source can rename a file, drop a metric or change what a series means. For a daily refresh of
+many datasets:
+
+1. A dataset whose source is gone must be skipped, not stop the run: the others still refresh, and
+   the skipped one keeps its last version (it is still correct for the days it covers).
+2. Before a renamed source continues a dataset id, compare its rows with the rows Onyx serves for
+   the same days (`GET /v1/bulk/<publisher>/<dataset>/rows?from=...`). Continue only if they are
+   equal: a version adds days, it never changes the days already published.
+3. A source whose values or columns changed for days already published is new data: give it a
+   new dataset id (with the whole history) and, if the old one should stop, end it with a tombstone.
+4. Retry the anchor and the upload when a node does not answer: both are safe to repeat (a report
+   already recorded is not sent again).
 
 ## Many datasets with one anchor (catalogs)
 

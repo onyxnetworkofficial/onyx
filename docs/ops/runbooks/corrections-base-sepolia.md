@@ -18,12 +18,15 @@ rounding dust).
 **Who:** the owner, with the deployer key in `.env` (never printed, never on a command line).
 The registry's owner is another test key (`.onyx-testnet/keys/registry-owner.key`; never the
 coordinator, REG-R1-F3): it registers the recheck metric, the deployer pairs it. **Time:** about 20 minutes for
-steps 1-6. **Cost:** one contract creation and three owner transactions; a dry run prints forge's
-estimate first. Test ETH only.
+steps 1-6. **Cost:** one contract creation and three owner transactions, then two to four for the
+first market (the fee minted and gas granted when the opener lacks them, its approval, the open);
+a dry run prints forge's estimate first. Test ETH only.
 
 **Rehearsed:** locally by `scripts/corrections-anvil.sh` and `scripts/recheck-anvil.sh` (both in
-check-all): the same contracts, the live manifest's real template ids, a market, rechecks that
-disagree and agree, payouts to the wei. **Deployed** on Base Sepolia 2026-11-01 (step 2:
+check-all): the same contracts, the live manifest's real template ids, a market opened as step 6
+opens it (`DeployCorrections.openMarket` with blocks from `scripts/corrections-blocks.py`: the
+fee minted to an opener that held none, a forged value refused before anything was sent, a
+second run sending nothing), rechecks that disagree and agree, payouts to the wei. **Deployed** on Base Sepolia 2026-11-01 (step 2:
 `0x3765dab41115fc2b849b13f81c75fce96a771133`, docs/ops/deployment.md), and steps 3 to 5 done the
 same day for `us.treasury.tga_total_deposits`: its `.recheck` metric registered (template
 `0x2d5828d8ebfcbfa6545463c11e43ab24aee03e8cf2fa7ba65f0985345d0c3016`, block 53274589) and paired
@@ -58,8 +61,9 @@ key from `.env` passed to forge in the environment (never on a command line, nev
 (step 2; the address and block go to `.onyx-testnet/corrections-sepolia.json`), `pair MANIFEST
 DATE` (steps 3 to 5 simulated) and `pair MANIFEST DATE --yes` (sent: the recheck metric registered
 unless the registry holds it, then paired; `DeployCorrections.pair` refuses another template or
-tolerance and sends nothing for what is done), and `status`. The manual steps below stay as the
-reference.
+tolerance and sends nothing for what is done), `open MANIFEST DATE [--close-at T] [--yes]` and
+`bet MARKET yes|no TONYX [--key NAME] [--yes]` (step 6, 2026-11-14) and `status` (the settings and
+every market). The manual steps below stay as the reference.
 
 1. **Rehearse on a fork first** (about 5 minutes, no transaction on Base Sepolia):
 
@@ -122,11 +126,74 @@ reference.
 
    Check: `cast call $ONYX_CORRECTIONS 'pairs(bytes32)(bytes32,uint128)' <original_metric_key>`.
 
-6. **Open the first market** (anyone; here a test key, never the deployer if it wants to bet;
-   approve 5 tONYX first). Blocks are 0.2 s on Base Sepolia (measured 2026-11-01): the close
-   must be at least 18,000 blocks (an hour) ahead, the deadline at least 432,000 blocks (a day)
-   after the close and at most 12,960,000 blocks (30 days) from now; the deadline must fall after
-   the last recheck day (`recheck_days`):
+6. **Open the first market and bet on both sides** (anyone; here operator test keys, never the
+   deployer; about 10 minutes). Each command is a dry run first (forge simulates on the live
+   chain's state; nothing sent), then the same command with `--yes`. Trading closes 2026-11-17
+   00:00 UTC, which leaves four recheck days (11-17 to 11-20); right after the open, one Yes and
+   one No bet from two miner keys, so the market has both sides (a market whose winning side has
+   no bet voids):
+
+   ```sh
+   M=sources/us.treasury.tga_total_deposits/manifest.json
+   scripts/corrections-sepolia.sh open $M 2026-10-28 --close-at 2026-11-17T00:00:00Z
+   scripts/corrections-sepolia.sh open $M 2026-10-28 --close-at 2026-11-17T00:00:00Z --yes
+   scripts/corrections-sepolia.sh bet 1 yes 10 --key miner-0
+   scripts/corrections-sepolia.sh bet 1 yes 10 --key miner-0 --yes
+   scripts/corrections-sepolia.sh bet 1 no 10 --key miner-1
+   scripts/corrections-sepolia.sh bet 1 no 10 --key miner-1 --yes
+   scripts/corrections-sepolia.sh status
+   ```
+
+   What it does:
+   - **The value:** the original round's `roundId`, `windowEnd` and value from the node's answer
+     (`https://onyx.cryptagraph.com/v1/observations/us.treasury.tga_total_deposits?subject=us.treasury.tga_deposits:2026-10-28`;
+     `ONYX_API_URL` names another node), its metric, subject and template checked against the
+     manifest; the on-chain value is the answer's number (`answer`, not the decimal text).
+   - **The blocks** (`scripts/corrections-blocks.py`), at the block time measured over the last
+     432,000 blocks (0.2 s on Base Sepolia): the close the block expected at `--close-at`
+     (refused before the earliest allowed close, after a day before the last recheck day starts,
+     or when it leaves less than `minRecheckBlocks` before the deadline); without it the earliest
+     the contract allows (`minTradingBlocks`, 18,000 blocks: an hour) plus 9,000 blocks (30
+     minutes) for the build and the sends to land (`CORRECTIONS_CLOSE_MARGIN_BLOCKS`). The
+     deadline is the block expected at 12:00 UTC on the day after the last recheck day
+     (`recheck_days` of step 3), so a recheck round started on the last day can still be
+     recorded by it.
+   - **The checks** (`DeployCorrections.checkOpening`, before anything is sent): the contract's
+     pair is the manifest's `.recheck` metric and the registry holds its template (as `pair`
+     checks; other `CORRECTIONS_AFTER_DAYS`/`SPAN_DAYS` are refused); the close and deadline
+     against the contract's own `minTradingBlocks`, `minRecheckBlocks` and `maxMarketBlocks`;
+     the close before the last recheck day ends and the deadline after it; the round and value
+     against the registry's recorded result (`NotTheRecordedValue`); no recheck recorded yet;
+     the opener not an insider (owner, treasury, coordinator).
+   - **The opener:** `.onyx-testnet/keys/miner-0.key`, a markets test bettor
+     (`CORRECTIONS_OPENER_KEY_FILE` names another; level-2 observers and the registry's owner are
+     refused). When it holds less than the 5 tONYX fee, or less than 0.00002 test ETH, the deployer
+     (the tONYX minter) first mints the rest and grants 0.00005 test ETH, as
+     `scripts/markets-sepolia.sh` does a bettor. It approves the fee unless approved, then opens.
+   - **The record:** the market id forge logged (read back from the chain, a few tries while the
+     RPC lags) and its blocks go to `.onyx-testnet/corrections-sepolia.json`. Run again when the
+     value has a market, open, closed or settled, it sends nothing and records that market;
+     `--new-market` opens another.
+   - **The bets** (`DeployCorrections.placeBet`): whole tONYX from `--key NAME`
+     (`.onyx-testnet/keys/NAME.key`, miner-0 by default); refused before anything is sent for an
+     insider, a level-2 observer's or the registry owner's key, a market that is not open or has
+     closed, a side other than yes or no, an amount under `minBet` or over the 100 tONYX per
+     bettor, or a side past half the pool cap. The deployer mints the stake and grants gas when
+     the bettor lacks them; the bettor approves the stake unless approved.
+
+   **Dry runs 2026-11-14** (nothing sent). `open --close-at 2026-11-17T00:00:00Z` at head block
+   58790851 (18:13 UTC): the node's round
+   `0xe0001998052d14c709f552c542da326f7a3baf343b9da41627c6e91a7ad836cf` (windowEnd 1793335911),
+   value 18463; close block 59758656 (~2026-11-17 00:00 UTC), deadline block 61702656
+   (~2026-11-21 12:00 UTC). The opener held no tONYX and 0.000038 test ETH (no gas grant), so
+   three transactions: the deployer mints 5 tONYX to it, it approves 5 tONYX and opens market 1
+   (forge's estimate: 729,212 gas, 0.0000073 test ETH). With `CORRECTIONS_AFTER_DAYS=8` it was
+   refused (`RecheckRegisteredOtherwise`). The two bets, dry run on a local anvil fork with that
+   market opened there: miner-0 Yes 10 and miner-1 No 10, each holding no tONYX, so each is a
+   mint of 10 tONYX, an approval and the bet (about 457,600 gas, 0.000005 test ETH each).
+   `--yes` computes the blocks again from the head it starts at.
+
+   By hand (the reference; approve 5 tONYX first; the same bounds):
 
    ```sh
    cast send "$ONYX_TONYX" 'approve(address,uint256)' "$ONYX_CORRECTIONS" 5000000000000000000 \
@@ -136,8 +203,7 @@ reference.
      --rpc-url "$RPC" --interactive
    ```
 
-   `roundId` and `windowEnd` are the original round's (its `/v1/observations` answer:
-   `roundId`, `windowEnd`). A wrong value or round is refused (`WrongValue`).
+   A wrong value or round is refused (`WrongValue`).
 
 ## Left before a market can settle on Base Sepolia
 

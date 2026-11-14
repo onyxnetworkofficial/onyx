@@ -29,6 +29,8 @@ export async function product(browser, base, root, expect) {
 		expect((await cta.innerText()).trim() === 'Add your data' && (await cta.getAttribute('href')) === '#/submit', `U1 ${width}: primary action invites the visitor to add their data`);
 		expect((await pg.getByTestId('home-secondary').getAttribute('href')) === '#/data', `U1 ${width}: browsing is the secondary action`);
 		expect((await pg.locator('.console, .tally, .stats').count()) === 0 && (await pg.getByTestId('contribution-steps').locator('li').count()) === 3, `U1 ${width}: home explains three contribution steps without the technical console`);
+		const users = await pg.getByTestId('data-users').getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+		expect(JSON.stringify(users) === JSON.stringify(['#/datasets', '#/api', '#/how-it-works']), `U1 ${width}: home has a data-users section linking datasets, API and checks (${users.join(', ')})`);
 		const unwanted = requests.filter((r) => r.method !== 'GET' || /\/data\/|\.wasm$|verifier\.worker|\/v1\//.test(r.path));
 		expect(unwanted.length === 0, `U1 ${width}: home makes no submissions and fetches no datasets, verifier or API (${JSON.stringify(unwanted)})`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth === innerWidth), `U1 ${width}: home fits the viewport`);

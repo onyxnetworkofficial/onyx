@@ -117,6 +117,38 @@ test('a rows answer becomes a table; anything out of shape is dropped', () => {
 	assert.equal(sample({ ...answer, rows: [] }), null);
 });
 
+// ADR-0059 amendment 5: a widened dataset's answer shows old rows padded to the newest scale (an
+// added column null); the table shows the same text as before the widening, and a padded value
+// past 80 characters is trimmed of its zeros before any cut (THREATS BULK-WIDEN-3).
+test('sample of a widened answer shows the same text as before', () => {
+	const before = {
+		manifest: { schema: { columns: [{ name: 'day', kind: 'int' }, { name: 'v', kind: 'decimal', scale: 2 }] } },
+		rows: [
+			{ key: '1787788800', values: { day: '1787788800', v: '711.50' } },
+			{ key: '1787875200', values: { day: '1787875200', v: '-3.00' } }
+		]
+	};
+	const z = (n) => '0'.repeat(n);
+	const after = {
+		manifest: {
+			format: 2,
+			schema: { columns: [{ name: 'day', kind: 'int' }, { name: 'v', kind: 'decimal', scale: 22 }, { name: 'w', kind: 'int', nullable: true }] }
+		},
+		rows: [
+			{ key: '1787788800', schema: 0, values: { day: '1787788800', v: '711.5' + z(21), w: null } },
+			{ key: '1787875200', schema: 0, values: { day: '1787875200', v: '-3.' + z(22), w: null } }
+		]
+	};
+	const a = sample(before);
+	const b = sample(after);
+	assert.deepEqual(b.columns, ['day', 'v', 'w']);
+	assert.deepEqual(b.rows.map((r) => r.slice(0, 2)), a.rows);
+	assert.deepEqual(b.rows.map((r) => r[2]), ['', '']);
+	const long = '9'.repeat(77) + '.25';
+	const wide = { ...after, rows: [{ key: '1', values: { day: '1', v: long + z(36), w: null } }] };
+	assert.equal(sample(wide).rows[0][1], long);
+});
+
 test('a page link carries the search and the open dataset, and nothing else', () => {
 	assert.equal(toLink(''), '#/datasets');
 	assert.equal(toLink('btc sth'), '#/datasets?q=btc+sth');

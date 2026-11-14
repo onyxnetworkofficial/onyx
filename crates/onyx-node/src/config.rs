@@ -1064,7 +1064,9 @@ pub struct BulkConfig {
     /// `ONYX_BULK_WARM_DIR` (default `<ONYX_BULK_DIR>/warm`): warm shards.
     pub warm: PathBuf,
     /// `ONYX_BULK_QUOTA_GIB` (default 16), `ONYX_BULK_MAX_DATASETS` (64),
-    /// `ONYX_BULK_MAX_GIB` (256), `ONYX_BULK_WARM_AFTER_DAYS` (7).
+    /// `ONYX_BULK_MAX_GIB` (256), `ONYX_BULK_WARM_AFTER_DAYS` (7),
+    /// `ONYX_BULK_FORMAT2` (`off` default, `on`: take format-2 manifests,
+    /// ADR-0059 amendment 5 item 8).
     pub limits: onyx_api::bulk_serve::BulkLimits,
     /// `ONYX_BULK_FREE_PER_MINUTE` (default 60): free bulk answers per
     /// client per minute (reads, and storage-network peer fetches, ADR-0060).
@@ -1090,6 +1092,7 @@ impl BulkConfig {
             "ONYX_BULK_ERASE_GRACE_DAYS",
             "ONYX_BULK_ERASE_HOLD",
             "ONYX_BULK_ERASE_MAX_SHARDS",
+            "ONYX_BULK_FORMAT2",
         ];
         let Some(dir) = get("ONYX_BULK_DIR")
             .map(|p| p.trim().to_string())
@@ -1127,6 +1130,14 @@ impl BulkConfig {
                 3_650,
             )? * 86_400,
             catalog_checkpoint: d.catalog_checkpoint,
+            // Off until a release that reads format 2 is the rollback
+            // target: a node holding a format-2 manifest cannot start an
+            // older binary (review BULK-WIDEN-R1 finding 2).
+            format2: match get("ONYX_BULK_FORMAT2").as_deref().map(str::trim) {
+                None | Some("off") => false,
+                Some("on") => true,
+                Some(_) => return Err("ONYX_BULK_FORMAT2 must be on or off".into()),
+            },
         };
         let warm = get("ONYX_BULK_WARM_DIR")
             .map(|p| p.trim().to_string())

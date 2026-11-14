@@ -1,6 +1,7 @@
 # Spec: bulk datasets from a publisher (contributor loop CL5)
 
-Status: **Accepted as ADR-0059 (2026-10-29), built.** Test network only. Code: `crates/onyx-bulk`,
+Status: **Accepted as ADR-0059 (2026-10-29), built** (amendment 5, widening successors, built
+2026-11-14: format 2, R-BULK-16). Test network only. Code: `crates/onyx-bulk`,
 `onyx_api::bulk_serve`, `crates/onyx-publish`, `onyx-check --bulk`. Publisher guide:
 docs/ops/bulk-publish.md. Threats: THREATS.md "CL5".
 
@@ -30,7 +31,23 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   rights_statement, shard_count, row_count, byte_count, key_min, key_max, shards_root}`;
   `shards_root` = Merkle root over `borsh(entry)`; manifest root =
   `keccak256("onyx-bulk-manifest-v1" ‖ borsh(header))`. At most 65,536 shards; Borsh manifest at
-  most 8 MiB.
+  most 8 MiB. **Format 2** (a widened dataset, ADR-0059 amendment 5): the same fields in the same
+  order with `earlier: Vec<{until: u32, schema}>` (oldest first, 1 to 7 entries) right after
+  `schema`, so the last 84 bytes stay `shard_count` to `shards_root`; `schema` is the newest. An
+  entry covers the shards from the previous entry's `until` (or 0) up to its own `until`, the
+  newest schema `[last until, shard_count)`: `schema_of(i)` is shard i's schema. The Borsh is
+  written by hand: `earlier` (its count first, more than 7 refused before any entry is read) only
+  in format 2, so a format-1 header is byte for byte what it was; a header with one schema is
+  always format 1. The root formula does not change (its first byte is the format).
+- **Widening** (`Schema::widens(old, new)`): at an old column's position a decimal's scale grows
+  (up to 38) or a non-key `int` becomes `decimal`; after the old columns, nullable columns (64 in
+  all); at least one change. Never: renaming, reordering or dropping a column, a smaller scale,
+  decimal to int, any change to or from text, any change of nullability, a change to the key.
+- **Shown rows** (`row::present(from, to, cells)`): a row stored under `from` shown under `to`
+  (a schema `from` widens to): decimals padded with zeros to `to`'s scale, an int in a column that
+  became decimal written with zero fraction digits, columns `from` lacks null. Never rounds or
+  fails; composes (`from` to `b` to `to` equals `from` to `to`). Shown cells are display only: a
+  padded decimal may pass the 80-character cap of stored cells (up to 117 characters).
 - **Anchor**: the ADR-0028 `SignedReport` over `{source: publisher, key: key id, metric:
   "bulk.manifest", subject: Aggregate(dataset), value: Bytes(root), observed_unix: created_unix,
   sequence}`, posted with `OnyxSignedBook.postReport(payload, signature)`.
@@ -39,8 +56,11 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
 - R-BULK-1 (rights): `rights.redistribution` is `Allowed`, `rights.source` is the publisher,
   `rights_statement` is exactly `onyx_bulk::RIGHTS_STATEMENT`, the license is a license id.
 - R-BULK-2 (versions): version 1 has `prev` zero; version n+1 names version n's root, keeps
-  dataset, publisher, schema and rights, has a later `created_unix`, keeps every earlier entry in
-  place and adds at least one.
+  dataset, publisher and rights, has a later `created_unix`, keeps every earlier entry in place and
+  adds at least one. Its schema is version n's, with `earlier` equal to version n's, or widens
+  version n's (R-BULK-16), with `earlier` exactly version n's followed by `{until: n's
+  shard_count, schema: n's schema}`: no earlier shard is relabelled and a version widens at most
+  once.
 - R-BULK-3 (anchor): a node holds a manifest only when, at its finalized block, `report(digest)`
   is recorded with this report's hash, `factView(fact)` is accepted on that hash, and
   `keyState(key)` is registered (the book's fact view already withdraws what a retired or
@@ -48,8 +68,10 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   did not know or had suspended is refused without a chain read for 60 s. It reads the anchor again
   at most 300 s (host clock) before serving.
 - R-BULK-4 (shards): a node stores a shard only for a root in a held manifest of that dataset,
-  with a body of exactly `entry.bytes` and no content encoding, that checks against the schema
-  (framing caps read first) and hashes to the root with the entry's rows and key range.
+  with a body of exactly `entry.bytes` and no content encoding, that checks against
+  `schema_of(entry.index)` (framing caps read first) and hashes to the root with the entry's rows
+  and key range. It loads a shard to serve rows under the same schema, so a load (keyed by root and
+  schema hash) stays valid across widenings.
 - R-BULK-5 (forks): a second anchored manifest for a held version marks the dataset forked; it is
   not served until an operator reviews it (the file `forked.txt` in its folder). Two anchored
   catalogs of one publisher that cannot both stand (another root under a held number that still
@@ -71,9 +93,15 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   the held report no longer holds.
 - R-BULK-8 (client): the answer must name the publisher and dataset asked (and at least the
   version asked); a row is accepted only if it is proven to its shard root, the shard entry to
-  `shards_root`, the header to the root, the root to the publisher's signature over the anchor
-  payload, the row fits the schema and the asked range, the page's rows are one run, and the
-  caller's own node shows R-BULK-3 at its finalized block.
+  `shards_root`, the header (its whole schema chain valid) to the root, the root to the
+  publisher's signature over the anchor payload, the row fits `schema_of` its proven shard index
+  and the asked range, its `values` (if sent) equal `present(schema_of(index), schema, row)` and
+  its `schema` (if sent) that index, the page's rows are one run, and the caller's own node shows
+  R-BULK-3 at its finalized block. A header format the check does not read is undecided ("update
+  onyx-check", exit 3) only when the raw header's root verifies against the signed report (own,
+  or through the catalog leaf) for the publisher and dataset asked and the caller's node shows
+  R-BULK-3 for that report and its signer (without a node: exit 3 with `chainChecked: false`);
+  else refused.
 
 - R-BULK-11 (catalogs, ADR-0059 amendment 1): a catalog commits to one leaf per dataset
   (publisher, dataset, version, previous root, root), sorted strictly by dataset, under the
@@ -151,6 +179,24 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   the node holds never stops the learning, and the route prefers a newer learned proof. While kept, rows, info and listing answer `410 bulk_dataset_removed` with
   `learned` and the public uploads are refused; `removed` stays catalog-only and the node's own
   fetches, challenges and peer routes by root are untouched.
+- R-BULK-16 (widening, ADR-0059 amendment 5): a later version may widen the schema for its new
+  shards (format 2); every earlier shard keeps its bytes, root, entry and the schema it was built
+  under. `validate` (format 2): 1 to 7 earlier schemas, `until` strictly increasing within
+  `1..shard_count`, every schema valid, each widening the next and the last widening `schema`, and
+  no shard root under two schemas. A node stores a format-2 manifest (a new version, or one in a
+  withdrawn version's place) only with `ONYX_BULK_FORMAT2=on` (else 422 `bulk_format_not_taken`,
+  through its own report or a catalog; the catalog itself is taken), and reads held ones whatever
+  the setting: the same manifest again is 200, and a second anchored manifest for a held version
+  marks the dataset forked (`forked.txt` only). Answers: `manifest.format`,
+  `manifest.schemas` (each schema with the index it ends at, the newest ending at `shard_count`),
+  `manifest.schema` the newest; each row decoded under its shard's schema and its `values` shown
+  under the newest (R-BULK-8), with `schema` (the shard's schema index) in format 2. Storage
+  `read_rows` checks each shard under its own schema; storage nodes refuse a deal on a format-2
+  manifest (the deployed OnyxStorage reads format 1 only). `GET /v1/bulk/manifests/{root}` also
+  carries the header's own bytes (`header`). The history walk (R-BULK-12) leaves an own-report
+  manifest in a format it does not read undecided when that header hashes to the root the walk
+  followed, the manifest starts with it and the report is the publisher's for that root and
+  version; else the node's fault. At most 8 schemas per dataset.
 
 ### Routes
 `GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
@@ -163,8 +209,10 @@ the matches), `GET /v1/bulk/{publisher}/{dataset}`,
 docs/spec/delivery.md "Bulk datasets".
 
 ### Tools
-`onyx-publish keygen | address | keys-doc | synth | build | sign | anchor | upload | catalog-build |
-catalog-sign | catalog-anchor | catalog-upload`;
+`onyx-publish keygen | address | keys-doc | synth | build [--prev DIR [--widen]] | schema-fit --prev DIR
+--input FILE --out new.json | sign | anchor | upload | catalog-build | catalog-sign | catalog-anchor |
+catalog-upload` (`upload` steps back to the previous version's folder on "versions are taken in
+order");
 `onyx-check --bulk answer.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N]
 --rpc URL --chain-id N --book 0x… [--history NODE [--keys 0x…,0x…] [--scan-keys-from BLOCK
 [--logs-range N]]]`.

@@ -1833,6 +1833,22 @@ fn join(base: &str, path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
+/// A deal's manifest, if this node backs a deal on it: format 1 only. The
+/// deployed `OnyxStorage` reads format-1 headers only (it refuses any other
+/// format byte), so a deal on a widened dataset waits for one that accepts
+/// format 2; the node refuses it here rather than fail its checks later
+/// (ADR-0059 amendment 5 item 1).
+fn deal_format(m: &Manifest) -> Result<(), String> {
+    if m.header.format != onyx_bulk::manifest::FORMAT {
+        return Err(format!(
+            "manifest {} is format {} (a widened dataset): no deal on it until an OnyxStorage that reads format 2 is deployed",
+            m.header.root(),
+            m.header.format
+        ));
+    }
+    Ok(())
+}
+
 /// Fetch the manifest with `root` from the first of `urls` that serves one
 /// with exactly that root. Returns the manifest and its signed report bytes.
 pub async fn fetch_manifest(
@@ -2175,6 +2191,7 @@ impl StorageNode {
         deadline: Option<tokio::time::Instant>,
     ) -> Result<Manifest, String> {
         if let Some((m, _)) = self.store.manifest_record(&d.info.manifest_root) {
+            deal_format(&m)?;
             return Ok(m);
         }
         let urls = manifest_sources(s, d, Some(&self.cfg.node));
@@ -2189,6 +2206,9 @@ impl StorageNode {
                 return Err("fetch time budget used up".into());
             }
             let (m, rep) = fetch_manifest_until(self.get.as_ref(), &urls, &root, deadline).await?;
+            if root == d.info.manifest_root {
+                deal_format(&m)?;
+            }
             let prev = m.header.prev;
             chain.push((m, rep));
             if prev == Hash32::ZERO {
@@ -3321,19 +3341,21 @@ pub async fn read_rows(
             shard: u32::MAX,
             why,
         })?;
-    let schema = m.header.schema.clone();
     let mut out = ReadResult::default();
     for e in m
         .shards
         .iter()
         .filter(|e| e.key_max >= from && e.key_min <= to)
     {
+        // Each shard under the schema it was built under (ADR-0059 amendment
+        // 5 item 4), never the newest.
+        let schema = m.header.schema_of(e.index);
         let mut why = Vec::new();
         let mut done = false;
         for u in sources(&s, &d, e.index, None) {
             let url = join(&u, &format!("/v1/bulk/shards/{}", e.root));
             let checked = match get.get(&url, e.bytes as usize).await {
-                Ok((200, body)) => onyx_bulk::shard::check_shard(&schema, &body)
+                Ok((200, body)) => onyx_bulk::shard::check_shard(schema, &body)
                     .map_err(|err| format!("refused: {err}"))
                     .and_then(|c| {
                         let x = c.summary;

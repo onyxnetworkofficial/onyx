@@ -5,7 +5,9 @@
 //! served by a real `BulkStore` (the publisher's node).
 
 use super::*;
-use crate::bulk_serve::tests::{published, published_keys, sign, world, World};
+use crate::bulk_serve::tests::{
+    published, published_keys, sign, widened, world, world_format2, World,
+};
 use crate::bulk_serve::{parse_rows_query, BulkStore};
 use onyx_storage::abi::{encode, uint, Tok};
 use onyx_storage::ids::{deal_salt, node_id};
@@ -3518,5 +3520,61 @@ async fn storage_restart_r1_a_save_racing_forget_logs_leaves_no_stale_file() {
         assert!(!path.exists(), "round {round}: no stale file");
         assert_eq!(kept_next(&r), None, "round {round}");
     }
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// ADR-0059 amendment 5 item 4: a client read of a deal on a widened
+/// manifest checks every shard under the schema its index was built under;
+/// item 1: a storage node refuses a deal on a format-2 manifest (the deployed
+/// `OnyxStorage` reads format 1 only) rather than fail its checks.
+#[tokio::test]
+async fn widen_storage_read_rows_checks_each_shard_under_its_schema() {
+    let publisher = world_format2();
+    let (v1, _) = published(&publisher).await;
+    let (v2, _) = widened(&publisher, &v1).await;
+    let s = setup_with(5, publisher, v2.clone());
+    let only = net(&s, &[("http://publisher", Peer::Good)]);
+    let r = read_rows(&reader(&s), only.as_ref(), 0, 0, 39)
+        .await
+        .expect("read");
+    assert_eq!(r.rows.len(), 40);
+    assert_eq!(r.served_by.len(), 4);
+    for (shard, _, k, bytes) in &r.rows {
+        let schema = v2.header.schema_of(*shard);
+        let cells = onyx_bulk::row::decode_row(schema, bytes).expect("fits its shard's schema");
+        assert_eq!(onyx_bulk::row::key_of(schema, &cells), Some(*k));
+    }
+    // A row of shard 0 fits schema 0 only; one of shard 3 the newest only.
+    let first = &r.rows[0].3;
+    assert!(onyx_bulk::row::decode_row(&v2.header.schema, first).is_err());
+    // The storage node: no manifest taken, no shard fetched.
+    let own = world_format2();
+    own.node.anchor(&sign(&v1));
+    own.node.anchor(&sign(&v2));
+    let node = StorageNode::new(
+        reader(&s),
+        Arc::new(Sent::default()),
+        only.clone(),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: s.nodes[0],
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 8,
+        },
+    );
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let e = node
+        .ensure_manifest(&snap, &d, None)
+        .await
+        .expect_err("refused");
+    assert!(e.contains("format 2") && e.contains("OnyxStorage"), "{e}");
+    let rep = node.tick().await.expect("tick");
+    assert!(rep.fetch_failed >= 1 && rep.fetched == 0, "{rep:?}");
+    assert!(own.store.manifest_record(&v2.header.root()).is_none());
+    assert!(v2.shards.iter().all(|e| !own.store.holds_shard(&e.root)));
+    let _ = std::fs::remove_dir_all(&own.dir);
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
 }
