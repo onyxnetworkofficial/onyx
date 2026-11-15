@@ -1,0 +1,29 @@
+{
+  "columns": [
+    {
+      "kind": "int",
+      "name": "key"
+    },
+    {
+      "kind": "text",
+      "name": "day"
+    },
+    {
+      "kind": "text",
+      "name": "address"
+    },
+    {
+      "kind": "text",
+      "name": "action"
+    },
+    {
+      "kind": "text",
+      "name": "reason"
+    },
+    {
+      "kind": "text",
+      "name": "source"
+    }
+  ],
+  "key": "key"
+}

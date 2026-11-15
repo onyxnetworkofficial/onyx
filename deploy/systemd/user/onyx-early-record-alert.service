@@ -1,0 +1,13 @@
+# A failed early-contributor record run (OnFailure= of onyx-early-record.service; runbook
+# docs/ops/early-record.md "When the run stops"). It logs one line with the tag
+# onyx-early-record-alert and the run's result and exit status to the journal: no mail, no outside
+# service. The health watch runbook (docs/ops/runbooks/health-watch.md) checks for it:
+#   journalctl --user -t onyx-early-record-alert --since -1d
+# Install: see onyx-early-record.service.
+
+[Unit]
+Description=Onyx early-contributor record: log a failed run
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/logger -t onyx-early-record-alert -p user.err "onyx-early-record failed: result ${MONITOR_SERVICE_RESULT}, exit status ${MONITOR_EXIT_STATUS} (3: the second node differs, 4: a privacy hit; journalctl --user -u onyx-early-record)"

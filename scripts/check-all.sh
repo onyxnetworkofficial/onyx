@@ -138,6 +138,13 @@ stage "bulk-demo"
 # forged row slashed, misses settled by a keeper, repair onto new replicas, conservation on chain.
 scripts/storage-network-anvil.sh
 stage "storage-network-anvil"
+# ROADMAP S26 slice 3 (ADR-0065 design test 10, THREATS EARLY): the early-contributor record on anvil
+# (about 30 s once built): one outside address's accepted work of four kinds, a forged proof and a
+# losing bet give exactly its rows; every role key and the record's own key excluded; bulk versions
+# 1 and 2 under the record's own publisher id; verify gives the same bytes and shard roots; the
+# daily run's dry run with the real tools gives the same bytes from a fresh state.
+scripts/early-record-anvil.sh
+stage "early-record-anvil"
 scripts/check-boundaries.sh
 scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).
@@ -158,12 +165,16 @@ scripts/check-secrets.sh
 #   job's Landlock rules.
 # - ADR-0044 (THREATS ETH-7): the Ethereum window fetch against fake JSON-RPC servers on 127.0.0.1
 #   serving the committed mainnet blocks: what it writes, the lies it refuses, the rate and the pins.
+# - ROADMAP S26 (THREATS EARLY-4, EARLY-9, EARLY-12, EARLY-19): the early-contributor record's daily
+#   run with stub tools: verify on the second node and the privacy scan gate publication, one
+#   catalog a day, a rerun resumes and sends nothing twice, no node URL or key path printed.
 side_by_side \
   "python3 -I scripts/health-watch-tests.py" \
   "python3 -I scripts/refresh-onchain-tests.py" \
   "scripts/storage-sepolia-tests.sh" \
   "scripts/remote-check.sh --self-test" \
-  "python3 -I scripts/refresh-eth-onchain-tests.py"
+  "python3 -I scripts/refresh-eth-onchain-tests.py" \
+  "python3 -I scripts/early-record-daily-tests.py"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.
 python3 -I scripts/recount-chain-input.py --self-test

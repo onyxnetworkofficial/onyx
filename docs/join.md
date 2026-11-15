@@ -83,6 +83,16 @@ and the network's observers fetch it. Do it from an AI agent or a script with th
 `onyx_proposal_status`), or on the site's Add data page. A proposal costs nothing; the first
 paid query of a day runs its round (NORTH-STAR NS10).
 
+## Your work is recorded
+
+Your accepted testnet work is recorded in the early-contributor record (ROADMAP S26, ADR-0065):
+one row per accepted piece of work, with the chain references of the work and of its acceptance,
+published once a day as the dataset `testnet.early-contributors` of the publisher `early-record`
+(`GET /v1/bulk/early-record/testnet.early-contributors/rows`, checked with `onyx-check --bulk`;
+docs/ops/early-record.md). Anyone can rebuild it from public chain logs. This is a record, not a
+promise: it gives no score, weight or ranking, and early contributors may be rewarded later or not.
+Level-2 rounds are counted once their evidence is public (ADR-0065, slice 3).
+
 ## What this does not do
 
 - It does not make you paid: observer pay and bonds wait for the token economics (NORTH-STAR

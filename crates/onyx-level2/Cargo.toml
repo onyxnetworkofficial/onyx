@@ -24,5 +24,10 @@ thiserror.workspace = true
 onyx-fetch = { workspace = true, features = ["fixture"] }
 hex.workspace = true
 
+# Its unit tests run with `cargo test` (an example's do not by default).
+[[example]]
+name = "test-gas"
+test = true
+
 [lints]
 workspace = true

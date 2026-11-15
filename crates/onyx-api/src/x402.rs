@@ -402,9 +402,13 @@ pub fn check_network(network: &str, allow_mainnet: bool) -> Result<(), String> {
 /// re-checks every request URL with this function. A base URL with a query or
 /// fragment is refused (M7-L51-F3): `/verify` would land inside it.
 pub fn check_facilitator_url(url: &str) -> Result<(), String> {
+    // The refusal names the URL's scheme and host only: a node or
+    // facilitator URL may carry a provider key in its path, query or user
+    // info, and errors reach logs and terminals.
     let refuse = || {
         format!(
-            "facilitator URL {url:?} must be https:// (http:// only to localhost, 127.0.0.1 or [::1])"
+            "facilitator URL {} must be https:// (http:// only to localhost, 127.0.0.1 or [::1])",
+            url_origin(url)
         )
     };
     if url.contains(['?', '#']) {
@@ -426,6 +430,22 @@ pub fn check_facilitator_url(url: &str) -> Result<(), String> {
         Some("https") => Ok(()),
         Some("http") if is_loopback_host(host) => Ok(()),
         _ => Err(refuse()),
+    }
+}
+
+/// A URL as an error or a log may show it: `scheme://host[:port]` only. The
+/// path, query, fragment and user info can hold a provider's key, so they
+/// never appear.
+pub fn url_origin(url: &str) -> String {
+    match url.trim().parse::<axum::http::Uri>() {
+        Ok(u) => match (u.scheme_str(), u.authority()) {
+            (Some(s), Some(a)) if !a.host().is_empty() => match a.port_u16() {
+                Some(p) => format!("{s}://{}:{p}", a.host()),
+                None => format!("{s}://{}", a.host()),
+            },
+            _ => "(a URL without a scheme and host)".into(),
+        },
+        Err(_) => "(a URL that does not parse)".into(),
     }
 }
 
@@ -1217,6 +1237,36 @@ mod tests {
         assert!(check_network(BASE_SEPOLIA, false).is_ok());
         assert!(check_network("eip155:1", false).is_err());
         assert!(check_network("eip155:1", true).is_ok());
+    }
+
+    /// THREATS EARLY-17: a refused URL is named by its scheme and host only;
+    /// a key in its path, query or user info never reaches the error.
+    #[test]
+    fn a_refused_url_never_shows_its_path_query_or_user_info() {
+        for (url, shown) in [
+            // An IP literal host, so no text here reads as an e-mail address.
+            (
+                "http://user:s3cret@192.0.2.1/v3/k3y?token=t0k",
+                "http://192.0.2.1",
+            ),
+            ("ftp://node.example:8545/k3y", "ftp://node.example:8545"),
+            ("https://node.example/k3y#s3cret", "https://node.example"),
+        ] {
+            let e = check_facilitator_url(url).expect_err("refused");
+            assert!(e.contains(shown), "{e}");
+            for secret in ["s3cret", "k3y", "t0k", "user"] {
+                assert!(!e.contains(secret), "{e}");
+            }
+        }
+        assert_eq!(
+            url_origin("https://a.example:443/x?y"),
+            "https://a.example:443"
+        );
+        assert_eq!(url_origin("not a url"), "(a URL that does not parse)");
+        assert_eq!(
+            url_origin("/just/a/path"),
+            "(a URL without a scheme and host)"
+        );
     }
 
     /// M7-L48-F4: a facilitator URL must be https; plain http only to this

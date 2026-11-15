@@ -24,6 +24,8 @@ pub mod catalog;
 pub mod client;
 pub mod contrib;
 pub mod credits;
+pub mod early;
+pub mod early_chain;
 pub mod evm_tx;
 pub mod gate;
 pub mod indexer;

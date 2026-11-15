@@ -249,7 +249,7 @@ pub struct FinalizedLog {
     pub tx: Option<String>,
 }
 
-fn hex_u64(v: &Value, what: &str) -> Result<u64, String> {
+pub(crate) fn hex_u64(v: &Value, what: &str) -> Result<u64, String> {
     let s = v
         .as_str()
         .ok_or_else(|| format!("{what}: not a hex quantity"))?;
@@ -262,7 +262,7 @@ fn hex_u64(v: &Value, what: &str) -> Result<u64, String> {
     u64::from_str_radix(digits, 16).map_err(|e| format!("{what}: {e}"))
 }
 
-fn hex_bytes(v: &Value, what: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn hex_bytes(v: &Value, what: &str) -> Result<Vec<u8>, String> {
     let s = v.as_str().ok_or_else(|| format!("{what}: not a string"))?;
     hex::decode(
         s.strip_prefix("0x")
@@ -287,7 +287,7 @@ fn hx(b: &[u8]) -> String {
 
 /// Why a retried read failed (IDX-R2-2).
 #[derive(Debug)]
-enum RpcFailure {
+pub(crate) enum RpcFailure {
     /// The node answered that it does not keep the state asked for.
     StateMissing(String),
     /// Every attempt failed (down, rate-limited, timing out).
@@ -303,6 +303,92 @@ impl std::fmt::Display for RpcFailure {
                 "the node failed {tries} times (last: {last}); it is down, rate-limiting or timing out: retry later or use another node"
             ),
         }
+    }
+}
+
+/// `method` once, then again after each wait in `backoff` while the node
+/// fails (a 429, a timeout, a backend down); an answer saying the node lacks
+/// old state is not retried. Shared by the indexer and the early-contributor
+/// record's reader (`early_chain`).
+pub(crate) async fn call_retrying<R: JsonRpc + ?Sized>(
+    rpc: &R,
+    backoff: &[std::time::Duration],
+    method: &str,
+    params: Value,
+) -> Result<Value, RpcFailure> {
+    let mut waits = backoff.iter();
+    let mut tries = 0usize;
+    loop {
+        tries += 1;
+        match rpc.call(method, params.clone()).await {
+            Ok(v) => return Ok(v),
+            Err(e) if state_missing(&e) => return Err(RpcFailure::StateMissing(e)),
+            Err(e) => match waits.next() {
+                Some(d) => tokio::time::sleep(*d).await,
+                None => return Err(RpcFailure::Node { tries, last: e }),
+            },
+        }
+    }
+}
+
+/// Capped `eth_getLogs` ranges over `from..=to`: at most `span` blocks each.
+/// A range the node refuses (a span cap, an answer too large, a backend that
+/// lost the range) is split in halves down to one block, and the smaller span
+/// stays for the rest of the walk (the node's cap does not move). Shared by
+/// the indexer's scan and the early-contributor record's reader.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Spans {
+    next: u64,
+    to: u64,
+    span: u64,
+}
+
+impl Spans {
+    /// A walk over `from..=to` in ranges of at most `span` (at least 1) blocks.
+    pub(crate) fn new(from: u64, to: u64, span: u64) -> Self {
+        Spans {
+            next: from,
+            to,
+            span: span.max(1),
+        }
+    }
+
+    /// The range to read now, `None` when the walk is done.
+    pub(crate) fn range(&self) -> Option<(u64, u64)> {
+        (self.next <= self.to).then(|| {
+            (
+                self.next,
+                self.to.min(self.next.saturating_add(self.span - 1)),
+            )
+        })
+    }
+
+    /// The range was read: go on after it.
+    pub(crate) fn done(&mut self) {
+        if let Some((_, b)) = self.range() {
+            match b.checked_add(1) {
+                Some(n) => self.next = n,
+                // The walk reached the last block there is.
+                None => (self.next, self.to) = (1, 0),
+            }
+        }
+    }
+
+    /// The node refused the range: halve it and return true, or return false
+    /// for a one-block range (it cannot be split).
+    pub(crate) fn split(&mut self) -> bool {
+        match self.range() {
+            Some((a, b)) if b > a => {
+                self.span = (b - a).div_ceil(2).max(1);
+                true
+            }
+            _ => false,
+        }
+    }
+
+    /// The first block not read yet.
+    pub(crate) fn next_block(&self) -> u64 {
+        self.next
     }
 }
 
@@ -1052,19 +1138,7 @@ impl<T: JsonRpc> Indexer<T> {
         method: &str,
         params: Value,
     ) -> Result<Value, RpcFailure> {
-        let mut waits = backoff.iter();
-        let mut tries = 0usize;
-        loop {
-            tries += 1;
-            match self.rpc.call(method, params.clone()).await {
-                Ok(v) => return Ok(v),
-                Err(e) if state_missing(&e) => return Err(RpcFailure::StateMissing(e)),
-                Err(e) => match waits.next() {
-                    Some(d) => tokio::time::sleep(*d).await,
-                    None => return Err(RpcFailure::Node { tries, last: e }),
-                },
-            }
-        }
+        call_retrying(&self.rpc, backoff, method, params).await
     }
 
     /// The configuration.
@@ -1268,8 +1342,7 @@ impl<T: JsonRpc> Indexer<T> {
         report: &mut PollReport,
         mode: Mode,
     ) -> Result<(), String> {
-        let mut a = from;
-        let mut span = self.cfg.span;
+        let mut spans = Spans::new(from, to, self.cfg.span);
         let mut calls = 0u64;
         let mut answered = 0u64;
         // The rescan has its own, smaller budget, so the scan of new blocks
@@ -1284,12 +1357,11 @@ impl<T: JsonRpc> Indexer<T> {
             Mode::Rescan => u64::try_from(self.held.len().div_ceil(HELD_TOPICS_PER_CALL).max(1))
                 .unwrap_or(u64::MAX),
         };
-        while a <= to {
+        while let Some((a, b)) = spans.range() {
             if calls >= budget {
                 break;
             }
             calls = calls.saturating_add(cost);
-            let b = to.min(a.saturating_add(span - 1));
             let got = match mode {
                 Mode::All => self.get_logs(a, b).await,
                 Mode::Rescan => self.held_logs(a, b).await,
@@ -1298,9 +1370,8 @@ impl<T: JsonRpc> Indexer<T> {
                 Ok(logs) => logs,
                 // Split on any error (a span cap, an answer too large, a
                 // backend that lost the range): halves down to one block.
-                Err(_) if b > a => {
+                Err(_) if spans.split() => {
                     report.splits += 1;
-                    span = (b - a).div_ceil(2).max(1);
                     continue;
                 }
                 Err(e) if mode == Mode::Rescan => {
@@ -1373,7 +1444,7 @@ impl<T: JsonRpc> Indexer<T> {
             // A span that had to be split stays split for the rest of this
             // poll (the node's cap does not move); the next poll starts again
             // from the configured span.
-            a = b + 1;
+            spans.done();
             if answered.is_multiple_of(SAVE_EVERY_RANGES) {
                 self.save().await;
             }

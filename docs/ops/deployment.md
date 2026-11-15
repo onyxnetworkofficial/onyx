@@ -551,6 +551,7 @@ node at `https://onyx.cryptagraph.com/v1/` indexes this set, [site-hosting.md](s
 | OnyxSignedBook (level-3 book and bulk manifests, CL5; `scripts/deploy-signed-book.sh`, 2026-10-30, tx `0x485057a75ea1bba625da407a00a98cf9da2159ad4de0f64c3a653d416a6e6144`; code hash `0x0843e5a59d2ee1d64aefa6f0487c6c1289b32c8c120ddf0550950cbf57f55d20`) | `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` |
 | Signed book reviewer (a test key of its own, `.onyx-testnet/keys/signed-book-reviewer.key`; registers publisher keys with `cargo run -p onyx-level2 --example book-reviewer`) | `0x98afa79b24e067ddac2478468d3e1c81d4810d30` |
 | Bulk demo publisher `synthetic-demo` (synthetic rows only; domain onyx.cryptagraph.com, keys document at `/.well-known/onyx-source-keys.json`) | `0x39c543ec14a6aff3e38c82f132f3ff014f671269` |
+| Record publisher `early-record` (the early-contributor record, ROADMAP S26, ADR-0065; origin onyx.cryptagraph.com/record, keys document at `/record/.well-known/onyx-source-keys.json`; key made 2026-11-15, one anchor a day; docs/ops/early-record.md) | `0x9c32d230b3f5f8abcaf7a2ca7eea077400f9eb70` |
 | Bulk publisher `onchain-archive` (on-chain metrics from its own nodes; origin onyx.cryptagraph.com/archive, keys document at `/archive/.well-known/onyx-source-keys.json`; registered 2026-10-30, block 52364676) | `0xedff5b3070a2ecc6fa06ea7781ec90f6318bee5c` |
 
 Markets next to this registry (NORTH-STAR NS11, ADR-0042 amendment 2; `scripts/markets-sepolia.sh
@@ -609,6 +610,44 @@ the final release redeploys both (and the stakes bound to them).
 
 The A2 run of 2026-10-14 (settlement `0x4edc6a6329ce71adb7d65fb987b77ed460c85640`, revenue
 `0x904157faf2c709032cdd0a17816ea57c2d6fd7dc`) stays on chain; nothing serves it.
+
+### Operator test keys (ROADMAP S26)
+
+The operator's own test keys that run the demo rounds, the level-2 observers, the storage nodes and
+the test markets. The early-contributor record excludes them from its first day
+(deploy/early-record/exclusions.json; docs/ops/early-record.md). Addresses only; the keys stay outside
+the repository.
+
+| Key | Address |
+|---|---|
+| Operator test key `miner-0` (level-1 miner) | `0x34fb3097a51b7ede8964d89bd7895c81d772d912` |
+| Operator test key `miner-1` (level-1 miner) | `0x650a692b1bf4f722d70311621de76e5421dd22cc` |
+| Operator test key `validator-0` (level-1 validator and level-2 observer) | `0x8ad4ffede93548409574b26ac98067c2d599983a` |
+| Operator test key `validator-1` (level-1 validator and level-2 observer) | `0x872f51b7c60ecfa0b38a81226ba5456aadbc4d6b` |
+| Operator test key `validator-2` (level-1 validator and level-2 observer) | `0x2da8a996abdd774a03046e0e640cb360c4ea9f6b` |
+| Operator test key `validator-3` (level-1 validator and level-2 observer) | `0xd4ebc0e515c7b8dc9447a21811f88740a4c2c257` |
+| Operator test key `validator-4` (level-1 validator and level-2 observer) | `0xaf66aeb145b953886b707a20cbab4f8db953d896` |
+| Operator test key `validator-5` (level-1 validator and level-2 observer) | `0xcfd5e3e09f618d1fb9a732df4a760dc0dd5c7416` |
+| Operator test key `validator-6` (level-1 validator and level-2 observer) | `0x3c1cc9073f46e374b3fdf054679ce582a85c3359` |
+| Operator test key `validator-7` (level-1 validator and level-2 observer) | `0x015838c9a7253e99a86ed5e92e5530bdd4b4ce22` |
+| Operator test key `validator-8` (level-1 validator and level-2 observer) | `0x50c56e0ed43845b622c4ca8be598c6abb31fbf1f` |
+| Operator test key `validator-9` (level-1 validator and level-2 observer) | `0x6f92a3c5a2d93107a545cd88570c70f455120a07` |
+| Operator test key `validator-10` (level-1 validator and level-2 observer) | `0x14f5abdd8de5224964edec179f8b5bf9adc7660f` |
+| Operator test key `validator-11` (level-1 validator and level-2 observer) | `0xf7299e775ed545a1fe3757f0cda58de1319041ad` |
+| Operator test key `validator-12` (level-1 validator and level-2 observer) | `0x8b773c3d6df6f035ce79d303bb3258003fc82544` |
+| Operator test key `validator-13` (level-1 validator and level-2 observer) | `0x384698d9d5074b53656941e4ad65fb7ca25deaf1` |
+| Operator test key `validator-14` (level-1 validator and level-2 observer) | `0x32e7b4b3099b41c62670fdf51d73e1057f87e852` |
+| Operator test key `validator-15` (level-1 validator and level-2 observer) | `0xcb0cfbfcb51dc0cecfaf9acf1240b2fd3589d000` |
+| Operator test key `storage-n1` (storage node operator) | `0x8b4b4af75de064722b9829c30a93cb173c222e04` |
+| Operator test key `storage-n2` (storage node operator) | `0x9e5ca8cbb6957cdc23a7d8b6a6c5da30345d29b0` |
+| Operator test key `storage-n3` (storage node operator) | `0x7df600d20ead4116b4bdc29a4c4aee5cd71471c6` |
+| Operator test key `storage-n4` (storage node operator) | `0xeadadce11fd3f3cfb5e8bb229b3c2c23beb583bd` |
+| Operator test key `storage-n5` (storage node operator) | `0x813ebba5bf3db27f6c6c955cc4f7b0ac67ba584b` |
+| Operator test key `storage-payer` (storage deal payer) | `0x8a650541a7ad53ad445251d34bf6dad6eb50366c` |
+| Operator test key `customer` (test customer and underwriter) | `0x981b12dd9ad364336407aeaffad09268608c4f8a` |
+| Operator test key `registry-owner` (registry owner in test runs) | `0xebb80fcf544f0768adad02a9e07d90a129cc61a3` |
+| Operator test key `track-nws-poster` (track-record poster) | `0x61a8c49af1a7bbc662f4bfbe6f1e0b202680f579` |
+| Operator test key `track-nws-relay` (track-record relay) | `0xc948ae9f2c1a28277376b3dd32bcbe6c866d16fc` |
 
 The health watch reads its balance checks from these rows (copied into
 [deploy/health-watch/thresholds.json](../../deploy/health-watch/thresholds.json) `addresses`; a test

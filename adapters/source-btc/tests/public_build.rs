@@ -168,6 +168,9 @@ const EXACT: &[&str] = &[
     ".well-known/onyx-source-keys.json",
     // The onchain-archive publisher's keys document (its origin is onyx.cryptagraph.com/archive).
     "archive/.well-known/onyx-source-keys.json",
+    // The early-contributor record's keys document (ROADMAP S26; origin onyx.cryptagraph.com/record;
+    // one test address, no data).
+    "record/.well-known/onyx-source-keys.json",
     "app/version.json",
     "history/pools-week.json",
     // Reserve history (ADR-0034): entity totals and reserve rows only; the

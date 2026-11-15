@@ -62,5 +62,10 @@ required-features = ["http-client"]
 name = "credits-rehearsal"
 required-features = ["http-client"]
 
+# ROADMAP S26 (ADR-0065): the early-contributor record tool (docs/ops/early-record.md).
+[[example]]
+name = "early-record"
+required-features = ["http-client"]
+
 [lints]
 workspace = true

@@ -31,4 +31,5 @@ current state, plan and open questions. Testnets only until the mainnet gate in
 | [market-venues.md](market-venues.md) | Per-venue rights review for aligned market feeds (CL8, ADR-0058): the checklist; no venue cleared |
 | [label-removal.md](label-removal.md) | Label correction and removal requests, end to end |
 | [onboarding-sector.md](onboarding-sector.md) | Adding a chain or sector |
+| [early-record.md](early-record.md) | The early-contributor record (ADR-0065): build one day, what it prints, the folders, verify, its own publisher, the daily run and its exit codes |
 | [runbooks/](runbooks/README.md) | Step-by-step runbooks |

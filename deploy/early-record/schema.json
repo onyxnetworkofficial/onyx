@@ -1,0 +1,80 @@
+{
+  "columns": [
+    {
+      "kind": "int",
+      "name": "key"
+    },
+    {
+      "kind": "text",
+      "name": "day"
+    },
+    {
+      "kind": "text",
+      "name": "kind"
+    },
+    {
+      "kind": "text",
+      "name": "who"
+    },
+    {
+      "kind": "text",
+      "name": "subject"
+    },
+    {
+      "kind": "text",
+      "name": "contract"
+    },
+    {
+      "kind": "text",
+      "name": "accept_tx"
+    },
+    {
+      "kind": "int",
+      "name": "accept_block"
+    },
+    {
+      "kind": "int",
+      "name": "accept_log"
+    },
+    {
+      "kind": "text",
+      "name": "work_tx"
+    },
+    {
+      "kind": "int",
+      "name": "work_block"
+    },
+    {
+      "kind": "int",
+      "name": "work_log"
+    },
+    {
+      "kind": "text",
+      "name": "counterparty",
+      "nullable": true
+    },
+    {
+      "kind": "int",
+      "name": "amount",
+      "nullable": true
+    },
+    {
+      "kind": "text",
+      "name": "detail"
+    },
+    {
+      "kind": "text",
+      "name": "check"
+    },
+    {
+      "kind": "int",
+      "name": "revokes",
+      "nullable": true
+    },
+    {
+      "kind": "int",
+      "name": "rules"
+    }
+  ],
+  "key": "key"
+}

@@ -123,15 +123,23 @@ async fn fetch(get: &dyn HttpGet, url: &str, max: usize) -> Result<Option<Vec<u8
         let (status, body) = get
             .get(url, max)
             .await
-            .map_err(|e| undecided(format!("{url}: {e}")))?;
+            .map_err(|e| undecided(format!("{}: {e}", crate::x402::url_origin(url))))?;
         match status {
             200 => return Ok(Some(body)),
             404 => return Ok(None),
             429 | 503 => tokio::time::sleep(Duration::from_secs(RETRY_SECS)).await,
-            s => return Err(undecided(format!("{url}: status {s}"))),
+            s => {
+                return Err(undecided(format!(
+                    "{}: status {s}",
+                    crate::x402::url_origin(url)
+                )))
+            }
         }
     }
-    Err(undecided(format!("{url}: the node stayed busy")))
+    Err(undecided(format!(
+        "{}: the node stayed busy",
+        crate::x402::url_origin(url)
+    )))
 }
 
 struct KeyInfo {

@@ -9,6 +9,9 @@ Read-only. Looks for, in every scanned file (and inside `.gz` and `.b64.txt` fil
 - Bitcoin addresses, classed as label-set, pool-allowlist, EXCLUDED:<source> (wBTC, cbBTC,
   filings, payouts, third-party lists, OKX PoR or BITB rows outside label set v2) or other.
 Prints the source class of a name hit, never the name (set SHOW=1 for a private local review).
+With FAIL_ON_HIT=1 it exits 1 when any file has a hit, when a target folder is missing, or when a
+target holds no file (the early-contributor record's daily run, scripts/early-record-daily.sh,
+refuses to publish a version folder then: a scan of nothing must never pass).
 
 usage: python3 -I scripts/audit-privacy-scan.py <onyx-root> <the entity indexer> <target>...
   target: "git" (every tracked file), "history" (every blob reachable from any ref), or a
@@ -178,3 +181,10 @@ for k, v in sorted(hits.items()):
 print("\n# btc address tokens per file (class counts)")
 for k, v in sorted(addr_class.items()):
     print(k[0], k[1], dict(v))
+if os.environ.get("FAIL_ON_HIT"):
+    missing = [t for t in targets if t not in ("git", "history") and not os.path.isdir(os.path.join(onyx, t))]
+    empty = [t for t in targets if not stats.get(t)]
+    if missing or empty:
+        print("\n# refused: a target folder is missing or holds no file:", sorted(set(missing + empty)))
+    if hits or missing or empty:
+        sys.exit(1)

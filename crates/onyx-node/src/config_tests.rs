@@ -138,6 +138,41 @@ fn widen_format_2_uploads_are_off_until_set_on() {
         .contains("ONYX_BULK_FORMAT2 must be on or off"));
 }
 
+/// A refused node URL names only its scheme and host (2026-11-15).
+#[test]
+fn a_refused_node_url_shows_only_its_scheme_and_host() {
+    // A URL may carry a provider key in its user part, path or query: the
+    // error names only scheme and host (2026-11-15 review of S26 slice 2).
+    let secret = "SECRETKEY123";
+    let bad = "http://user:SECRETKEY123@api.example.test/v1/SECRETKEY123?k=SECRETKEY123";
+    let mut m = base();
+    m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk");
+    m.insert(
+        "ONYX_STORAGE_CONTRACT",
+        "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e",
+    );
+    m.insert(
+        "ONYX_STORAGE_NODE_ID",
+        "0x0101010101010101010101010101010101010101010101010101010101010101",
+    );
+    m.insert("ONYX_STORAGE_KEY_FILE", "/run/credentials/onyx/storage-key");
+    m.insert("ONYX_STORAGE_CATALOG_NODES", bad);
+    let e = load(&m).expect_err("refused");
+    assert!(
+        e.contains("ONYX_STORAGE_CATALOG_NODES") && e.contains("http://api.example.test"),
+        "{e}"
+    );
+    assert!(!e.contains(secret), "{e}");
+    let mut m = base();
+    m.insert("ONYX_PUBLIC_URL", bad);
+    let e = load(&m).expect_err("refused");
+    assert!(
+        e.contains("ONYX_PUBLIC_URL") && e.contains("http://api.example.test"),
+        "{e}"
+    );
+    assert!(!e.contains(secret), "{e}");
+}
+
 /// ADR-0059 amendment 4 item 5a slice 2a: a storage node learns of removals
 /// by default (`on`; `log` and `off`), from https catalog nodes (http only to
 /// loopback) first, hourly within 300..=86400 s; every setting is refused

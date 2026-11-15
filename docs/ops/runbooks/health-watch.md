@@ -80,7 +80,7 @@ restart or an RPC change.
    ```
 
    On the hosted server the env file also names the publisher whose daily catalogs to watch and
-   the five storage nodes: `ONYX_WATCH_BULK_PUBLISHERS=onchain-archive` and
+   the five storage nodes: `ONYX_WATCH_BULK_PUBLISHERS=onchain-archive,early-record` (the record publisher, docs/ops/early-record.md, from its first published day) and
    `ONYX_WATCH_STORAGE_NODES=http://127.0.0.1:8201,...,http://127.0.0.1:8205` (port 8201 is
    `onyx-storage@n1`, through 8205 for `n5`). The unit's `ExecStart` already has `--disk /`: the
    root file system holds the state of onyx-node and the storage nodes. `ONYX_WATCH_DISKS` adds more
@@ -115,6 +115,11 @@ restart or an RPC change.
   "since", "ts", "host"}`. A non-zero exit or a timeout (`notify.command_timeout_s`; all commands
   of one run share twice that) keeps the event unsent; the next run sends it again. No channel is wired: the project owner picks one (LC-18); an
   e-mail or Telegram sender is a 10-line script reading stdin.
+- The early-contributor record's daily run (docs/ops/early-record.md "When the run stops") is not
+  one of the watch's checks: when it ends failed, its `OnFailure=` unit logs one line with the tag
+  `onyx-early-record-alert`. On the machine that runs it, check once a day with
+  `journalctl --user -t onyx-early-record-alert --since -1d`; any line needs a person (exit 3 and 4
+  hold back every later day of the record).
 
 ## What each alert means
 

@@ -1,0 +1,75 @@
+# The early-contributor record's daily run (ROADMAP S26 slice 3, ADR-0065 item 12; runbook
+# docs/ops/early-record.md "The daily run"). A systemd *user* unit, started once a day after 00:30
+# UTC by onyx-early-record.timer. It builds the new complete days, verifies each against a second
+# node, scans each folder, then signs, anchors (one postReport a day on Base Sepolia, test network
+# only) and uploads one catalog a day under the record's own publisher id. A failed run is safe to
+# start again: it goes on where it stopped and never builds a built version twice.
+#
+#   install -D -m 0644 deploy/systemd/user/onyx-early-record.service ~/.config/systemd/user/onyx-early-record.service
+#   install -D -m 0644 deploy/systemd/user/onyx-early-record.timer   ~/.config/systemd/user/onyx-early-record.timer
+#   install -D -m 0644 deploy/systemd/user/onyx-early-record-alert.service ~/.config/systemd/user/onyx-early-record-alert.service
+#   install -D -m 0600 /dev/null ~/.config/onyx/early-record.env   # then fill it in (below)
+#   install -d -m 0700 ~/.local/state/onyx-early-record/out          # OUT must exist
+#   systemctl --user daemon-reload
+#   (the first run, the backfill, by hand: docs/ops/early-record.md "Install")
+#   systemctl --user enable --now onyx-early-record.timer
+#   loginctl enable-linger "$USER"     # keep user timers running while logged out
+#
+# ~/.config/onyx/early-record.env (mode 0600: the node URLs may hold provider keys). The script
+# reads every variable itself (scripts/early-record-daily.sh header). One assignment a line, no
+# quotes, and no comment after a value (systemd keeps it in the value). The values below are
+# placeholders; each comment line says what the line under it is:
+#   # an Onyx checkout
+#   ONYX_EARLY_REPO=<path>
+#   # a folder with early-record and onyx-publish, put first on PATH
+#   ONYX_EARLY_BIN=<path>
+#   # chain node 1, and node 2 of another provider (verify runs against it); never printed
+#   ONYX_EARLY_RPC=<URL>
+#   ONYX_EARLY_RPC2=<URL>
+#   # under %S/onyx-early-record (~/.local/state/onyx-early-record): the only place it writes
+#   ONYX_EARLY_STATE=<state dir>/state
+#   ONYX_EARLY_OUT=<state dir>/out
+#   ONYX_EARLY_PUBLISHER=early-record
+#   # The entity indexer checkout, read only, for the privacy scan
+#   ONYX_EARLY_INDEXER=<path>
+#   # the record key file, made by onyx-publish keygen; the script never reads it
+#   ONYX_EARLY_KEY=<path>
+#   # it goes on a command line: a URL that holds no key
+#   ONYX_EARLY_ANCHOR_RPC=https://sepolia.base.org
+#   # the node's signedBook address, and the Onyx node URL
+#   ONYX_EARLY_BOOK=<0x address>
+#   ONYX_EARLY_NODE=<URL>
+#
+# Exit codes (the header of scripts/early-record-daily.sh): 1 (a node or a tool failed) starts the
+# run again after 20 minutes, at most 4 starts in 12 hours; 2 (config), 3 (the second node
+# differs), 4 (a privacy hit) and 5 (another run holds the lock) never restart. When the unit ends
+# failed, onyx-early-record-alert.service logs one line with the tag onyx-early-record-alert
+# (`journalctl --user -t onyx-early-record-alert`). 3 and 4 need a person before any later day is
+# published. `journalctl --user -u onyx-early-record` shows every step.
+
+[Unit]
+Description=Onyx early-contributor record, daily run
+Documentation=file:///opt/onyx/docs/ops/early-record.md
+OnFailure=onyx-early-record-alert.service
+StartLimitIntervalSec=12h
+StartLimitBurst=4
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/onyx/early-record.env
+ExecStart=/usr/bin/bash ${ONYX_EARLY_REPO}/scripts/early-record-daily.sh
+StateDirectory=onyx-early-record
+StateDirectoryMode=0700
+# A day's run waits up to ONYX_EARLY_WAIT_SECS for its anchor to be final; the first backfill
+# (every day since the deploy blocks, each anchored and uploaded in turn) is run by hand.
+TimeoutStartSec=6h
+Restart=on-failure
+RestartSec=20min
+RestartPreventExitStatus=2 3 4 5
+MemoryMax=4G
+Nice=10
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=%S/onyx-early-record

@@ -302,7 +302,8 @@ impl NodeConfig {
         // http only for a loopback dev server.
         onyx_api::x402::check_facilitator_url(&public_url).map_err(|_| {
             format!(
-                "ONYX_PUBLIC_URL must be https:// (http:// only to localhost), not {public_url:?}"
+                "ONYX_PUBLIC_URL must be https:// (http:// only to localhost), not {}",
+                onyx_api::x402::url_origin(&public_url)
             )
         })?;
         let (rpc_url, rpc_source) = match (
@@ -1029,7 +1030,11 @@ impl StorageConfig {
                 continue;
             }
             onyx_api::x402::check_facilitator_url(u).map_err(|_| {
-                format!("ONYX_STORAGE_CATALOG_NODES: {u:?} must be https:// (http:// only to localhost, 127.0.0.1 or [::1])")
+                // Only scheme and host: a node URL may carry a key in its path or query.
+                format!(
+                    "ONYX_STORAGE_CATALOG_NODES: {} must be https:// (http:// only to localhost, 127.0.0.1 or [::1])",
+                    onyx_api::x402::url_origin(u)
+                )
             })?;
             if !catalog_nodes.iter().any(|x| x == u) {
                 catalog_nodes.push(u.to_string());

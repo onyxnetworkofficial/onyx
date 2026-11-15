@@ -71,6 +71,13 @@ impl KeySigner {
         Self::on_any_chain(chain, secret)
     }
 
+    /// The chain id this signer puts in every transaction it signs (read once,
+    /// when it was made). A caller that must send on one chain only checks this,
+    /// not a separate answer of the node.
+    pub fn chain_id(&self) -> u64 {
+        self.chain_id
+    }
+
     /// [`Self::new`] on a local anvil too: an outside observer's key is no
     /// unlocked account there (north-star loop NL16 rehearsal).
     pub fn on_any_chain(chain: &CastChain, secret: [u8; 32]) -> Result<Self, String> {

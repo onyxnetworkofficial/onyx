@@ -1146,8 +1146,40 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       validator verdicts, level-2 agreement, storage proofs and miss reports, signed reports,
       correct staked claims, found corrections), from final blocks only; the operator's own and
       public test keys in a separate exclusion dataset; published as a bulk dataset under a
-      publisher id of its own (never `onchain-archive`). Design 2026-11-14 (to become an ADR);
-      THREATS EARLY-1 to EARLY-12 with it. v1: an optional signed claim address on submissions
+      publisher id of its own (never `onchain-archive`). Design 2026-11-14, ADR-0065;
+      THREATS EARLY-1 to EARLY-18. Slice 1 built 2026-11-14 (pure code, no chain reads):
+      `onyx_api::early` joins logs to rows for every kind but `l2_agreed` (credit to the address
+      the contract checked, `revoke` rows, a JSON state cache), writes the day's CSV and the
+      schema `onyx-publish build` takes, models the exclusions with the fixed list, builds the
+      role-getter calldata; `deploy/early-record/contracts.json` checked against the deployment
+      documents. Review fixes the same day: a shard with a dispute case gives no row and no
+      longer stops the run, a superseded stake claim gets a `revoke` row, the reviewed
+      exclusions list (`exclusions.json`, the demo publisher) may exclude a book signer, scan
+      blocks quoted from each contract's own row, a pruned cache. Slice 2 built 2026-11-14
+      (`onyx_api::early_chain`, the tool `examples/early-record.rs`, docs/ops/early-record.md):
+      finalized days only (binary search on block times), the previous day's hash checked,
+      capped log ranges split on refusal (shared with the indexer), rate limits retried and a
+      cut-off run resumed, the contracts' deploy blocks checked, role getters, observed times
+      and Empty shards by `eth_call`, `build` never rebuilds a built folder, `verify` rebuilds a
+      day and compares bytes and shard roots. Its review fixes the same day: raw node errors
+      classified (429 retried, any refusal split), two finalized reads and two passes over each
+      day's logs, node URLs redacted and read from `ONYX_EARLY_RPC`, reviewed exclusions with
+      their days, a state lock, fsync, day.json and schemas compared, days without blocks
+      named. Slice 3 code built 2026-11-14: `scripts/early-record-anvil.sh` in check-all (one
+      outside address's accepted work of four kinds, a forged proof and a losing bet on a local
+      anvil give exactly its rows; role keys and the record's key excluded; bulk versions 1 and 2
+      under the record's own publisher id `early-record`; `verify` gives the same bytes and
+      shard roots; the daily dry run with the real tools), `scripts/early-record-daily.sh` (every
+      new day built, verified on a second node, privacy-scanned, then one catalog a day signed,
+      anchored and uploaded; resumable; dry run; tested with stub tools) and the user timer
+      `deploy/systemd/user/onyx-early-record.timer`. Its review fixes the same day: a state hash
+      in day.json (a log left out whose row comes later fails verify on its own day), each day
+      published before the next, verify after the bulk build (shard roots), absolute paths for the
+      scan (a scan of nothing fails), the neutral publisher id `early-record` (origin
+      `onyx.cryptagraph.com/record`), restarts and a journal alert. Left (ops): the record's key, its keys
+      document and registration, funding, the timer's install, the first backfill, the rest of
+      the reviewed list of operator test keys; then `l2_agreed` (needs a published transcript per
+      round, THREATS EARLY-16). v1: an optional signed claim address on submissions
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);
