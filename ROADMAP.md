@@ -963,7 +963,11 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
       level-2 observer registry's members as bettors (NL6-4), legal review.
       2026-10-27 (NL14, NL18, ADR-0042 amendment 3): a second deployment with guarded listings
       (`closeBy`, insiders) and guarded futures, and `OnyxParametric` test policies
-      (`scripts/insurance-sepolia.sh`, two products offered).
+      (`scripts/insurance-sepolia.sh`, two products offered). 2026-11-15 (CL7): the Markets page
+      also shows the correction markets (`OnyxCorrections`, ADR-0057), read from the chain;
+      the recheck runner on Base Sepolia (`scripts/recheck-sepolia.sh`: a read-only pre-flight,
+      then the recheck round, resolve, withdraw and `payTreasury`), rehearsed end to end on a
+      local fork (`scripts/recheck-fork.sh`); market 1's recheck is due 2026-11-17 to 11-20.
 - [ ] S7 Prepaid balances over HTTP (ADR-0046, partner tracker T7): a request header carrying a
       voucher instead of an x402 payment, `onyx_api::prepaid::PrepaidBook` per buyer from chain
       reads of `OnyxPrepaid.accounts`, a redemption schedule inside the exit delay, receipts for

@@ -474,7 +474,7 @@ export const verifier = {
 	/** NS11: the reads of the live markets (verify/src/markets_view.rs). */
 	marketsCalls: async (config: string) =>
 		JSON.parse(await call<string>('markets_calls', config)) as { chainId: number; calls: { key: string; to: string; data: string }[] },
-	/** NS11: the live markets decoded and checked from the reader's own RPC reads, at the reader's clock. */
+	/** NS11: the live markets decoded and checked from the reader's own RPC reads (with the block they were read at), at the reader's clock. */
 	marketsLive: async (config: string, reads: string, now: number) =>
 		JSON.parse(await call<string>('markets_live', config, reads, BigInt(now))) as MarketsLive,
 	/** ADR-0044: the Ethereum window checked against its pins (verify/src/eth_chain.rs). */
@@ -597,4 +597,31 @@ export type LiveProduct = {
 	level?: number | null;
 };
 export type LiveInsurance = { ok: boolean; problems: string[]; count?: number; pool?: string; reserved?: string; free?: string; products: LiveProduct[]; markets?: LiveMarket[] };
-export type MarketsLive = { ok: boolean; problems: string[]; count?: number; markets: LiveMarket[]; insurance?: LiveInsurance | null };
+/** One side of a correction market (CL7): its pool in tONYX, its bettors and its share of the pool. */
+export type CorrectionSide = { pool: string; bettors: number; sharePpm: string };
+/** One correction market as the verifier read it (CL7, ADR-0057); values at the file's scale. */
+export type LiveCorrection = {
+	id: number;
+	ok: boolean;
+	problems: string[];
+	state?: 'open' | 'resolved' | 'void';
+	/** Open and before its close block, at the page's block. */
+	betting?: boolean;
+	pastDeadline?: boolean;
+	value?: string;
+	tolerance?: string;
+	yes?: CorrectionSide;
+	no?: CorrectionSide;
+	total?: string;
+	bettors?: number;
+	closeBlock?: number;
+	resolveBlock?: number;
+	/** Estimated from the file's block time and the reader's clock; null past what a page can show. */
+	closeAt?: number | null;
+	resolveAt?: number | null;
+	recheckValue?: string | null;
+	winner?: 'yes' | 'no' | null;
+	voidReason?: 'nobet' | 'norecheck' | null;
+};
+export type LiveCorrections = { ok: boolean; problems: string[]; count?: number; feePpm?: number; block?: number; markets: LiveCorrection[] };
+export type MarketsLive = { ok: boolean; problems: string[]; count?: number; markets: LiveMarket[]; insurance?: LiveInsurance | null; corrections?: LiveCorrections | null };

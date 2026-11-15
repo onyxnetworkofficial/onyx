@@ -338,6 +338,14 @@ pub trait DrawChain: ChainView {
     fn draw_lead(&self) -> Result<u64, String> {
         Ok(DRAW_LEAD)
     }
+    /// CL7 (THREATS CL7-25): asked right before a NEW draw of `spec` is put in
+    /// the book and announced (never for a draw resumed or adopted), so a live
+    /// runner refuses a draw whose window its observers can no longer serve,
+    /// with nothing sent. Default: allowed (replays and rehearsals observe
+    /// windows in the past).
+    fn may_announce(&self, _spec: &ObservationSpec) -> Result<(), String> {
+        Ok(())
+    }
     /// `drawCount` of the fact: how many draws the registry has recorded.
     fn draw_count(&self, fact: &OnchainFact) -> Result<u32, String>;
     /// `drawBudget(metric, subject)`: the subject's draws that did not end
@@ -1577,6 +1585,9 @@ pub struct SimulatedRegistry {
     reopens: BTreeMap<(Hash32, Hash32), u32>,
     /// What [`DrawChain::deployment`] answers (`None` by default).
     pub deployment: Option<RegistryDeployment>,
+    /// CL7: [`DrawChain::may_announce`] refuses every new draw with this
+    /// reason (`None` by default: allowed), as a live runner refuses a past window.
+    pub refuse_new_draws: Option<String>,
     /// The reveal key draws announced from now on snapshot (`setRevealKey`;
     /// `None` by default: draws take no sealed post), ROADMAP C11.
     pub reveal_key: Option<crate::sealed::Point>,
@@ -1612,6 +1623,7 @@ impl Default for SimulatedRegistry {
             strikes: BTreeMap::new(),
             reopens: BTreeMap::new(),
             deployment: None,
+            refuse_new_draws: None,
             reveal_key: None,
             sealed: crate::sealed::SimulatedSealedLog::default(),
             sealed_blocks: BTreeMap::new(),
@@ -1720,6 +1732,12 @@ impl ChainView for SimulatedRegistry {
 }
 
 impl DrawChain for SimulatedRegistry {
+    fn may_announce(&self, _spec: &ObservationSpec) -> Result<(), String> {
+        match &self.refuse_new_draws {
+            Some(why) => Err(why.clone()),
+            None => Ok(()),
+        }
+    }
     fn deployment(&self) -> Result<Option<RegistryDeployment>, String> {
         Ok(self.deployment)
     }

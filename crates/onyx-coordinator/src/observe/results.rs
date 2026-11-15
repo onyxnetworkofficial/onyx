@@ -829,6 +829,20 @@ impl ObservationResults {
         self.latest_draw(spec).ok()
     }
 
+    /// The attempt of the fact's held draw ([`Self::held_draw`]: announced and not released, so a
+    /// run that stopped, before its round opened or with the round kept unfinished, finishes it
+    /// on that draw rather than announce another). `Some((attempt, same))`, where `same` says it
+    /// was announced for `spec` itself (the same spec id: for a dated fact, the same window);
+    /// `None` when no draw is held (none announced, or the last one released: its round or
+    /// failed attempt published). An operator reads it before choosing a window (CL7, THREATS
+    /// CL7-25): a held draw is resumed on its own window, a new window picked only when none is.
+    pub fn held_spec(&self, spec: &ObservationSpec) -> Option<(u32, bool)> {
+        let fact = self.fact_key_of(spec).ok()?;
+        let attempt = self.held(&fact)?;
+        let a = self.announcements.get(&(fact, attempt))?;
+        Some((attempt, a.spec_id == spec.id()))
+    }
+
     /// The pool snapshot the fact's latest announcement fixed (review
     /// REVLOG-R5: a resumed draw opens with it).
     pub fn announced_pool(&self, spec: &ObservationSpec) -> Result<Vec<Observer>, ObserveError> {

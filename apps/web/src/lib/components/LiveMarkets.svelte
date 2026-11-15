@@ -5,17 +5,20 @@
 	// Base Sepolia RPC by default, no API key), and the Rust verifier decodes and checks every answer
 	// (verify/src/markets_view.rs). Nothing is read until the reader asks, so opening the page sends
 	// no request off the site. tONYX is a test token with no value. The same read shows the test
-	// insurance products (NL18, OnyxParametric). Every read is pinned to one block (THREATS NL6-20),
-	// each answer is capped before it is parsed (NL6-21), and the page only ever reads (NL6-23).
+	// insurance products (NL18, OnyxParametric) and the correction markets (CL7, ADR-0057,
+	// OnyxCorrections: is a published value right? settled only by a later recheck). Every read is
+	// pinned to one block (THREATS NL6-20), each answer is capped before it is parsed (NL6-21), and
+	// the page only ever reads (NL6-23).
 	import { onMount } from 'svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
-	import { verifier, type LiveMarket, type LiveProduct, type MarketsLive } from '#lib/verifier.ts';
+	import { verifier, type CorrectionSide, type LiveCorrection, type LiveMarket, type LiveProduct, type MarketsLive } from '#lib/verifier.ts';
 
 	const FILE = 'markets/base-sepolia.json';
 	const DEFAULT_RPC = 'https://sepolia.base.org';
 	// `number` is the market's name on the page; markets on the guarded futures (NL23) count on from the first futures' ids.
 	type Meta = { id: number; number?: number; title: string; question: string; recordDate: string; source: string; sourceUrl: string; unit: string };
 	type ProductMeta = { id: number; title: string; question: string; recordDate: string; source: string; sourceUrl: string; unit: string };
+	type CorrectionMeta = ProductMeta & { metric: string };
 	type File = {
 		network: string;
 		explorer: string;
@@ -27,6 +30,8 @@
 		registry: string;
 		markets: Meta[];
 		insurance?: { address: string; facts: string; futures: string; products: ProductMeta[]; markets?: Meta[] };
+		/** CL7: `blockMs` turns the contract's blocks into times, about. */
+		corrections?: { address: string; blockMs: number; markets: CorrectionMeta[] };
 	};
 	/** Largest RPC answer the page parses (THREATS NL6-21). */
 	const MAX_ANSWER = 64 * 1024;
@@ -99,7 +104,7 @@
 			const results: Record<string, unknown> = {};
 			for (const c of calls) results[c.key] = await rpcCall(url, 'eth_call', [{ to: c.to, data: c.data }, block]);
 			readAt = Math.floor(Date.now() / 1000);
-			live = await verifier.marketsLive(text, JSON.stringify({ chainId, results }), readAt);
+			live = await verifier.marketsLive(text, JSON.stringify({ chainId, block, results }), readAt);
 			pill = live.ok ? { state: 'good', text: 'Read from the chain' } : { state: 'bad', text: live.problems[0] ?? 'Refused' };
 		} catch (e) {
 			live = null;
@@ -141,6 +146,42 @@
 	}
 	// A policy is sold only when the pool's free funds back its whole payout (R-PI-4).
 	const sellable = (p: LiveProduct) => !!p.buying && Number(live?.insurance?.free ?? '0') >= Number(p.payout ?? '0');
+
+	// CL7: correction markets. The value is shown exact (no rounding through Number).
+	const correctionOf = (id: number) => live?.corrections?.markets.find((m) => m.id === id) ?? null;
+	function grouped(d: string): string {
+		const [i, f] = d.split('.');
+		return `${i.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}${f ? `.${f}` : ''}`;
+	}
+	/** A value in its unit: USD as $, "million USD" as "$18,463 million". */
+	function amount(d: string, unit: string): string {
+		const sign = d.startsWith('-') ? '−' : '';
+		const n = grouped(sign ? d.slice(1) : d);
+		const usd = /^(\w+) USD$/.exec(unit);
+		if (unit === 'USD') return `${sign}$${n}`;
+		return usd ? `${sign}$${n} ${usd[1]}` : `${sign}${n} ${unit}`;
+	}
+	const tolerance = (t: string, unit: string) => (/^0(\.0+)?$/.test(t) ? 'only the same number' : `within ${amount(t, unit)} either way`);
+	const about = (t: number | null | undefined) => (t == null ? 'time unknown' : `about ${when(t)}`);
+	const blockNo = (b: number | undefined) => (b ?? 0).toLocaleString('en-US');
+	const feePct = (ppm: number | undefined) => `${((ppm ?? 0) / 10000).toLocaleString('en-US', { maximumFractionDigits: 2 })}%`;
+	const sides = (yes: CorrectionSide, no: CorrectionSide) => [
+		{ key: 'yes', label: 'Accurate (Yes)', side: yes },
+		{ key: 'no', label: 'Wrong (No)', side: no }
+	];
+	function correctionStatus(c: LiveCorrection): string {
+		if (c.state === 'resolved') return 'Resolved';
+		if (c.state === 'void') return 'Void, every bet refunded';
+		if (c.betting) return 'Open for bets';
+		return c.pastDeadline ? 'Closed, past its deadline' : 'Closed, waiting for the recheck';
+	}
+	function winnerText(c: LiveCorrection): string {
+		if (c.winner === 'yes') return 'Accurate (Yes)';
+		if (c.winner === 'no') return 'Wrong (No)';
+		if (c.voidReason === 'nobet') return 'None: the winning side had no bet';
+		if (c.voidReason === 'norecheck') return 'None: no valid recheck';
+		return 'After the recheck';
+	}
 </script>
 
 {#snippet card(meta: Meta, m: LiveMarket | null, tid: string)}
@@ -253,10 +294,67 @@
 				{/each}
 			</div>
 		{/if}
+		{#if file.corrections}
+			<h3 class="ihead" id="corr-title">Test correction markets</h3>
+			<p class="fine ilede">
+				Each market asks one thing: is a value Onyx published right? After betting closes, other observers read the source again (the recheck); the coordinator that picks them says none of them bet.
+				Accurate wins if the recheck gives the same number, within the tolerance; Wrong wins if not. No recheck by the deadline: every bet is refunded.
+				The source is public, so anyone can check it first: a market mostly pays whoever checks, and the money on Accurate is a reward for finding an error.
+			</p>
+			<p class="fine ilede">The contract counts blocks, not hours: each time below is an estimate at one block every {file.corrections.blockMs / 1000} s.</p>
+			{#if live?.corrections && !live.corrections.ok && live.corrections.problems.length}<p class="err" role="alert" data-testid="corr-refused">{live.corrections.problems.join('; ')}</p>{/if}
+			<div class="lcards" data-testid="live-corrections">
+				{#each file.corrections.markets as meta (meta.id)}
+					{@const c = correctionOf(meta.id)}
+					<article class="lcard" data-testid={`live-correction-${meta.id}`}>
+						<div class="ctop"><span class="cat">Correction · market {meta.id}</span>{#if c?.ok}<span class="state" class:open={c.betting} class:done={c.state === 'resolved'} data-testid={`correction-state-${meta.id}`}>{correctionStatus(c)}</span>{/if}</div>
+						<h3>{meta.title}</h3>
+						<p class="fine">{meta.question}</p>
+						{#if c && !c.ok}
+							<p class="err" data-testid={`correction-problems-${meta.id}`}>Refused: {c.problems.join('; ')}</p>
+						{:else if c?.yes && c.no}
+							{@const shares = (c.bettors ?? 0) >= MIN_SHARE_BETS}
+							<div class="claim">
+								<span class="fine">Published value</span>
+								<b class="mono" data-testid={`correction-value-${meta.id}`}>{amount(c.value ?? '0', meta.unit)}</b>
+								<span class="fine" data-testid={`correction-tolerance-${meta.id}`}>Counts as accurate: {tolerance(c.tolerance ?? '0', meta.unit)}</span>
+							</div>
+							<ul class="buckets" data-testid={`correction-sides-${meta.id}`}>
+								{#each sides(c.yes, c.no) as s (s.key)}
+									<li class:win={c.winner === s.key} class:few={!shares}>
+										<span class="bl">{s.label}{#if c.winner === s.key}<span class="won">Won</span>{/if}</span>
+										{#if shares}
+											<span class="bar"><i style:width={pct(s.side.sharePpm)}></i></span>
+											<b class="mono">{pct(s.side.sharePpm)}</b>
+										{/if}
+										<span class="fine mono">{tokens(s.side.pool)} tONYX · {s.side.bettors} {s.side.bettors === 1 ? 'bet' : 'bets'}</span>
+									</li>
+								{/each}
+							</ul>
+							<p class="fine">
+								{shares ? "Percentages are each side's share of the pool, not odds." : `Each side's share of the pool shows from ${MIN_SHARE_BETS} bets.`} Winners split the losing
+								side, less a {feePct(live?.corrections?.feePpm)} fee.
+							</p>
+							<dl class="lfacts">
+								<div><dt>Pool</dt><dd class="mono" data-testid={`correction-total-${meta.id}`}>{tokens(c.total ?? '0')} tONYX</dd></div>
+								<div><dt>Bettors</dt><dd class="mono">{c.bettors}</dd></div>
+								<div><dt>Betting closes</dt><dd class="mono" data-testid={`correction-close-${meta.id}`}>{about(c.closeAt)}<span class="blk">block {blockNo(c.closeBlock)}</span></dd></div>
+								<div><dt>Recheck due by</dt><dd class="mono" data-testid={`correction-deadline-${meta.id}`}>{about(c.resolveAt)}<span class="blk">block {blockNo(c.resolveBlock)}</span></dd></div>
+								<div><dt>Recheck value</dt><dd class="mono" data-testid={`correction-recheck-${meta.id}`}>{c.recheckValue ? amount(c.recheckValue, meta.unit) : c.state === 'void' ? 'None' : 'Not yet'}</dd></div>
+								<div><dt>Winner</dt><dd data-testid={`correction-winner-${meta.id}`}>{winnerText(c)}</dd></div>
+							</dl>
+						{:else}
+							<div class="pending" aria-hidden="true"><i></i><i></i><i></i></div>
+						{/if}
+						<p class="src fine">Rechecked from <a href={meta.sourceUrl} rel="noopener noreferrer" target="_blank">{meta.source}</a>, record date <span class="nowrap">{meta.recordDate}</span>, by Onyx observers the coordinator says did not bet.</p>
+					</article>
+				{/each}
+			</div>
+		{/if}
 		<details class="contracts">
 			<summary>Contracts on {file.network}</summary>
 			<ul>
-				{#each [['Futures', file.futures], ['Observed facts', file.facts], ['Stakes', file.stakes], ['Drawn panel', file.panel], ['tONYX test token', file.token], ['Registry', file.registry], ...(file.insurance ? [['Insurance', file.insurance.address], ['Guarded facts', file.insurance.facts], ['Guarded futures', file.insurance.futures]] : [])] as [name, addr]}
+				{#each [['Futures', file.futures], ['Observed facts', file.facts], ['Stakes', file.stakes], ['Drawn panel', file.panel], ['tONYX test token', file.token], ['Registry', file.registry], ...(file.insurance ? [['Insurance', file.insurance.address], ['Guarded facts', file.insurance.facts], ['Guarded futures', file.insurance.futures]] : []), ...(file.corrections ? [['Corrections', file.corrections.address]] : [])] as [name, addr]}
 					<li><span>{name}</span><a class="mono" href={`${file.explorer}/address/${addr}`} rel="noopener noreferrer" target="_blank">{short(addr)}</a></li>
 				{/each}
 			</ul>
@@ -316,6 +414,10 @@
 	.src { margin: 0; }
 	.ihead { font-family: var(--display); font-weight: 400; font-size: var(--text-xl); line-height: var(--lh-tight); margin: var(--sp-6) 0 var(--sp-1); }
 	.nowrap { white-space: nowrap; }
+	/* CL7: the published value a correction market bets on. */
+	.claim { display: grid; gap: var(--sp-0); padding: var(--sp-2) var(--sp-3); border-radius: var(--radius-sm); background: var(--accent-soft); }
+	.claim b { font-size: var(--text-lg); font-weight: 500; overflow-wrap: anywhere; }
+	.blk { display: block; font-size: var(--text-xs); color: var(--muted); }
 	.ilede { max-width: 46rem; margin: 0 0 var(--sp-2); }
 	.contracts { margin-top: var(--sp-4); font-size: var(--text-sm); }
 	.contracts summary { cursor: pointer; min-height: 44px; display: flex; align-items: center; color: var(--muted); }

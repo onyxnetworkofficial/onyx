@@ -14,8 +14,10 @@
 #    original observers and the bettor: 10 members.
 # 5. The recheck round runs on the paired recheck (`demo --recheck 7:7 --pool <plan pool>`); its
 #    stored transcript holds none of the six left out.
-# 6. `recheck-resolve` settles the market from the recheck's results store (the source still says
-#    the same: Yes); the Yes bettor withdraws its stake plus the No pool less the fee.
+# 6. `recheck-resolve --dry-run` estimates and sends nothing; `recheck-resolve` settles the market
+#    from the recheck's results store (the source still says the same: Yes); `recheck-payout`
+#    has the Yes bettor withdraw its stake plus the No pool less the fee (a No bettor is owed
+#    nothing) and pays the treasury; run again, it sends nothing.
 # Keys: anvil's public dev accounts and fresh throwaway keys; the rehearsal observers' keys are
 # public test keys. Env: FOUNDRY_BIN (~/.foundry/bin), CARGO_TARGET_DIR.
 set -euo pipefail
@@ -168,17 +170,43 @@ assert len(pool) == 10 and not (pool & left_out), (sorted(pool), sorted(left_out
 PY
 echo "recheck round recorded; its pool holds none of the 6 left out"
 # 6. Resolve and pay.
-r=$(lm recheck-resolve --recheck 7:7 --record-date "$date" --rpc "$RPC" --cast "$FOUNDRY_BIN/cast" \
-  --corrections "$corrections" --store "$work/recheck.json" --from "$DEPLOYER") || fail "recheck-resolve"
+resolve_flags=(--recheck 7:7 --record-date "$date" --rpc "$RPC" --cast "$FOUNDRY_BIN/cast"
+  --corrections "$corrections" --margin-blocks 5)
+r=$(lm recheck-resolve "${resolve_flags[@]}" --store "$work/recheck.json" --from "$DEPLOYER" --dry-run) \
+  || fail "recheck-resolve --dry-run"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); m=r["markets"]; assert r["dryRun"] and len(m) == 1 and m[0]["market"] == 1 and m[0]["gas"] > 0 and not m[0]["resolved"], r' "$r" \
+  || fail "resolve --dry-run: $r"
+[ "$(c call "$corrections" "$MARKET_SIG" 1 --json | python3 -I -c 'import json,sys; m=json.load(sys.stdin)[0]; m = m if isinstance(m, list) else json.loads(m); print(m[8])')" = 1 ] \
+  || fail "the dry run resolved the market"
+r=$(lm recheck-resolve "${resolve_flags[@]}" --store "$work/recheck.json" --from "$DEPLOYER") || fail "recheck-resolve"
 python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); assert r["markets"] == [{"market": 1, "resolved": True}], r' "$r" \
   || fail "resolve: $r"
 state=$(c call "$corrections" "$MARKET_SIG" 1 --json)
 python3 -I -c 'import json,sys; m=json.loads(sys.argv[1])[0]; m = m if isinstance(m, list) else json.loads(m); assert (int(m[8]), int(m[9])) == (2, 1), m' "$state" \
   || fail "the market is not resolved Yes: $state"
 before=$(call "$token" 'balanceOf(address)(uint256)' "${A[yes1]}")
-sendk yes1 "$corrections" 'withdraw(uint256)' 1
+t0=$(call "$token" 'balanceOf(address)(uint256)' "${A[treasury]}")
+# The payout sends as the bettors (impersonated: anvil only) and payTreasury from the deployer.
+c rpc anvil_impersonateAccount "${A[yes1]}" >/dev/null
+payout() {
+  lm recheck-payout --recheck 7:7 --record-date "$date" --rpc "$RPC" --cast "$FOUNDRY_BIN/cast" \
+    --corrections "$corrections" --from "${A[yes1]}" --from "${A[no1]}" --treasury-from "$DEPLOYER" "$@"
+}
+r=$(payout --dry-run) || fail "recheck-payout --dry-run"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); w=r["withdrawals"]; assert r["dryRun"] and len(w) == 1 and w[0]["gas"] > 0 and not w[0]["paid"] and r["treasury"]["gas"] > 0, r' "$r" \
+  || fail "payout --dry-run: $r"
+[ "$(call "$token" 'balanceOf(address)(uint256)' "${A[yes1]}")" = "$before" ] || fail "the payout dry run paid"
+r=$(payout) || fail "recheck-payout"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); w=r["withdrawals"]; assert len(w) == 1 and w[0]["paid"] and r["treasury"]["paid"], r' "$r" \
+  || fail "payout: $r"
 after=$(call "$token" 'balanceOf(address)(uint256)' "${A[yes1]}")
 python3 -I -c 'import sys; got = int(sys.argv[2]) - int(sys.argv[1]); assert got == 30 * 10**18 + 15 * 10**18 * 98 // 100, got' "$before" "$after" \
   || fail "the Yes payout"
-echo "resolved Yes from the recheck (round $(python3 -I -c 'import json,sys; print(json.loads(sys.argv[1])["round"])' "$r")); yes1 +44.7 tONYX"
+t1=$(call "$token" 'balanceOf(address)(uint256)' "${A[treasury]}")
+python3 -I -c 'import sys; got = int(sys.argv[2]) - int(sys.argv[1]); assert got == 5 * 10**18 + 15 * 10**18 * 2 // 100, got' "$t0" "$t1" \
+  || fail "the treasury's payment"
+r=$(payout) || fail "recheck-payout again"
+python3 -I -c 'import json,sys; r=json.loads(sys.argv[1]); w=r["withdrawals"]; assert [x.get("paidBefore") for x in w] == [True] and r["treasury"]["owed"] == "0" and not r["treasury"]["paid"], r' "$r" \
+  || fail "the second payout: $r"
+echo "resolved Yes from the recheck (dry run first: nothing sent); recheck-payout: yes1 +44.7 tONYX, the treasury +5.3, a second payout sent nothing"
 echo "RECHECK ANVIL PASSED"

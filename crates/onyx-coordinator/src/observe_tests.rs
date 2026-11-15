@@ -2270,6 +2270,48 @@ fn pool_of(n: u8, bond: u128) -> Vec<Observer> {
         .collect()
 }
 
+/// CL7 (THREATS CL7-25): a draw is held from its announcement until it is released, opened or
+/// not, and only for its own fact; an operator resumes a held draw and picks a new window only
+/// when none is held.
+#[test]
+fn a_draw_is_held_from_its_announcement_until_released() {
+    let mut store = store_for(NUM);
+    assert_eq!(store.held_spec(&spec(NUM)), None, "nothing announced");
+    let pool = pool_of(9, 1_000);
+    store
+        .announce_draw(&spec(NUM), &cfg(), &pool, 50, &SimulatedChain::at(40))
+        .expect("announce");
+    assert_eq!(store.held_spec(&spec(NUM)), Some((0, true)));
+    let mut later = spec(NUM);
+    later.window_start += 10_000;
+    later.window_end += 10_000;
+    assert_eq!(
+        store.held_spec(&later),
+        None,
+        "another window is another fact here"
+    );
+    store
+        .release_draw(&spec(NUM), Release::NeverSent)
+        .expect("release");
+    assert_eq!(store.held_spec(&spec(NUM)), None, "released");
+    let snapshot = store
+        .announce_draw(&spec(NUM), &cfg(), &pool, 50, &SimulatedChain::at(40))
+        .expect("announce again");
+    store
+        .open_round(
+            spec(NUM),
+            cfg(),
+            snapshot,
+            &SimulatedChain::with_beacon(beacon()),
+        )
+        .expect("open");
+    assert_eq!(
+        store.held_spec(&spec(NUM)),
+        Some((0, true)),
+        "an opened round keeps its draw held until it is published"
+    );
+}
+
 /// L2-F2: the observers are the draw of the announced pool and beacon,
 /// never a set the coordinator chose; a pool member who was not drawn
 /// cannot commit, and a consumer refuses a hand-picked set.

@@ -388,6 +388,93 @@ fn record_date(src: &dyn Source, args: &[String], window_start: u64) -> Result<S
     })
 }
 
+/// The coordinator's key from [`COORDINATOR_KEY_ENV`] (kept in the process).
+fn coordinator_secret() -> Result<[u8; 32], String> {
+    let key = std::env::var(COORDINATOR_KEY_ENV).map_err(|_| {
+        format!("{COORDINATOR_KEY_ENV} is required on a live chain: the coordinator's key")
+    })?;
+    secret_of_hex(&key)
+}
+
+/// A 32-byte key from its hex (`0x` optional, whitespace trimmed); an error never shows it.
+fn secret_of_hex(key: &str) -> Result<[u8; 32], String> {
+    let mut secret = [0u8; 32];
+    hex_to(key.trim().trim_start_matches("0x"), &mut secret)
+        .map_err(|_| format!("{COORDINATOR_KEY_ENV}: not a 32-byte hex key"))?;
+    Ok(secret)
+}
+
+/// The address of a key given as hex (see [`coordinator_address`]).
+fn address_of_hex(key: &str) -> Result<[u8; 20], String> {
+    key_address(&secret_of_hex(key)?)
+        .ok_or_else(|| format!("{COORDINATOR_KEY_ENV}: not a valid secp256k1 key"))
+}
+
+/// The address of the key in [`COORDINATOR_KEY_ENV`], for an operator's pre-flight (CL7,
+/// `scripts/recheck-sepolia.sh check`): it must be `OnyxSettlement.coordinator()`. The key is
+/// never printed.
+pub fn coordinator_address() -> Result<[u8; 20], String> {
+    let key = std::env::var(COORDINATOR_KEY_ENV)
+        .map_err(|_| format!("{COORDINATOR_KEY_ENV} is not set"))?;
+    address_of_hex(&key)
+}
+
+/// Whether the round book at `book` holds a draw of `src`'s fact for `record_date` (CL7, THREATS
+/// CL7-25): `{"held": false}`, or `{"held": true, "attempt": N, "sameWindow": bool}` where
+/// `sameWindow` says it was announced for the window starting at `window_start`; both with
+/// `bookDraws`, the draws of the fact the book counts (`null` once its fact is settled). An operator's
+/// runner reads this, never the logs, to decide whether a stopped round resumes on its window or
+/// a new window is picked. A missing book holds nothing.
+pub fn book_held(
+    src: &dyn Source,
+    book: &Path,
+    record_date: &str,
+    window_start: u64,
+) -> Result<Json, String> {
+    let sp = src.spec(record_date, window_start)?;
+    let mut st = store(src);
+    st.load_book(book)?;
+    // The draws the book knows of this fact (its next attempt), for a runner to compare with the
+    // chain's count: more on chain and none held is another book's draw (CL7-25).
+    let draws = st.next_attempt(&sp).ok();
+    Ok(match st.held_spec(&sp) {
+        Some((attempt, same)) => {
+            json!({"held": true, "attempt": attempt, "sameWindow": same, "bookDraws": draws})
+        }
+        None => json!({"held": false, "bookDraws": draws}),
+    })
+}
+
+/// Seconds a NEW draw must be announced before its window opens on a live chain (CL7, THREATS
+/// CL7-25): its beacon lies `LIVE_DRAW_LEAD` (50) blocks ahead, 10 s at Base Sepolia's 0.2 s
+/// blocks; then the beacon is fixed, the round opened, and every observer must see the draw
+/// before it fetches in the window. A draw announced later draws a committee that cannot observe
+/// its window, and each such draw is one of the subject's three without a value.
+pub const MIN_ANNOUNCE_LEAD_SECS: u64 = 60;
+
+/// Before a live coordinator draws (CL7, THREATS CL7-25): a draw the book holds for this very
+/// spec ([`held_spec`](onyx_coordinator::observe::ObservationResults::held_spec)) is resumed
+/// whatever the time (its round finishes on that draw); one held for another window of the fact
+/// is refused (run with its own window); with none held, a new draw is announced only while
+/// `window_start` is at least [`MIN_ANNOUNCE_LEAD_SECS`] ahead of `now`. Nothing is sent before
+/// this check.
+pub fn announce_lead_ok(
+    now: u64,
+    window_start: u64,
+    held: Option<(u32, bool)>,
+) -> Result<(), String> {
+    match held {
+        Some((_, true)) => Ok(()),
+        Some((attempt, false)) => Err(format!(
+            "the book holds draw {attempt} of this fact, announced for another window: run again with that draw's --window-start to finish it; nothing was sent"
+        )),
+        None if now.saturating_add(MIN_ANNOUNCE_LEAD_SECS) >= window_start => Err(format!(
+            "--window-start {window_start} is less than {MIN_ANNOUNCE_LEAD_SECS} s ahead of now ({now}) and the book holds no draw to resume: a new draw would miss its window; pick a later window; nothing was sent"
+        )),
+        None => Ok(()),
+    }
+}
+
 /// The live level-2 coordinator for independent observers (ROADMAP B2, B6).
 /// Flags as the Treasury adapter's `examples/level2-coordinator.rs` documents,
 /// plus, on a live chain: the coordinator's key in [`COORDINATOR_KEY_ENV`]
@@ -440,12 +527,7 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
         .ok_or("--rpc URL is required: the coordinator announces its draw on OnyxRegistry")?;
     // ROADMAP B6: on a live chain the coordinator and the owner sign their own.
     if cast.chain_id()? != ANVIL_CHAIN_ID {
-        let key = std::env::var(COORDINATOR_KEY_ENV).map_err(|_| {
-            format!("{COORDINATOR_KEY_ENV} is required on a live chain: the coordinator's key")
-        })?;
-        let mut secret = [0u8; 32];
-        hex_to(key.trim().trim_start_matches("0x"), &mut secret)
-            .map_err(|_| format!("{COORDINATOR_KEY_ENV}: not a 32-byte hex key"))?;
+        let secret = coordinator_secret()?;
         if add_signer(&mut cast, secret)? != Some(cast.coordinator) {
             return Err(format!(
                 "{COORDINATOR_KEY_ENV} is not the key of --coordinator"
@@ -530,6 +612,14 @@ pub fn coordinator(src: &dyn Source, args: &[String]) -> Result<(), String> {
     let mut inbox = DirInbox::open(Path::new(&spool))?;
     let mut st = store(src);
     st.load_book(Path::new(&book))?;
+    // CL7 (THREATS CL7-25): on a live chain, no new draw for a window it can no longer observe:
+    // checked here for the book's draw of another window, and again by the chain right before a
+    // new draw is announced (a held draw that never landed is released first, then refused).
+    if cast.chain_id()? != ANVIL_CHAIN_ID {
+        let sp = src.spec(&record_date, window_start)?;
+        announce_lead_ok(clock.now(), window_start, st.held_spec(&sp))?;
+        cast.announce_lead = Some(MIN_ANNOUNCE_LEAD_SECS);
+    }
     let store_path = flag(args, "--store")?;
     let new_store = args.iter().any(|a| a == "--new-store");
     let onchain = cast.deployment()?;
@@ -1541,6 +1631,93 @@ pub fn keep_ladder(dir: &std::path::Path, ladder: &onyx_core::Ladder) -> Result<
 mod tests {
     use super::*;
     use onyx_core::{Ladder, ProofLevel, Step};
+
+    /// CL7 (THREATS CL7-25): a new live draw needs its window ahead; a held draw is resumed on
+    /// its own window whatever the time, and refused for another window.
+    #[test]
+    fn a_new_draw_needs_its_window_ahead_and_a_held_one_is_resumed() {
+        let w = 1_000_000;
+        assert!(announce_lead_ok(w - MIN_ANNOUNCE_LEAD_SECS - 1, w, None).is_ok());
+        assert!(announce_lead_ok(w - MIN_ANNOUNCE_LEAD_SECS, w, None).is_err());
+        assert!(
+            announce_lead_ok(w + 3_600, w, None).is_err(),
+            "a past window"
+        );
+        assert!(
+            announce_lead_ok(w + 3_600, w, Some((0, true))).is_ok(),
+            "resumed"
+        );
+        let e = announce_lead_ok(w - 3_600, w, Some((1, false))).expect_err("another window");
+        assert!(e.contains("draw 1"), "{e}");
+        assert!(
+            announce_lead_ok(u64::MAX, u64::MAX, None).is_err(),
+            "no overflow"
+        );
+    }
+
+    /// The runner's book read: a draw announced and saved for one window of the recheck is held
+    /// for that window only; a missing book holds nothing.
+    #[test]
+    fn the_book_says_which_window_holds_a_draw() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let src = crate::manifest::ManifestSource::from_file(
+            &root.join("sources/us.treasury.tga_total_deposits/manifest.json"),
+            &root,
+        )
+        .expect("manifest")
+        .recheck(7, 7)
+        .expect("recheck");
+        let dir = std::env::temp_dir().join(format!("onyx-l2-held-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("dir");
+        let book = dir.join("book.json");
+        // 2026-11-15, a recheck day of the record date 2026-10-28.
+        let w1 = 20_772 * 86_400 + 3_600;
+        let w2 = w1 + 600;
+        let date = "2026-10-28";
+        assert_eq!(
+            book_held(&src, &book, date, w1),
+            Ok(json!({"held": false, "bookDraws": 0}))
+        );
+        let mut st = store(&src);
+        let sp = src.spec(date, w1).expect("spec");
+        st.announce_draw(
+            &sp,
+            &src.observe_config(&sp),
+            &crate::rehearsal_pool_of(&src, 9),
+            50,
+            &onyx_coordinator::observe::SimulatedChain::at(40),
+        )
+        .expect("announce");
+        st.save_book(&book).expect("save");
+        assert_eq!(
+            book_held(&src, &book, date, w1),
+            Ok(json!({"held": true, "attempt": 0, "sameWindow": true, "bookDraws": 1}))
+        );
+        assert_eq!(
+            book_held(&src, &book, date, w2),
+            Ok(json!({"held": true, "attempt": 0, "sameWindow": false, "bookDraws": 1}))
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// The pre-flight's address of a hex key (anvil's public dev key 0 here); a bad key is an
+    /// error that never shows it.
+    #[test]
+    fn a_hex_key_gives_its_address_and_a_bad_one_is_not_shown() {
+        let dev0 = "0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80";
+        assert_eq!(
+            address_of_hex(&format!(" {dev0}\n")).map(|a| hex(&a)),
+            Ok("f39fd6e51aad88f6f4ce6ab8827279cfffb92266".to_string())
+        );
+        let bad = "0x12zz";
+        let e = address_of_hex(bad).expect_err("bad");
+        assert!(!e.contains("12zz"), "{e}");
+        assert!(
+            address_of_hex(&format!("0x{}", "0".repeat(64))).is_err(),
+            "not a valid key"
+        );
+    }
 
     #[test]
     fn a_second_run_with_a_dropped_step_is_refused() {

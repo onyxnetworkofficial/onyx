@@ -23,9 +23,15 @@
 //!   `--pool FILE` draws the simulated observers from that snapshot of rehearsal keys (a recheck
 //!   plan's pool) instead of the default nine.
 //! - `rehearsal-pool --size N`: the first N rehearsal observers (public test keys) as a pool file.
-//! - `recheck-plan`, `recheck-resolve`: the recheck runner of correction markets
-//!   (`onyx_level2::corrections`, CL7): plan a value's recheck round from `OnyxCorrections`,
-//!   then resolve its markets from the recheck's results store.
+//! - `recheck-plan`, `recheck-resolve`, `recheck-payout`: the recheck runner of correction
+//!   markets (`onyx_level2::corrections`, CL7): plan a value's recheck round from
+//!   `OnyxCorrections`, resolve its markets from the recheck's results store, then the winners'
+//!   withdrawals and the treasury's payment (`scripts/recheck-sepolia.sh` runs them live).
+//! - `coordinator-address`: the address of the key in `ONYX_L2_COORDINATOR_KEY` (never printed),
+//!   for a pre-flight check that it is `OnyxSettlement.coordinator()`.
+//! - `book-held --book FILE --record-date D --window-start W`: whether the round book holds a
+//!   draw of the fact, and for that window (`onyx_level2::live::book_held`); with `--recheck`,
+//!   the recheck's.
 //!
 //! `--recheck AFTER_DAYS:SPAN_DAYS` runs every other mode on the manifest's paired recheck
 //! (`ManifestSource::recheck`, ADR-0057 item 2): the coordinator, observers and client of a
@@ -62,7 +68,10 @@ fn run(args: &[String]) -> Result<i32, String> {
     let repo = PathBuf::from(flag(args, "--repo").unwrap_or_else(|| ".".into()));
     let src = ManifestSource::from_file(&path, &repo).map_err(|e| e.to_string())?;
     // CL7: the runner's commands take the value's own source and read `--recheck` themselves.
-    if matches!(mode.as_str(), "recheck-plan" | "recheck-resolve") {
+    if matches!(
+        mode.as_str(),
+        "recheck-plan" | "recheck-resolve" | "recheck-payout"
+    ) {
         return onyx_level2::corrections::run(&src, args).map(|()| 0);
     }
     let src = match flag(args, "--recheck") {
@@ -94,12 +103,29 @@ fn run(args: &[String]) -> Result<i32, String> {
             println!("{}", serde_json::to_string_pretty(&pool).map_err(|e| e.to_string())?);
             Ok(0)
         }
+        // CL7 (THREATS CL7-25): whether the round book holds a draw for this window.
+        "book-held" => {
+            let book = flag(args, "--book").ok_or("--book FILE")?;
+            let date = flag(args, "--record-date").ok_or("--record-date D")?;
+            let w: u64 = flag(args, "--window-start")
+                .ok_or("--window-start UNIX")?
+                .parse()
+                .map_err(|_| "--window-start UNIX")?;
+            let held = onyx_level2::live::book_held(&src, Path::new(&book), &date, w)?;
+            println!("{held}");
+            Ok(0)
+        }
+        "coordinator-address" => {
+            let a = onyx_level2::live::coordinator_address()?;
+            println!("0x{}", hex::encode(a));
+            Ok(0)
+        }
         "--pin" | "pin" => {
             let t = src.template();
             println!("{}={}", t.metric.0, t.id());
             Ok(0)
         }
-        _ => Err("usage: level2-manifest <coordinator|observer|check|demo|pin|rehearsal-pool|recheck-plan|recheck-resolve> --manifest FILE [--repo DIR] [--recheck A:S] ...".into()),
+        _ => Err("usage: level2-manifest <coordinator|observer|check|demo|pin|rehearsal-pool|book-held|coordinator-address|recheck-plan|recheck-resolve|recheck-payout> --manifest FILE [--repo DIR] [--recheck A:S] ...".into()),
     }
 }
 

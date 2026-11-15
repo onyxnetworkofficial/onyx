@@ -538,6 +538,63 @@ fn a_crash_after_announce_cannot_redraw() {
     assert_eq!(check_beacon(&r.draw(), &chain.0), Ok(()));
 }
 
+/// CL7 (THREATS CL7-25, review H1 of the recheck runner): the book holds draw 0, saved before
+/// its `announceDraw`, which never landed (the run stopped during the send). A rerun on that
+/// window releases it once a final block at or past its beacon height shows no draw; the live
+/// runner then refuses a new draw for the window, which has passed: an error, nothing sent, the
+/// chain's draw count unchanged and the book holding nothing, so the runner picks a new window.
+/// Without the refusal the same rerun announces a fresh draw for the dead window.
+#[test]
+fn a_held_draw_that_never_landed_is_not_redrawn_for_a_dead_window() {
+    let path = book_path("never-landed");
+    let mut chain = SimulatedRegistry::new();
+    chain.height = 40;
+    let mut a = store();
+    a.announce_draw(&spec_at(0), &cfg_at(0), &pool(9, 1_000), 50, &chain)
+        .expect("saved in the book, never sent");
+    a.save_book(&path).expect("save");
+    let fact = a.onchain_fact(&spec_at(0)).expect("fact");
+    chain.height = 500;
+    chain.refuse_new_draws = Some("the window has passed".into());
+    let mut b = store();
+    b.load_book(&path).expect("book");
+    assert!(
+        b.held_spec(&spec_at(0)).is_some(),
+        "the rerun finds the draw held"
+    );
+    let e = draw_and_open(
+        &mut b,
+        spec_at(0),
+        cfg_at(0),
+        &pool(9, 1_000),
+        &mut chain,
+        &ChainWait::NOW,
+        &mut |s| s.save_book(&path),
+    )
+    .expect_err("refused");
+    assert!(
+        e.contains("no new draw") && e.contains("nothing was sent"),
+        "{e}"
+    );
+    assert_eq!(chain.draw_count(&fact), Ok(0), "nothing announced");
+    let mut c = store();
+    c.load_book(&path).expect("book");
+    assert_eq!(c.held_spec(&spec_at(0)), None, "released and saved");
+    // The same book without the refusal: a fresh draw (the waste the refusal prevents).
+    chain.refuse_new_draws = None;
+    let (_, rec) = draw_and_open(
+        &mut c,
+        spec_at(0),
+        cfg_at(0),
+        &pool(9, 1_000),
+        &mut chain,
+        &ChainWait::NOW,
+        &mut |s| s.save_book(&path),
+    )
+    .expect("a new draw");
+    assert_eq!((rec.attempt, rec.draw_count), (0, 1));
+}
+
 /// Review REVLOG-R5: a draw whose beacon was never fixed and whose beacon
 /// block left the `blockhash` window can no longer be fixed: it is given up
 /// (counted; no beacon on chain means no committee, which clients accept)

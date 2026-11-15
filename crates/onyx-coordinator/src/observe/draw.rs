@@ -115,6 +115,11 @@ pub fn draw_and_open(
                     "DrawsExhausted: the subject holds {strikes} of {allowance} draws without a recorded value; the registry owner must reopen it"
                 ));
             }
+            // CL7 (THREATS CL7-25): a new draw only for a window it can still
+            // serve; a held draw just released (it never landed) falls here too.
+            chain
+                .may_announce(&spec)
+                .map_err(|e| format!("no new draw: {e}; nothing was sent"))?;
             let attempt = store
                 .next_attempt(&spec)
                 .map_err(|e| format!("announce: {e}"))?;

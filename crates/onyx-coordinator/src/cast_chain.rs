@@ -18,6 +18,10 @@ use std::process::Command;
 /// An `OnyxRegistry` on an anvil, driven through `cast`.
 #[derive(Clone, Debug)]
 pub struct CastChain {
+    /// CL7 (THREATS CL7-25): when set, a NEW draw is announced only while its
+    /// window starts at least this many seconds after now by the system clock
+    /// (a live coordinator's, ROADMAP B2); `None` (the default): no bound.
+    pub announce_lead: Option<u64>,
     /// The `cast` binary.
     pub cast: PathBuf,
     /// The anvil's JSON-RPC URL.
@@ -268,6 +272,22 @@ impl ChainView for CastChain {
 }
 
 impl DrawChain for CastChain {
+    fn may_announce(&self, spec: &onyx_core::ObservationSpec) -> Result<(), String> {
+        let Some(lead) = self.announce_lead else {
+            return Ok(());
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_err(|e| e.to_string())?
+            .as_secs();
+        if now.saturating_add(lead) >= spec.window_start {
+            return Err(format!(
+                "the window starting at {} is less than {lead} s after now ({now}): its observers could not serve it",
+                spec.window_start
+            ));
+        }
+        Ok(())
+    }
     /// Review R11-1: chain id, registry and the hash of the registry's
     /// deploy block ([`CastChain::deploy_block`]), found once per run.
     fn deployment(&self) -> Result<Option<RegistryDeployment>, String> {
@@ -992,6 +1012,7 @@ impl CastChain {
         let work = std::env::temp_dir().join(format!("onyx-cast-{}", std::process::id()));
         std::fs::create_dir_all(&work).map_err(|e| e.to_string())?;
         let mut c = CastChain {
+            announce_lead: None,
             cast,
             rpc,
             work,
@@ -1412,6 +1433,7 @@ mod tests {
         let work = std::env::temp_dir().join(format!("onyx-b6-signer-{}", std::process::id()));
         std::fs::create_dir_all(&work).expect("dir");
         let c = CastChain {
+            announce_lead: None,
             cast,
             // Never reached: `cast calldata` reads no node.
             rpc: "http://127.0.0.1:9".into(),
@@ -1476,9 +1498,60 @@ mod tests {
     /// Review C11-R2-2: sealed posts are read only at a final block; a run
     /// with `--finality safe` is refused before any call (the read is kept for
     /// good, and a safe block can still reorg on an OP stack).
+    /// CL7 (THREATS CL7-25): with a lead set (a live coordinator), a new draw is allowed only for
+    /// a window at least that far after now; without one (rehearsals, replays), any window.
+    #[test]
+    fn a_live_chain_refuses_a_new_draw_for_a_window_too_close_or_past() {
+        let chain = |lead| CastChain {
+            announce_lead: lead,
+            cast: PathBuf::from("/nonexistent/onyx-test-cast"),
+            rpc: "http://127.0.0.1:1".into(),
+            work: std::env::temp_dir(),
+            registry: [1; 20],
+            coordinator: [2; 20],
+            finality: Finality::Finalized,
+            deployed: std::sync::OnceLock::new(),
+            receipt_signer: test_keys::receipt_signer(),
+            reveal_key: None,
+            record_rounds: false,
+            beacon: None,
+            signers: vec![],
+        };
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("clock")
+            .as_secs();
+        let at = |w: u64| onyx_core::ObservationSpec {
+            feed: "f".into(),
+            metric: onyx_core::MetricId("f".into()),
+            subject: onyx_core::Subject::Aggregate("s:2026-10-28".into()),
+            fetcher: Hash32::ZERO,
+            url: "https://example.org/x.json".into(),
+            selector: "/x".into(),
+            kind: onyx_core::ObservationKind::Exact { max_len: 8 },
+            window_start: w,
+            window_end: w + 300,
+            min_observers: 3,
+            rights: onyx_core::DataRights {
+                license: "CC0-1.0".into(),
+                redistribution: onyx_core::Redistribution::Allowed,
+                source: onyx_core::SourceId("x".into()),
+                attribution: None,
+                terms: String::new(),
+            },
+        };
+        assert_eq!(chain(None).may_announce(&at(0)), Ok(()), "no bound");
+        let live = chain(Some(60));
+        // A bound far from the 60 s edge: the test reads the clock twice.
+        assert_eq!(live.may_announce(&at(now + 3_600)), Ok(()));
+        assert!(live.may_announce(&at(now + 10)).is_err(), "too close");
+        assert!(live.may_announce(&at(now - 3_600)).is_err(), "past");
+    }
+
     #[test]
     fn c11_r2_2_sealed_posts_are_never_read_at_a_safe_block() {
         let chain = |finality| CastChain {
+            announce_lead: None,
             cast: PathBuf::from("/nonexistent/onyx-test-cast"),
             rpc: "http://127.0.0.1:1".into(),
             work: std::env::temp_dir(),

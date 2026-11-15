@@ -160,10 +160,12 @@ Built: `OnyxCorrections` (contracts/src), `onyx_core::recheck_of` and `SubjectRu
    call, so a pool built from logs could miss a bettor (THREATS CL7-20). One round serves the
    open markets that close at least a margin before the earliest deadline (`corrections::serve`,
    CL7-R1-1). The client checks a recheck round's pool with `client::verify_recheck_pool`; scripts/recheck-anvil.sh runs it all end to end on a local anvil (a real recheck round from the plan's pool, then resolve). Left: the Base Sepolia deployment and an operator running the runner; the ladder's contradiction kind `Recheck` and the
-   site's note and market list (TODO S6); `resolveSigned` (phase 2, item 4); the Base Sepolia
+   site's note next to the value (TODO S6, THREATS CL7-19); `resolveSigned` (phase 2, item 4); the Base Sepolia
    deployment (docs/ops/runbooks/corrections-base-sepolia.md). The placeholders: 7 days after the
    original's last observable day for 7 days (`after_days`, `span_days`), and
-   `DeployCorrections.defaults()`.
+   `DeployCorrections.defaults()`. Since 2026-11-15 the Markets page lists the correction markets
+   from the chain (`LiveMarkets.svelte`, `markets_view.rs`), with the Consequences note that a
+   market on a public source mostly pays whoever checks.
 
 ## Open questions
 1. `openFee`, `feePpm`, `MAX_MARKET_BLOCKS`, `after_days` and `span_days`: placeholders until

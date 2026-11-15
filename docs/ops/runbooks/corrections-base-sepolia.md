@@ -22,8 +22,9 @@ steps 1-6. **Cost:** one contract creation and three owner transactions, then tw
 first market (the fee minted and gas granted when the opener lacks them, its approval, the open);
 a dry run prints forge's estimate first. Test ETH only.
 
-**Rehearsed:** locally by `scripts/corrections-anvil.sh` and `scripts/recheck-anvil.sh` (both in
-check-all): the same contracts, the live manifest's real template ids, a market opened as step 6
+**Rehearsed:** the recheck runner end to end on a local fork of Base Sepolia
+(`scripts/recheck-fork.sh`, step 7, 2026-11-15); locally by `scripts/corrections-anvil.sh` and
+`scripts/recheck-anvil.sh` (both in check-all): the same contracts, the live manifest's real template ids, a market opened as step 6
 opens it (`DeployCorrections.openMarket` with blocks from `scripts/corrections-blocks.py`: the
 fee minted to an opener that held none, a forged value refused before anything was sent, a
 second run sending nothing), rechecks that disagree and agree, payouts to the wei. **Deployed** on Base Sepolia 2026-11-01 (step 2:
@@ -207,8 +208,114 @@ every market). The manual steps below stay as the reference.
 
 ## Left before a market can settle on Base Sepolia
 
-7. **The recheck round** (THREATS CL7-3, CL7-20): plan it with the runner (built 2026-11-01,
-   `onyx_level2::corrections`; the values below are the deployment's own):
+7. **The recheck round** (THREATS CL7-3, CL7-20, CL7-23 to CL7-27). **The script
+   (2026-11-15):** `scripts/recheck-sepolia.sh` runs steps 7 and 8 for one value, from the plan
+   to the treasury's payment. `E` is the node export dir of the testnet run (its
+   `deployment.json` and `observations/`, as `scripts/level2-sepolia.sh` takes it):
+
+   ```sh
+   M=sources/us.treasury.tga_total_deposits/manifest.json
+   scripts/recheck-sepolia.sh check $M 2026-10-28 "$E"        # the pre-flight, read-only
+   scripts/recheck-sepolia.sh run $M 2026-10-28 "$E"          # dry run: nothing sent
+   scripts/recheck-sepolia.sh run $M 2026-10-28 "$E" --yes    # on a recheck day after the close
+   ```
+
+   Run it on the first recheck day after the close (market 1: 2026-11-17, after block
+   59,758,659, about 00:00 UTC; the recheck must be recorded by block 61,702,659, about
+   2026-11-21 12:00 UTC); `run --yes` takes about 35 minutes, so run it where a closed terminal
+   does not stop it: inside tmux, as `systemd-run --user --scope -p MemoryMax=12G
+   scripts/recheck-sepolia.sh run $M 2026-10-28 "$E" --yes`. One run at a time per value holds a
+   lock outside the state dir (`flock` in `RECHECK_LOCK_DIR`, default `~/.cache/onyx-b6/locks`;
+   a refused run names the holder and its live coordinator and observer PIDs); each run logs to
+   `<state>/logs/<UTC time>/` (`<state>/logs/latest` is the last).
+   What it does:
+   - **The plan** (`level2-manifest recheck-plan`, below): `none` (no market), `wait` (trading
+     open: the close block and its estimated UTC time; the dry run lists what `--yes` will send
+     after it) and `void-only` stop cleanly; `run` goes on.
+   - **The round** (state `run`, unless the registry already holds the recheck and the store has
+     it): as `scripts/level2-sepolia.sh` runs a manifest round, with `--recheck 7:7` for the
+     coordinator and every observer. Observers are ONLY the plan's pool: the candidates
+     (`RECHECK_POOL_KEYS`, default `validator-0..15`) without every bettor of the value's
+     markets and every observer of the original round (11 of 16 for market 1); the original
+     store's round must be the one the registry recorded (CL7-27). The coordinator (the
+     deployer, `BASE_SEPOLIA_PRIVATE_KEY` read from `.env` by the script and given to the
+     coordinator in its environment only; any such variable the shell already holds is dropped)
+     runs with `--pool <the plan's pool> --window-start W`. **The window (CL7-24, CL7-25):** the
+     script reads the round book with the coordinator's own code (`level2-manifest book-held`):
+     a draw the book holds is resumed on the window it was announced for, whatever the time (it
+     may need only its receipts and record), so no second draw is announced; with none held (a
+     first run, a run stopped before its draw, a draw that never landed, or a round that
+     recorded no value) a new window: the plan's `windowStart`, or `ONYX_L2_LEAD` (150) seconds
+     from now when that is later, since a live round is observed in real time. A new window past
+     the last recheck day is refused, and so is a new round when about 40 minutes of blocks from
+     the head reach the deadline; so is a state dir whose book holds no draw while the chain
+     counts more draws than it (a lost book, another state dir). The live coordinator itself
+     refuses a new draw less than 60 s before its window, at start and again at the moment of
+     announcing: a held draw that never landed is released and then refused, with nothing sent,
+     and the next run takes a new window. Each round that records no value is one of the subject's
+     three draws (`DrawsExhausted` after three): the script prints the draws used and drops that
+     round's pool so the next draw rebuilds it. The recheck metric is registered by `pair`
+     before any market, so the runner never registers (no `--owner`). Its results store is
+     `$E/observations/<source>.recheck.json` and its pin goes to `$E/observations/pins` whenever
+     the store exists (`scripts/deploy-api.sh` ships both). A run that stops is finished by
+     running it again: the state dir (`~/.cache/onyx-b6/<source>.recheck-<date>`, `--state DIR`)
+     keeps the book, the drawn pool and the windows used, and a plan pool that differs from the
+     drawn one is refused. `run` refuses unless `OnyxCorrections.registry()` is the export's
+     registry (CL7-27). The RPC (`ONYX_L2_RPC`, default `https://sepolia.base.org`) must be
+     Base Sepolia and serve archive state: the coordinator finds the registry's deploy block by
+     reading code at past blocks, and a pruned endpoint fails there, before the draw. A loopback
+     RPC is the rehearsal's fork only (chain id `RECHECK_FORK_CHAIN_ID`, 845320; CL7-23).
+   - **Then** `recheck-resolve` from `RECHECK_SENDER_KEY` (miner-0, the opener: anyone may
+     resolve) for the markets the round serves (one that closes too late is left to void), and
+     `recheck-payout`: `withdraw` from every key of `RECHECK_BETTOR_KEYS` the contract owes
+     (winners; every bettor of a void market), then `payTreasury()`. Each reads the chain first:
+     a second run sends nothing. A recheck recorded on chain that the store cannot give, so
+     `resolve` is not sent, fails the run with the reason.
+   - **The pre-flight** (`check`, read-only, PASS/FAIL per line, exit 1 on any FAIL): the
+     contract's registry is `deployment.json`'s; the recheck metric is registered with the
+     manifest's recheck template and paired with its tolerance; the `.env` key is
+     `OnyxSettlement.coordinator()` (`level2-manifest coordinator-address`: the address only);
+     the markets, their close and deadline; a round from the close or now, whichever is later,
+     fits the recheck days and the deadline; the pool without bettors and original observers holds at least the draw
+     (provisional while trading is open); the original store and the receipt key exist; every
+     signer's balance covers its gas (measured on the fork rehearsal, rounded up) at three times
+     today's fee.
+   - **Rehearsed** on a local anvil fork of Base Sepolia, end to end (`scripts/recheck-fork.sh
+     $M 2026-10-28 "$E"`, about 15 minutes, not in check-all: it needs the network). It forks at
+     the head with another chain id (845320, so nothing signed there is valid on Base Sepolia),
+     mines past the close with no time between the blocks (the contract counts blocks; the
+     fork's clock stays the wall clock, so the live coordinator's clock check holds and today is
+     a recheck day), gives every signer the pre-flight names 0.01 test ETH there, then runs the
+     pre-flight, the dry run, `run --yes` and `run --yes` again. **2026-11-15, market 1:**
+     forked at block 59,142,037, 616,623 blocks mined; the pre-flight passed; the dry run sent
+     nothing; the round drew 5 of the 11 (the observers fetched the real Daily Treasury
+     Statement), all 5 agreed on 18463 and were receipted; `resolve` from miner-0: Yes won
+     (recheck 18463, tolerance 0); miner-0 withdrew 19.8 tONYX (its 10 plus the No pool's 10 less
+     the 2% fee, to the wei), `payTreasury` paid 5.2 tONYX (the open fee and the trading fee);
+     the contract held exactly its liabilities; the second run sent nothing. `run --yes` took
+     624 s on the fork (finality is 64 one-second blocks there; about 20 minutes on Base
+     Sepolia). Gas: announceDraw 161,684, fixBeacon 50,424, five postReceipt 563,451,
+     recordObservation 202,295 (the coordinator, 977,854), postCommit about 179,650 each,
+     resolve 147,499, withdraw 97,394, payTreasury 53,314: 16 transactions, 2,174,282 gas. The
+     script's budgets are these rounded up by about half. The fork differs from the live chain
+     where THREATS CL7-26 says; the live pre-flight and dry run (2026-11-15, state `wait`) passed.
+     **Faults, 2026-11-15 (after review H1, THREATS CL7-25;** `RECHECK_FORK_FAULT=interrupt`,
+     `observers` or `lost`, each on its own fork): a SIGINT to the runner (by PID) once its coordinator had
+     started stopped it before any draw (0 draws); the next run, after that window's commit close,
+     found no draw in the book, dropped the saved window, picked a new one and resolved market 1
+     with **one** draw. With every observer stopped (by PID) once the draw was opened, the round
+     recorded no value (1 draw used, the run exited 1 and dropped its window and pool); the next
+     run picked a new window, never the dead one, and resolved market 1 with **two** draws. With
+     the coordinator's `announceDraw` dropped by the fork's proxy and the runner stopped while it
+     waited for it (the book held draw 0, the chain none), the next run after that window's
+     commit close resumed the held draw, found it never landed, released it and refused a new
+     draw for the dead window ("no new draw ... nothing was sent", draws 0 -> 0); the run after
+     took a new window and resolved market 1 with **one** draw. All three ended as the run
+     above: Yes, miner-0 paid 19.8 tONYX to the wei, the treasury 5.2, a second run sending
+     nothing (re-run 2026-11-15 after the re-review, each on its own fork).
+
+   The commands the script runs, by hand (the reference; the values below are the
+   deployment's own):
 
    ```
    cargo run -p onyx-level2 --example level2-manifest -- recheck-plan \
@@ -219,22 +326,26 @@ every market). The manual steps below stay as the reference.
    ```
 
    It reads every market and bettor of the value from the contract's lists and prints
-   `"state"`: `none`, `wait` (trading open), `void-only` (no recheck day left, CL7-13) or `run`
-   with `windowStart`, the markets it serves (a later close is left to void, CL7-R1-1) and the
-   pool without bettors and original observers, written to `--out-pool`. Then run the round with
-   the coordinator and observers as for any manifest round, each with `--recheck 7:7`, the
-   coordinator with `--pool recheck-pool.json --window-start <windowStart>`. Rehearsed end to
-   end on a local anvil (`scripts/recheck-anvil.sh`), not yet on Base Sepolia: until a recheck
-   round is recorded the market voids after its deadline and every bet is refunded (and the open
-   fee, since no recheck round was tried).
-8. **Resolve** (anyone, after the recheck is recorded): `level2-manifest recheck-resolve
+   `"state"`: `none`, `wait` (trading open; with `--pool`, a provisional pool too), `void-only`
+   (no recheck day left, CL7-13) or `run` with `windowStart`, the markets it serves (a later
+   close is left to void, CL7-R1-1) and the pool without bettors and original observers, written
+   to `--out-pool`. Then run the round with the coordinator and observers as for any manifest
+   round, each with `--recheck 7:7`, the coordinator with `--pool recheck-pool.json
+   --window-start <windowStart>`. Until a recheck round is recorded the market voids after its
+   deadline and every bet is refunded (and the open fee, since no recheck round was tried).
+8. **Resolve and pay** (anyone, after the recheck is recorded): `level2-manifest recheck-resolve
    --manifest ... --recheck 7:7 --record-date D --rpc ... --corrections ... --store <the
-   recheck's results store> --key-file F` sends `resolve(marketId, recheckRoundId,
-   recheckValue)` for every open market of the value; then each winner `withdraw(marketId)`;
-   anyone `payTreasury()`.
-9. **The site**: add the contract to `apps/web/static/markets/base-sepolia.json` and the reader
-   (`markets_view.rs`) once a market exists (TODO S6, THREATS CL7-19), with the note that the
-   source is public, so a market mostly pays whoever checks it (ADR-0057 consequences).
+   recheck's results store> --key-file F [--dry-run]` sends `resolve(marketId, recheckRoundId,
+   recheckValue)` for every open market of the value (`--dry-run`: estimates only); then
+   `level2-manifest recheck-payout ... --key-file F1 [--key-file F2 ...] --treasury-key-file F
+   [--dry-run]` sends `withdraw(marketId)` for each key the contract owes and `payTreasury()`
+   when the treasury is owed anything.
+9. **The site** (done 2026-11-15 for market 1): the Markets page shows each market named in the
+   `corrections` block of `apps/web/static/markets/base-sepolia.json`, read from the chain in the
+   reader's browser and checked by `markets_view.rs`, with the note that the source is public, so
+   a market mostly pays whoever checks it (ADR-0057 consequences). A new market needs its entry
+   there with every field: `id`, `fact`, `metric`, `title`, `question`, `recordDate`, `source`,
+   `sourceUrl`, `unit`, `scale`.
 
 ## Verify
 

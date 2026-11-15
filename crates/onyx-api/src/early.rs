@@ -2446,7 +2446,7 @@ pub const PLACEHOLDERS: [(&str, &str); 6] = [
     ),
     (
         "0x00000000000000000000000000000000000c0de1",
-        "scripts/recheck-anvil.sh:77",
+        "scripts/recheck-anvil.sh:79",
     ),
 ];
 

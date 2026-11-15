@@ -69,5 +69,24 @@
         "scale": 2
       }
     ]
+  },
+  "corrections": {
+    "note": "Contributor loop CL7 (ADR-0057): correction markets on OnyxCorrections. Each asks whether a published level-2 value is accurate; only a later recheck round settles it (Yes when the recheck is within the tolerance, else No), and with no recheck every bet is refunded. The value, tolerance, pools, blocks, state and recheck are read from the chain; the contract counts blocks, and the page shows each one as a time from blockMs (Base Sepolia's block time, measured 2026-11-15 over 432,000 blocks), an estimate.",
+    "address": "0x3765dab41115fc2b849b13f81c75fce96a771133",
+    "blockMs": 200,
+    "markets": [
+      {
+        "id": 1,
+        "fact": "0xeae3ecdef95a96f5641568a96510c3b779a520f081ed4b21c8ab0532c03f665b",
+        "title": "U.S. Treasury deposits on 2026-10-28",
+        "question": "Is the published total of deposits into the Treasury General Account for 28 October 2026 right?",
+        "metric": "us.treasury.tga_total_deposits",
+        "recordDate": "2026-10-28",
+        "source": "U.S. Treasury, Daily Treasury Statement",
+        "sourceUrl": "https://fiscaldata.treasury.gov/datasets/daily-treasury-statement/",
+        "unit": "million USD",
+        "scale": 0
+      }
+    ]
   }
 }
