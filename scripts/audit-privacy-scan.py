@@ -33,7 +33,13 @@ def addr(a):
 # --- reference sets -------------------------------------------------------
 label_addrs = set()
 for n in ("test.onyx.entities.btc.v1.json", "test.onyx.entities.btc.v2.json"):
-    for l in json.load(open(os.path.join(onyx, "fixtures/labels", n)))["labels"]:
+    lp = os.path.join(onyx, "fixtures/labels", n)
+    if not os.path.exists(lp):
+        # The public tree leaves the label sets out. Without them no address is let off as a
+        # label-set address, so the scan only gets stricter.
+        print(f"note: {n} is not in this tree; no address counts as a label-set address", file=sys.stderr)
+        continue
+    for l in json.load(open(lp))["labels"]:
         label_addrs.add(addr(l["address"]))
 pool_addrs = set()
 for p in json.load(open(os.path.join(onyx, "fixtures/pools/pool-allowlist.json"))):

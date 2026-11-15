@@ -334,7 +334,10 @@ class Daily(unittest.TestCase):
         rel = self.t / "here"
         (rel / "o").mkdir(parents=True)
         self.run_daily("--dry-run", cwd=str(rel), ONYX_EARLY_OUT="o", ONYX_EARLY_STATE="s")
-        scanned = (rel / "o" / "scan.log").read_text().splitlines()[0]
+        # The scan's notes (e.g. a label set the public tree leaves out) may come first.
+        scanned = next(
+            x for x in (rel / "o" / "scan.log").read_text().splitlines() if x.startswith("files scanned")
+        )
         self.assertRegex(scanned, r"^files scanned: \{'/[^']+/o/versions/" + D2 + r"': [1-9]")
         # The output root lost while the state keeps its days: a new version 1 would follow.
         for p in sorted((rel / "o").rglob("*"), reverse=True):
