@@ -538,6 +538,18 @@ impl TieredStore<FsCas, FsCas> {
             _ => self.hot.open_checked(kind, key),
         }
     }
+
+    /// The size of `key`'s object file ([`FsCas::size_of`]), from the store
+    /// [`Cas::get`] reads.
+    pub fn size_of(&self, kind: Kind, key: &Hash32) -> Option<u64> {
+        match kind {
+            Kind::Rows | Kind::Shard => self
+                .hot
+                .size_of(kind, key)
+                .or_else(|| self.warm.size_of(kind, key)),
+            _ => self.hot.size_of(kind, key),
+        }
+    }
 }
 
 impl<H: CasPrune, W: CasPrune> Cas for TieredStore<H, W> {

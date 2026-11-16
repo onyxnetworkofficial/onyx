@@ -170,6 +170,58 @@ impl CatalogHeader {
         }
         Ok(())
     }
+
+    /// Whether `p` proves that this catalog lists no leaf for dataset `id`
+    /// (ADR-0059 amendment 6 item 4): two leaves at `i` and `i + 1` whose
+    /// ids bracket `id` strictly, or the first leaf above it, or the last
+    /// below it; in a catalog with no leaves, an empty proof. Like
+    /// [`CatalogHeader::proves`], it assumes the signed leaves are sorted,
+    /// which only a walk of the whole catalog checks (THREATS CAT-SUCC-7).
+    pub fn proves_absent(&self, id: &str, p: &AbsenceProof) -> Result<(), CatalogError> {
+        let n = u64::from(self.leaf_count);
+        let at = |leaf: &CatalogLeaf, p: &Proof| {
+            p.leaf_count == n
+                && leaf.publisher == self.publisher
+                && onyx_merkle::verify(&self.leaves_root, &leaf.row(), p)
+        };
+        let no = |why| Err(CatalogError::Proof(why));
+        match (&p.left, &p.right) {
+            (None, None) if n == 0 => Ok(()),
+            (Some((l, lp)), Some((r, rp))) => {
+                if lp.index.checked_add(1) != Some(rp.index) || !at(l, lp) || !at(r, rp) {
+                    return no("the neighbours are not two adjacent leaves of the catalog");
+                }
+                if !(l.dataset.as_str() < id && id < r.dataset.as_str()) {
+                    return no("the neighbours do not bracket the id");
+                }
+                Ok(())
+            }
+            (None, Some((r, rp))) => {
+                if rp.index != 0 || !at(r, rp) || id >= r.dataset.as_str() {
+                    return no("the first leaf does not come after the id");
+                }
+                Ok(())
+            }
+            (Some((l, lp)), None) => {
+                if lp.index.checked_add(1) != Some(n) || !at(l, lp) || l.dataset.as_str() >= id {
+                    return no("the last leaf does not come before the id");
+                }
+                Ok(())
+            }
+            (None, None) => no("an empty absence proof for a catalog with leaves"),
+        }
+    }
+}
+
+/// The leaves around a dataset id a catalog does not list (ADR-0059
+/// amendment 6 item 4): the one before it, unless the id comes first, and
+/// the one after it, unless the id comes last.
+#[derive(Clone, Debug, PartialEq, Eq, BorshSerialize, BorshDeserialize)]
+pub struct AbsenceProof {
+    /// The leaf before the id, with its path.
+    pub left: Option<(CatalogLeaf, Proof)>,
+    /// The leaf after the id, with its path.
+    pub right: Option<(CatalogLeaf, Proof)>,
 }
 
 /// A leaf with its path and its two neighbours.
@@ -326,6 +378,31 @@ impl Catalog {
             proof,
             left: i.checked_sub(1).and_then(at),
             right: at(i + 1),
+        })
+    }
+
+    /// The proof that this catalog lists no leaf for `id` (`None` when it
+    /// lists one): see [`CatalogHeader::proves_absent`].
+    pub fn absence_proof(&self, id: &str) -> Option<AbsenceProof> {
+        self.absence_proof_in(&leaves_tree(&self.leaves), id)
+    }
+
+    /// [`Catalog::absence_proof`] from the leaves' tree built once
+    /// ([`leaves_tree`]).
+    pub fn absence_proof_in(&self, tree: &MerkleTree, id: &str) -> Option<AbsenceProof> {
+        let i = match self.leaves.binary_search_by(|l| l.dataset.as_str().cmp(id)) {
+            Ok(_) => return None,
+            Err(i) => i,
+        };
+        let at = |j: usize| -> Option<(CatalogLeaf, Proof)> {
+            Some((
+                self.leaves.get(j)?.clone(),
+                tree.proof(u64::try_from(j).ok()?)?,
+            ))
+        };
+        Some(AbsenceProof {
+            left: i.checked_sub(1).and_then(at),
+            right: at(i),
         })
     }
 

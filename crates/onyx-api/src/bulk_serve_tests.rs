@@ -288,6 +288,13 @@ pub(crate) struct World {
 
 static N: AtomicU64 = AtomicU64::new(0);
 
+/// `store` with its links index worker started, as the node starts it.
+pub(crate) fn started(store: BulkStore) -> Arc<BulkStore> {
+    let s = Arc::new(store);
+    s.succ_start();
+    s
+}
+
 fn world_with(limits: BulkLimits) -> World {
     let dir = std::env::temp_dir().join(format!(
         "onyx-bulk-test-{}-{}",
@@ -310,7 +317,7 @@ fn world_with(limits: BulkLimits) -> World {
     .with_free_per_minute(10_000);
     World {
         node,
-        store: Arc::new(store),
+        store: started(store),
         clock,
         dir,
     }
@@ -828,15 +835,17 @@ async fn versions_append_and_replays_change_nothing() {
         json!(2)
     );
     // Restart: both versions reload and serve.
-    let again = BulkStore::open(
-        pin(),
-        w.node.clone(),
-        Arc::new(|| T0),
-        &w.dir,
-        &w.dir.join("warm"),
-        BulkLimits::default(),
-    )
-    .expect("ok");
+    let again = Arc::new(
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0),
+            &w.dir,
+            &w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("ok"),
+    );
     let a = again
         .rows(
             "example.publisher",
@@ -1253,15 +1262,17 @@ async fn cat_r1_one_catalog_report_anchors_its_manifests() {
         "bulk_catalog_unknown"
     );
     // Both survive a restart, with the catalog served back.
-    let again = BulkStore::open(
-        pin(),
-        w.node.clone(),
-        Arc::new(|| T0),
-        &w.dir,
-        &w.dir.join("warm"),
-        BulkLimits::default(),
-    )
-    .expect("reopen");
+    let again = Arc::new(
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0),
+            &w.dir,
+            &w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("reopen"),
+    );
     assert_eq!(
         again
             .catalog_record("example.publisher", 0)
@@ -2061,6 +2072,9 @@ async fn lc_17_the_listing_names_each_publishers_newest_catalog() {
     let w = world();
     let (cs, _) = walked(&w, 2).await;
     let (c2, _) = cs.last().expect("c2");
+    // `moved` comes from a built links index (null before: ADR-0059
+    // amendment 6, review SUCC-B2 L4).
+    w.settle().await;
     let r = routes(w.store.clone())
         .oneshot(
             Request::get("/v1/bulk?q=nothing.matches&limit=1")
@@ -2083,6 +2097,7 @@ async fn lc_17_the_listing_names_each_publishers_newest_catalog() {
             "createdUnix": c2.header.created_unix,
             "leaves": c2.header.leaf_count,
             "removed": 0,
+            "moved": 0,
             "erase": null,
         }])
     );
@@ -2692,15 +2707,17 @@ async fn cat_6_two_anchored_catalogs_with_one_number_fork_until_one_is_withdrawn
         "bulk_publisher_forked"
     );
     // A restart keeps the mark (its record is checked again).
-    let again = BulkStore::open(
-        pin(),
-        w.node.clone(),
-        Arc::new(|| T0),
-        &w.dir,
-        &w.dir.join("warm"),
-        BulkLimits::default(),
-    )
-    .expect("starts");
+    let again = Arc::new(
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0),
+            &w.dir,
+            &w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("starts"),
+    );
     assert_eq!(
         code(
             again
@@ -4356,7 +4373,7 @@ fn world_erase(cfg: EraseConfig) -> World {
     .with_erase(cfg);
     World {
         node: w.node,
-        store: Arc::new(store),
+        store: started(store),
         clock: w.clock,
         dir: w.dir,
     }
@@ -5177,7 +5194,7 @@ impl World {
         .with_removals(mode);
         World {
             node: self.node,
-            store: Arc::new(store),
+            store: started(store),
             clock: self.clock,
             dir: self.dir,
         }
@@ -5441,7 +5458,7 @@ async fn cat_3_learn_a_restart_keeps_it() {
     let dir = l.sto.dir.join("learned").join(LP);
     assert!(dir.join(format!("{LD}.bin")).exists());
     std::fs::write(dir.join(format!("{LD}.tmp")), b"cut short").expect("ok");
-    let again = l.sto.reopen().expect("starts");
+    let again = Arc::new(l.sto.reopen().expect("starts"));
     assert!(again.learned_removal(LP, LD).expect("ok").is_some());
     let e = again
         .rows(LP, LD, &parse_rows_query(Some("from=0&to=3")).expect("q"))
@@ -6241,7 +6258,7 @@ async fn widen_shard_put_and_restore_check_an_old_root_under_its_schema() {
         .with_erase(erase_cfg(EraseMode::On));
         World {
             node: base.node,
-            store: Arc::new(store),
+            store: started(store),
             clock: base.clock,
             dir: base.dir,
         }
@@ -6427,7 +6444,7 @@ async fn widen_a_restart_rechecks_a_format_2_chain() {
             limits,
         )
     };
-    let again = open(BulkLimits::default()).expect("reads format 2 with the flag off");
+    let again = Arc::new(open(BulkLimits::default()).expect("reads format 2 with the flag off"));
     let a = again
         .rows(
             "example.publisher",
@@ -6641,4 +6658,2681 @@ async fn widen_with_the_flag_off_a_held_format_2_version_answers_200_and_its_for
     assert_eq!(kept.header.root(), v2.header.root());
     assert!(!dir.join("withdrawn").exists());
     let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Successor links (ADR-0059 amendment 6, slice 2; THREATS CAT-SUCC-*) ---
+
+const LINKS: &str = "onyx.successors";
+
+/// Field `k` of an error answer.
+fn field_of(e: &ApiError, k: &str) -> Value {
+    e.fields
+        .iter()
+        .find(|(n, _)| *n == k)
+        .map_or(Value::Null, |(_, v)| v.clone())
+}
+
+/// A links row `(n, from, from_version, from_prev, to)`.
+fn link_row(n: i128, from: &str, v: u32, prev: &Hash32, to: Option<&str>) -> Vec<u8> {
+    let cells = vec![
+        Cell::Int(n),
+        Cell::Text(from.into()),
+        Cell::Int(i128::from(v)),
+        Cell::Text(prev.to_string()),
+        to.map_or(Cell::Null, |t| Cell::Text(t.into())),
+    ];
+    encode_row(&onyx_bulk::successor::links_schema(), &cells).expect("row")
+}
+
+/// The next links version after `prev` (version 1 without), one new shard
+/// of `rows`.
+fn links_version(rows: &[Vec<u8>], prev: Option<&Manifest>, created: u64) -> (Manifest, Vec<u8>) {
+    let (m, mut files) = links_version_of(&[rows.to_vec()], prev, created);
+    (m, files.remove(0))
+}
+
+/// The next links version after `prev`, one new shard per element of
+/// `shards`; the new shard files.
+fn links_version_of(
+    shards: &[Vec<Vec<u8>>],
+    prev: Option<&Manifest>,
+    created: u64,
+) -> (Manifest, Vec<Vec<u8>>) {
+    let s = onyx_bulk::successor::links_schema();
+    let mut entries: Vec<ShardEntry> = prev.map(|p| p.shards.clone()).unwrap_or_default();
+    let mut files = Vec::new();
+    for rows in shards {
+        let file = encode_shard(rows);
+        let c = check_shard(&s, &file).expect("shard");
+        entries.push(ShardEntry::new(entries.len() as u32, &c.summary));
+        files.push(file);
+    }
+    let m = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: publisher(),
+            created_unix: created,
+            schema: s,
+            rights: rights(),
+        },
+        prev,
+        entries,
+    )
+    .expect("links manifest");
+    (m, files)
+}
+
+impl World {
+    async fn put_in(&self, dataset: &str, root: &Hash32, file: Vec<u8>) -> StatusCode {
+        self.store
+            .accept_shard(
+                "example.publisher",
+                dataset,
+                root,
+                &HeaderMap::new(),
+                Body::from(file),
+            )
+            .await
+            .expect("shard")
+            .0
+    }
+
+    /// Post and anchor catalog `c`.
+    async fn take(&self, c: &Catalog) {
+        let r = sign_catalog(c);
+        self.node.anchor(&r);
+        self.post_catalog(c, &r).await.expect("catalog taken");
+    }
+
+    /// Wait until the publisher's links index is built for its newest
+    /// catalog (a read never waits for it: it answers `pending`).
+    async fn settle(&self) {
+        self.store.succ_settle("example.publisher").await;
+    }
+
+    /// Wait (up to a cap far above any run) until the publisher's fork mark
+    /// is cleared by its background read.
+    async fn fork_cleared(&self) {
+        let wait = async {
+            while self.store.fork_marked("example.publisher").is_some() {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+            }
+        };
+        tokio::time::timeout(std::time::Duration::from_secs(60), wait)
+            .await
+            .expect("the fork mark clears");
+    }
+
+    /// A held shard that can no longer be read (as after a loss on disk):
+    /// an index that reads it again stays pending.
+    fn forget(&self, root: &Hash32) {
+        self.store.loaded.lock().expect("lock").clear();
+        assert!(self.store.tiers.forget_bulk(root));
+    }
+
+    async fn successor_of(&self, dataset: &str) -> Value {
+        self.settle().await;
+        let e = self
+            .store
+            .rows(
+                "example.publisher",
+                dataset,
+                &parse_rows_query(Some("")).expect("q"),
+            )
+            .await
+            .expect_err("removed");
+        assert_eq!(e.code, "bulk_dataset_removed");
+        field_of(&e, "successor")
+    }
+}
+
+/// A move: `synthetic.metrics` (the old id, held) to `synthetic.new` (held),
+/// in catalog 1, with links version 1 of one row. The links version is
+/// posted but its shard is not uploaded yet.
+struct Move {
+    w: World,
+    old: Manifest,
+    new: Manifest,
+    links: Manifest,
+    links_file: Vec<u8>,
+    c0: Catalog,
+    c1: Catalog,
+}
+
+async fn a_move() -> Move {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let old = manifest(&files, None, T0);
+    let new_files = shard_files(0..40, 10);
+    let new = manifest_of("synthetic.new", &new_files, T0 + 1);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&old.header), CatalogLeaf::of(&new.header)],
+    );
+    w.take(&c0).await;
+    w.post_in(&old, 0).await.expect("old");
+    w.upload_all(&old, &files).await;
+    w.post_in(&new, 0).await.expect("new");
+    for (f, e) in new_files.iter().zip(&new.shards) {
+        assert!(w
+            .put_in("synthetic.new", &e.root, f.clone())
+            .await
+            .is_success());
+    }
+    let tomb = CatalogLeaf::of(&old.header).tombstone().expect("tombstone");
+    let (links, links_file) = links_version(
+        &[link_row(
+            1,
+            "synthetic.metrics",
+            2,
+            &old.header.root(),
+            Some("synthetic.new"),
+        )],
+        None,
+        T0 + 15,
+    );
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            tomb,
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    w.take(&c1).await;
+    Move {
+        w,
+        old,
+        new,
+        links,
+        links_file,
+        c0,
+        c1,
+    }
+}
+
+#[tokio::test]
+async fn cat_succ_a_link_is_pending_until_its_links_version_is_held() {
+    let m = a_move().await;
+    // The catalog is taken, the links version is not here yet.
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "pending"
+    );
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "pending"
+    );
+    let root = m.links.shards[0].root;
+    assert_eq!(
+        m.w.put_in(LINKS, &root, m.links_file.clone()).await,
+        StatusCode::CREATED
+    );
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(s["status"], "live");
+    assert_eq!(s["dataset"], "synthetic.new");
+}
+
+#[tokio::test]
+async fn cat_succ_the_410_info_and_listing_show_the_link() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        s,
+        json!({"dataset": "synthetic.new", "final": "synthetic.new", "status": "live", "hops": 1,
+               "row": "1", "generation": 1,
+               "proof": "/v1/bulk/example.publisher/synthetic.metrics/successor"})
+    );
+    // Info of the old id is the same 410; the new id names what it replaces.
+    let e =
+        m.w.store
+            .info_checked("example.publisher", "synthetic.metrics")
+            .await
+            .expect_err("removed");
+    assert_eq!(field_of(&e, "successor")["dataset"], "synthetic.new");
+    let info =
+        m.w.store
+            .info_checked("example.publisher", "synthetic.new")
+            .await
+            .expect("live");
+    assert_eq!(
+        info["replaces"],
+        json!({"count": 1, "first": ["synthetic.metrics"]})
+    );
+    // The listing: a count per entry, `moved` per catalog, the links role.
+    let r = list(State(m.w.store.clone()), None, RawQuery(None)).await;
+    let body = r.into_body().collect().await.expect("body").to_bytes();
+    let v: Value = serde_json::from_slice(&body).expect("json");
+    let entry = |d: &str| {
+        v["datasets"]
+            .as_array()
+            .expect("list")
+            .iter()
+            .find(|e| e["dataset"] == d)
+            .cloned()
+            .unwrap_or(Value::Null)
+    };
+    assert_eq!(entry("synthetic.new")["replaces"], 1);
+    assert_eq!(entry(LINKS)["role"], "successors");
+    assert_eq!(entry(LINKS)["generation"], 1);
+    assert_eq!(
+        entry("synthetic.metrics"),
+        Value::Null,
+        "removed: not listed"
+    );
+    assert_eq!(v["catalogs"][0]["moved"], 1);
+    let _ = (&m.old, &m.new, &m.c0, &m.c1);
+}
+
+#[tokio::test]
+async fn cat_succ_the_successor_answer_proves_the_chain() {
+    use onyx_bulk::successor::{follow, read_links_pages, End, Listing};
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    // Everything a reader needs, checked here with the onyx-bulk rules.
+    let hex = |v: &Value| onyx_bulk::wire::hex_field(v, "field").expect("hex");
+    let h = CatalogHeader::try_from_slice(&hex(&a["catalog"]["header"])).expect("header");
+    let report = SignedReport::try_from_slice(&hex(&a["catalog"]["report"])).expect("report");
+    assert_eq!(h, m.c1.header);
+    cat::verify(&h, &report).expect("signed");
+    let mut leaves = BTreeMap::new();
+    for p in a["chain"].as_array().expect("chain") {
+        let lp = LeafProof::try_from_slice(&hex(&p["leaf"])).expect("leaf");
+        h.proves(&lp).expect("proven");
+        leaves.insert(lp.leaf.dataset.clone(), lp.leaf);
+    }
+    let g = &a["generations"][0];
+    let glp = LeafProof::try_from_slice(&hex(&g["leaf"])).expect("links leaf");
+    h.proves(&glp).expect("proven");
+    let (_, links) = read_links_pages(&glp.leaf.root, std::slice::from_ref(&a["links"]))
+        .expect("every links row");
+    let chain = follow("synthetic.metrics", Some(&links), |id| {
+        Ok::<_, ()>(
+            leaves
+                .get(id)
+                .cloned()
+                .map_or(Listing::Absent, Listing::Leaf),
+        )
+    })
+    .expect("walk");
+    assert_eq!(
+        chain.end,
+        End::Live {
+            dataset: "synthetic.new".into(),
+            version: 1
+        }
+    );
+    assert_eq!(a["end"]["status"], "live");
+    // A live dataset has no successor; an unknown one is not here.
+    let live =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.new")
+            .await
+            .expect_err("live");
+    assert_eq!(
+        (live.status, live.code),
+        (StatusCode::CONFLICT, "bulk_dataset_live")
+    );
+    let none =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.none")
+            .await
+            .expect_err("unknown");
+    assert_eq!(none.code, "bulk_unknown_dataset");
+    // Through the route.
+    let app = routes(m.w.store.clone());
+    let r = app
+        .oneshot(
+            Request::get("/v1/bulk/example.publisher/synthetic.metrics/successor")
+                .body(Body::empty())
+                .expect("req"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(r.status(), StatusCode::OK);
+}
+
+/// Review SUCC-R2 L1 and SUCC-B2 L2: a fork of the links dataset found
+/// after the index was built, and a publisher fork mark, each make the 410
+/// name no successor; once the book withdraws one side of the publisher
+/// fork, the 410's own read of the chain clears the mark. Nothing of the
+/// index is cleared by hand.
+#[tokio::test]
+async fn cat_succ_under_a_fork_mark_or_a_forked_links_dataset_the_410_names_no_successor() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    let set_forked = |why: Option<&str>| {
+        m.w.store
+            .datasets
+            .write()
+            .expect("lock")
+            .get_mut(&("example.publisher".into(), LINKS.into()))
+            .expect("held")
+            .forked = why.map(str::to_string);
+    };
+    // The links dataset forks on this node (as `accept_held` marks it).
+    set_forked(Some("two manifests for version 1"));
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await,
+        json!({"status": "forked"})
+    );
+    let info =
+        m.w.store
+            .info_checked("example.publisher", "synthetic.new")
+            .await
+            .expect("live");
+    assert!(info.get("replaces").is_none(), "no link under a fork");
+    set_forked(None);
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    // A second anchored catalog 1: a publisher fork mark, read before the
+    // removal; the successor route refuses.
+    let c1b = catalog_of(
+        Some(&m.c0),
+        T0 + 21,
+        vec![
+            CatalogLeaf::of(&m.old.header),
+            CatalogLeaf::of(&m.new.header),
+        ],
+    );
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    m.w.node.anchor_by(&r1b, &SECRET2);
+    assert_eq!(
+        code(m.w.post_catalog(&c1b, &r1b).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    let e =
+        m.w.store
+            .info_checked("example.publisher", "synthetic.metrics")
+            .await
+            .expect_err("not served");
+    assert_eq!(e.code, "bulk_dataset_removed");
+    assert_eq!(field_of(&e, "successor"), json!({"status": "forked"}));
+    assert_eq!(
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect_err("forked")
+            .code,
+        "bulk_publisher_forked"
+    );
+    // The book withdraws the other side. After the recheck window the 410
+    // still answers at once, `forked`, with no chain read of its own
+    // (review SUCC-B3 L2); the mark is read again in the background, and
+    // once it clears the 410 names the successor.
+    m.w.node.withdraw(&r1b);
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let before = m.w.node.reads();
+    let e =
+        m.w.store
+            .rows(
+                "example.publisher",
+                "synthetic.metrics",
+                &parse_rows_query(Some("")).expect("q"),
+            )
+            .await
+            .expect_err("removed");
+    assert_eq!(field_of(&e, "successor"), json!({"status": "forked"}));
+    assert_eq!(m.w.node.reads(), before, "the 410 reads no chain");
+    m.w.fork_cleared().await;
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone()),
+        (json!("live"), json!("synthetic.new"))
+    );
+    assert!(m.w.store.fork_marked("example.publisher").is_none());
+}
+
+/// Review SUCC-R2 L2 and SUCC-B4: a links dataset forked on this node while
+/// its index waits for a shard makes the 410 say `forked`, not `pending`.
+#[tokio::test]
+async fn cat_succ_a_pending_index_of_a_forked_links_dataset_is_forked() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.settle().await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await,
+        json!({"status": "pending"})
+    );
+    m.w.store
+        .datasets
+        .write()
+        .expect("lock")
+        .get_mut(&("example.publisher".into(), LINKS.into()))
+        .expect("held")
+        .forked = Some("two manifests for version 1".into());
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await,
+        json!({"status": "forked"})
+    );
+}
+
+/// THREATS CAT-SUCC-2 and CAT-SUCC-6 (reviews SUCC-R2 M4, SUCC-B2 L5,
+/// SUCC-B4): a later row fixes a wrong link with no key at stake. Each
+/// catalog reads its links version whole once: a read between the catalog
+/// and the links upload is pending and reads nothing, and a start builds
+/// the index before any read.
+#[tokio::test]
+async fn cat_succ_a_later_row_fixes_a_wrong_link_and_a_start_builds_the_index() {
+    let m = a_move().await;
+    // Version 1 names a typo.
+    let (bad, bad_file) = links_version(&[move_row(1, &m.old, "synthetic.typo")], None, T0 + 15);
+    let w = world();
+    let _ = (&m.links, &m.links_file);
+    // A fresh world with the typo version in catalog 1.
+    let files = shard_files(0..30, 10);
+    w.take(&m.c0).await;
+    w.post_in(&m.old, 0).await.expect("old");
+    w.upload_all(&m.old, &files).await;
+    w.post_in(&m.new, 0).await.expect("new");
+    let tomb = CatalogLeaf::of(&m.old.header).tombstone().expect("t");
+    let c1 = catalog_of(
+        Some(&m.c0),
+        T0 + 20,
+        vec![
+            tomb.clone(),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&bad.header),
+        ],
+    );
+    w.take(&c1).await;
+    w.post_in(&bad, 1).await.expect("links v1");
+    w.put_in(LINKS, &bad.shards[0].root, bad_file).await;
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone()),
+        (json!("not_listed"), json!("synthetic.typo"))
+    );
+    assert_eq!(w.store.succ_reads(), 1);
+    // Version 2 adds the right row; no key is at stake (review SUCC-R1 H1).
+    let (good, good_file) =
+        links_version(&[move_row(2, &m.old, "synthetic.new")], Some(&bad), T0 + 25);
+    let c2 = catalog_of(
+        Some(&c1),
+        T0 + 30,
+        vec![
+            tomb.clone(),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&good.header),
+        ],
+    );
+    w.take(&c2).await;
+    // Read between the catalog and the links upload: pending, nothing read.
+    assert_eq!(
+        w.successor_of("synthetic.metrics").await["status"],
+        "pending"
+    );
+    assert_eq!(w.store.succ_reads(), 1);
+    w.post_in(&good, 2).await.expect("links v2");
+    w.put_in(LINKS, &good.shards[1].root, good_file).await;
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone(), s["row"].clone()),
+        (json!("live"), json!("synthetic.new"), json!("2"))
+    );
+    assert_eq!(w.store.succ_reads(), 3, "version 2 read whole, once");
+    // The next catalog lists the same links version: read whole once more.
+    let c3 = catalog_of(
+        Some(&c2),
+        T0 + 40,
+        vec![
+            tomb,
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&good.header),
+            other_leaf("synthetic.extra"),
+        ],
+    );
+    w.take(&c3).await;
+    assert_eq!(w.successor_of("synthetic.metrics").await["row"], "2");
+    assert_eq!(
+        w.store.succ_reads(),
+        5,
+        "the same version, read for catalog 3"
+    );
+    // A start builds every publisher's index before any read.
+    let again = started(
+        BulkStore::open(
+            pin(),
+            w.node.clone(),
+            Arc::new(|| T0),
+            &w.dir,
+            &w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("reopen"),
+    );
+    again.succ_settle("example.publisher").await;
+    assert!(again.succ_built("example.publisher"), "built at start");
+    assert_eq!(again.succ_reads(), 2);
+    let e = again
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("")).expect("q"),
+        )
+        .await
+        .expect_err("removed");
+    assert_eq!(field_of(&e, "successor")["row"], "2");
+    assert_eq!(again.succ_reads(), 2, "the read built nothing");
+    // Queued again with nothing new: the job finds it built and reads none.
+    again.succ_start();
+    again.succ_settle("example.publisher").await;
+    assert_eq!(again.succ_reads(), 2, "built already: nothing read");
+    let keys = w.node.0.lock().expect("lock").keys.clone();
+    assert!(keys.values().all(|k| !k.1), "no key suspended");
+}
+
+#[tokio::test]
+async fn cat_succ_rows_at_a_root_serve_that_version() {
+    let w = world();
+    let (v1, _) = published(&w).await;
+    let files2 = shard_files(30..40, 10);
+    let v2 = manifest(&files2, Some(&v1), T0 + 5);
+    let r2 = sign(&v2);
+    w.node.anchor(&r2);
+    w.post(&v2, &r2).await.expect("v2");
+    w.upload_all(&v2, &[vec![], vec![], vec![], files2[0].clone()])
+        .await;
+    let newest = w.rows("from=0&to=3").await.expect("rows");
+    assert_eq!(newest["manifest"]["root"], v2.header.root().to_string());
+    let at = w
+        .rows(&format!("from=0&to=3&root={}", v1.header.root()))
+        .await
+        .expect("rows at v1");
+    assert_eq!(at["manifest"]["root"], v1.header.root().to_string());
+    assert_eq!(at["query"]["root"], v1.header.root().to_string());
+    let e = w
+        .rows(&format!("root={}", Hash32([9; 32])))
+        .await
+        .expect_err("not held");
+    assert_eq!(
+        (e.status, e.code),
+        (StatusCode::CONFLICT, "bulk_version_not_held")
+    );
+    assert_eq!(
+        code(w.rows("root=0x12").await.expect_err("bad")),
+        "bad_request"
+    );
+}
+
+#[tokio::test]
+async fn cat_succ_an_own_report_links_version_is_refused() {
+    let w = world();
+    let (links, _) = links_version(
+        &[link_row(
+            1,
+            "synthetic.metrics",
+            2,
+            &Hash32([1; 32]),
+            Some("synthetic.new"),
+        )],
+        None,
+        T0,
+    );
+    let r = sign(&links);
+    w.node.anchor(&r);
+    let e = w.post(&links, &r).await.expect_err("refused");
+    assert_eq!(
+        (e.status, e.code),
+        (StatusCode::UNPROCESSABLE_ENTITY, "bulk_reserved_dataset")
+    );
+}
+
+/// A tombstone of `old` (version 1) and its row `n` to `to`.
+fn move_row(n: i128, old: &Manifest, to: &str) -> Vec<u8> {
+    link_row(n, &old.header.dataset, 2, &old.header.root(), Some(to))
+}
+
+/// Review SUCC-B2 H1 (1) and SUCC-B4: a links version whose last shard is
+/// withheld leaves the index pending and reads nothing, however often it
+/// is read or a held shard is sent again; the shard that comes reads the
+/// version whole, once.
+#[tokio::test]
+async fn cat_succ_a_withheld_shard_leaves_the_index_pending_until_it_comes() {
+    let m = a_move().await;
+    // Version 2: seven one-row shards of inert rows, then the move's row.
+    let mut shards: Vec<Vec<Vec<u8>>> = (0..7)
+        .map(|i| {
+            vec![link_row(
+                i + 2,
+                &format!("synthetic.gone{i}"),
+                2,
+                &Hash32([7; 32]),
+                Some("synthetic.new"),
+            )]
+        })
+        .collect();
+    shards.push(vec![move_row(9, &m.old, "synthetic.new")]);
+    let (v2, files) = links_version_of(&shards, Some(&m.links), T0 + 25);
+    let tomb = CatalogLeaf::of(&m.old.header).tombstone().expect("t");
+    let c2 = catalog_of(
+        Some(&m.c1),
+        T0 + 30,
+        vec![
+            tomb,
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&v2.header),
+        ],
+    );
+    m.w.take(&c2).await;
+    m.w.post_in(&m.links, 1).await.expect("links v1");
+    m.w.post_in(&v2, 2).await.expect("links v2");
+    m.w.put_in(LINKS, &v2.shards[0].root, m.links_file.clone())
+        .await;
+    for (f, e) in files.iter().zip(&v2.shards[1..8]) {
+        m.w.put_in(LINKS, &e.root, f.clone()).await;
+    }
+    for _ in 0..3 {
+        assert_eq!(
+            m.w.successor_of("synthetic.metrics").await["status"],
+            "pending"
+        );
+    }
+    assert_eq!(
+        m.w.store.succ_reads(),
+        0,
+        "nothing read while one is missing"
+    );
+    let jobs = m.w.store.succ_jobs().len();
+    m.w.put_in(LINKS, &v2.shards[1].root, files[0].clone())
+        .await;
+    m.w.settle().await;
+    assert_eq!(m.w.store.succ_jobs().len(), jobs, "a held shard: no job");
+    m.w.put_in(LINKS, &v2.shards[8].root, files[7].clone())
+        .await;
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["row"].clone()),
+        (json!("live"), json!("9"))
+    );
+    assert_eq!(m.w.store.succ_reads(), 9, "the version read whole, once");
+}
+
+/// Review SUCC-B2 L4 (a, b): the successor route answers a dataset live in
+/// the newest catalog with 409 `bulk_dataset_live` even when this node does
+/// not hold it, and a storage node's learned removal with its 410.
+#[tokio::test]
+async fn cat_succ_the_route_answers_live_for_a_listed_dataset_and_410_for_a_learned_removal() {
+    let m = a_move().await;
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    let c2 = catalog_of(Some(&m.c1), T0 + 30, leaves);
+    m.w.take(&c2).await;
+    let e =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.extra")
+            .await
+            .expect_err("live");
+    assert_eq!(
+        (e.status, e.code),
+        (StatusCode::CONFLICT, "bulk_dataset_live")
+    );
+    let l = learning().await;
+    let (_, _, body) = leaf_get(&l.cat, LP, LD).await;
+    assert_eq!(l.sto.learn(&body).await, Learn::Kept(0));
+    let e = l
+        .sto
+        .store
+        .successor_answer(LP, LD)
+        .await
+        .expect_err("removed");
+    assert_eq!(
+        (e.status, e.code),
+        (StatusCode::GONE, "bulk_dataset_removed")
+    );
+    assert!(e.fields.iter().any(|(k, _)| *k == "learned"));
+    l.clean();
+}
+
+/// Review SUCC-B2 L4 (c, d): the listing shows `moved` and `replaces` only
+/// from a settled index: null while the links are pending, and nothing
+/// under a publisher fork mark.
+#[tokio::test]
+async fn cat_succ_the_listing_shows_no_count_while_pending_or_forked() {
+    let m = a_move().await;
+    let listing = |s: Arc<BulkStore>| async move {
+        let r = list(State(s), None, RawQuery(None)).await;
+        let body = r.into_body().collect().await.expect("body").to_bytes();
+        serde_json::from_slice::<Value>(&body).expect("json")
+    };
+    m.w.settle().await;
+    let v = listing(m.w.store.clone()).await;
+    assert_eq!(v["catalogs"][0]["moved"], Value::Null, "pending");
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let v = listing(m.w.store.clone()).await;
+    assert_eq!(v["catalogs"][0]["moved"], 1);
+    // A second anchored catalog 1: a fork mark.
+    let c1b = catalog_of(
+        Some(&m.c0),
+        T0 + 21,
+        vec![
+            CatalogLeaf::of(&m.old.header),
+            CatalogLeaf::of(&m.new.header),
+        ],
+    );
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    m.w.node.anchor_by(&r1b, &SECRET2);
+    assert_eq!(
+        code(m.w.post_catalog(&c1b, &r1b).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    let v = listing(m.w.store.clone()).await;
+    assert_eq!(v["catalogs"][0]["moved"], Value::Null, "forked");
+    assert!(v["datasets"]
+        .as_array()
+        .expect("list")
+        .iter()
+        .all(|e| e.get("replaces").is_none()));
+}
+
+/// Review SUCC-B2 M2 and H1 (2, 3), SUCC-B4 M1: no read waits for a links
+/// index build. While the worker is stuck before another publisher's job
+/// (as on a hung disk, accepted), the listing, the 410 and info answer from
+/// the index built before.
+#[tokio::test]
+async fn cat_succ_the_410_answers_while_another_publishers_build_waits() {
+    let cap = || std::time::Duration::from_secs(60);
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    // The worker is stuck (as on a hung disk) before the next job.
+    m.w.store.succ_hold();
+    let other = SourceId("example.second".into());
+    let leaf = CatalogLeaf {
+        publisher: other.clone(),
+        dataset: "synthetic.metrics".into(),
+        version: 1,
+        prev: Hash32::ZERO,
+        root: Hash32([5; 32]),
+    };
+    let c = Catalog::build(other, None, T0 + 10, vec![leaf]).expect("catalog");
+    m.w.take(&c).await;
+    let r = tokio::time::timeout(cap(), list(State(m.w.store.clone()), None, RawQuery(None)))
+        .await
+        .expect("the listing answers while a build is held");
+    assert_eq!(r.status(), StatusCode::OK);
+    let s = tokio::time::timeout(cap(), m.w.successor_of("synthetic.metrics"))
+        .await
+        .expect("the 410 answers while another publisher's build is held");
+    assert_eq!(s["status"], "live");
+    let info = tokio::time::timeout(
+        cap(),
+        m.w.store.info_checked("example.publisher", "synthetic.new"),
+    )
+    .await
+    .expect("info answers")
+    .expect("live");
+    assert_eq!(info["replaces"]["count"], 1);
+    assert_eq!(m.w.store.succ_queued(), vec!["example.second".to_string()]);
+    m.w.store.succ_release();
+    m.w.store.succ_settle("example.second").await;
+    assert!(m.w.store.succ_built("example.second"));
+}
+
+/// Review SUCC-B2 L1 and M2: the successor answer takes the catalog's
+/// number, header and report in one read, and uses the index only when it
+/// was built for that catalog: while the build for a new catalog waits, the
+/// answer comes at once with the new catalog's header and report and the
+/// end `pending`, never the older catalog's chain.
+#[tokio::test]
+async fn cat_succ_the_answer_names_one_catalog_and_waits_for_no_build() {
+    let cap = || std::time::Duration::from_secs(60);
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let hex = |v: &Value| onyx_bulk::wire::hex_field(v, "field").expect("hex");
+    let one_catalog = |a: &Value, want: &Catalog| {
+        let h = CatalogHeader::try_from_slice(&hex(&a["catalog"]["header"])).expect("header");
+        let r = SignedReport::try_from_slice(&hex(&a["catalog"]["report"])).expect("report");
+        assert_eq!(h, want.header);
+        assert_eq!(a["catalog"]["number"], want.header.number);
+        cat::verify(&h, &r).expect("the report signs this header");
+    };
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    one_catalog(&a, &m.c1);
+    assert_eq!(a["end"]["status"], "live");
+    m.w.store.succ_hold();
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    let c2 = catalog_of(Some(&m.c1), T0 + 30, leaves);
+    m.w.take(&c2).await;
+    let a = tokio::time::timeout(
+        cap(),
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics"),
+    )
+    .await
+    .expect("answered while the build waits")
+    .expect("answer");
+    one_catalog(&a, &c2);
+    assert_eq!(a["end"], json!({"status": "pending"}));
+    assert_eq!(a["chain"], json!([]));
+    assert_eq!(a["links"], Value::Null);
+    m.w.store.succ_release();
+    m.w.settle().await;
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    one_catalog(&a, &c2);
+    assert_eq!(a["end"]["status"], "live");
+}
+
+/// The thief's catalog 1 (`SECRET`): it removes `synthetic.metrics` and
+/// links it to `to`; its links version is uploaded.
+async fn a_thiefs_move(
+    to: &str,
+) -> (
+    World,
+    Manifest,
+    Manifest,
+    Catalog,
+    Catalog,
+    SignedReport,
+    Manifest,
+) {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let old = manifest(&files, None, T0);
+    let new_files = shard_files(0..40, 10);
+    let new = manifest_of("synthetic.new", &new_files, T0 + 1);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&old.header), CatalogLeaf::of(&new.header)],
+    );
+    w.take(&c0).await;
+    w.post_in(&old, 0).await.expect("old");
+    w.upload_all(&old, &files).await;
+    w.post_in(&new, 0).await.expect("new");
+    let (links, links_file) = links_version(&[move_row(1, &old, to)], None, T0 + 15);
+    let mut leaves = vec![
+        CatalogLeaf::of(&old.header).tombstone().expect("t"),
+        CatalogLeaf::of(&new.header),
+        CatalogLeaf::of(&links.header),
+    ];
+    if to != "synthetic.new" {
+        leaves.push(other_leaf(to));
+    }
+    let c1 = catalog_of(Some(&c0), T0 + 20, leaves);
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("c1");
+    w.post_in(&links, 1).await.expect("links");
+    w.put_in(LINKS, &links.shards[0].root, links_file).await;
+    (w, old, new, c0, c1, r1, links)
+}
+
+impl World {
+    /// The publisher's replacement of catalog 1 under `SECRET2`, taken once
+    /// the book withdrew `r1` (THREATS CAT-5).
+    async fn replace_1(
+        &self,
+        c0: &Catalog,
+        r1: &SignedReport,
+        leaves: Vec<CatalogLeaf>,
+    ) -> Catalog {
+        let c1b = catalog_of(Some(c0), T0 + 50, leaves);
+        let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+        self.node.anchor_by(&r1b, &SECRET2);
+        self.node.withdraw(r1);
+        self.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+        assert_eq!(
+            self.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+            StatusCode::CREATED
+        );
+        c1b
+    }
+
+    async fn listed(&self) -> Value {
+        self.settle().await;
+        let r = list(State(self.store.clone()), None, RawQuery(None)).await;
+        let body = r.into_body().collect().await.expect("body").to_bytes();
+        serde_json::from_slice(&body).expect("json")
+    }
+}
+
+/// THREATS CAT-SUCC-1 and CAT-SUCC-8 (review SUCC-B2 L5): a thief's
+/// catalog that removes a dataset and links it to the thief's id is set
+/// aside with its links version; the publisher's replacement lists its own
+/// links version and the index follows it.
+#[tokio::test]
+async fn cat_succ_a_set_aside_catalog_takes_its_rows_with_it() {
+    let (w, old, new, c0, _c1, r1, thiefs) = a_thiefs_move("synthetic.thief").await;
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(s["dataset"], "synthetic.thief");
+    let (own, own_file) = links_version(&[move_row(1, &old, "synthetic.new")], None, T0 + 45);
+    let c1b = w
+        .replace_1(
+            &c0,
+            &r1,
+            vec![
+                CatalogLeaf::of(&old.header).tombstone().expect("t"),
+                CatalogLeaf::of(&new.header),
+                CatalogLeaf::of(&own.header),
+            ],
+        )
+        .await;
+    // The thief's links version went with its catalog.
+    let e = w
+        .store
+        .rows(
+            "example.publisher",
+            LINKS,
+            &parse_rows_query(Some(&format!("root={}", thiefs.header.root()))).expect("q"),
+        )
+        .await
+        .expect_err("set aside");
+    assert_eq!(e.code, "bulk_unknown_dataset");
+    assert_eq!(
+        w.successor_of("synthetic.metrics").await["status"],
+        "pending"
+    );
+    w.post_in(&own, 1).await.expect("own links");
+    w.put_in(LINKS, &own.shards[0].root, own_file).await;
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone()),
+        (json!("live"), json!("synthetic.new"))
+    );
+    let v = w.listed().await;
+    assert_eq!(v["catalogs"][0]["number"], c1b.header.number);
+    assert_eq!(v["catalogs"][0]["moved"], 1);
+}
+
+/// THREATS CAT-SUCC-8 (review SUCC-B2 L5): when the tombstone's catalog is
+/// set aside, the old id is back and its row is inert (the replacement
+/// lists the same links version); the same tombstone again makes it act.
+#[tokio::test]
+async fn cat_succ_a_set_aside_tombstone_makes_the_link_inert() {
+    let (w, old, new, c0, _c1, r1, links) = a_thiefs_move("synthetic.new").await;
+    assert_eq!(w.successor_of("synthetic.metrics").await["status"], "live");
+    let reads = w.store.succ_reads();
+    let c1b = w
+        .replace_1(
+            &c0,
+            &r1,
+            vec![
+                CatalogLeaf::of(&old.header),
+                CatalogLeaf::of(&new.header),
+                CatalogLeaf::of(&links.header),
+            ],
+        )
+        .await;
+    w.settle().await;
+    w.rows("from=0&to=3")
+        .await
+        .expect("the old id serves again");
+    let info = w
+        .store
+        .info_checked("example.publisher", "synthetic.new")
+        .await
+        .expect("live");
+    assert!(info.get("replaces").is_none(), "the row acts on nothing");
+    assert_eq!(w.listed().await["catalogs"][0]["moved"], 0);
+    // The same tombstone (version 2 after the same root) again.
+    let c2 = catalog_of(
+        Some(&c1b),
+        T0 + 60,
+        vec![
+            CatalogLeaf::of(&old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    let r2 = cat::sign(&SECRET2, &c2.header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    w.post_catalog(&c2, &r2).await.expect("c2");
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone(), s["row"].clone()),
+        (json!("live"), json!("synthetic.new"), json!("1"))
+    );
+    assert_eq!(
+        w.store.succ_reads(),
+        reads + 1,
+        "the same links version: read for catalog 2 only (catalog 1b removes nothing)"
+    );
+}
+
+/// THREATS CAT-SUCC-8 (review SUCC-B2 L5): erasing the old id's shards
+/// after the grace keeps its link (the links are another dataset).
+#[tokio::test]
+async fn cat_succ_erasure_keeps_the_link() {
+    let e = erase_world(erase_cfg(EraseMode::On)).await;
+    let (w, s) = (&e.w, &e.w.store);
+    let (links, file) = links_version(&[move_row(1, &e.m, "synthetic.other")], None, T0 + 22);
+    let c2 = catalog_of(
+        Some(&e.c1),
+        T0 + 25,
+        vec![
+            CatalogLeaf::of(&e.m.header).tombstone().expect("t"),
+            CatalogLeaf::of(&e.other.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    w.take(&c2).await;
+    w.post_in(&links, 2).await.expect("links");
+    w.put_in(LINKS, &links.shards[0].root, file).await;
+    let due = T0 + 30 * DAY;
+    e.pass(100, T0).await;
+    e.pass(102, due).await;
+    let p = e.pass(103, due + 3_600).await;
+    assert_eq!(p.erased, 1);
+    assert!(!s.holds_shard(&e.m.shards[1].root), "erased");
+    assert!(s.holds_shard(&links.shards[0].root), "the links stay");
+    let gone = w.rows("from=0&to=3").await.expect_err("removed");
+    assert_eq!(field_of(&gone, "erase")["phase"], "erased");
+    let succ = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (succ["status"].clone(), succ["dataset"].clone()),
+        (json!("live"), json!("synthetic.other"))
+    );
+    let _ = (&e.files, &e.r1);
+}
+
+/// THREATS CAT-SUCC-4 (review SUCC-B2 L5): a row written before its
+/// tombstone is inert until that exact tombstone (version and previous
+/// root); a row for another tombstone of the same id never acts.
+#[tokio::test]
+async fn cat_succ_a_row_written_before_its_tombstone_acts_only_on_that_tombstone() {
+    let m = a_move().await;
+    let w = world();
+    let files = shard_files(0..30, 10);
+    w.take(&m.c0).await;
+    w.post_in(&m.old, 0).await.expect("old");
+    w.upload_all(&m.old, &files).await;
+    w.post_in(&m.new, 0).await.expect("new");
+    // Catalog 1: the old id still live, the links already name its future
+    // tombstone (row 1) and another one after a root it never had (row 2).
+    let (links, file) = links_version(
+        &[
+            move_row(1, &m.old, "synthetic.new"),
+            link_row(
+                2,
+                "synthetic.metrics",
+                2,
+                &Hash32([9; 32]),
+                Some("synthetic.typo"),
+            ),
+        ],
+        None,
+        T0 + 15,
+    );
+    let c1 = catalog_of(
+        Some(&m.c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&m.old.header),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    w.take(&c1).await;
+    w.post_in(&links, 1).await.expect("links");
+    w.put_in(LINKS, &links.shards[0].root, file).await;
+    w.settle().await;
+    w.rows("from=0&to=3").await.expect("live: the row waits");
+    assert_eq!(w.listed().await["catalogs"][0]["moved"], 0);
+    let c2 = catalog_of(
+        Some(&c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    w.take(&c2).await;
+    let s = w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["dataset"].clone(), s["row"].clone()),
+        (json!("live"), json!("synthetic.new"), json!("1"))
+    );
+    let _ = (&m.links, &m.links_file, &m.c1, &m.w);
+}
+
+/// THREATS CAT-SUCC-10 (review SUCC-B2 L5): the links dataset is an
+/// ordinary dataset on every read route: info, rows (checked as any rows
+/// answer), the listing, its manifest and shard by root, and the successor
+/// route answers it live.
+#[tokio::test]
+async fn cat_succ_the_links_dataset_is_an_ordinary_dataset_on_every_route() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let send = |app: Router, u: String| async move {
+        let r = app
+            .oneshot(Request::get(u).body(Body::empty()).expect("req"))
+            .await
+            .expect("ok");
+        let status = r.status();
+        let body = r.into_body().collect().await.expect("body").to_bytes();
+        (status, body)
+    };
+    let read = routes(m.w.store.clone());
+    let peer = peer_routes(m.w.store.clone());
+    let base = format!("/v1/bulk/example.publisher/{LINKS}");
+    let (s, b) = send(read.clone(), base.clone()).await;
+    assert_eq!(s, StatusCode::OK);
+    let info: Value = serde_json::from_slice(&b).expect("json");
+    assert_eq!(info["manifest"]["root"], m.links.header.root().to_string());
+    let (s, b) = send(read.clone(), format!("{base}/rows")).await;
+    assert_eq!(s, StatusCode::OK);
+    let rows: Value = serde_json::from_slice(&b).expect("json");
+    onyx_bulk::wire::check_rows_answer(&rows, None, None).expect("an ordinary rows answer");
+    assert_eq!(rows["rows"].as_array().map(Vec::len), Some(1));
+    let (s, b) = send(read.clone(), "/v1/bulk".into()).await;
+    assert_eq!(s, StatusCode::OK);
+    assert!(String::from_utf8_lossy(&b).contains(LINKS));
+    let (s, _) = send(
+        peer.clone(),
+        format!("/v1/bulk/manifests/{}", m.links.header.root()),
+    )
+    .await;
+    assert_eq!(s, StatusCode::OK);
+    let (s, b) = send(peer, format!("/v1/bulk/shards/{}", m.links.shards[0].root)).await;
+    assert_eq!((s, b.to_vec()), (StatusCode::OK, m.links_file.clone()));
+    let (s, b) = send(read, format!("{base}/successor")).await;
+    assert_eq!(s, StatusCode::CONFLICT);
+    assert!(String::from_utf8_lossy(&b).contains("bulk_dataset_live"));
+}
+
+// --- Build reviews SUCC-B3 and SUCC-B4 ---
+
+/// `q`'s catalog 0 (its made-up dataset `synthetic.old` live) and catalog
+/// 1 (`leaves` and that dataset's tombstone), both taken: catalog 1 removes
+/// something, so its links are read (review SUCC-B5 M2). Catalog 1.
+async fn a_removing_catalog(w: &World, q: &str, leaves: Vec<CatalogLeaf>) -> Catalog {
+    let old = CatalogLeaf {
+        publisher: SourceId(q.into()),
+        dataset: "synthetic.old".into(),
+        version: 1,
+        prev: Hash32::ZERO,
+        root: Hash32([3; 32]),
+    };
+    let c0 = Catalog::build(SourceId(q.into()), None, T0 + 8, vec![old.clone()]).expect("c0");
+    w.take(&c0).await;
+    let mut leaves = leaves;
+    leaves.push(old.tombstone().expect("live"));
+    let c1 = Catalog::build(SourceId(q.into()), Some(&c0), T0 + 10, leaves).expect("c1");
+    w.take(&c1).await;
+    c1
+}
+
+/// Publisher `q`'s catalog 0: a dataset of its own (one shard of `rows`
+/// rows), a tombstone, and a links version whose one entry is that shard,
+/// which does not read under the links schema: its index stays pending
+/// (review SUCC-B3 H1). The big shard's root, and the catalog.
+async fn a_pending_links_publisher(w: &World, q: &str, rows: i128) -> (Hash32, Catalog) {
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let files = shard_files(0..rows, rows as usize);
+    let big_entry = ShardEntry::new(0, &check_shard(&schema(), &files[0]).expect("ok").summary);
+    let big = Manifest::build(
+        NewVersion {
+            dataset: "synthetic.big".into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 4,
+            schema: schema(),
+            rights: r.clone(),
+        },
+        None,
+        vec![big_entry],
+    )
+    .expect("big manifest");
+    let m = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: onyx_bulk::successor::links_schema(),
+            rights: r,
+        },
+        None,
+        vec![big_entry],
+    )
+    .expect("links manifest");
+    let c = a_removing_catalog(
+        w,
+        q,
+        vec![CatalogLeaf::of(&big.header), CatalogLeaf::of(&m.header)],
+    )
+    .await;
+    let n = c.header.number;
+    w.post_in(&big, n).await.expect("big manifest taken");
+    w.store
+        .accept_shard(
+            q,
+            "synthetic.big",
+            &big_entry.root,
+            &HeaderMap::new(),
+            Body::from(files[0].clone()),
+        )
+        .await
+        .expect("big shard");
+    w.post_in(&m, n).await.expect("links manifest taken");
+    (big_entry.root, c)
+}
+
+/// Publisher `q`'s catalog 0 with a links version of one shard per element
+/// of `shards`, all uploaded, and with a tombstone when it `removes`: the
+/// catalog, the manifest and the files.
+async fn a_links_publisher_of(
+    w: &World,
+    q: &str,
+    shards: &[Vec<Vec<u8>>],
+    removes: bool,
+) -> (Catalog, Manifest, Vec<Vec<u8>>) {
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let s = onyx_bulk::successor::links_schema();
+    let files: Vec<Vec<u8>> = shards.iter().map(|rows| encode_shard(rows)).collect();
+    let entries = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ShardEntry::new(i as u32, &check_shard(&s, f).expect("shard").summary))
+        .collect();
+    let m = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: s,
+            rights: r,
+        },
+        None,
+        entries,
+    )
+    .expect("links manifest");
+    let leaves = vec![CatalogLeaf::of(&m.header)];
+    let c = if removes {
+        a_removing_catalog(w, q, leaves).await
+    } else {
+        let c = Catalog::build(SourceId(q.into()), None, T0 + 10, leaves).expect("catalog");
+        w.take(&c).await;
+        c
+    };
+    w.post_in(&m, c.header.number)
+        .await
+        .expect("links manifest taken");
+    for (f, e) in files.iter().zip(&m.shards) {
+        w.store
+            .accept_shard(q, LINKS, &e.root, &HeaderMap::new(), Body::from(f.clone()))
+            .await
+            .expect("links shard");
+    }
+    (c, m, files)
+}
+
+/// Inert links row `i` (a tombstone no catalog lists).
+fn inert_row(i: i128) -> Vec<u8> {
+    link_row(
+        i,
+        &format!("synthetic.gone{i}"),
+        2,
+        &Hash32([7; 32]),
+        Some("synthetic.next"),
+    )
+}
+
+/// Publisher `q`'s catalog 0 with a tombstone and a links version of `n`
+/// inert rows, all uploaded.
+async fn a_links_publisher(w: &World, q: &str, n: i128) -> Catalog {
+    let rows: Vec<Vec<u8>> = (1..=n).map(inert_row).collect();
+    a_links_publisher_of(w, q, &[rows], true).await.0
+}
+
+/// Publisher `q`'s next catalog after `c`, the same leaves, taken.
+async fn next_catalog(w: &World, q: &str, c: &Catalog, created: u64) -> Catalog {
+    let n = Catalog::build(SourceId(q.into()), Some(c), created, c.leaves.clone()).expect("next");
+    w.take(&n).await;
+    n
+}
+
+fn cap() -> std::time::Duration {
+    std::time::Duration::from_secs(60)
+}
+
+impl World {
+    /// The 410's `successor` of `dataset` as it stands now (no wait).
+    async fn successor_now(&self, dataset: &str) -> Value {
+        let e = self
+            .store
+            .rows(
+                "example.publisher",
+                dataset,
+                &parse_rows_query(Some("")).expect("q"),
+            )
+            .await
+            .expect_err("removed");
+        field_of(&e, "successor")
+    }
+
+    /// The jobs of `q` so far.
+    fn jobs_of(&self, q: &str) -> usize {
+        self.store.succ_jobs().iter().filter(|j| *j == q).count()
+    }
+}
+
+/// Every read route, for the publisher and `other`.
+async fn read_everything(s: &Arc<BulkStore>, other: &str) {
+    let q = parse_rows_query(Some("")).expect("q");
+    let _ = s.rows("example.publisher", "synthetic.metrics", &q).await;
+    let _ = s
+        .info_checked("example.publisher", "synthetic.metrics")
+        .await;
+    let _ = s.info_checked("example.publisher", "synthetic.new").await;
+    let _ = s
+        .successor_answer("example.publisher", "synthetic.metrics")
+        .await;
+    let _ = s.replaces_of(other, "synthetic.next");
+    let _ = s.replaces_all();
+    let _ = list(State(s.clone()), None, RawQuery(None)).await;
+    let app = routes(s.clone());
+    for u in [
+        "/v1/bulk".to_string(),
+        "/v1/bulk/example.publisher/synthetic.metrics".into(),
+        "/v1/bulk/example.publisher/synthetic.metrics/rows".into(),
+        "/v1/bulk/example.publisher/synthetic.metrics/successor".into(),
+        "/v1/bulk/example.publisher/synthetic.new".into(),
+        format!("/v1/bulk/{other}/{LINKS}"),
+    ] {
+        let r = app
+            .clone()
+            .oneshot(Request::get(u).body(Body::empty()).expect("req"))
+            .await
+            .expect("ok");
+        let _ = r.into_body().collect().await;
+    }
+}
+
+/// Review SUCC-B3 H1 and M1 (the reviewer's attack), after the SUCC-B4
+/// redesign: two publishers whose links never read (their leaf names their
+/// own 60,000-row data shard), whose answers are read all the time and
+/// whose held shards are sent again, never hold up another publisher's
+/// build: none of that queues a job, and each big shard is loaded once.
+#[tokio::test]
+async fn cat_succ_two_pending_publishers_starve_no_other_build() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    let links_root = m.links.shards[0].root;
+    m.w.put_in(LINKS, &links_root, m.links_file.clone()).await;
+    m.w.settle().await;
+    let hostile = ["example.third", "example.fourth"];
+    for q in hostile {
+        a_pending_links_publisher(&m.w, q, 60_000).await;
+        m.w.store.succ_settle(q).await;
+    }
+    assert_eq!(
+        m.w.store.succ_reads(),
+        3,
+        "the honest links shard and each big shard, once"
+    );
+    let jobs = m.w.store.succ_jobs().len();
+    let stop = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    let (s, st, file) = (m.w.store.clone(), stop.clone(), m.links_file.clone());
+    let attacker = tokio::spawn(async move {
+        let mut n = 0u64;
+        while !st.load(Ordering::Relaxed) {
+            // A held shard sent again (any client may), and reads.
+            if n.is_multiple_of(50) {
+                let _ = s
+                    .accept_shard(
+                        "example.publisher",
+                        LINKS,
+                        &links_root,
+                        &HeaderMap::new(),
+                        Body::from(file.clone()),
+                    )
+                    .await;
+            }
+            for q in hostile {
+                let _ = s.replaces_of(q, "synthetic.x");
+            }
+            let _ = s.replaces_all();
+            n += 1;
+            tokio::task::yield_now().await;
+        }
+        n
+    });
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    let c2 = catalog_of(Some(&m.c1), T0 + 30, leaves);
+    m.w.take(&c2).await;
+    let built = tokio::time::timeout(cap(), m.w.settle()).await;
+    stop.store(true, Ordering::Relaxed);
+    assert!(attacker.await.expect("attacker") > 0);
+    assert!(built.is_ok(), "the index for catalog 2 is built");
+    assert_eq!(
+        m.w.store.succ_jobs()[jobs..].to_vec(),
+        vec!["example.publisher".to_string()],
+        "one job: the new catalog's"
+    );
+    assert_eq!(m.w.store.succ_reads(), 4, "no big shard loaded again");
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+}
+
+/// Review SUCC-B3 M1 and SUCC-B4: a pending index is built again only for
+/// the shard it waits for: a held shard sent again, or another publisher's
+/// new links shard, queues nothing for it.
+#[tokio::test]
+async fn cat_succ_only_the_publishers_own_change_builds_a_pending_index_again() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.settle().await;
+    let q = "example.publisher";
+    let before = m.w.jobs_of(q);
+    // A held shard of this publisher sent again.
+    let files = shard_files(0..40, 10);
+    assert_eq!(
+        m.w.put_in("synthetic.new", &m.new.shards[0].root, files[0].clone())
+            .await,
+        StatusCode::OK
+    );
+    m.w.settle().await;
+    assert_eq!(m.w.jobs_of(q), before, "held again: no job");
+    // Another publisher's new links shard.
+    a_links_publisher(&m.w, "example.second", 2).await;
+    m.w.store.succ_settle("example.second").await;
+    m.w.settle().await;
+    assert_eq!(m.w.jobs_of(q), before, "another publisher's change");
+    // The shard the index waits for.
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    assert_eq!(m.w.jobs_of(q), before + 1, "its own shard: one job");
+}
+
+/// Review SUCC-B4 (redesign): a held links shard that does not read under
+/// the links schema is read again only for the publisher's next catalog
+/// (or links manifest): no read, no time and no shard sent again does it.
+#[tokio::test]
+async fn cat_succ_an_unreadable_links_version_is_read_again_only_for_a_new_catalog() {
+    let w = world();
+    let q = "example.second";
+    let (big, c) = a_pending_links_publisher(&w, q, 100).await;
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 1);
+    w.clock.fetch_add(3_600, Ordering::Relaxed);
+    let files = shard_files(0..100, 100);
+    assert_eq!(
+        w.store
+            .accept_shard(
+                q,
+                "synthetic.big",
+                &big,
+                &HeaderMap::new(),
+                Body::from(files[0].clone())
+            )
+            .await
+            .expect("sent again")
+            .0,
+        StatusCode::OK
+    );
+    for _ in 0..3 {
+        let _ = w.store.replaces_of(q, "synthetic.x");
+        let _ = w.store.replaces_all();
+    }
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 1, "nothing read again");
+    next_catalog(&w, q, &c, T0 + 20).await;
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 2, "its next catalog: read once more");
+}
+
+/// Review SUCC-B3 L6: a catalog, a links manifest and a links shard taken
+/// through the upload routes each queue one job, before any read; the read
+/// after them builds nothing.
+#[tokio::test]
+async fn cat_succ_an_upload_starts_the_index_build_before_any_read() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let old = manifest(&files, None, T0);
+    let new_files = shard_files(0..40, 10);
+    let new = manifest_of("synthetic.new", &new_files, T0 + 1);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&old.header), CatalogLeaf::of(&new.header)],
+    );
+    w.take(&c0).await;
+    w.post_in(&old, 0).await.expect("old");
+    w.post_in(&new, 0).await.expect("new");
+    w.settle().await;
+    let (links, links_file) = links_version(&[move_row(1, &old, "synthetic.new")], None, T0 + 15);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    let up = upload_routes(w.store.clone());
+    let send = |req: Request<Body>| {
+        let up = up.clone();
+        async move { up.oneshot(req).await.expect("ok").status() }
+    };
+    let q = "example.publisher";
+    let wr = &w;
+    let one_more = move |n: usize| async move {
+        wr.settle().await;
+        wr.jobs_of(q) == n + 1 && wr.store.succ_built(q)
+    };
+    let n = w.jobs_of(q);
+    let body = json!({"catalog": hex0x(&borsh::to_vec(&c1).expect("ok")), "report": hex0x(&borsh::to_vec(&r1).expect("ok"))});
+    let s = send(
+        Request::post("/v1/bulk/catalogs")
+            .body(Body::from(body.to_string()))
+            .expect("req"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert!(one_more(n).await, "the catalog upload built the index");
+    let n = w.jobs_of(q);
+    let body = json!({"manifest": hex0x(&links.to_bytes()), "catalog": 1});
+    let s = send(
+        Request::post("/v1/bulk/manifests")
+            .body(Body::from(body.to_string()))
+            .expect("req"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert!(
+        one_more(n).await,
+        "the links manifest upload built it again"
+    );
+    let n = w.jobs_of(q);
+    let s = send(
+        Request::put(format!(
+            "/v1/bulk/example.publisher/{LINKS}/shards/{}",
+            links.shards[0].root
+        ))
+        .body(Body::from(links_file))
+        .expect("req"),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED);
+    assert!(one_more(n).await, "the links shard upload built it again");
+    assert_eq!(w.store.succ_reads(), 1, "the links row read by that job");
+    let n = w.jobs_of(q);
+    assert_eq!(w.successor_now("synthetic.metrics").await["status"], "live");
+    assert_eq!(
+        (w.jobs_of(q), w.store.succ_reads()),
+        (n, 1),
+        "the read built nothing"
+    );
+}
+
+/// Review SUCC-B3 L6 and SUCC-B4: a job that panics leaves the index as it
+/// was and stops no other build; the publisher's next catalog builds it.
+#[tokio::test]
+async fn cat_succ_a_build_that_panics_stops_no_other_build() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.settle().await;
+    m.w.store.succ_panic_next("example.publisher");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    assert_eq!(
+        m.w.successor_now("synthetic.metrics").await["status"],
+        "pending"
+    );
+    a_links_publisher(&m.w, "example.second", 1).await;
+    tokio::time::timeout(cap(), m.w.store.succ_settle("example.second"))
+        .await
+        .expect("the worker goes on");
+    assert_eq!(m.w.store.succ_kept("example.second"), 0);
+    assert!(m.w.store.succ_built("example.second"));
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    m.w.take(&catalog_of(Some(&m.c1), T0 + 30, leaves)).await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+}
+
+/// Review SUCC-B4 H1: the index keeps only the links that act in its
+/// catalog (one per tombstone at most), never every row: 52 rows, one kept.
+#[tokio::test]
+async fn cat_succ_the_index_keeps_only_the_links_that_act_in_its_catalog() {
+    let m = a_move().await;
+    let mut rows: Vec<Vec<u8>> = (2..52).map(inert_row).collect();
+    rows.push(move_row(52, &m.old, "synthetic.new"));
+    let (v2, f2) = links_version(&rows, Some(&m.links), T0 + 25);
+    let c2 = catalog_of(
+        Some(&m.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&v2.header),
+        ],
+    );
+    m.w.take(&c2).await;
+    m.w.post_in(&m.links, 1).await.expect("links v1");
+    m.w.post_in(&v2, 2).await.expect("links v2");
+    m.w.put_in(LINKS, &v2.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.put_in(LINKS, &v2.shards[1].root, f2).await;
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["row"].clone()),
+        (json!("live"), json!("52"))
+    );
+    assert_eq!(m.w.store.succ_kept("example.publisher"), 1);
+}
+
+/// Review SUCC-B3 L4: once no generation is used, nothing of the links is
+/// kept.
+#[tokio::test]
+async fn cat_succ_rows_of_a_generation_no_longer_used_are_let_go() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    assert_eq!(m.w.store.succ_kept("example.publisher"), 1);
+    let c2 = catalog_of(
+        Some(&m.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&m.links.header).tombstone().expect("t"),
+        ],
+    );
+    m.w.take(&c2).await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "no_links"
+    );
+    assert_eq!(m.w.store.succ_kept("example.publisher"), 0);
+}
+
+/// Review SUCC-B3 L1: the 410 names the successor from the catalog the
+/// removal was read from, matched by root, not number: an index built for
+/// another catalog with the same number does not answer.
+#[tokio::test]
+async fn cat_succ_the_410_matches_its_catalog_by_root() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    let other = catalog_of(
+        Some(&m.c0),
+        T0 + 21,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&m.links.header),
+        ],
+    );
+    assert_eq!(other.header.number, m.c1.header.number);
+    let body = CatalogBody::new(other);
+    assert_eq!(
+        m.w.store
+            .successor_json("example.publisher", "synthetic.metrics", 1, &body),
+        json!({"status": "pending"})
+    );
+}
+
+/// Review SUCC-B3 L3: when page 0 of the links cannot be read, the answer
+/// is still given, with `end` pending and no links, not an error.
+#[tokio::test]
+async fn cat_succ_the_answer_without_its_links_page_is_pending() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    m.w.forget(&m.links.shards[0].root);
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("an answer");
+    assert_eq!(a["end"], json!({"status": "pending"}));
+    assert_eq!(a["links"], Value::Null);
+    assert_eq!(a["chain"], json!([]));
+}
+
+/// Review SUCC-B3 M1: index builds take none of the readers' load permits:
+/// with every one of them held (readers busy), a build still reads its
+/// shards.
+#[tokio::test]
+async fn cat_succ_index_builds_take_no_reader_load_permits() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    let _busy =
+        m.w.store
+            .loads
+            .acquire_many(MAX_LOADS as u32)
+            .await
+            .expect("every reader permit");
+    let s = tokio::time::timeout(cap(), m.w.successor_of("synthetic.metrics"))
+        .await
+        .expect("built with every reader permit held");
+    assert_eq!(s["status"], "live");
+    assert_eq!(m.w.store.succ_reads(), 1);
+}
+
+/// Review SUCC-B4 (redesign): no read queues a build. With a settled index,
+/// an index that waits for a shard, and one not built for the newest
+/// catalog, every read route answers and the queue, the jobs and the reads
+/// stay as they are.
+#[tokio::test]
+async fn cat_succ_a_read_never_queues_a_build() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.settle().await;
+    a_links_publisher(&m.w, "example.second", 2).await;
+    m.w.store.succ_settle("example.second").await;
+    assert_eq!(
+        m.w.successor_now("synthetic.metrics").await["status"],
+        "pending",
+        "waits for the links shard"
+    );
+    let (jobs, reads) = (m.w.store.succ_jobs(), m.w.store.succ_reads());
+    for _ in 0..3 {
+        read_everything(&m.w.store, "example.second").await;
+    }
+    assert_eq!(m.w.store.succ_queued(), Vec::<String>::new());
+    m.w.settle().await;
+    assert_eq!(
+        (m.w.store.succ_jobs(), m.w.store.succ_reads()),
+        (jobs.clone(), reads)
+    );
+    // Not built for the newest catalog: reads answer pending, queue nothing.
+    m.w.store.succ_hold();
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    m.w.take(&catalog_of(Some(&m.c1), T0 + 30, leaves)).await;
+    let queued = vec!["example.publisher".to_string()];
+    assert_eq!(m.w.store.succ_queued(), queued);
+    for _ in 0..3 {
+        read_everything(&m.w.store, "example.second").await;
+    }
+    assert_eq!(m.w.store.succ_queued(), queued);
+    assert_eq!(m.w.store.succ_jobs(), jobs);
+    m.w.store.succ_release();
+}
+
+/// Review SUCC-B4 H1 (the reviewer's attack, kept as a test): publishers
+/// with links of their own, read all the time and posting new catalogs,
+/// used to evict the honest index at every cycle. Nothing is evicted now:
+/// the honest 410 stays live at every moment and its index is never built
+/// again.
+#[tokio::test]
+async fn cat_succ_other_publishers_churn_never_unbuilds_an_honest_index() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let hostile: Vec<String> = (0..17).map(|i| format!("example.hostile{i}")).collect();
+    let mut cats = Vec::new();
+    for q in &hostile {
+        cats.push(a_links_publisher(&m.w, q, 2).await);
+    }
+    let q = "example.publisher";
+    let built = m.w.jobs_of(q);
+    let body = CatalogBody::new(m.c1.clone());
+    let honest = || m.w.store.successor_json(q, "synthetic.metrics", 1, &body)["status"].clone();
+    for round in 0..5u64 {
+        for (h, c) in hostile.iter().zip(cats.iter_mut()) {
+            let _ = m.w.store.replaces_of(h, "synthetic.next");
+            *c = next_catalog(&m.w, h, c, T0 + 100 + round).await;
+            assert_eq!(honest(), "live");
+        }
+        let _ = list(State(m.w.store.clone()), None, RawQuery(None)).await;
+        assert_eq!(honest(), "live");
+        for h in &hostile {
+            m.w.store.succ_settle(h).await;
+        }
+        assert_eq!(honest(), "live");
+    }
+    assert_eq!(
+        m.w.jobs_of(q),
+        built,
+        "the honest index was never built again"
+    );
+}
+
+/// Review SUCC-B4 H1 and M1: churn of many hostile publishers delays the
+/// honest index only by its place in the queue. With the worker held, each
+/// hostile publisher posts catalogs again and again and is read; each is
+/// queued once, the honest publisher once after them, and it is built
+/// after exactly those jobs.
+#[tokio::test]
+async fn cat_succ_hostile_churn_delays_an_honest_build_only_by_its_place_in_the_queue() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    let hostile: Vec<String> = (0..8).map(|i| format!("example.hostile{i}")).collect();
+    let mut cats = Vec::new();
+    for h in &hostile {
+        cats.push(a_links_publisher(&m.w, h, 2).await);
+        m.w.store.succ_settle(h).await;
+    }
+    m.w.settle().await;
+    let start = m.w.store.succ_jobs().len();
+    m.w.store.succ_hold();
+    for (k, (h, c)) in hostile.iter().zip(cats.iter_mut()).enumerate() {
+        *c = next_catalog(&m.w, h, c, T0 + 100 + k as u64).await;
+    }
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    for round in 0..3u64 {
+        for (h, c) in hostile.iter().zip(cats.iter_mut()) {
+            *c = next_catalog(&m.w, h, c, T0 + 200 + round).await;
+            let _ = m.w.store.replaces_of(h, "synthetic.next");
+        }
+        let _ = list(State(m.w.store.clone()), None, RawQuery(None)).await;
+    }
+    let mut want = hostile.clone();
+    want.push("example.publisher".into());
+    assert_eq!(m.w.store.succ_queued(), want);
+    m.w.store.succ_release();
+    m.w.settle().await;
+    assert_eq!(
+        m.w.store.succ_jobs()[start..].to_vec(),
+        want,
+        "built after exactly the jobs queued before it"
+    );
+    assert_eq!(
+        m.w.successor_now("synthetic.metrics").await["status"],
+        "live"
+    );
+}
+
+/// The publisher's links version 2 of 4 shards (version 1's and 3 more),
+/// every shard held, in catalog 2 (review SUCC-B4).
+async fn four_shard_links(m: &Move) -> (Manifest, Catalog) {
+    let shards: Vec<Vec<Vec<u8>>> = (0..3).map(|i| vec![inert_row(i + 2)]).collect();
+    let (v2, files) = links_version_of(&shards, Some(&m.links), T0 + 25);
+    let c2 = catalog_of(
+        Some(&m.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&v2.header),
+        ],
+    );
+    m.w.take(&c2).await;
+    m.w.post_in(&m.links, 1).await.expect("links v1");
+    m.w.post_in(&v2, 2).await.expect("links v2");
+    m.w.put_in(LINKS, &v2.shards[0].root, m.links_file.clone())
+        .await;
+    for (f, e) in files.iter().zip(&v2.shards[1..]) {
+        m.w.put_in(LINKS, &e.root, f.clone()).await;
+    }
+    (v2, c2)
+}
+
+/// Review SUCC-B4 M2: a links version that only appends to the last one is
+/// read whole, once, like any other (no part read to keep or to drop), and
+/// versions taken while the worker is busy come to one read of the newest.
+#[tokio::test]
+async fn cat_succ_each_catalog_reads_its_links_version_whole_once() {
+    let m = a_move().await;
+    let (v2, c2) = four_shard_links(&m).await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    assert_eq!(m.w.store.succ_reads(), 4, "version 2 read whole, once");
+    m.w.store.succ_hold();
+    let leaves = |v: &Manifest| {
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&v.header),
+        ]
+    };
+    let (v3, f3) = links_version(&[inert_row(9)], Some(&v2), T0 + 35);
+    let c3 = catalog_of(Some(&c2), T0 + 40, leaves(&v3));
+    m.w.take(&c3).await;
+    m.w.post_in(&v3, 3).await.expect("links v3");
+    m.w.put_in(LINKS, &v3.shards[4].root, f3).await;
+    let (v4, f4) = links_version(&[move_row(10, &m.old, "synthetic.new")], Some(&v3), T0 + 45);
+    m.w.take(&catalog_of(Some(&c3), T0 + 50, leaves(&v4))).await;
+    m.w.post_in(&v4, 4).await.expect("links v4");
+    m.w.put_in(LINKS, &v4.shards[5].root, f4).await;
+    assert_eq!(
+        m.w.store.succ_queued(),
+        vec!["example.publisher".to_string()]
+    );
+    m.w.store.succ_release();
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["row"].clone()),
+        (json!("live"), json!("10"))
+    );
+    assert_eq!(
+        m.w.store.succ_reads(),
+        4 + 6,
+        "version 4 read whole, once; version 3 not at all"
+    );
+}
+
+/// Review SUCC-B4 M1 and the redesign: one publisher's big but usable
+/// links version (a 60,000-row shard between two small ones) is read in one
+/// job, with no pass or time limit to cut it short, and costs one read per
+/// catalog it posts: never one per request or per shard sent again.
+#[tokio::test]
+async fn cat_succ_a_big_links_version_costs_one_read_per_catalog() {
+    let w = world();
+    let q = "example.second";
+    let shards = vec![
+        vec![inert_row(1)],
+        (2..60_002).map(inert_row).collect::<Vec<_>>(),
+        vec![inert_row(60_002)],
+    ];
+    let (c, m, files) = a_links_publisher_of(&w, q, &shards, true).await;
+    assert!(m.header.byte_count <= onyx_bulk::successor::LINKS_MAX_BYTES);
+    w.store.succ_settle(q).await;
+    assert!(w.store.succ_built(q));
+    assert_eq!(w.store.succ_reads(), 3, "every shard read once");
+    let jobs = w.store.succ_jobs().len();
+    for _ in 0..50 {
+        let _ = w.store.replaces_of(q, "synthetic.next");
+        let _ = w.store.replaces_all();
+        let _ = w.store.info_checked(q, LINKS).await;
+    }
+    for (f, e) in files.iter().zip(&m.shards) {
+        w.store
+            .accept_shard(q, LINKS, &e.root, &HeaderMap::new(), Body::from(f.clone()))
+            .await
+            .expect("sent again");
+    }
+    w.store.succ_settle(q).await;
+    assert_eq!((w.store.succ_jobs().len(), w.store.succ_reads()), (jobs, 3));
+    next_catalog(&w, q, &c, T0 + 20).await;
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 6, "its next catalog: read once more");
+}
+
+/// Review SUCC-B4 L1: the successor route reads page 0 of the links from
+/// the held version: no fork read and no anchor read of the chain, even
+/// after the recheck window (the rows route reads both then).
+#[tokio::test]
+async fn cat_succ_the_successor_route_reads_no_chain() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let before = m.w.node.reads();
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    assert_eq!(a["end"]["status"], "live");
+    assert_eq!(
+        a["links"]["manifest"]["root"],
+        m.links.header.root().to_string()
+    );
+    assert_eq!(m.w.node.reads(), before, "no chain read");
+    let root = m.links.header.root();
+    m.w.store
+        .rows(
+            "example.publisher",
+            LINKS,
+            &parse_rows_query(Some(&format!("root={root}"))).expect("q"),
+        )
+        .await
+        .expect("rows");
+    assert!(
+        m.w.node.reads() > before,
+        "control: the rows route reads it"
+    );
+}
+
+/// Review SUCC-B4 L2: an index build reads a warm links shard where it is:
+/// no reader asked for it, so it stays warm.
+#[tokio::test]
+async fn cat_succ_an_index_build_leaves_shard_tiers_as_they_are() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    let root = m.links.shards[0].root;
+    m.w.put_in(LINKS, &root, m.links_file.clone()).await;
+    m.w.settle().await;
+    m.w.store.tiers.to_warm(&root).expect("to warm");
+    m.w.store.loaded.lock().expect("lock").clear();
+    let reads = m.w.store.succ_reads();
+    let mut leaves = m.c1.leaves.clone();
+    leaves.push(other_leaf("synthetic.extra"));
+    m.w.take(&catalog_of(Some(&m.c1), T0 + 30, leaves)).await;
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+    assert_eq!(m.w.store.succ_reads(), reads + 1, "read for catalog 2");
+    assert_eq!(m.w.store.tier(&root), Some(Tier::Warm));
+}
+
+// --- Build review SUCC-B5 (the reviewer's attack tests, each with a
+// tombstone in the attacker's catalog: since SUCC-B5 M2 a catalog without
+// one reads nothing) ---
+
+/// Wait (up to `secs`) until `publisher` is neither queued nor being built.
+async fn succ_b5_settle(s: &BulkStore, publisher: &str, secs: u64) {
+    let wait = async {
+        while s.succ_busy(publisher) {
+            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+        }
+    };
+    tokio::time::timeout(std::time::Duration::from_secs(secs), wait)
+        .await
+        .expect("the build ends");
+}
+
+/// Review SUCC-B5 H1 (the reviewer's attack): `LINKS_MAX_BYTES` bounded only
+/// the header's claim. Links entries that name one held shard (stored under
+/// the publisher's own dataset, of 768,916 bytes) with the fewest bytes its
+/// rows allow made a 4,352-byte header for a 49 MB job (65,536 rows of 48 KB
+/// would be 3 GiB). Now a load refuses a file whose size is not its
+/// entry's, before it reads it: the index stays pending.
+#[tokio::test]
+async fn cat_succ_a_job_reads_no_more_than_the_byte_cap() {
+    let w = world();
+    let q = "example.second";
+    let s = onyx_bulk::successor::links_schema();
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    // 16 inert rows of about 48 KB (three 16,000-byte texts), all with key 1.
+    let fat: Vec<Vec<u8>> = (0..16)
+        .map(|_| {
+            encode_row(
+                &s,
+                &[
+                    Cell::Int(1),
+                    Cell::Text("x".repeat(16_000)),
+                    Cell::Int(2),
+                    Cell::Text("y".repeat(16_000)),
+                    Cell::Text("z".repeat(16_000)),
+                ],
+            )
+            .expect("row")
+        })
+        .collect();
+    let file = encode_shard(&fat);
+    let sum = check_shard(&s, &file).expect("shard").summary;
+    let data = Manifest::build(
+        NewVersion {
+            dataset: "synthetic.fat".into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 4,
+            schema: s.clone(),
+            rights: r.clone(),
+        },
+        None,
+        vec![ShardEntry::new(0, &sum)],
+    )
+    .expect("data manifest");
+    // The links version: 64 entries naming that one shard, each declaring
+    // the fewest bytes its row count allows (equal one-key ranges may follow
+    // each other).
+    const K: u32 = 64;
+    let entries: Vec<ShardEntry> = (0..K)
+        .map(|i| {
+            let mut e = ShardEntry::new(i, &sum);
+            e.bytes = 4 + 4 * e.rows;
+            e
+        })
+        .collect();
+    let links = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: s,
+            rights: r,
+        },
+        None,
+        entries,
+    )
+    .expect("links manifest");
+    assert!(onyx_bulk::successor::usable(&links.header).is_ok());
+    let real = u64::from(K) * file.len() as u64;
+    let c = a_removing_catalog(
+        &w,
+        q,
+        vec![
+            CatalogLeaf::of(&data.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    )
+    .await;
+    let n = c.header.number;
+    w.post_in(&data, n).await.expect("data manifest taken");
+    w.store
+        .accept_shard(
+            q,
+            "synthetic.fat",
+            &sum.root,
+            &HeaderMap::new(),
+            Body::from(file.clone()),
+        )
+        .await
+        .expect("data shard");
+    w.post_in(&links, n).await.expect("links manifest taken");
+    succ_b5_settle(&w.store, q, 600).await;
+    let settled = w.store.replaces_all().contains_key(q);
+    let reads = w.store.succ_reads();
+    assert!(
+        !settled || real <= onyx_bulk::successor::LINKS_MAX_BYTES,
+        "the index was built from {reads} loads, {real} real bytes, over the {} cap (header: {})",
+        onyx_bulk::successor::LINKS_MAX_BYTES,
+        links.header.byte_count
+    );
+    assert_eq!(reads, 1, "the first load is refused: the job stops there");
+    // A reader of entry 0's rows is refused the same way: the file is in no
+    // cache (an index load fills none), so its size on disk refuses it.
+    let entry_0 = parse_rows_query(Some("limit=16")).expect("q");
+    let e = w.store.rows(q, LINKS, &entry_0).await.expect_err("refused");
+    assert_eq!(e.code, "bulk_shard_missing");
+    // A reader of the data dataset loads that file under the links schema
+    // into the cache: a cache hit is checked against the entry too.
+    w.store
+        .rows(q, "synthetic.fat", &parse_rows_query(Some("")).expect("q"))
+        .await
+        .expect("the data rows");
+    let e = w.store.rows(q, LINKS, &entry_0).await.expect_err("refused");
+    assert_eq!(e.code, "bulk_shard_missing");
+}
+
+/// Review SUCC-B5 H1: an entry that names a file the job loaded for an
+/// earlier entry is checked against it too. Here the first entry is true
+/// and the next three name the same file with the fewest bytes its row
+/// allows: the job reads the file once and refuses the second entry, so the
+/// file's rows are not taken again and again under a small header.
+#[tokio::test]
+async fn cat_succ_an_entry_naming_a_loaded_file_with_fewer_bytes_is_refused() {
+    let w = world();
+    let q = "example.second";
+    let s = onyx_bulk::successor::links_schema();
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let file = encode_shard(&[inert_row(1)]);
+    let sum = check_shard(&s, &file).expect("shard").summary;
+    let entries: Vec<ShardEntry> = (0..4)
+        .map(|i| {
+            let mut e = ShardEntry::new(i, &sum);
+            if i > 0 {
+                e.bytes = 4 + 4 * e.rows;
+            }
+            e
+        })
+        .collect();
+    let links = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: s,
+            rights: r,
+        },
+        None,
+        entries,
+    )
+    .expect("links manifest");
+    assert!(onyx_bulk::successor::usable(&links.header).is_ok());
+    let c = a_removing_catalog(&w, q, vec![CatalogLeaf::of(&links.header)]).await;
+    w.post_in(&links, c.header.number)
+        .await
+        .expect("links manifest taken");
+    // Taken for the first entry, the true one.
+    w.store
+        .accept_shard(q, LINKS, &sum.root, &HeaderMap::new(), Body::from(file))
+        .await
+        .expect("the shard");
+    w.store.succ_settle(q).await;
+    assert!(w.store.succ_built(q));
+    assert_eq!(w.store.succ_reads(), 1, "one load");
+    assert!(
+        !w.store.replaces_all().contains_key(q),
+        "pending: entry 1 is false"
+    );
+}
+
+/// Review SUCC-B5 M1 (the reviewer's attack): a job's cost was its
+/// entries, not its bytes: one held one-row shard named by 65,536 entries
+/// made a usable version (10 MB by its header, one 80-byte upload), and
+/// each job of it loaded 65,537 shard files while an honest build waited
+/// behind it (11.6 s). Now a version of more than `MAX_LINK_SHARDS` shards
+/// is unusable, and a job loads each distinct shard once.
+#[tokio::test]
+async fn cat_succ_an_honest_build_never_waits_behind_a_job_of_65536_loads() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.settle().await;
+    let w = &m.w;
+    let q = "example.second";
+    let s = onyx_bulk::successor::links_schema();
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let file = encode_shard(&[inert_row(1)]);
+    let sum = check_shard(&s, &file).expect("shard").summary;
+    const K: u32 = 65_536;
+    let entries: Vec<ShardEntry> = (0..K).map(|i| ShardEntry::new(i, &sum)).collect();
+    let links = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: s,
+            rights: r,
+        },
+        None,
+        entries,
+    )
+    .expect("links manifest");
+    let c = a_removing_catalog(w, q, vec![CatalogLeaf::of(&links.header)]).await;
+    w.post_in(&links, c.header.number)
+        .await
+        .expect("links manifest taken");
+    succ_b5_settle(&w.store, q, 600).await;
+    let before = w.store.succ_reads();
+    // The one upload: the attacker's job starts.
+    w.store
+        .accept_shard(q, LINKS, &sum.root, &HeaderMap::new(), Body::from(file))
+        .await
+        .expect("the one shard");
+    // The honest links shard comes now: its build is queued behind.
+    w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    succ_b5_settle(&w.store, "example.publisher", 900).await;
+    let loads = w.store.succ_reads() - before;
+    assert_eq!(w.successor_now("synthetic.metrics").await["status"], "live");
+    assert!(loads < 1_024, "one job of {loads} shard loads");
+    assert_eq!(
+        loads, 1,
+        "the attacker's version is unusable: only the honest shard"
+    );
+}
+
+/// Review SUCC-B5 M1: entries that name one shard again load it once a
+/// job; its rows still count at each entry (readers read them all).
+#[tokio::test]
+async fn cat_succ_a_shard_named_again_is_loaded_once_a_job() {
+    let w = world();
+    let q = "example.second";
+    let row = inert_row(1);
+    let shards = vec![vec![row.clone()], vec![row.clone()], vec![row]];
+    let (_, m, _) = a_links_publisher_of(&w, q, &shards, true).await;
+    assert_eq!(
+        m.shards[0].root, m.shards[2].root,
+        "one file named three times"
+    );
+    w.store.succ_settle(q).await;
+    assert!(w.store.replaces_all().contains_key(q), "built, not pending");
+    assert_eq!(w.store.succ_reads(), 1, "one load for three entries");
+}
+
+/// Review SUCC-B5 L1 (the reviewer's attack): a links manifest of a
+/// generation the catalog lists but does not use queued a job that read
+/// the used (unreadable) version whole again: up to 8 reads a catalog. Now
+/// a pending index waits for exactly one header or shard.
+#[tokio::test]
+async fn cat_succ_an_unused_generation_reads_nothing_again() {
+    let w = world();
+    let q = "example.second";
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let files = shard_files(0..100, 100);
+    let big_entry = ShardEntry::new(0, &check_shard(&schema(), &files[0]).expect("ok").summary);
+    let big = Manifest::build(
+        NewVersion {
+            dataset: "synthetic.big".into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 4,
+            schema: schema(),
+            rights: r.clone(),
+        },
+        None,
+        vec![big_entry],
+    )
+    .expect("big manifest");
+    // Generation 1 names the data shard: it never reads under the links schema.
+    let g1 = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: onyx_bulk::successor::links_schema(),
+            rights: r.clone(),
+        },
+        None,
+        vec![big_entry],
+    )
+    .expect("links manifest");
+    let s = onyx_bulk::successor::links_schema();
+    let f2 = encode_shard(&[inert_row(1)]);
+    let g2 = Manifest::build(
+        NewVersion {
+            dataset: onyx_bulk::successor::generation_id(2).expect("in range"),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 6,
+            schema: s.clone(),
+            rights: r,
+        },
+        None,
+        vec![ShardEntry::new(
+            0,
+            &check_shard(&s, &f2).expect("ok").summary,
+        )],
+    )
+    .expect("generation 2");
+    let c = a_removing_catalog(
+        &w,
+        q,
+        vec![
+            CatalogLeaf::of(&big.header),
+            CatalogLeaf::of(&g1.header),
+            CatalogLeaf::of(&g2.header),
+        ],
+    )
+    .await;
+    let n = c.header.number;
+    w.post_in(&big, n).await.expect("big manifest taken");
+    w.store
+        .accept_shard(
+            q,
+            "synthetic.big",
+            &big_entry.root,
+            &HeaderMap::new(),
+            Body::from(files[0].clone()),
+        )
+        .await
+        .expect("big shard");
+    w.post_in(&g1, n).await.expect("generation 1 taken");
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 1, "generation 1 read once");
+    w.post_in(&g2, n).await.expect("generation 2 taken");
+    w.store.succ_settle(q).await;
+    assert_eq!(
+        w.store.succ_reads(),
+        1,
+        "a manifest of an unused generation read generation 1 again"
+    );
+}
+
+/// Review SUCC-B5 L2: a shard stored after a job found it missing but
+/// before the job stored that it waits for it is not lost: the job checks
+/// again once its wait is stored, and queues itself.
+#[tokio::test]
+async fn cat_succ_a_shard_stored_while_a_job_stores_its_wait_is_not_lost() {
+    let m = a_move().await;
+    m.w.settle().await;
+    m.w.store.succ_hold_store();
+    // It waits for this header: the job runs, finds the shard missing and
+    // stops before it stores that.
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    let at = async {
+        while !m.w.store.succ_at_store_gate() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(cap(), at).await.expect("at the gate");
+    // The index still waits for the header: this upload queues nothing.
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.store.succ_release_store();
+    assert_eq!(
+        m.w.successor_of("synthetic.metrics").await["status"],
+        "live"
+    );
+}
+
+/// Review SUCC-B5 L2: the same for a header: a manifest stored after a job
+/// found it missing but before the job stored its wait is not lost.
+#[tokio::test]
+async fn cat_succ_a_header_stored_while_a_job_stores_its_wait_is_not_lost() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let (v2, f2) = links_version(
+        &[move_row(2, &m.old, "synthetic.new")],
+        Some(&m.links),
+        T0 + 25,
+    );
+    let c2 = catalog_of(
+        Some(&m.c1),
+        T0 + 30,
+        vec![
+            CatalogLeaf::of(&m.old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&m.new.header),
+            CatalogLeaf::of(&v2.header),
+        ],
+    );
+    m.w.store.succ_hold_store();
+    m.w.take(&c2).await;
+    let at = async {
+        while !m.w.store.succ_at_store_gate() {
+            tokio::task::yield_now().await;
+        }
+    };
+    tokio::time::timeout(cap(), at).await.expect("at the gate");
+    // The index for catalog 1 waits for nothing: this queues nothing.
+    m.w.post_in(&v2, 2).await.expect("links v2");
+    m.w.store.succ_release_store();
+    m.w.settle().await;
+    m.w.put_in(LINKS, &v2.shards[1].root, f2).await;
+    let s = m.w.successor_of("synthetic.metrics").await;
+    assert_eq!(
+        (s["status"].clone(), s["row"].clone()),
+        (json!("live"), json!("2"))
+    );
+}
+
+/// Review SUCC-B5 L3: page 0 of the links is refused, as `serving` refuses
+/// the version, when the last anchor read found its report no longer held;
+/// still with no chain read.
+#[tokio::test]
+async fn cat_succ_page_0_is_refused_when_its_version_was_found_not_held() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let digest =
+        m.w.store
+            .datasets
+            .read()
+            .expect("lock")
+            .get(&("example.publisher".into(), LINKS.into()))
+            .expect("held")
+            .versions[0]
+            .report
+            .payload
+            .digest();
+    m.w.store.mark(digest, false);
+    let before = m.w.node.reads();
+    let a =
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    assert_eq!(a["end"], json!({"status": "pending"}));
+    assert_eq!(a["links"], Value::Null);
+    assert_eq!(m.w.node.reads(), before, "no chain read");
+    let root = m.links.header.root();
+    m.w.store
+        .rows(
+            "example.publisher",
+            LINKS,
+            &parse_rows_query(Some(&format!("root={root}"))).expect("q"),
+        )
+        .await
+        .expect_err("the rows route refuses it too");
+}
+
+/// Review SUCC-B5 L3: a "not held" verdict older than `ANCHOR_RECHECK_SECS`
+/// still refuses page 0 (the answer reads no chain), and is read again in
+/// the background as the rows route would read it: a report held again
+/// serves page 0 again.
+#[tokio::test]
+async fn cat_succ_a_stale_not_held_verdict_is_read_again_in_the_background() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let digest =
+        m.w.store
+            .datasets
+            .read()
+            .expect("lock")
+            .get(&("example.publisher".into(), LINKS.into()))
+            .expect("held")
+            .versions[0]
+            .report
+            .payload
+            .digest();
+    m.w.store.mark(digest, false);
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let answer = || {
+        m.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+    };
+    let a = answer().await.expect("answer");
+    assert_eq!(a["links"], Value::Null, "refused until it is read again");
+    let held = async {
+        loop {
+            let c =
+                m.w.store
+                    .rechecked
+                    .lock()
+                    .expect("lock")
+                    .get(&digest)
+                    .copied();
+            if c.is_some_and(|(_, held)| held) {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+        }
+    };
+    tokio::time::timeout(cap(), held)
+        .await
+        .expect("read again in the background");
+    let a = answer().await.expect("answer");
+    assert_eq!(a["end"]["status"], "live");
+    assert_ne!(a["links"], Value::Null);
+}
+
+/// Review SUCC-B5 M2: a start queues the publishers whose newest catalog
+/// removes a dataset first and reads nothing for the others (nothing can
+/// act in their catalogs), so an honest publisher with a move is not left
+/// pending behind every other publisher's read.
+#[tokio::test]
+async fn cat_succ_a_start_reads_only_catalogs_that_remove_and_queues_them_first() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    for q in ["example.aaa", "example.bbb"] {
+        a_links_publisher_of(&m.w, q, &[vec![inert_row(1)]], false).await;
+    }
+    a_links_publisher(&m.w, "example.zzz", 1).await;
+    for q in [
+        "example.publisher",
+        "example.aaa",
+        "example.bbb",
+        "example.zzz",
+    ] {
+        m.w.store.succ_settle(q).await;
+    }
+    let again = Arc::new(
+        BulkStore::open(
+            pin(),
+            m.w.node.clone(),
+            Arc::new(|| T0),
+            &m.w.dir,
+            &m.w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("reopen"),
+    );
+    again.succ_hold();
+    again.succ_start();
+    let order = [
+        "example.publisher",
+        "example.zzz",
+        "example.aaa",
+        "example.bbb",
+    ];
+    assert_eq!(again.succ_queued(), order.map(String::from).to_vec());
+    again.succ_release();
+    for q in order {
+        again.succ_settle(q).await;
+        assert!(again.succ_built(q), "{q} built");
+    }
+    assert_eq!(again.succ_reads(), 2, "only the catalogs that remove read");
+    assert_eq!(
+        again.replaces_all().get("example.aaa").map(|r| r.1),
+        Some(0)
+    );
 }

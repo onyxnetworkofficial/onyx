@@ -1685,7 +1685,7 @@
       "get": {
         "operationId": "getBulkDataset",
         "summary": "A bulk dataset's latest manifest, anchor, versions and shards",
-        "description": "Every shard entry comes with its proof under the manifest's `shards_root`, and its tier (hot, warm, or null when not uploaded yet). A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6).",
+        "description": "Every shard entry comes with its proof under the manifest's `shards_root`, and its tier (hot, warm, or null when not uploaded yet). A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A removed dataset answers `bulk_dataset_removed` (410) with `successor` (ADR-0059 amendment 6 item 5): its `dataset`, `final`, `status`, `hops`, `row`, `generation` and `proof` name where the publisher moved it; it is `{status: pending}` while this node lacks the links version the newest catalog lists or has not built its links index for that catalog yet (the node never waits for it: ask again), and `{status: forked}` under a fork. A live dataset that other removed ids link to gains `replaces`: `{count, first}` (at most 64 ids).",
         "tags": [
           "Bulk"
         ],
@@ -1741,7 +1741,7 @@
       "get": {
         "operationId": "getBulkRows",
         "summary": "Rows in a key range, each with its proofs",
-        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A dataset whose schema widened (format 2) shows every row under the newest schema; each row's `schema` names the schema it is stored under (BulkRows). A header format your onyx-check does not read is undecided there (exit 3, update onyx-check) only when its root verifies against the signed report and your own node shows the book holding that report for the publisher's key (with `--unchecked`: exit 3 with `chainChecked: false`); anything else is refused.",
+        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A dataset whose schema widened (format 2) shows every row under the newest schema; each row's `schema` names the schema it is stored under (BulkRows). A header format your onyx-check does not read is undecided there (exit 3, update onyx-check) only when its root verifies against the signed report and your own node shows the book holding that report for the publisher's key (with `--unchecked`: exit 3 with `chainChecked: false`); anything else is refused. With `root`, the held version with that manifest root is served, not the newest (`bulk_version_not_held` when not held); the answer's `query.root` names it.",
         "tags": [
           "Bulk"
         ],
@@ -1790,6 +1790,16 @@
               "minimum": 1,
               "maximum": 1000
             }
+          },
+          {
+            "name": "root",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^0x[0-9a-fA-F]{64}$"
+            },
+            "description": "Serve the held version with this manifest root instead of the newest (ADR-0059 amendment 6 item 4: a reader pins every page of one links version); `bulk_version_not_held` (409) when this node holds no version with it."
           }
         ],
         "responses": {
@@ -2565,6 +2575,68 @@
             "$ref": "#/components/responses/Error"
           },
           "500": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/bulk/{publisher}/{dataset}/successor": {
+      "get": {
+        "operationId": "getBulkSuccessor",
+        "summary": "Where a removed bulk dataset went, with every proof",
+        "description": "For a dataset the publisher removed (ADR-0059 amendment 6): the newest catalog's header and signed report (`catalog`), each links generation up to the used one (`generations`: a leaf proof and the held manifest header, or an absence proof), every id the chain reaches, start first (`chain`: a leaf proof, or an absence proof), the node's `end` (`status` live, removed, retracted, not_listed, no_links, cycle, too_long, pending or forked) and page 0 of the used links version's rows pinned by root (`links`, as `rows?root=` answers it; later pages through that route). `end` is `pending` (with no `chain` and `links` null) while this node lacks the links version, has not built its links index for the newest catalog yet, or cannot read page 0; it never waits for that build or for the chain (ask again). Check it with `onyx-check --successor` on your own chain node: it follows the chain itself. The answer can be large: a header per generation (tens of KB in hex for a widened one, at most 8) and page 0 of up to 1,000 rows with a proof for each shard they come from (about 2 MB when each row is a shard of its own). A dataset the newest catalog lists live, or that this node holds, answers `bulk_dataset_live` (409); a removal a storage node learned answers its `bulk_dataset_removed` (410) with `learned` and no successor.",
+        "tags": [
+          "Bulk"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/bulkPublisher"
+          },
+          {
+            "$ref": "#/components/parameters/bulkDataset"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The successor with its proofs",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BulkSuccessor"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "410": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
             "$ref": "#/components/responses/Error"
           }
         }
@@ -5205,7 +5277,7 @@
       },
       "BulkList": {
         "type": "object",
-        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped.",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped. A dataset other removed ids link to has `replaces` (a count); a links dataset (`onyx.successors`, ADR-0059 amendment 6) has `role: successors` and its `generation`; each catalog entry has `moved`. Both come only from a links index built for the newest catalog: while it is not built, its links are pending, or the publisher or its links dataset is forked, `moved` is null and no entry has `replaces`.",
         "properties": {
           "datasets": {
             "type": "array",
@@ -5273,6 +5345,14 @@
                     "waiting",
                     "erased"
                   ]
+                },
+                "moved": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "minimum": 0,
+                  "description": "Removed datasets with a successor link that names a target (ADR-0059 amendment 6); null while this node has no settled links index for this catalog (not built yet, pending, or forked)."
                 }
               },
               "required": [
@@ -5876,6 +5956,76 @@
             "description": "`catalog`: this node's newest held catalog; `learned`: a removal this node learned from another node and keeps."
           }
         }
+      },
+      "BulkSuccessor": {
+        "type": "object",
+        "description": "ADR-0059 amendment 6 item 5. `catalog`: {number, header (Borsh hex), report (Borsh hex)}. `generations`: [{generation, dataset, leaf or absent (Borsh hex LeafProof or AbsenceProof), header (Borsh hex ManifestHeader, for a live one this node holds)}]. `chain`: [{dataset, leaf or absent}]. `end`: {status, dataset, hops: [{from, row, position, to}]}. `links`: a BulkRows page or null.",
+        "properties": {
+          "publisher": {
+            "type": "string"
+          },
+          "dataset": {
+            "type": "string"
+          },
+          "catalog": {
+            "type": "object",
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 0
+              },
+              "header": {
+                "type": "string"
+              },
+              "report": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "number",
+              "header",
+              "report"
+            ]
+          },
+          "generations": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "chain": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          },
+          "end": {
+            "type": "object",
+            "properties": {
+              "status": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "status"
+            ]
+          },
+          "links": {
+            "type": [
+              "object",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "publisher",
+          "dataset",
+          "catalog",
+          "generations",
+          "chain",
+          "end",
+          "links"
+        ]
       }
     },
     "parameters": {
@@ -6381,29 +6531,69 @@
       "status": 400,
       "description": "A want with anything but the four closed-list values (free text, a URL, a metric, a subject, a date), or extra fields beside want, buyer and signature."
     },
+    "bulk_bad_catalog": {
+      "status": 422,
+      "description": "A bulk catalog that does not decode, has a bad shape (sorting, counts, roots, publisher) or a signature that does not sign it."
+    },
     "bulk_bad_manifest": {
       "status": 422,
       "description": "A bulk manifest that does not decode or validate (format, ids, counts, shards_root, rights and the rights statement), or a report that does not sign its root for its key (ADR-0059)."
     },
-    "bulk_format_not_taken": {
-      "status": 422,
-      "description": "A format-2 bulk manifest (a dataset whose schema widened, ADR-0059 amendment 5) on a node with `ONYX_BULK_FORMAT2` off; the node keeps serving the earlier version."
+    "bulk_busy": {
+      "status": 503,
+      "description": "`GET /v1/bulk/catalogs/{publisher}/files`: two answers are being sent already; try again after `retry-after` (10 s)."
+    },
+    "bulk_catalog_conflict": {
+      "status": 409,
+      "description": "The node holds another catalog with this number for this publisher."
+    },
+    "bulk_catalog_entry": {
+      "status": 409,
+      "description": "A dataset enters a bulk catalog at a version after 1 whose previous version this node does not hold with that root."
+    },
+    "bulk_catalog_gap": {
+      "status": 409,
+      "description": "Bulk catalogs are taken in order; `need` is the number this node takes next."
+    },
+    "bulk_catalog_not_successor": {
+      "status": 409,
+      "description": "A bulk catalog that is not the append-only successor of the newest held one (a dataset dropped, a version skipped or rewritten, not later)."
+    },
+    "bulk_catalog_unknown": {
+      "status": 409,
+      "description": "The manifest names a catalog number this node does not hold for its publisher: upload the catalog first."
     },
     "bulk_chain_unavailable": {
       "status": 503,
       "description": "The chain node could not be read for the bulk anchor; retry."
     },
+    "bulk_conflicting_anchor": {
+      "status": 409,
+      "description": "A second root for one bulk dataset version: a held version or the book's report under the manifest's own sequence names another root."
+    },
     "bulk_dataset_forked": {
       "status": 409,
       "description": "Two anchored manifests exist for one version of the dataset (the publisher key equivocated or was stolen): not served until reviewed. Also a catalog dataset while its publisher's catalogs are forked (`fork`: both sides' headers and reports, THREATS CAT-6), until the book withdraws either side."
     },
-    "bulk_publisher_forked": {
+    "bulk_dataset_live": {
       "status": 409,
-      "description": "Two anchored catalogs of this publisher cannot both stand (one number with two roots, or one that is not the append-only successor of the one before): nothing of the publisher is taken until the book withdraws either side (`fork`: both sides' headers and reports, THREATS CAT-6)."
+      "description": "The successor route: the dataset is not removed (the newest catalog lists it live, or this node holds it), so it has no successor (ADR-0059 amendment 6)."
+    },
+    "bulk_dataset_removed": {
+      "status": 410,
+      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back. On rows and info, `erase` (when this node keeps a record of the removal) gives its `phase` (waiting, erasing, erased) and the chain time it is `due` (item 5a): until then its files stay fetchable by root on the peer routes; manifests and catalogs always do. On a storage node, `learned` (`number`, `root`, `checked_at`: the catalog whose tombstone it learned from another node and the finalized block it last read anchored at, slice 2a) when the removal is learned rather than from a held catalog; the shards stay readable by root there."
     },
     "bulk_encoded_body": {
       "status": 400,
       "description": "A shard sent with a content encoding: the node never decompresses a body."
+    },
+    "bulk_format_not_taken": {
+      "status": 422,
+      "description": "A format-2 bulk manifest (a dataset whose schema widened, ADR-0059 amendment 5) on a node with `ONYX_BULK_FORMAT2` off; the node keeps serving the earlier version."
+    },
+    "bulk_no_leaf": {
+      "status": 404,
+      "description": "`GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`: the publisher's newest catalog on this node lists no such dataset, or the node holds no catalog of the publisher and keeps no learned removal of it."
     },
     "bulk_node_full": {
       "status": 503,
@@ -6413,6 +6603,10 @@
       "status": 409,
       "description": "The manifest's signed report is not recorded and accepted in the signed book at the node's finalized block, or the key is not active (`reason`). Retry once the anchor is final."
     },
+    "bulk_not_in_catalog": {
+      "status": 422,
+      "description": "The named bulk catalog does not list exactly this manifest."
+    },
     "bulk_not_servable": {
       "status": 409,
       "description": "The manifest's signed report no longer holds in the signed book (key retired, compromised or suspended, or the fact disputed): `reason`."
@@ -6421,9 +6615,17 @@
       "status": 409,
       "description": "A bulk version out of order, or one that drops or changes an earlier shard or the rights, or changes the schema other than by a widening that keeps every earlier schema and boundary (ADR-0059 amendment 5; at most 8 schemas)."
     },
+    "bulk_publisher_forked": {
+      "status": 409,
+      "description": "Two anchored catalogs of this publisher cannot both stand (one number with two roots, or one that is not the append-only successor of the one before): nothing of the publisher is taken until the book withdraws either side (`fork`: both sides' headers and reports, THREATS CAT-6)."
+    },
     "bulk_quota_exceeded": {
       "status": 413,
       "description": "The publisher's bytes or datasets on this node would pass its quota (ONYX_BULK_QUOTA_GIB, ONYX_BULK_MAX_DATASETS)."
+    },
+    "bulk_reserved_dataset": {
+      "status": 422,
+      "description": "`POST /v1/bulk/manifests`: a links dataset (`onyx.successors`...) enters only through a catalog, never with its own report (ADR-0059 amendment 6 item 1)."
     },
     "bulk_shard_mismatch": {
       "status": 422,
@@ -6433,9 +6635,17 @@
       "status": 409,
       "description": "The rows asked lie in a shard the publisher has not uploaded to this node yet."
     },
+    "bulk_shard_removed": {
+      "status": 410,
+      "description": "`GET /v1/bulk/shards/{root}`: the publisher removed the dataset of this shard and this node erased the file after the grace (ADR-0059 amendment 4 item 5a); answered until a held manifest's upload stores the file again. Another node may still hold it."
+    },
     "bulk_shard_size": {
       "status": 413,
       "description": "The shard body is not exactly the size its manifest entry states."
+    },
+    "bulk_unknown_catalog": {
+      "status": 404,
+      "description": "This node holds no such bulk catalog."
     },
     "bulk_unknown_dataset": {
       "status": 404,
@@ -6448,6 +6658,10 @@
     "bulk_unknown_shard": {
       "status": 404,
       "description": "The shard root is in no held manifest of the dataset."
+    },
+    "bulk_version_not_held": {
+      "status": 409,
+      "description": "`rows?root=`: this node holds no version of the dataset with that manifest root (ADR-0059 amendment 6 item 4)."
     },
     "catalog_mismatch": {
       "status": 500,
@@ -6876,58 +7090,6 @@
     "wants_closed": {
       "status": 503,
       "description": "This node has no prepaid contract, so it takes no wants (the board is still shown)."
-    },
-    "bulk_bad_catalog": {
-      "status": 422,
-      "description": "A bulk catalog that does not decode, has a bad shape (sorting, counts, roots, publisher) or a signature that does not sign it."
-    },
-    "bulk_catalog_conflict": {
-      "status": 409,
-      "description": "The node holds another catalog with this number for this publisher."
-    },
-    "bulk_catalog_not_successor": {
-      "status": 409,
-      "description": "A bulk catalog that is not the append-only successor of the newest held one (a dataset dropped, a version skipped or rewritten, not later)."
-    },
-    "bulk_catalog_gap": {
-      "status": 409,
-      "description": "Bulk catalogs are taken in order; `need` is the number this node takes next."
-    },
-    "bulk_catalog_entry": {
-      "status": 409,
-      "description": "A dataset enters a bulk catalog at a version after 1 whose previous version this node does not hold with that root."
-    },
-    "bulk_conflicting_anchor": {
-      "status": 409,
-      "description": "A second root for one bulk dataset version: a held version or the book's report under the manifest's own sequence names another root."
-    },
-    "bulk_catalog_unknown": {
-      "status": 409,
-      "description": "The manifest names a catalog number this node does not hold for its publisher: upload the catalog first."
-    },
-    "bulk_not_in_catalog": {
-      "status": 422,
-      "description": "The named bulk catalog does not list exactly this manifest."
-    },
-    "bulk_unknown_catalog": {
-      "status": 404,
-      "description": "This node holds no such bulk catalog."
-    },
-    "bulk_no_leaf": {
-      "status": 404,
-      "description": "`GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`: the publisher's newest catalog on this node lists no such dataset, or the node holds no catalog of the publisher and keeps no learned removal of it."
-    },
-    "bulk_busy": {
-      "status": 503,
-      "description": "`GET /v1/bulk/catalogs/{publisher}/files`: two answers are being sent already; try again after `retry-after` (10 s)."
-    },
-    "bulk_dataset_removed": {
-      "status": 410,
-      "description": "`/v1/bulk`: the publisher removed the dataset with a tombstone in its catalog named in `catalog` (ADR-0059 amendment 4): its rows, info and listing stop and no upload brings it back. On rows and info, `erase` (when this node keeps a record of the removal) gives its `phase` (waiting, erasing, erased) and the chain time it is `due` (item 5a): until then its files stay fetchable by root on the peer routes; manifests and catalogs always do. On a storage node, `learned` (`number`, `root`, `checked_at`: the catalog whose tombstone it learned from another node and the finalized block it last read anchored at, slice 2a) when the removal is learned rather than from a held catalog; the shards stay readable by root there."
-    },
-    "bulk_shard_removed": {
-      "status": 410,
-      "description": "`GET /v1/bulk/shards/{root}`: the publisher removed the dataset of this shard and this node erased the file after the grace (ADR-0059 amendment 4 item 5a); answered until a held manifest's upload stores the file again. Another node may still hold it."
     }
   }
 }

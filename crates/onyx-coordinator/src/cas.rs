@@ -245,6 +245,15 @@ impl FsCas {
     pub(crate) fn object_path(&self, kind: Kind, key: &Hash32) -> PathBuf {
         self.path(kind, key)
     }
+
+    /// The size of `key`'s object file from its metadata, read without
+    /// reading the file and without following a link; `None` when there is
+    /// no such regular file. A caller that knows the size an object must
+    /// have refuses another one before reading it (THREATS SUCC-B5 H1).
+    pub fn size_of(&self, kind: Kind, key: &Hash32) -> Option<u64> {
+        let m = std::fs::symlink_metadata(self.path(kind, key)).ok()?;
+        m.is_file().then_some(m.len())
+    }
 }
 
 impl Cas for FsCas {
@@ -354,6 +363,17 @@ impl FsCas {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_size_of_an_object_is_read_from_its_file() {
+        let dir = std::env::temp_dir().join(format!("onyx-cas-size-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let cas = FsCas::new(&dir);
+        let k = cas.put(Kind::Blob, b"abcd").expect("put");
+        assert_eq!(cas.size_of(Kind::Blob, &k), Some(4));
+        assert_eq!(cas.size_of(Kind::Blob, &Hash32([9; 32])), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 
     #[test]
     fn keys_and_integrity_on_read() {

@@ -20,6 +20,10 @@
 //! row to shard root, shard entry to manifest root, manifest root to the
 //! publisher's signature. The chain read (the book recorded and accepted
 //! that signed report) is the caller's (`onyx-check --bulk`).
+//!
+//! [`successor`] reads successor links (ADR-0059 amendment 6): where a removed
+//! dataset went, as rows of a reserved links dataset in the publisher's
+//! catalogs.
 
 pub mod anchor;
 pub mod catalog;
@@ -28,6 +32,7 @@ pub mod manifest;
 pub mod row;
 pub mod schema;
 pub mod shard;
+pub mod successor;
 pub mod wire;
 
 pub use anchor::{AnchorError, ANCHOR_METRIC};

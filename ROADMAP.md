@@ -1144,6 +1144,7 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       reads it (a newer format is exit 3 only when its root is signed); `onyx-publish schema-fit` and
       `build --widen`; `upload` steps back for a node that lacks a version. Left: the successor link
       from an ended id to a new one; storage deals on a widened dataset (a new OnyxStorage)
+      Successor link: design drafted (ADR-0059 amendment 6 draft 3 after reviews SUCC-R1 and SUCC-R2, 2026-11-15: a reserved links dataset in the catalogs; THREATS CAT-SUCC-1 to CAT-SUCC-11); build in three slices: slice 1 (onyx-bulk: links rows, chains, generations, complete pinned runs, absence proofs) built 2026-11-15; slice 2, the node part (links index, 410 successor, the successor route, rows?root=, own-report links refused, replaces) built the same day; next the chain part of the check and --history, then onyx-check and the tool.
 - [ ] S26 Early-contributor record (early contributors may be rewarded later;
       no reward is promised): a daily, append-only list of accepted testnet work, one row per
       event, each with the chain reference of the work and of its acceptance (miner roots,

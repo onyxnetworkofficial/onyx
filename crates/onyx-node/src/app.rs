@@ -1113,6 +1113,11 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         }
         _ => None,
     };
+    // ADR-0059 amendment 6: one background worker builds every publisher's
+    // links index at start, then after each upload that changes it.
+    if let Some(store) = &bulk_store {
+        store.succ_start();
+    }
     if let Some(store) = bulk_store.clone() {
         tokio::spawn(async move {
             loop {

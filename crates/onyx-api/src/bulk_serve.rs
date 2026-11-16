@@ -906,6 +906,16 @@ impl Loaded {
         let (a, b) = self.offsets[i];
         &self.bytes[a..b]
     }
+
+    /// Whether this is the shard `e` describes: its size, rows and keys.
+    /// One root has one content, so an entry that names a held root with
+    /// another size, row count or key range is false (review SUCC-B5 H1).
+    fn fits(&self, e: &ShardEntry) -> bool {
+        self.bytes.len() as u64 == e.bytes
+            && self.offsets.len() as u64 == e.rows
+            && self.keys.first() == Some(&e.key_min)
+            && self.keys.last() == Some(&e.key_max)
+    }
 }
 
 type Key = (String, String);
@@ -970,6 +980,9 @@ pub struct BulkStore {
     learned: Mutex<learn::LearnState>,
     /// One learn pass at a time (each writes the records it changes).
     learn_one: Arc<tokio::sync::Mutex<()>>,
+    /// Successor links indexes per publisher and their builds (ADR-0059
+    /// amendment 6, review SUCC-B2).
+    succ: succ::Succ,
     /// Tests: every learned-record write fails.
     #[cfg(test)]
     learn_fault: std::sync::atomic::AtomicBool,
@@ -1187,6 +1200,7 @@ impl BulkStore {
             removals_mode: RemovalsMode::On,
             learned: Mutex::new(learn::LearnState::default()),
             learn_one: Arc::new(tokio::sync::Mutex::new(())),
+            succ: succ::Succ::default(),
             #[cfg(test)]
             learn_fault: std::sync::atomic::AtomicBool::new(false),
             #[cfg(test)]
@@ -1672,15 +1686,23 @@ impl BulkStore {
 
     /// `GET /v1/bulk/{publisher}/{dataset}`, after re-reading a catalog fork
     /// of its publisher.
-    pub async fn info_checked(&self, publisher: &str, dataset: &str) -> Result<Value, ApiError> {
-        if let Some(n) = self.removed(publisher, dataset)? {
-            return Err(self.gone(publisher, dataset, n));
+    pub async fn info_checked(
+        self: &Arc<Self>,
+        publisher: &str,
+        dataset: &str,
+    ) -> Result<Value, ApiError> {
+        if let Some(r) = self.removed_in(publisher, dataset)? {
+            return Err(self.gone(publisher, dataset, r));
         }
         if let Some(e) = self.learned_gone(publisher, dataset)? {
             return Err(e);
         }
         self.fork_stands(publisher).await?;
-        self.info(publisher, dataset)
+        let mut v = self.info(publisher, dataset)?;
+        if let Some((count, first)) = self.replaces_of(publisher, dataset) {
+            v["replaces"] = json!({"count": count, "first": first});
+        }
+        Ok(v)
     }
 
     /// Whether `publisher` has a catalog fork mark now (no chain read).
@@ -1939,6 +1961,8 @@ impl BulkStore {
             self.remember_withdrawn(*digest);
         }
         self.mark(r.payload.digest(), true);
+        // The newest catalog changed: the links index builds for it.
+        self.succ_queue(publisher);
         eprintln!(
             "bulk: set aside {} withdrawn catalog(s) of {publisher} from number {}; {} dataset(s) cut, {} kept under the new catalog (THREATS CAT-5)",
             gone.len(),
@@ -2122,6 +2146,10 @@ impl BulkStore {
                 anchor,
             },
         );
+        drop(cs);
+        // The links index builds for the new catalog now, never at a read
+        // (ADR-0059 amendment 6 item 5).
+        self.succ_queue(&publisher);
         Ok((StatusCode::CREATED, status))
     }
 
@@ -2146,6 +2174,17 @@ impl BulkStore {
     /// Fails closed (review of the CAT-3 build, finding 3): a poisoned lock
     /// or a newest catalog not held whole is an error, never "not removed".
     pub fn removed(&self, publisher: &str, dataset: &str) -> Result<Option<u64>, ApiError> {
+        Ok(self.removed_in(publisher, dataset)?.map(|(n, _)| n))
+    }
+
+    /// [`Self::removed`] with the body of that catalog, read in the same
+    /// lock: the 410 names its successor from this catalog (review SUCC-B3
+    /// L1).
+    fn removed_in(
+        &self,
+        publisher: &str,
+        dataset: &str,
+    ) -> Result<Option<(u64, Arc<CatalogBody>)>, ApiError> {
         let cs = self.catalogs.read().map_err(|_| internal("lock"))?;
         let Some((n, h)) = cs.get(publisher).and_then(|m| m.last_key_value()) else {
             return Ok(None);
@@ -2154,17 +2193,26 @@ impl BulkStore {
             .body
             .as_ref()
             .ok_or_else(|| internal("the newest catalog is not held whole: try again"))?;
-        Ok(b.removed.contains(dataset).then_some(*n))
+        Ok(b.removed.contains(dataset).then(|| (*n, b.clone())))
     }
 
     /// A removed dataset's 410, with its erase phase and due time when this
-    /// node keeps a record of it (ADR-0059 amendment 4 item 5a).
-    fn gone(&self, publisher: &str, dataset: &str, n: u64) -> ApiError {
-        let e = dataset_removed(n);
-        match self.erase_json(publisher, dataset) {
-            Some(v) => e.with_field("erase", v),
-            None => e,
+    /// node keeps a record of it (ADR-0059 amendment 4 item 5a) and its
+    /// `successor` (amendment 6 item 5).
+    fn gone(
+        self: &Arc<Self>,
+        publisher: &str,
+        dataset: &str,
+        (n, body): (u64, Arc<CatalogBody>),
+    ) -> ApiError {
+        let mut e = dataset_removed(n);
+        if let Some(v) = self.erase_json(publisher, dataset) {
+            e = e.with_field("erase", v);
         }
+        e.with_field(
+            "successor",
+            self.successor_json(publisher, dataset, n, &body),
+        )
     }
 
     /// The newest held catalog body of every publisher that removed a
@@ -2583,6 +2631,15 @@ impl BulkStore {
         public: bool,
     ) -> Result<(StatusCode, Value), ApiError> {
         let m = decode_manifest(manifest)?;
+        // Links versions enter only through catalogs (ADR-0059 amendment 6
+        // item 1; review SUCC-R2 M2).
+        if onyx_bulk::successor::is_links_id(&m.header.dataset) {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bulk_reserved_dataset",
+                "a links dataset (onyx.successors...) enters only through a catalog, never with its own report",
+            ));
+        }
         let r = SignedReport::try_from_slice(report)
             .map_err(|_| bad_request("report: not a Borsh SignedReport"))?;
         let signer = onyx_bulk::anchor::verify(&m.header, &r).map_err(|e| {
@@ -2941,6 +2998,8 @@ impl BulkStore {
             anchor,
             catalog,
         });
+        // A links index waiting for exactly this header builds now.
+        self.succ_manifest_stored(&key.0, &key.1, &root);
         Ok((StatusCode::CREATED, body))
     }
 
@@ -3161,6 +3220,10 @@ impl BulkStore {
         }
         // Stored again: a held manifest names it, so it is served again.
         self.unerase(root);
+        // A links index that waits for exactly this shard builds now; any
+        // other shard, sent again or not, queues nothing (reviews SUCC-B3
+        // M1, SUCC-B4).
+        self.succ_shard_stored(root);
         eprintln!(
             "onyx-node: bulk: stored shard {root} of {publisher}/{dataset} ({} bytes{})",
             e.bytes,
@@ -3272,14 +3335,35 @@ impl BulkStore {
         entry: &ShardEntry,
         schema: &onyx_bulk::Schema,
     ) -> Result<Arc<Loaded>, ApiError> {
+        self.load_as(entry, schema, false).await
+    }
+
+    /// [`Self::load`]; `index` (a links index build, which reads every shard
+    /// of a version once) leaves the cache, `touched` and the tiers as they
+    /// are (it is no reader's demand: review SUCC-B4 L2) and takes none of
+    /// the readers' load permits: the one index worker bounds builds
+    /// (reviews SUCC-B2 H1, SUCC-B3 M1).
+    async fn load_as(
+        &self,
+        entry: &ShardEntry,
+        schema: &onyx_bulk::Schema,
+        index: bool,
+    ) -> Result<Arc<Loaded>, ApiError> {
         let root = &entry.root;
         let ck = (*root, keccak256(&borsh::to_vec(schema).unwrap_or_default()));
+        let unfit = || {
+            shard_missing("the shard cannot be served for this dataset: the stored shard does not match this dataset's entry")
+        };
         if let Some(l) = self.cached(&ck) {
-            return Ok(l);
+            return if l.fits(entry) { Ok(l) } else { Err(unfit()) };
         }
-        let _permit = self.loads.acquire().await.map_err(|_| internal("loads"))?;
+        let _permit = if index {
+            None
+        } else {
+            Some(self.loads.acquire().await.map_err(|_| internal("loads"))?)
+        };
         if let Some(l) = self.cached(&ck) {
-            return Ok(l);
+            return if l.fits(entry) { Ok(l) } else { Err(unfit()) };
         }
         let Some(tier) = self.tiers.tier(root) else {
             return Err(shard_missing(
@@ -3289,7 +3373,15 @@ impl BulkStore {
         let schema = schema.clone();
         let (want, tiers, tiers_file) = (*entry, self.tiers.clone(), self.dir.join("tiers.json"));
         let loaded = tokio::task::spawn_blocking(move || -> Result<Loaded, String> {
-            if tier == Tier::Warm && tiers.warm_to_hot(&want.root).is_ok() {
+            // The entry's size is the file's: an entry that names a held root
+            // with fewer bytes is refused before the file is moved or read
+            // (review SUCC-B5 H1; an upload checks the size only for the entry
+            // it is sent to). One root has one content (a shard's framing is
+            // strict), so the size on disk is the size `get` reads.
+            if tiers.size_of(Kind::Shard, &want.root) != Some(want.bytes) {
+                return Err("the stored shard's size differs from this dataset's entry".into());
+            }
+            if tier == Tier::Warm && !index && tiers.warm_to_hot(&want.root).is_ok() {
                 // Read on demand: back to hot (ADR-0052).
                 tiers.save(&tiers_file).map_err(|e| e.to_string())?;
             }
@@ -3326,6 +3418,9 @@ impl BulkStore {
         .map_err(|_| internal("load task"))?
         .map_err(|e| shard_missing(format!("the shard cannot be served for this dataset: {e}")))?;
         let l = Arc::new(loaded);
+        if index {
+            return Ok(l);
+        }
         if let Ok(mut c) = self.loaded.lock() {
             c.retain(|(k, _)| *k != ck);
             c.push((ck, l.clone()));
@@ -3356,10 +3451,10 @@ impl BulkStore {
     /// A version the book no longer holds (its key compromised from before it,
     /// or its fact disputed) is skipped, so the honest earlier versions keep
     /// serving (review CL5-R4); none holding is a refusal.
-    async fn serving(&self, key: &Key) -> Result<Held, ApiError> {
+    async fn serving(self: &Arc<Self>, key: &Key, at: Option<Hash32>) -> Result<Held, ApiError> {
         type Version = (Hash32, SignedReport, [u8; 20]);
-        if let Some(n) = self.removed(&key.0, &key.1)? {
-            return Err(self.gone(&key.0, &key.1, n));
+        if let Some(r) = self.removed_in(&key.0, &key.1)? {
+            return Err(self.gone(&key.0, &key.1, r));
         }
         if let Some(e) = self.learned_gone(&key.0, &key.1)? {
             return Err(e);
@@ -3370,12 +3465,20 @@ impl BulkStore {
             if d.forked.is_some() {
                 return Err(forked(d));
             }
-            let v = d
+            let v: Vec<Version> = d
                 .versions
                 .iter()
                 .rev()
+                .filter(|h| at.is_none_or(|r| h.manifest.header.root() == r))
                 .map(|h| (h.manifest.header.root(), h.report.clone(), h.signer))
                 .collect();
+            if at.is_some() && v.is_empty() {
+                return Err(ApiError::new(
+                    StatusCode::CONFLICT,
+                    "bulk_version_not_held",
+                    "this node holds no version of the dataset with that manifest root",
+                ));
+            }
             (v, d.versions.iter().any(|h| h.catalog.is_some()))
         };
         if in_catalog {
@@ -3443,6 +3546,17 @@ impl BulkStore {
     /// in id order. `total` counts every match; `next` is the cursor of the
     /// page after (`null` on the last).
     pub fn list(&self, q: &ListQuery) -> Result<Value, ApiError> {
+        self.list_with(q, &BTreeMap::new())
+    }
+
+    /// [`Self::list`] with each publisher's links index (`replaces` per
+    /// entry, `moved` per catalog; ADR-0059 amendment 6 item 5), read before
+    /// any of the listing's locks.
+    fn list_with(
+        &self,
+        q: &ListQuery,
+        links: &BTreeMap<String, succ::Replaces>,
+    ) -> Result<Value, ApiError> {
         // Publishers with a catalog fork mark (taken before, never under, the
         // datasets lock).
         let forked_pubs: std::collections::BTreeSet<String> = self
@@ -3474,6 +3588,7 @@ impl BulkStore {
                     "createdUnix": h.header.created_unix,
                     "leaves": h.header.leaf_count,
                     "removed": h.body.as_ref().map(|b| b.removed.len()),
+                    "moved": links.get(p).map(|l| l.1),
                     "erase": erase.get(p).map(|(w, e)| json!({"waiting": w, "erased": e})),
                 }))
             })
@@ -3522,14 +3637,24 @@ impl BulkStore {
                     .iter()
                     .filter(|e| self.tiers.tier(&e.root).is_some())
                     .count();
-                json!({
+                let mut v = json!({
                     "publisher": p, "dataset": d, "version": hd.version,
                     "root": hd.root().to_string(), "rows": hd.row_count, "bytes": hd.byte_count,
                     "shards": hd.shard_count, "stored_shards": stored,
                     "key_min": hd.key_min.to_string(), "key_max": hd.key_max.to_string(),
                     "license": hd.rights.license, "forked": forked,
                     "created_unix": hd.created_unix,
-                })
+                });
+                if let Some(n) = links.get(p).and_then(|l| l.0.get(d)) {
+                    v["replaces"] = json!(n.len());
+                }
+                if let Some(g) = (1..=onyx_bulk::successor::MAX_LINK_GENERATIONS).find(|g| {
+                    onyx_bulk::successor::generation_id(*g).as_deref() == Some(d.as_str())
+                }) {
+                    v["role"] = json!("successors");
+                    v["generation"] = json!(g);
+                }
+                v
             })
             .collect();
         Ok(json!({"datasets": items, "total": total, "next": next, "catalogs": catalogs}))
@@ -3590,13 +3715,26 @@ impl BulkStore {
 
     /// `GET /v1/bulk/{publisher}/{dataset}/rows`.
     pub async fn rows(
-        &self,
+        self: &Arc<Self>,
         publisher: &str,
         dataset: &str,
         q: &RowsQuery,
     ) -> Result<Value, ApiError> {
         let key = (publisher.to_string(), dataset.to_string());
-        let held = self.serving(&key).await?;
+        let held = self.serving(&key, q.root).await?;
+        self.rows_of(publisher, dataset, held, q).await
+    }
+
+    /// The rows answer for `q` of `held`, a version of `publisher`'s
+    /// `dataset` ([`Self::rows`] after its checks; the successor route's
+    /// links page 0).
+    async fn rows_of(
+        &self,
+        publisher: &str,
+        dataset: &str,
+        held: Held,
+        q: &RowsQuery,
+    ) -> Result<Value, ApiError> {
         let anchor = anchor_json(&held);
         let manifest = held.manifest;
         let from = q.from.unwrap_or(i128::MIN);
@@ -3661,6 +3799,7 @@ impl BulkStore {
                 "to": q.to.map(|t| t.to_string()),
                 "page": q.page,
                 "limit": q.limit,
+                "root": q.root.map(|r| r.to_string()),
             },
             "shards": shards,
             "rows": rows,
@@ -3880,6 +4019,10 @@ pub struct RowsQuery {
     pub page: u64,
     /// Rows per page, 1..=[`MAX_PAGE_ROWS`].
     pub limit: u64,
+    /// Serve the held version with this manifest root, not the newest
+    /// (`409 bulk_version_not_held` when not held; ADR-0059 amendment 6
+    /// item 4: a reader pins every page of one version).
+    pub root: Option<Hash32>,
 }
 
 /// Datasets per `GET /v1/bulk` page at most.
@@ -4056,6 +4199,7 @@ pub fn parse_rows_query(q: Option<&str>) -> Result<RowsQuery, ApiError> {
         to: None,
         page: 0,
         limit: DEFAULT_PAGE_ROWS,
+        root: None,
     };
     let mut seen: Vec<&str> = Vec::new();
     for pair in q.unwrap_or("").split('&').filter(|p| !p.is_empty()) {
@@ -4077,6 +4221,16 @@ pub fn parse_rows_query(q: Option<&str>) -> Result<RowsQuery, ApiError> {
                     .ok()
                     .filter(|p| *p <= 1 << 32)
                     .ok_or_else(|| bad_request("page must be 0..=2^32"))?
+            }
+            "root" => {
+                out.root = Some(
+                    v.strip_prefix("0x")
+                        .filter(|h| h.len() == 64)
+                        .and_then(|h| hex::decode(h).ok())
+                        .and_then(|b| <[u8; 32]>::try_from(b).ok())
+                        .map(Hash32)
+                        .ok_or_else(|| bad_request("root must be 0x and 64 hex digits"))?,
+                )
             }
             "limit" => {
                 out.limit = v
@@ -4100,6 +4254,7 @@ pub fn routes(store: Arc<BulkStore>) -> Router {
         .route("/v1/bulk", get(list))
         .route("/v1/bulk/{publisher}/{dataset}", get(info))
         .route("/v1/bulk/{publisher}/{dataset}/rows", get(rows))
+        .route("/v1/bulk/{publisher}/{dataset}/successor", get(successor))
         .with_state(store)
 }
 
@@ -4174,10 +4329,13 @@ async fn list(
     client: Option<Extension<ClientKey>>,
     RawQuery(q): RawQuery,
 ) -> Response {
-    let r = (|| {
+    let r = async {
         limited(&store, client)?;
-        store.list(&parse_list_query(q.as_deref())?)
-    })();
+        let q = parse_list_query(q.as_deref())?;
+        let links = store.replaces_all();
+        store.list_with(&q, &links)
+    }
+    .await;
     match r {
         Ok(v) => no_store(StatusCode::OK, v),
         Err(e) => e.into_response(),
@@ -4212,6 +4370,23 @@ async fn rows(
         let (p, d) = path_ids(path)?;
         let q = parse_rows_query(q.as_deref())?;
         store.rows(&p, &d, &q).await
+    }
+    .await;
+    match r {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    }
+}
+
+async fn successor(
+    State(store): State<Arc<BulkStore>>,
+    client: Option<Extension<ClientKey>>,
+    path: Result<Path<(String, String)>, PathRejection>,
+) -> Response {
+    let r = async {
+        limited(&store, client)?;
+        let (p, d) = path_ids(path)?;
+        store.successor_answer(&p, &d).await
     }
     .await;
     match r {
@@ -4861,6 +5036,10 @@ pub use erase::{EraseConfig, EraseMode, ErasePass, MAX_SHARDS_PER_PASS, MIN_GRAC
 #[path = "bulk_learn.rs"]
 mod learn;
 pub use learn::{check_leaf_answer, Learn, LearnPass, Recheck, RemovalsMode};
+
+#[path = "bulk_succ.rs"]
+mod succ;
+pub use succ::MAX_REPLACES_SHOWN;
 
 #[cfg(test)]
 #[path = "bulk_serve_tests.rs"]

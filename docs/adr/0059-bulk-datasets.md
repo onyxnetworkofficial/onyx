@@ -6,7 +6,7 @@ Accepted, 2026-10-29; amendment 1 (catalogs: one anchor for many manifests) acce
 on 2026-11-04 after reviews CAT-FIX-R1, CAT-FIX-R2 and CAT-6-R1: THREATS CAT-5, CAT-6);
 amendment 2 (catalogs kept small on disk) draft 4 after reviews CAT-RET-R1, CAT-FIX-R1 and
 CAT-DIFF-R1, built 2026-11-04; amendment 3 (a client check of a publisher's catalog history)
-draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion; its item 5a (erasure) draft 2 after design review CAT-ERASE-R1, slice 1 built 2026-11-09; amendment 5 (widening successors) draft 2 after review BULK-WIDEN-R1, built 2026-11-14 (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
+draft 2 after review CAT-HIST-R1, built 2026-11-05 and fixed after build review CAT-HIST-R2; amendment 4 (taking a dataset down) draft 2 after review CAT-TOMB-R1, built 2026-11-08 without item 5's deletion; its item 5a (erasure) draft 2 after design review CAT-ERASE-R1, slice 1 built 2026-11-09; amendment 5 (widening successors) draft 2 after review BULK-WIDEN-R1, built 2026-11-14; amendment 6 (successor links) draft 3 after reviews SUCC-R1 and SUCC-R2, 2026-11-15, slice 1 (`onyx-bulk`) and the node part of slice 2 built the same day (docs/contributor-loop.md CL5; test network only). Supersedes ADR-0055
 (the CL5 design inputs) where they differ. Built in `crates/onyx-bulk` (format, signature,
 client check), `onyx_coordinator::cas` (kind `Shard`) and `onyx_coordinator::tiers` (bulk shards
 hot or warm), `onyx_api::bulk_serve` (node routes), `crates/onyx-publish` (publisher tool) and
@@ -711,6 +711,544 @@ every link to the old id breaks; kept for the changes item 2 refuses). Round to 
 (changes the source's values; forbidden). A schema index in each shard entry (changes the entry
 layout and every carried-over leaf, while the proven index already fixes the schema; rejected).
 Show stored forms unpadded (one column would mix scales within an answer; rejected).
+
+## Amendment 6 (2026-11-15, draft 3 after reviews SUCC-R1 and SUCC-R2): successor links (where an ended dataset went)
+
+**Why** (ROADMAP S23, THREATS BULK-SCHEMA-1, BULK-SRC-1). Amendment 5 takes the changes that widen a
+schema. The others (a column gone, a column type that changes, rows for days before the last key:
+"old gaps") need a new dataset id with the whole history and a tombstone on the old id (amendment 4;
+docs/ops/bulk-publish.md "When new rows do not fit the schema"). The old id then answers `410
+bulk_dataset_removed` (`dataset_removed`, bulk_serve.rs:3767; `gone`, bulk_serve.rs:2162) and nothing
+tells its readers where the data went; `--history` ends at exit 4. The first publisher has four
+datasets refused every day for this reason (one lost a column, one has old gaps, two more of the
+same kind). Each must move to a new id, and its readers must be able to follow and check the move.
+
+**Draft 1 and its review.** Draft 1 made each link a separate report in the book, under a sequence
+fixed by the tombstone. Review SUCC-R1 (verdict "redesign"; every finding checked against the code)
+found: (H1) a wrong link can never be fixed: `sequenceOf` is never pruned (OnyxSignedBook.sol:18,
+131), a second link under one key is a sequence equivocation that suspends the key (:387-391,
+:583-612), and a suspended key cannot post its daily catalog either (`_permitError`, :737), while a
+typo naming another live id passed the tool; (M1) a link could be posted before its tombstone and
+wait unseen, since `from_version` and `from_prev` are predictable (catalog.rs:83-94); (M2) a chain
+broke when the successor gained versions and then moved on; (M3) the check took only `--keys`, not
+the key scan `--history` has (`scan_keys`, bulk_history.rs:806); (M4) the node's link records had
+no defined states (two slots a thief could fill); (L1) comparing rows of both ids is impossible
+once the old id answers 410; (L2) three claims were false (the reviewer can register any key,
+:252-281; the same link under a new key is `AlreadyStated`, :548, or `Stale` after 7 days, :366;
+"seconds" assumed a final transaction) and one was missing (a suspension stops every catalog); (L3)
+`from_prev` was not in the sequence; (L4) an old node answers 404 to the new upload route, which
+stops `upload` (`next_step`, onyx-publish main.rs:1400-1407), and a late node never learns links.
+Draft 1 is withdrawn. The review proposed a reserved links dataset; draft 2 takes it, with the
+changes listed under "Where the link can live" (d).
+
+**Draft 2 and its review.** Draft 2 took the reserved links dataset. Review SUCC-R2 ("build with
+changes", no High; every finding checked against the code) found:
+- (M1) "every page under C's header" refused honest answers: a rows answer carries the catalog that
+  first listed its version (`anchor_json` uses `Held.catalog`, bulk_serve.rs:3709-3714), which does
+  not move while its report holds (2836-2843);
+- (M2) later pages come from the rows route, which serves the newest held version (`serving`,
+  3359-3399), so a catalog taken between pages changes the root; and a node takes an own-report
+  version of any dataset (`accept_held`, 2757-2770), so rows could enter outside the catalog chain;
+- (M3) a broken links dataset stays broken: a tombstone is final (amendment 4 item 2,
+  catalog.rs:283-294), amendment 5 lets a non-key int become decimal (`from_version`), and
+  nothing enforced "only appended columns";
+- (M4) no cap on link rows (only the 16 GiB quota, bulk_serve.rs:153), and the node re-read all rows
+  at each catalog and at start;
+- (L1) a 410 under a fork mark would show a link (`serving` and `info_checked` check `removed()`
+  before the fork, bulk_serve.rs:3361 and 3382, 1676 and 1682);
+- (L2) undefined states (a forked links dataset, a links upload refused for quota, an old node's 404
+  on the new route, an absence proof in an empty catalog, the page cap, an empty page, hex case, the
+  `from_version` range) and a wrong field name (`next_page`, not `next`);
+- (L3) `--history` with a successor whose catalog is newer than the walk's newest; the catalog that
+  first listed a row needs every links manifest; `Walker` follows one dataset (catalog.rs:557-563);
+- (L4) absence proofs, like presence proofs, assume sorted leaves (CAT-HIST-R1);
+- (L5) the plan was too small: the key scan and sequence reads are private to `onyx-api`
+  (bulk_history.rs:806), and the tool must build a links version from rows.
+
+It settled open question 1: no registered publisher uses the `onyx.` prefix today (checked
+2026-11-15). Draft 3 takes every finding and the review's answers to questions 2 to 4: exit 4 for
+`cycle` and `too_long`, keep `pending`, keep exit 4 for `--history`.
+
+**Where the link can live.**
+
+- (a) *A field in the tombstone leaf.* A tombstone has no free field (`CatalogLeaf::tombstone`,
+  catalog.rs:83-94), so the leaf's Borsh must change. Old nodes decode catalogs with
+  `Catalog::try_from_slice` (`accept_catalog`, bulk_serve.rs:1975) and would refuse every catalog
+  of the publisher from the first linked one on; an old `onyx-check` decodes the asked leaf's
+  neighbours (`LeafProof::try_from_slice`, wire.rs:231 and 306), so it would refuse rows of any
+  dataset next to a linked tombstone and blame an honest node. Rejected.
+- (b) *A field in the new dataset's first manifest naming the id it replaces.* A manifest format 3
+  that old nodes and the deployed OnyxStorage refuse; the link points backward, so a reader of the
+  old id cannot check that only one dataset claims it; it cannot be added to a move made earlier.
+  Rejected.
+- (c) *A separate signed report per link* (draft 1). Rejected after SUCC-R1 H1: a link under one
+  key can never change without suspending that key.
+- (d) *A reserved links dataset of the publisher, listed in its catalogs.* **Taken.** Its rows are
+  links. A link row goes in the same catalog as its tombstone, so one signature and one anchor
+  cover both, at no extra gas. A later row for the same old id replaces an earlier one, so a wrong
+  link is fixed in the next catalog (H1). Nodes store and serve it like any dataset, and an old
+  node or an old `onyx-check --bulk` handles it as plain rows. Changes from the review's proposal,
+  each with its reason:
+  - No `from_catalog_root`. A row cannot name the root of the catalog that holds it: that root
+    commits the leaves root, which commits the links manifest root, which commits the row. A
+    catalog number would work, but no rule on it is checkable from one catalog, and it guards
+    nothing more: rows enter only through the publisher's catalog chain, where a thief's catalog
+    forks the owner's next one (THREATS CAT-6) and its set-aside takes the thief's rows with it
+    (CAT-5). A row acts only on the exact tombstone it names (version and previous root), so an
+    early row is public, inert until that tombstone, and replaced by any later row (M1).
+  - No `to_version` or `to_root`. A publisher's dataset id has one line in its catalogs and a
+    tombstone ends it for good (amendment 4 item 2), so the name fixes the target. A pinned version
+    is what broke chains when the successor moved on (M2).
+  - "Withholding is the node's fault" needs a new check. `check_rows_answer` proves only that the
+    rows of a page are one run with nothing skipped inside it (wire.rs:22-25, 394-405); neither
+    edge is proven (THREATS CL5-9). Item 4 adds the edges: the run starts at shard 0, row 0, pages
+    join, and it ends at the last row of shard `shard_count - 1` (`proves_entry` binds the index and
+    `leaf_count == shard_count`, manifest.rs:323-327). So an old `onyx-check --bulk` checks the
+    links' signature, not that the node sent all of them.
+  - There is a short window: a node takes the catalog before the links version's manifest and
+    shards can be uploaded (a manifest without its own report needs its catalog first, amendment 1
+    item 5). Meanwhile the old id's 410 says `pending`.
+
+**Decision.**
+
+1. **The links dataset** (`onyx-bulk`, new module `successor`). Each publisher may keep links rows
+   in a reserved dataset: an ordinary bulk dataset (format 1 or 2, catalog-anchored, versions
+   append, one dataset slot, its bytes in the quota).
+   - *Generations* (M3). The reserved ids are `onyx.successors` (generation 1) and
+     `onyx.successors.2` to `onyx.successors.8` (`generation_id`, `MAX_LINK_GENERATIONS` = 8). Every
+     id from `onyx.successors` on is reserved (`is_links_id`). A generation is *usable* in a catalog
+     C when C lists it live, its newest schema is readable (below), its `row_count` is at most
+     `MAX_LINK_ROWS` = 65,536 (M4) and at least 1, its `byte_count` (the sum of its shard files)
+     is at most `LINKS_MAX_BYTES` = 32 MiB (SUCC-B4: nodes and readers read a usable version whole;
+     the widest valid row takes 383 bytes in a shard, so 65,536 rows fit in 24 MiB), and its
+     `shard_count` is at most `MAX_LINK_SHARDS` = 1,024 (SUCC-B5 M1: a node loads each distinct
+     shard file once a job). `byte_count` is the header's claim, and an entry may name a shard file
+     held under another entry or dataset, so node and reader check it against the files (SUCC-B5
+     H1): a node takes a shard only when its file is exactly its entry's `bytes` (checked from the
+     file's size before it moves or reads it, and for every entry that names a file it loaded
+     already), and a reader refuses a shard whose rows pass its entry's `bytes` (item 4). The leaf
+     must be that generation's id and live, and the header the one it names and valid (review
+     SUCC-B1 L2). The links of C are the
+     rows of the lowest usable generation; each lower one is not listed, a tombstone, or listed
+     but not usable. With none usable, every chain ends `no_links`. A generation that breaks (a
+     tombstone, a schema no longer readable, too many rows, bytes or shards) is never repaired: the
+     publisher starts the next one (item 8). Why not enforce the schema at the node instead: a
+     signed and anchored catalog that lists a bad version, or a tombstone, cannot be undone by a
+     node; only moving to another id recovers. A node refusal would only add a state.
+   - *Schema* (`links_schema`, read by column name): `n` (`int`, the key, the link number), `from`
+     (`text`), `from_version` (`int`), `from_prev` (`text`), `to` (`text`, nullable; null retracts),
+     each not nullable except `to`. *Readable*: the newest schema has these five names with exactly
+     these kinds and nullability, `n` is the key, and any other column is ignored. So an appended
+     column (a later amendment) keeps a generation readable, and `from_version` widened to decimal
+     makes it unreadable.
+   - *A valid row*: `from` a dotted id; `to` null or a dotted id; neither a links id; `from != to`;
+     `from_version` in 2..=2^32 - 1 (a `u32`); `from_prev` `0x` and 64 lowercase hex digits, not
+     zero (L2). Other rows are inert. Rows are read in stored order (shard, then index); `n` is only
+     the order the tool writes (1, 2, 3, ...).
+   - *Own reports* (M2). A node refuses a manifest of a links id that comes with its own report
+     (`422 bulk_reserved_dataset`): links versions enter only through catalogs. Old nodes take
+     one, but item 2 reads only the version C lists, so it changes no link.
+   - There is no target publisher: a row names only a dataset of its own publisher.
+
+2. **The effective link** (one rule, used by nodes and readers). In catalog C, with every row of the
+   links version C lists for the used generation: the link of a removed id is the *last* valid row
+   whose `from`, `from_version` and `from_prev` are exactly that id's tombstone in C. A last row with
+   null `to` retracts it. Rows for another tombstone of the same id (one set aside, or written early)
+   are ignored. Nothing else counts: rows have no key, time or reading of their own, only the
+   catalog's signature and anchor.
+
+3. **Chains.** From the old id, follow effective links, at most `MAX_SUCCESSOR_HOPS` = 8, every leaf
+   in C. A chain ends:
+   - `live`: the last `to` is live in C, at whatever version it has reached (exit 0);
+   - `removed`: a tombstone with no effective link;
+   - `retracted`: a tombstone whose last row has null `to`;
+   - `not_listed`: C does not list a `to` (an absence proof, item 4);
+   - `no_links`: no generation is usable;
+   - `cycle`: one id met twice;
+   - `too_long`: a ninth link.
+
+   All but `live` are exit 4. `cycle` and `too_long` are the publisher's own rows and a later row
+   fixes them, so they are no fault (the review's answer to question 2). A successor that gains
+   versions stays `live`; one that later moves on continues through its own row. A node also shows
+   `pending` (it does not hold the version C lists) and `forked` (item 5); a reader never gets
+   those, since it checks the proofs itself.
+
+4. **Proofs** (`onyx-bulk`).
+   - *Absence*: `CatalogHeader::proves_absent(id, proof)`. The leaves at i and i + 1 bracket `id`
+     strictly, or the first or last leaf is beyond it, with the same path checks as `proves`. In a
+     catalog with no leaves, an empty proof (L2). Like `proves`, it assumes sorted leaves, which a
+     reader checks only with `--history` (L4, THREATS CAT-SUCC-7).
+   - *Every row*, pinned (M1, M2):
+     - A reader asks `GET /v1/bulk/{publisher}/{links id}/rows?root=R&page=k&limit=1000`, with R the
+       root of C's leaf for the used generation. New: `root=` serves that held version of the
+       dataset (`409 bulk_version_not_held` if not held), not the newest.
+     - Each page must have manifest root R. The catalog the page carries is the one that first
+       listed R, whatever it is: `check_rows_answer` checks its signature off chain, and C's leaf
+       already ties R to C's signed and anchored root, so no chain read is needed for it.
+     - The run is complete when: page 0 starts at shard 0, row 0; page k + 1 starts right after
+       page k's last row (the next index, or index 0 of the next shard when page k ended its shard,
+       by the proven entry's row count); the last row is the last index of shard `shard_count - 1`;
+       the rows add up to `row_count`. The join between pages is required: pages of rows 0 to 999,
+       1,100 to 1,999 and 1,900 to 2,499 of 2,500 skip 100 rows and repeat 100, yet pass every
+       other rule (review SUCC-B1 M1).
+     - The node's fault, each with its own error: no page, a page of another root, a page of more
+       than 1,000 rows (refused before it is checked), more than `ceil(row_count / 1000)` pages,
+       an empty page, a row that does not join, a run that stops before the last row. A run that
+       reaches the last row with a total other than `row_count` is the publisher's (a header it
+       signed that does not add up), as are rows of a shard that, with its framing, pass its
+       entry's `bytes` (`Oversize`, checked as rows come, so a reader takes at most `byte_count`:
+       SUCC-B5 H1). A version with no rows is not usable.
+     - The answer's next page is `next_page` (bulk_serve.rs:3667).
+   - A reader always reads every row of the used version, so node and reader apply item 2 to the
+     same rows. The first publisher needs one page; 65,536 rows are 66 pages.
+
+5. **Node.**
+   - *Index* (M4; build reviews SUCC-B2 and SUCC-B3; redesigned after SUCC-B4). The node keeps, per
+     publisher, an index for its newest held catalog C: the used generation, the version, the links
+     that act in C (for each tombstone of C, its last valid row, retractions included) and their
+     reverse (`replaces`). Never every row: one link at most per tombstone, so the index is bounded
+     by C's leaves, with no cache and no eviction.
+     - One background worker per node builds indexes, one publisher at a time, from a first-in
+       first-out queue that holds each publisher at most once. A publisher is queued when the node
+       takes a catalog of it (or sets one aside), or the one thing its pending index waits for: the
+       manifest header of a version C lists, or a shard (SUCC-B5 L1). At start every publisher is
+       queued, those whose newest catalog removes a dataset first (SUCC-B5 M2); until its job a
+       publisher's reads answer `pending`. Nothing else queues it: no read, no other manifest or
+       shard, no timer.
+     - A job reads the whole links version C lists, once, unless the index is built for C (number
+       and root) already, or C removes nothing (nothing can act: nothing is read). It first checks
+       that every shard is held; if one is not, the index is `pending` and waits for that shard
+       (the next job checks on from it). It loads each distinct shard file once, however many
+       entries name it (SUCC-B5 M1), and only when the file's size is its entry's (H1): at most
+       `LINKS_MAX_BYTES` from at most `MAX_LINK_SHARDS` files. A shard that does not read leaves
+       the index `pending` until the next catalog. No passes and no part reads: a later catalog
+       reads its version whole again, one bounded read per catalog.
+     - A job reads shards outside the upload locks, past the loader's cache and its permits for
+       readers, and leaves their tiers as they are (no reader asked for them). A job that panics
+       ends alone; the worker goes on.
+     - No read builds or waits: the 410, info, the listing and the successor route use the index
+       only when it is built for the catalog they answer from.
+     - Accepted: a worker stuck on I/O (a hung disk) stops every index build on that node; reads
+       still answer, `pending` for catalogs taken since (THREATS SUCC-B4).
+   - *The old id.* Rows and info answer `410 bulk_dataset_removed` as today; the body gains
+     `successor`: `{"dataset": <first to>, "final": <last id>, "status": <end>, "hops": n, "row":
+     <the n used>, "generation": g, "proof": "/v1/bulk/<publisher>/<dataset>/successor"}`. It stays
+     410, never a redirect: an HTTP client that follows redirects would get rows under another
+     schema without asking. Under a publisher fork mark, or a fork of the links dataset itself
+     (`d.forked`), the field is `{"status": "forked"}` and names no id (L1, L2). The 410 takes the
+     fork mark as it stands and never waits on the chain; a mark last read more than 300 s ago
+     is read again in the background, so a fork the book cleared stops showing `forked` at a
+     later read (SUCC-B2 L2, SUCC-B3 L2). A fork of the links dataset found after the build
+     counts at once. While the node lacks the links version C lists (not uploaded yet, or
+     refused, for example over the quota), it is `{"status": "pending"}` (L2); also until the
+     index for C is built, since the 410 never waits for a build (SUCC-B2 M2). C is the catalog
+     the removal was read from, matched by number and root (SUCC-B3 L1).
+   - *`GET /v1/bulk/{publisher}/{dataset}/successor`* (free read routes, rate limited). For a
+     removed dataset, `200` with:
+     - C's header and signed report;
+     - each generation up to the used one: a leaf proof and its manifest header, or an absence
+       proof;
+     - each hop's tombstone leaf, and the last `to`'s leaf or an absence proof;
+     - the end;
+     - page 0 of the links rows (as `rows?root=` answers it).
+
+     It is built from the newest catalog body in memory, its number, header, report and the
+     removal read together (SUCC-B2 L1), and the index, used only when built for that catalog
+     (else `end` is `pending`): no build waited for, no fetch. Page 0 comes from the held version
+     by its root, with no chain read (SUCC-B4 L1), and is refused, as the rows route refuses it,
+     when the last anchor read found the version's report no longer held (SUCC-B5 L3; a verdict
+     older than `ANCHOR_RECHECK_SECS` is read again in the background). When page 0 of the links
+     cannot be read, `end` is `pending` with no links and no chain, not an error (SUCC-B3 L3). Other
+     answers: `409 bulk_dataset_live` for a dataset the newest catalog lists live or this node
+     holds, `404 bulk_unknown_dataset`, `409 bulk_publisher_forked` at once under a fork mark (read
+     again in the background, as for the 410: SUCC-B3 L2), and on a storage node a learned
+     removal's own `410` (it names no successor, see "Not in this amendment"; SUCC-B2 L4).
+
+     Size (SUCC-B2 L3): a manifest header per generation up to the used one (a widened header is
+     tens of KB in hex, 8 at most) and page 0 of up to 1,000 rows, each shard used with its
+     proof: about 2 MB when every row is a shard of its own (1.84 MB measured). The headers stay:
+     a reader needs each one to check that a lower generation is not usable, and a publisher that
+     bloats them only makes its own answers larger.
+   - *The new id.* Info gains `replaces`: the old ids whose first hop is this id, at most 64 in id
+     order, with `count`. A listing entry gains `replaces` (a count) when it is not zero, and each
+     `catalogs` entry of the listing gains `moved`. A links dataset's listing entry gains
+     `"role": "successors"` and its generation. `replaces` and `moved` come only from an index
+     built for the newest catalog and settled: while it is not built, pending, or forked (the
+     publisher's mark or the links dataset), `moved` is null and no entry shows `replaces`
+     (SUCC-B2 L4).
+   - No new upload route: a links version goes up as an ordinary manifest and shards (L4 of
+     SUCC-R1).
+
+6. **Set-aside, erasure, rules of amendments 1 to 5.**
+   - *Set-aside.* A catalog the book withdraws is set aside with the versions it listed (amendment
+     1 item 3, CAT-5), so a thief's links rows go with the thief's catalog. A set-aside of the
+     tombstone's catalog brings the old id back: its row stays and is inert. The same tombstone again
+     (version and previous root) makes it act again; any other tombstone needs a new row.
+   - *Erasure* (amendment 4 item 5a) of an old id deletes its shard files only; the links are
+     another dataset. If a generation is removed, its shards may be erased after the grace; by then
+     the next generation holds the links still used (item 8).
+   - *Generations follow every dataset rule.* Catalogs keep them (amendment 1 item 3). A generation
+     moves at most one version per catalog, so one catalog adds all its moves in one version. A
+     widening (amendment 5) that keeps the five columns as they are keeps it usable.
+   - *Key rotation* changes nothing: rows have no key of their own, and any registered key of the
+     publisher signs its catalogs.
+
+7. **Client check.** The chain part sits in `onyx-api` (new `bulk_successor.rs`, beside
+   `check_history`), where the key scan and the sequence reads live (`scan_keys`,
+   bulk_history.rs:806; `read_sequence_at`) (L5). `onyx-check` only parses its options.
+   - `onyx-check --successor <answer|-> --publisher P --dataset D (--rpc URL --chain-id N --book
+     0x… | --unchecked) [--node URL] [--keys 0x…,0x…] [--scan-keys-from N [--logs-range N]]`.
+   - Off chain, the answer is checked by items 1 to 4: C's report with `catalog::verify`, each leaf
+     with `proves` or `proves_absent`, each generation's header against its leaf root, and every
+     links row as a complete, pinned run. With `--node`, the check fetches the pages after page 0.
+   - Then, at one finalized block B, it reads C's report (`read_anchor_at`). For every key (C's
+     signer, `--keys`, and with `--scan-keys-from` every `KeyRegistered` key of the publisher), it
+     reads `sequenceOf(key, sequence_for_catalog(C.number + 1))`. A report there that holds means
+     the node answered from an old catalog: undecided.
+   - *Outcomes.* Exit 0 for `live`: the report names each hop, its row, the generation, the final
+     id and its version, C's number, and B. Exit 4 for every other end. Exit 1, with `fault` "node":
+     a leaf, header or page that does not make the signed catalog or manifest, a page of another
+     root, or a run that does not reach the last row. Exit 3: the chain read leaves it undecided,
+     the node lags, or the answer is not a successor answer (an old node's 404, L2).
+     `--unchecked` always gives 3 with `chainChecked: false`.
+   - *`--history`* (amendment 3, L3). When the walk ends `Removed` (exit 4), the check asks the
+     history node's successor route, requires its C to be the walk's newest catalog (a newer one
+     extends the walk once; otherwise exit 3), checks it at the same B, and adds `successor` to the
+     report; the exit stays 4. `Walker` gains a set of followed ids (every hop and every generation
+     id). Naming the catalog that first listed each used row (`early: true` for a row before its
+     tombstone, information only) needs each links version's manifest header (`GET
+     /v1/bulk/manifests/{root}`): one more request per links version walked.
+   - The plain `--bulk` check of rows does not change. On a links dataset it proves the publisher
+     signed the rows, not that all were sent (CL5-9).
+
+8. **Tool** (`onyx-publish`).
+   - `catalog-build ... --links DIR --links-out DIR2 --move OLD=NEW[,OLD=NEW...]` ends each OLD as
+     `--remove` does, and writes the next version of DIR's generation into DIR2 (generation 1,
+     version 1 when there is no DIR) with one row per pair, numbered on from DIR. It lists that
+     version in the same catalog. It reuses `build`'s rows-to-shards-to-manifest path with `--prev`
+     (L5).
+   - It is refused when:
+     - NEW is not live in the catalog it builds, or NEW is OLD;
+     - either id is a links id;
+     - OLD is also in `--remove` or `--dirs`;
+     - DIR is not the version the previous catalog lists;
+     - DIR2 exists (a version is never rebuilt in place);
+     - the rows would pass `MAX_LINK_ROWS`, the version's bytes `LINKS_MAX_BYTES`, or its shards
+       `MAX_LINK_SHARDS`.
+
+     It prints both ids' row counts and key ranges, and warns at 90 % of each cap.
+   - `--relink OLD=NEW` and `--unlink OLD` write a row (NEW, or null) for an OLD that is already a
+     tombstone: a link after the fact, a fix, or a retraction.
+   - `--links-next-generation` writes version 1 of the next generation, holding only the effective
+     links of DIR's (renumbered from 1), and tombstones DIR's generation in the same catalog. It is
+     the way out of a full, unreadable or removed generation.
+   - `build`, `catalog-build --remove` and `--widen` refuse links ids.
+   - Then `catalog-sign`, `catalog-anchor` and `catalog-upload` as usual: one report. Then `upload
+     --dir DIR2 --catalog N` before the other folders, to keep `pending` short.
+   - **Order of a move:**
+     1. Build NEW's version 1 from the whole history under the new schema.
+     2. In catalog n, list NEW; OLD stays as it is. Sign, anchor and upload it, then `upload --dir
+        NEW --catalog n` to every node.
+     3. Check NEW on every node: every shard stored, `onyx-check --bulk` on a sample of rows.
+        Keep both ids served for an overlap (at least a day; a week lets readers compare rows).
+     4. In a later catalog, `--move OLD=NEW`. Sign, anchor and upload the catalog, then the links
+        folder.
+     5. Check: `GET /v1/bulk/<publisher>/OLD` answers 410 with `successor`, and `onyx-check
+        --successor` exits 0.
+
+     Both steps can go in one catalog, but OLD then stops before NEW's shards are up.
+   - Example (made up): `example.flows` moves to `example.flows-2` after its source dropped a
+     column.
+
+9. **Limits and cost.**
+   - At most 8 hops.
+   - At most 65,536 rows a generation, and 8 generations.
+   - At most `LINKS_MAX_BYTES` = 32 MiB (SUCC-B4) and `MAX_LINK_SHARDS` = 1,024 shards (SUCC-B5
+     M1) a links version, both checked against the files (SUCC-B5 H1): a node reads a usable
+     version whole, in one job of at most 1,024 file loads and 32 MiB, once per catalog that lists
+     it and removes something; a reader's 66 pages carry a proof per shard. The tool adds one shard
+     per catalog that moves or relinks something, so a generation lasts 1,024 such catalogs.
+   - A node keeps, per publisher, at most one link per tombstone of its newest catalog.
+   - One dataset slot for the used generation, and one more slot for each generation started after
+     it (the ended one stays a leaf).
+   - One more leaf for each new id.
+   - No transaction beyond the catalog: the four moves of the first publisher go in one daily
+     catalog, as one links version of four rows.
+   - No key is ever at stake for a link. A suspended key stops every catalog of the publisher
+     (`_permitError`, OnyxSignedBook.sol:737), which is why draft 1's per-link reports were
+     dropped.
+
+10. **Rollout.** No existing format, route or rule changes, so nothing has to go first.
+    - Old nodes take links versions as plain rows (and own-report ones too, item 1) and answer 410
+      without `successor`.
+    - An old `onyx-check --bulk` verifies links rows' signatures. It has no `--successor` (exit
+      2), and its `--history` exits 4 without `successor`.
+    - A late node gets the links with every other dataset (the publisher's uploads).
+    - Order: nodes, `onyx-check`, the tool, then the first publisher's four moves.
+
+**Trust.** The reviewer can register any key for any source (`registerKey`,
+OnyxSignedBook.sol:252-281; the provenance is not checked on chain). Such a key could sign catalogs
+for the publisher, links included, as it could sign anything else. That is the existing trust in
+the reviewer (ADR-0028), not new here. Nodes and the operator cannot set a link.
+
+**Tests (for the build).**
+- `onyx-bulk` (slice 1):
+  - `cat_succ_the_links_schema_is_read_by_name_and_bad_rows_are_inert`
+  - `cat_succ_the_last_row_for_a_tombstone_wins_and_a_null_target_retracts`
+  - `cat_succ_a_chain_follows_a_successor_that_gained_versions_and_moved_on`
+  - `cat_succ_every_end_of_a_chain`
+  - `cat_succ_a_generation_over_the_row_cap_unreadable_or_removed_gives_way_to_the_next`
+  - `cat_succ_a_links_version_first_listed_in_an_older_catalog_checks`
+  - `cat_succ_pages_are_pinned_to_one_root_and_must_reach_the_last_row`
+  - `cat_succ_an_absent_id_is_proven_by_its_neighbours_and_in_an_empty_catalog`
+  - after build review SUCC-B4: `cat_succ_a_links_version_over_the_byte_cap_is_unusable`,
+    `cat_succ_the_links_kept_for_a_catalog_answer_as_every_row_does`
+  - after build review SUCC-B5: `cat_succ_a_links_version_over_the_shard_cap_is_unusable`,
+    `cat_succ_a_reader_takes_no_more_rows_than_the_entries_hold`
+- `onyx-api` (slice 2):
+  - `cat_succ_the_410_info_and_listing_show_the_link`
+  - `cat_succ_a_link_is_pending_until_its_links_version_is_held`
+  - `cat_succ_under_a_fork_mark_or_a_forked_links_dataset_the_410_names_no_successor`
+  - `cat_succ_rows_at_a_root_serve_that_version`
+  - `cat_succ_an_own_report_links_version_is_refused`
+  - `cat_succ_a_row_written_before_its_tombstone_acts_only_on_that_tombstone`
+  - `cat_succ_a_later_row_fixes_a_wrong_link_and_a_start_builds_the_index` (built for the two
+    names the draft gave: a later row fixes a wrong link with no key suspended, and how the index
+    reads rows; renamed after SUCC-B4)
+  - `cat_succ_a_set_aside_catalog_takes_its_rows_with_it`
+  - `cat_succ_a_set_aside_tombstone_makes_the_link_inert`
+  - `cat_succ_erasure_keeps_the_link`
+  - `cat_succ_the_links_dataset_is_an_ordinary_dataset_on_every_route`
+  - after build review SUCC-B2:
+    `cat_succ_a_withheld_shard_leaves_the_index_pending_until_it_comes`,
+    `cat_succ_the_410_answers_while_another_publishers_build_waits`,
+    `cat_succ_the_answer_names_one_catalog_and_waits_for_no_build`,
+    `cat_succ_the_route_answers_live_for_a_listed_dataset_and_410_for_a_learned_removal`,
+    `cat_succ_the_listing_shows_no_count_while_pending_or_forked`
+  - after build review SUCC-B3: `cat_succ_two_pending_publishers_starve_no_other_build`,
+    `cat_succ_only_the_publishers_own_change_builds_a_pending_index_again`,
+    `cat_succ_an_upload_starts_the_index_build_before_any_read`,
+    `cat_succ_a_build_that_panics_stops_no_other_build`,
+    `cat_succ_rows_of_a_generation_no_longer_used_are_let_go`,
+    `cat_succ_the_410_matches_its_catalog_by_root`,
+    `cat_succ_the_answer_without_its_links_page_is_pending`,
+    `cat_succ_index_builds_take_no_reader_load_permits`
+  - after build review SUCC-B4 (the redesign; tests of the removed passes, permits, gap, retry
+    time, row cap and part reads were dropped with them): `cat_succ_a_read_never_queues_a_build`,
+    `cat_succ_other_publishers_churn_never_unbuilds_an_honest_index`,
+    `cat_succ_hostile_churn_delays_an_honest_build_only_by_its_place_in_the_queue`,
+    `cat_succ_each_catalog_reads_its_links_version_whole_once`,
+    `cat_succ_a_big_links_version_costs_one_read_per_catalog`,
+    `cat_succ_an_unreadable_links_version_is_read_again_only_for_a_new_catalog`,
+    `cat_succ_the_index_keeps_only_the_links_that_act_in_its_catalog`,
+    `cat_succ_the_successor_route_reads_no_chain`,
+    `cat_succ_an_index_build_leaves_shard_tiers_as_they_are`,
+    `cat_succ_a_pending_index_of_a_forked_links_dataset_is_forked`
+  - after build review SUCC-B5: `cat_succ_a_job_reads_no_more_than_the_byte_cap`,
+    `cat_succ_an_entry_naming_a_loaded_file_with_fewer_bytes_is_refused`,
+    `cat_succ_an_honest_build_never_waits_behind_a_job_of_65536_loads`,
+    `cat_succ_a_shard_named_again_is_loaded_once_a_job`,
+    `cat_succ_a_start_reads_only_catalogs_that_remove_and_queues_them_first`,
+    `cat_succ_an_unused_generation_reads_nothing_again`,
+    `cat_succ_a_shard_stored_while_a_job_stores_its_wait_is_not_lost`,
+    `cat_succ_a_header_stored_while_a_job_stores_its_wait_is_not_lost`,
+    `cat_succ_page_0_is_refused_when_its_version_was_found_not_held`,
+    `cat_succ_a_stale_not_held_verdict_is_read_again_in_the_background`
+  - `cat_succ_the_history_check_follows_a_link_and_still_reports_removed`
+  - `cat_succ_the_history_check_needs_the_successor_catalog_in_its_walk`
+- `onyx-check` (slice 3):
+  - `bulk_successor_a_move_verifies_on_chain`
+  - `bulk_successor_a_withheld_row_is_the_nodes_fault`
+  - `bulk_successor_an_old_catalog_is_undecided_when_a_scanned_key_holds_the_next`
+  - `bulk_successor_every_end_but_live_is_exit_4`
+  - `bulk_successor_an_old_nodes_404_is_exit_3`
+- `onyx-publish` (slice 3):
+  - `catalog_build_move_removes_and_writes_the_links_version`
+  - `catalog_build_relink_and_unlink_need_a_tombstone`
+  - `catalog_build_refuses_rows_past_the_cap_and_starts_the_next_generation`
+  - `the_reserved_ids_are_never_removed_widened_or_built_by_hand`
+- Fuzz: `bulk_parsers` selector 8 (a successor answer and an absence proof).
+
+`cat_6_` is taken by the CAT-6 tests, so these use `cat_succ_`.
+
+**Build plan** (about 20 hours, in three slices, each with its own commit and review).
+1. *Slice 1, `onyx-bulk`*: `successor.rs` (generations, schema, rows, items 2 and 3, the pinned
+   complete run) and `catalog.rs` (`proves_absent`) (about 3.5 h). Built 2026-11-15 with its eight
+   tests. One addition: `follow` ends `not_removed` when the start is live (the route's `409
+   bulk_dataset_live`). Build review SUCC-B1 ("ready with changes", fixed the same day): one error
+   per run failure, the join between pages required (it is not implied by the other checks), every
+   empty page and every page past 1,000 rows refused, generation leaves checked against their id
+   and header, `follow` refusing a leaf of another id, `Links::accepts` for a newer version and
+   `Links::effective` for the reverse index; a ninth link that would close a cycle ends
+   `too_long`.
+2. *Slice 2, `onyx-api` and `onyx-node`*: `bulk_succ.rs` (the index, the 410 field, the successor
+   answer, `replaces`); `bulk_serve.rs` (`rows?root=`, the own-report refusal, `gone`, `info`,
+   `list`, index updates); `bulk_successor.rs` (the chain part of the check); `bulk_history.rs` and
+   `Walker` (about 8 h).
+   Node part built 2026-11-15 (`bulk_succ.rs`, `rows?root=`, `422 bulk_reserved_dataset`, the
+   410 field, the successor route, `replaces` and `moved`). Choices the text left open: the index
+   is never built under the upload locks (a start needs no other step); the successor route
+   answers 200 with `end.status` `pending` (and no links page) when the node lacks the links
+   version or has not built the index for the newest catalog, and `forked` (no proofs) under a
+   fork of the links dataset. Build review SUCC-B2 ("not ready", fixed the same day; THREATS
+   SUCC-B2): the first build tied every read to one global build lock, rebuilt a pending index on
+   every read from row 0 and kept nothing of it (H1: a links version of one-row shards with the
+   last one withheld cost seconds per read), read every row again when the next catalog listed
+   the same version or after a read in the window before the links upload (M1), so a 410 could
+   wait on another publisher's build (M2), mixed two catalogs in one answer (L1), kept a cleared
+   fork mark and a later links fork unseen (L2), understated the answer's size (L3), and gave
+   wrong answers for an unheld live id, a learned removal and the listing's counts (L4). Item 5
+   above now says how the index is built, kept and read. Re-review SUCC-B3 ("not ready", fixed
+   the same day; THREATS SUCC-B3): a build kept its permit through every pass while reads kept
+   asking again, and one node-wide change count (moved even by a held shard sent again) made a
+   pending index count as changed, so two publishers whose links never read held both permits
+   and reloaded a large shard at every pass (H1, proved by the reviewer's attack, now a test);
+   unreadable shards were tried at every pass under the readers' load permits (M1); the 410
+   matched its catalog by number only (L1) and could wait on a chain read for a fork mark (L2);
+   an unreadable links page failed the whole answer (L3); memory had no bound over publishers
+   (L4); a stuck pass held its permit for good (L5); and tests missed the upload wakes, the retry
+   time, the panic guard, the build limit and fairness (L6). Re-review SUCC-B4 ("not ready";
+   THREATS SUCC-B4) found new liveness holes in those fixes: about 17 publishers with full links
+   versions evicted the honest index every cycle (H1); a stopped pass lost every earlier pass, and
+   the time limit did not stop the blocking load (M1); a part read was dropped when the next
+   version only appended (M2); the route's page 0 awaited the chain (L1); index loads moved warm
+   shards to hot (L2). The index was then redesigned, bounded and eager, as item 5 says: the byte
+   cap (item 1), one worker fed by uploads, only the links that act, no read that builds.
+   Re-review SUCC-B5 ("not ready"; THREATS SUCC-B5) kept the worker and queue but found the input
+   bound open: the byte cap trusted the header, and an entry naming a held file with fewer bytes
+   made a 4 KB header for a 49 MB job (H1); a job cost one load per entry, 65,536 for one small
+   file (M1); a start read every publisher in name order (M2); an unused generation's manifest
+   read the used version again (L1); a test missed one re-queue (L2); page 0 ignored a cached
+   "not held" verdict (L3); and the queue and shard waits were scanned (L4). Fixed as items 1, 4
+   and 5 say: the files are checked against their entries, a shard cap, one load per file, no
+   read for a catalog that removes nothing, exact waits. Still to build in slice 2: the chain
+   part of the check (`bulk_successor.rs`) and the `--history` extension.
+3. *Slice 3, tools*: `onyx-check --successor`; `onyx-publish` (`--links`, `--move`, `--relink`,
+   `--unlink`, `--links-next-generation`, refusals) reusing `build`'s internals; the fuzz selector
+   (about 5.5 h).
+4. *Docs*: docs/spec/bulk-datasets.md; docs/ops/bulk-publish.md ("Move a dataset to a new id",
+   replacing "Onyx has no link ... yet"); docs/api/openapi.json (the successor route, `root=`);
+   the 410 row of docs/spec/delivery.md's error table (line 656) gains `successor`, and new codes
+   go into it (`bulk_dataset_live`, `bulk_version_not_held`, `bulk_reserved_dataset`); THREATS;
+   ROADMAP; STATUS (about 1.5 h). Build reviews: about 2 h.
+
+**THREATS** SUCC-R1, SUCC-R2 (the reviews) and CAT-SUCC-1 to CAT-SUCC-11: a thief's rows (1), a
+re-pointed link (2), a target of another publisher (3), a missing target or an early row (4), long
+chains and cycles (5), sizes and caps (6), a node that hides rows or answers from an old catalog (7),
+set-aside and erasure (8), "continues" is only a claim (9), older software (10), the reserved
+dataset itself (11).
+
+**Not in this amendment.** Storage deals and storage nodes (THREATS CAT-2, OnyxStorage v2): a
+storage node's learned 410 (amendment 4 item 5a, slice 2a) names no successor. Links between
+publishers. Splits of one id into two (several old ids may name one new id). The website and the AI
+connector following a link. Any proof that the new id holds the old rows: a link is the publisher's
+signed pointer (THREATS CAT-SUCC-9).
+
+**Open questions** (for the slice reviews).
+1. Is `MAX_LINK_ROWS` = 65,536 right? It costs a reader 66 pages at most; a smaller cap means
+   earlier generation changes.
+2. Should `rows?root=` serve any held version of any dataset (draft 3: yes, it is generic), or only
+   links versions?
 
 ## Alternatives
 - A new anchor contract (a registry of dataset roots): duplicates the key registry, life cycle and
