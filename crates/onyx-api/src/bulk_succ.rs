@@ -160,6 +160,9 @@ pub(crate) struct Succ {
     started: AtomicBool,
     /// Bumped at the end of every job (tests wait on it).
     done: tokio::sync::watch::Sender<u64>,
+    /// Report digests whose stale "not held" verdict is being read again
+    /// for page 0 now: one read per window (review SUCC-B6 M1).
+    rereads: Mutex<BTreeSet<Hash32>>,
     /// Tests: shard loads tried by builds.
     #[cfg(test)]
     reads: std::sync::atomic::AtomicU64,
@@ -188,6 +191,7 @@ impl Default for Succ {
             wake: Arc::new(tokio::sync::Notify::new()),
             started: AtomicBool::new(false),
             done: tokio::sync::watch::Sender::new(0),
+            rereads: Mutex::new(BTreeSet::new()),
             #[cfg(test)]
             reads: std::sync::atomic::AtomicU64::new(0),
             #[cfg(test)]
@@ -275,28 +279,35 @@ async fn succ_work(store: Weak<BulkStore>, wake: Arc<tokio::sync::Notify>) {
 impl BulkStore {
     /// Start the links index worker (once) and queue every publisher with a
     /// held catalog, those whose newest catalog removes a dataset first
-    /// (their 410s wait for it; the others read nothing: review SUCC-B5 M2).
-    /// Until its job, a publisher's reads answer `pending`. Needs a tokio
-    /// runtime; without one it does nothing.
+    /// (their 410s wait for it; the others read nothing: review SUCC-B5 M2),
+    /// and among those the smallest links version first (a job's bytes, not
+    /// a publisher's name, set its place: review SUCC-B6 L1). Until its job,
+    /// a publisher's reads answer `pending`. Needs a tokio runtime; without
+    /// one it does nothing.
     pub fn succ_start(self: &Arc<Self>) {
         let Ok(rt) = tokio::runtime::Handle::try_current() else {
             return;
         };
-        let mut pubs: Vec<(bool, String)> = match self.catalogs.read() {
+        let newest: Vec<(String, Option<Arc<CatalogBody>>)> = match self.catalogs.read() {
             Ok(cs) => cs
                 .iter()
                 .map(|(p, m)| {
-                    let quiet = m
-                        .last_key_value()
-                        .and_then(|(_, h)| h.body.as_ref())
-                        .is_some_and(|b| b.removed.is_empty());
-                    (quiet, p.clone())
+                    let body = m.last_key_value().and_then(|(_, h)| h.body.clone());
+                    (p.clone(), body)
                 })
                 .collect(),
             Err(_) => Vec::new(),
         };
+        let mut pubs: Vec<(bool, u64, String)> = newest
+            .into_iter()
+            .map(|(p, body)| match body {
+                Some(b) if b.removed.is_empty() => (true, 0, p),
+                Some(b) => (false, self.links_bytes(&p, &b.catalog), p),
+                None => (false, 0, p),
+            })
+            .collect();
         pubs.sort();
-        for (_, p) in &pubs {
+        for (_, _, p) in &pubs {
             self.succ_queue(p);
         }
         if !self.succ.started.swap(true, Ordering::SeqCst) {
@@ -520,20 +531,10 @@ impl BulkStore {
         })
     }
 
-    /// Where `publisher`'s links stand under catalog `body`: the used
-    /// generation (`choose_generation` over its leaves and the held
-    /// manifests) and the links of its version that act in it, read whole
-    /// once every shard is held (nothing is read for a catalog without a
-    /// tombstone: nothing can act); and what it waits for. The scan for
-    /// missing shards goes on from `wait` when it is for the same version.
-    async fn links_state(
-        &self,
-        publisher: &str,
-        body: &CatalogBody,
-        wait: Option<Wait>,
-    ) -> (LinksState, Option<Wait>) {
-        let c = &body.catalog;
-        let choice = sx::choose_generation(|g| -> Result<GenState, ()> {
+    /// The links generation `publisher` uses in catalog `c`
+    /// (`choose_generation` over its leaves and the held manifests).
+    fn generation_of(&self, publisher: &str, c: &Catalog) -> Result<sx::GenChoice, GenFault<()>> {
+        sx::choose_generation(|g| -> Result<GenState, ()> {
             let id = sx::generation_id(g).unwrap_or_default();
             Ok(match listing(c, &id) {
                 Listing::Absent => GenState::Absent,
@@ -543,8 +544,33 @@ impl BulkStore {
                     GenState::Live { leaf: l, header }
                 }
             })
-        });
-        let used = match choice {
+        })
+    }
+
+    /// The bytes a job of `publisher` under catalog `c` reads at most: the
+    /// held header's `byte_count` of the version it uses (0 when it uses
+    /// none or waits for a header: it reads nothing then).
+    fn links_bytes(&self, publisher: &str, c: &Catalog) -> u64 {
+        self.generation_of(publisher, c)
+            .ok()
+            .and_then(|ch| ch.used)
+            .map_or(0, |u| u.header.byte_count)
+    }
+
+    /// Where `publisher`'s links stand under catalog `body`: the used
+    /// generation ([`Self::generation_of`]) and the links of its version
+    /// that act in it, read whole once every shard is held (nothing is read
+    /// for a catalog without a tombstone: nothing can act); and what it
+    /// waits for. The scan for missing shards goes on from `wait` when it is
+    /// for the same version.
+    async fn links_state(
+        &self,
+        publisher: &str,
+        body: &CatalogBody,
+        wait: Option<Wait>,
+    ) -> (LinksState, Option<Wait>) {
+        let c = &body.catalog;
+        let used = match self.generation_of(publisher, c) {
             Ok(ch) => match ch.used {
                 Some(u) => u,
                 None => return (LinksState::None, None),
@@ -782,14 +808,38 @@ impl BulkStore {
             return false;
         };
         if (self.now)().saturating_sub(t) >= ANCHOR_RECHECK_SECS {
-            let me = self.clone();
-            let key = (publisher.to_string(), id.to_string());
-            let root = h.manifest.header.root();
-            tokio::spawn(async move {
-                let _ = me.serving(&key, Some(root)).await;
-            });
+            self.read_again_soon(publisher, id, h, t);
         }
         true
+    }
+
+    /// Read the anchor of `h`, a version of `publisher`'s dataset `id`
+    /// whose "not held" verdict of time `t` is stale, again in the
+    /// background as `serving` reads it, once per window (review SUCC-B6
+    /// M1): the first answer claims the read, the answers meanwhile read
+    /// nothing, and a read that fails (it writes no verdict) writes "not
+    /// held" anew, so it holds another window, as a fork mark does (review
+    /// CAT-6 L3). The claim is kept apart from the verdicts: `serving` reads
+    /// a stale one.
+    fn read_again_soon(self: &Arc<Self>, publisher: &str, id: &str, h: &Held, t: u64) {
+        let digest = h.report.payload.digest();
+        let claimed = self.succ.rereads.lock().is_ok_and(|mut r| r.insert(digest));
+        if !claimed {
+            return;
+        }
+        let claim = ReadAgain(self.clone(), digest);
+        let key = (publisher.to_string(), id.to_string());
+        let root = h.manifest.header.root();
+        tokio::spawn(async move {
+            let s = &claim.0;
+            let _ = s.serving(&key, Some(root)).await;
+            if let Ok(mut c) = s.rechecked.lock() {
+                if c.get(&digest) == Some(&(t, false)) {
+                    c.insert(digest, ((s.now)(), false));
+                }
+            }
+            drop(claim);
+        });
     }
 
     /// Held version `root` of `publisher`'s dataset `id` as stored, with no
@@ -888,6 +938,8 @@ impl BulkStore {
                 to: None,
                 page: 0,
                 limit: sx::LINKS_PAGE_ROWS,
+                desc: false,
+                dated: false,
                 root: Some(*root),
             };
             let page = match self.held_at(publisher, id, root) {
@@ -968,6 +1020,18 @@ impl BulkStore {
             "end": end,
             "links": links,
         }))
+    }
+}
+
+/// A claimed background read of a report's anchor
+/// ([`BulkStore::read_again_soon`]), let go when dropped, after a panic too.
+struct ReadAgain(Arc<BulkStore>, Hash32);
+
+impl Drop for ReadAgain {
+    fn drop(&mut self) {
+        if let Ok(mut r) = self.0.succ.rereads.lock() {
+            r.remove(&self.1);
+        }
     }
 }
 

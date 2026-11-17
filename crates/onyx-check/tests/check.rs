@@ -828,14 +828,20 @@ fn bulk_asked(dataset: &str) -> onyx_check::BulkAsked {
         min_version: 1,
         from: None,
         to: None,
+        desc: false,
+        page: 0,
     }
 }
 
 fn bulk_off_chain(answer: &Value, dataset: &str) -> onyx_check::BulkOutcome {
+    bulk_off_chain_asked(answer, &bulk_asked(dataset))
+}
+
+fn bulk_off_chain_asked(answer: &Value, asked: &onyx_check::BulkAsked) -> onyx_check::BulkOutcome {
     tokio::runtime::Builder::new_current_thread()
         .build()
         .unwrap()
-        .block_on(onyx_check::check_bulk(answer, &bulk_asked(dataset), None))
+        .block_on(onyx_check::check_bulk(answer, asked, None))
 }
 
 /// `onyx-check --bulk FILE ... --unchecked` on `answer`: exit code and report.
@@ -853,6 +859,161 @@ fn bulk_cli(answer: &Value, name: &str) -> (i32, Value) {
     ]);
     let _ = std::fs::remove_file(&p);
     out
+}
+
+/// An `order=desc` page (newcomer finding A15, review NEWC-R1 M1 and L1):
+/// asked with `--order desc`, the newest page verifies and is reported
+/// newest; without it the same answer is refused; a page that hides the
+/// newest rows or skips one on the way down is refused. `--from` and `--to`
+/// take the dates the rows route takes.
+#[test]
+fn bulk_newest_first_page_needs_the_order_asked_and_the_newest_row() {
+    let (a, _) = widened_answer();
+    let mut desc = a.clone();
+    desc["rows"].as_array_mut().unwrap().reverse();
+    let newest_first = onyx_check::BulkAsked {
+        desc: true,
+        ..bulk_asked("synthetic.test")
+    };
+    let o = bulk_off_chain_asked(&desc, &newest_first);
+    assert_eq!(o.code(), 0, "{}", o.report());
+    let r = o.report();
+    assert_eq!(
+        (r["rows"].clone(), r["order"].clone()),
+        (json!(8), json!("desc"))
+    );
+    assert_eq!(
+        (r["firstKey"].clone(), r["lastKey"].clone()),
+        (json!("7"), json!("0"))
+    );
+    assert_eq!(r["newestProven"], json!(true));
+    assert!(r["notProven"].as_str().unwrap().contains("`query`"), "{r}");
+    let up = bulk_off_chain(&a, "synthetic.test").report();
+    assert_eq!(
+        (up["order"].clone(), up["newestProven"].clone()),
+        (json!("asc"), json!(false))
+    );
+    // The direction asked is checked both ways.
+    let o = bulk_off_chain(&desc, "synthetic.test");
+    assert_eq!(o.code(), 1, "{}", o.report());
+    assert!(o.report()["error"]
+        .as_str()
+        .unwrap()
+        .contains("--order desc"));
+    assert_eq!(bulk_off_chain_asked(&a, &newest_first).code(), 1);
+    // "The newest rows" without the newest row: refused; as page 1, or under
+    // the upper bound asked, the same rows are a plain page.
+    let mut hides = desc.clone();
+    hides["rows"].as_array_mut().unwrap().remove(0);
+    let o = bulk_off_chain_asked(&hides, &newest_first);
+    assert_eq!(o.code(), 1, "{}", o.report());
+    assert!(o.report()["error"].as_str().unwrap().contains("newest row"));
+    for asked in [
+        onyx_check::BulkAsked {
+            page: 1,
+            ..newest_first.clone()
+        },
+        onyx_check::BulkAsked {
+            to: Some(6),
+            ..newest_first.clone()
+        },
+    ] {
+        let o = bulk_off_chain_asked(&hides, &asked);
+        assert_eq!(o.code(), 0, "{}", o.report());
+        assert_eq!(o.report()["newestProven"], json!(false));
+    }
+    // One row alone: the report carries the order asked (L1).
+    let mut one = desc.clone();
+    one["rows"].as_array_mut().unwrap().truncate(1);
+    let r = bulk_off_chain_asked(&one, &newest_first).report();
+    assert_eq!(
+        (r["order"].clone(), r["newestProven"].clone()),
+        (json!("desc"), json!(true)),
+        "{r}"
+    );
+    let mut gap = desc.clone();
+    gap["rows"].as_array_mut().unwrap().remove(3);
+    let o = bulk_off_chain_asked(&gap, &newest_first);
+    assert_eq!(o.code(), 1, "{}", o.report());
+    assert!(o.report()["error"].as_str().unwrap().contains("rows skip"));
+    // The command line: --order and --page; keys 0..8 are seconds of
+    // 1970-01-01, so the day as a date holds them.
+    let file = |name: &str, v: &Value| {
+        let p = std::env::temp_dir().join(format!("onyx-check-{name}-{}.json", std::process::id()));
+        std::fs::write(&p, serde_json::to_vec(v).unwrap()).unwrap();
+        p
+    };
+    let (pd, ph) = (file("desc", &desc), file("hides", &hides));
+    let run = |p: &std::path::Path, more: &[&str]| {
+        let mut args = vec![
+            "--bulk",
+            p.to_str().unwrap(),
+            "--publisher",
+            "example.publisher",
+            "--dataset",
+            "synthetic.test",
+            "--unchecked",
+        ];
+        args.extend_from_slice(more);
+        cli(&args)
+    };
+    let (code, r) = run(&pd, &["--order", "desc"]);
+    assert_eq!(
+        (code, r["order"].clone(), r["newestProven"].clone()),
+        (0, json!("desc"), json!(true)),
+        "{r}"
+    );
+    assert_eq!(run(&pd, &[]).0, 1);
+    assert_eq!(run(&pd, &["--order", "asc"]).0, 1);
+    assert_eq!(run(&ph, &["--order", "desc"]).0, 1);
+    assert_eq!(run(&ph, &["--order", "desc", "--page", "1"]).0, 0);
+    assert_eq!(
+        run(
+            &pd,
+            &[
+                "--order",
+                "desc",
+                "--from",
+                "1970-01-01",
+                "--to",
+                "1970-01-01"
+            ]
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run(
+            &pd,
+            &[
+                "--order",
+                "desc",
+                "--from",
+                "0",
+                "--to",
+                "1970-01-01T00:00:07Z"
+            ]
+        )
+        .0,
+        0
+    );
+    assert_eq!(
+        run(
+            &pd,
+            &[
+                "--order",
+                "desc",
+                "--from",
+                "1970-01-02",
+                "--to",
+                "1970-01-03"
+            ]
+        )
+        .0,
+        1
+    );
+    let _ = std::fs::remove_file(&pd);
+    let _ = std::fs::remove_file(&ph);
 }
 
 /// ADR-0059 amendment 5 items 4 and 8: a widened (format-2) answer verifies,
@@ -960,4 +1121,114 @@ fn bulk_an_unknown_format_signed_by_another_key_is_refused_on_chain() {
     // refused (the same chain read as for every format).
     let o = bulk_on_chain(&a, &Book::holding(&forged, false));
     assert_eq!(o.code(), 1, "{}", o.report());
+}
+
+/// `onyx-check --successor` (ADR-0059 amendment 6 item 7): the options it
+/// takes, and an answer that is no successor answer (an old node's 404, or
+/// its 410 with no successor) is exit 3, a malformed one the node's (exit
+/// 1). The chain part is tested with an in-process node in onyx-api
+/// (`bulk_successor_*`).
+#[test]
+fn successor_options_are_parsed_and_an_old_nodes_404_is_exit_3() {
+    let file = |name: &str, v: &Value| {
+        let p = std::env::temp_dir().join(format!(
+            "onyx-check-succ-{name}-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&p, serde_json::to_vec(v).unwrap()).unwrap();
+        p
+    };
+    let old = file(
+        "old",
+        &json!({"error": {"code": "not_found", "message": "no route"}}),
+    );
+    let old = old.to_str().unwrap();
+    let base = [
+        "--successor",
+        old,
+        "--publisher",
+        "example.publisher",
+        "--dataset",
+        "synthetic.a",
+    ];
+    let with = |more: &[&str]| {
+        let mut a: Vec<&str> = base.to_vec();
+        a.extend_from_slice(more);
+        cli(&a)
+    };
+    let key = format!("0x{}", "22".repeat(20));
+    let book = format!("0x{}", "11".repeat(20));
+    for (args, why) in [
+        (vec![], "no node and no --unchecked"),
+        (
+            vec!["--unchecked", "--keys", key.as_str()],
+            "keys need the chain",
+        ),
+        (
+            vec!["--unchecked", "--scan-keys-from", "5"],
+            "a scan needs the chain",
+        ),
+        (
+            vec!["--unchecked", "--node", "http://node.example"],
+            "plain http to a remote node",
+        ),
+        (
+            vec![
+                "--rpc",
+                "https://rpc.example",
+                "--chain-id",
+                "84532",
+                "--book",
+                book.as_str(),
+                "--logs-range",
+                "9",
+            ],
+            "a range without a scan",
+        ),
+        (
+            vec!["--unchecked", "--history", "https://node.example"],
+            "not an option of --successor",
+        ),
+    ] {
+        let (code, r) = with(&args);
+        assert_eq!((code, r["code"].clone()), (2, json!("usage")), "{why}: {r}");
+    }
+    let (code, _) = cli(&[
+        "--successor",
+        old,
+        "--dataset",
+        "synthetic.a",
+        "--unchecked",
+    ]);
+    assert_eq!(code, 2, "no publisher");
+    // An old node's 404 body: nothing decided.
+    let (code, r) = with(&["--unchecked"]);
+    assert_eq!(code, 3, "{r}");
+    assert!(
+        r["error"]
+            .as_str()
+            .unwrap()
+            .contains("not a successor answer"),
+        "{r}"
+    );
+    // A successor answer whose catalog does not decode: the node's.
+    let bad = file(
+        "bad",
+        &json!({"publisher": "example.publisher", "dataset": "synthetic.a",
+                "catalog": {"number": 0, "header": "0x00", "report": "0x00"},
+                "generations": [], "chain": [], "end": {"status": "live"}, "links": null}),
+    );
+    let (code, r) = cli(&[
+        "--successor",
+        bad.to_str().unwrap(),
+        "--publisher",
+        "example.publisher",
+        "--dataset",
+        "synthetic.a",
+        "--unchecked",
+    ]);
+    assert_eq!((code, r["fault"].clone()), (1, json!("node")), "{r}");
+    for p in [old, bad.to_str().unwrap()] {
+        let _ = std::fs::remove_file(p);
+    }
 }

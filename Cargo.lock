@@ -1339,6 +1339,7 @@ dependencies = [
 name = "onyx-publish"
 version = "0.0.1"
 dependencies = [
+ "axum",
  "borsh",
  "hex",
  "http-body-util",

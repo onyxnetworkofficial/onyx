@@ -462,8 +462,20 @@ body, built by the server and checked by every client, the browser included).
   Reading is free on the test network (60 answers per client per minute, `no-store`).
 - `GET /v1/bulk` lists the datasets; `GET /v1/bulk/{publisher}/{dataset}` gives the latest manifest
   (root, Borsh header, schema, rights), its anchor, the versions and every shard entry with its proof
-  and tier; `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=` gives the rows whose key
-  is in [`from`, `to`] in key order (`limit` 1..=1000, default 100), each with its Merkle proof to its
+  and tier; `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=&order=` gives the rows whose key
+  is in [`from`, `to`] in key order (`limit` 1..=1000, default 100; `order=desc` gives the newest
+  first, pages counted from the largest key down). A key is a whole number the publisher chose. The
+  answer's `key` names the key column and, when the key reads as unix seconds (UTC), the unit: the
+  column is named `day`, `date`, `time`, `timestamp`, `ts` or `t`, the signed header's `key_min` and
+  `key_max` lie from 100000000 (1973-03-03) to below 4102444800 (2100-01-01), and for `day` and
+  `date` both are multiples of 86400 (review NEWC-R1 M3). Only then do `from` and `to` also take a
+  UTC date (`2026-01-31`, for `to` the whole day) or date and time (`2026-01-31T12:00:00Z`); for any
+  other key `key.unit` is null and a date is 400 `bad_request`, as is an `order` other than `asc` or
+  `desc`. The client check takes the order and page asked (`onyx-check --bulk --order desc --page N`):
+  it refuses an answer in another order, and for a newest-first page 0 without `to` it proves the
+  page starts at the newest row, the last row of the last shard of the signed header (review
+  NEWC-R1 M1). `query`, `key` and `next_page` are not proven.
+  Each row comes with its Merkle proof to its
   shard root, each shard used with its entry's proof to the header's `shards_root`, the header, the
   publisher's signed report and the anchor read at the node's finalized block (rechecked at most
   300 s apart). A client checks it with `onyx-check --bulk` against the book on its own node.

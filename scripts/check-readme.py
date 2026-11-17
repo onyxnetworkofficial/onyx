@@ -40,6 +40,7 @@ IN_GIT = os.path.isdir(os.path.join(ROOT, ".git")) or os.path.isfile(os.path.joi
 DOCS = {
     "NORTH-STAR.md": "The north star: what the partners asked for, what makes Onyx new, and the build list",
     "TRACKER.md": "The vision, every idea, and the decision log",
+    "READINESS.md": "What stands before a public beta, outside publishers and real money",
     "contributor-loop.md": "The contributor loop (CL1-CL10): easy data contribution, one system for users",
     "north-star-loop.md": "The north star work loop (NL0-NL5): items, results, log",
     "desktop-app.md": "The Onyx desktop app: download, install (unsigned-installer steps), use, what stays on your computer (CL10)",

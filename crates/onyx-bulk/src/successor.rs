@@ -52,10 +52,13 @@ pub const MAX_LINK_ROWS: u64 = 65_536;
 pub const LINKS_MAX_BYTES: u64 = 32 << 20;
 /// Shards a links version may list and stay usable (review SUCC-B5 M1): the
 /// shards, not only the bytes, bound a node's loads (each distinct file once
-/// a job) and a reader's shard proofs. The tool adds one shard per catalog
-/// that moves something and refuses a version past this; the next
-/// generation holds the links then, as for the row cap.
-pub const MAX_LINK_SHARDS: u32 = 1_024;
+/// a job; about 0.7 s for 4,096 at the 177 µs a load review SUCC-B6
+/// measured) and a reader's shard proofs. Versions only append (each adds at
+/// least one shard), and the tool adds one per catalog that moves or relinks
+/// something, refusing a version past this; the next generation holds the
+/// links then. So a publisher writes links in at most 4,096 x 8 = 32,768
+/// catalogs in all (review SUCC-B6 L2: 1,024 allowed only 8,192).
+pub const MAX_LINK_SHARDS: u32 = 4_096;
 /// Links a chain follows at most.
 pub const MAX_SUCCESSOR_HOPS: usize = 8;
 /// Rows a reader asks for in each page of links rows.
@@ -674,8 +677,9 @@ pub fn follow<E>(
 }
 
 /// Links pages that do not make one complete, pinned run. Every variant but
-/// [`RunError::Count`] and [`RunError::Unusable`] is the node's fault
-/// ([`RunError::node_fault`]).
+/// [`RunError::Count`], [`RunError::Oversize`], [`RunError::Undersize`] and
+/// [`RunError::Unusable`] (a header or entries the publisher signed) is the
+/// node's fault ([`RunError::node_fault`]).
 #[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RunError {
     /// No page.
@@ -747,6 +751,32 @@ pub enum RunError {
         /// Its entry's `bytes`.
         of: u64,
     },
+    /// The rows of a shard, with its framing, take fewer bytes than its
+    /// entry says the file holds: proven rows, so the entry the publisher
+    /// signed is false (a node holds no such file and serves none: review
+    /// SUCC-B6 L3). Checked at the shard's last row.
+    #[error("links shard {shard} sends {bytes} bytes, not its {of}")]
+    Undersize {
+        /// The shard.
+        shard: u32,
+        /// Its rows with their framing.
+        bytes: u64,
+        /// Its entry's `bytes`.
+        of: u64,
+    },
+    /// Page `page`'s rows, by their length as sent, take more bytes than
+    /// the pinned header's `byte_count` has left: refused before any row of
+    /// it is checked (review SUCC-B6 L3). A node that serves the files of a
+    /// valid version never sends more.
+    #[error("links page {page} brings the rows to {bytes} bytes, more than {of}")]
+    TooManyBytes {
+        /// The page.
+        page: usize,
+        /// The rows' bytes with this page.
+        bytes: u64,
+        /// The header's `byte_count`.
+        of: u64,
+    },
     /// The version cannot hold links.
     #[error(transparent)]
     Unusable(#[from] Unusable),
@@ -757,7 +787,10 @@ impl RunError {
     pub fn node_fault(&self) -> bool {
         !matches!(
             self,
-            RunError::Count { .. } | RunError::Oversize { .. } | RunError::Unusable(_)
+            RunError::Count { .. }
+                | RunError::Oversize { .. }
+                | RunError::Undersize { .. }
+                | RunError::Unusable(_)
         )
     }
 }
@@ -772,9 +805,12 @@ impl RunError {
 /// pages too (the join: without it, pages that skip rows in one place and
 /// repeat them in another pass every other check, review SUCC-B1 M1); the
 /// last row is the last of shard `shard_count - 1`; the rows add up to
-/// `row_count`; the rows of a shard, with its framing, fit in its entry's
-/// `bytes` (review SUCC-B5 H1). Checks signatures off chain only: the caller
-/// ties `root` to its catalog and reads that on chain.
+/// `row_count`; the rows of a shard, with its framing, take exactly its
+/// entry's `bytes` (reviews SUCC-B5 H1, SUCC-B6 L3), and before a page is
+/// checked its rows, by their length as sent, fit in what the pinned
+/// header's `byte_count` has left (SUCC-B6 L3: no reader hashes more than
+/// the version holds). Checks signatures off chain only: the caller ties
+/// `root` to its catalog and reads that on chain.
 pub fn read_links_pages(
     root: &Hash32,
     pages: &[Value],
@@ -785,8 +821,10 @@ pub fn read_links_pages(
     let mut run: Option<(ManifestHeader, Links)> = None;
     let mut entries: BTreeMap<u32, ShardEntry> = BTreeMap::new();
     let mut prev: Option<(u32, u64)> = None;
-    // Row bytes taken per shard so far.
+    // Row bytes taken per shard so far, and rows with their length framing
+    // taken in all.
     let mut taken: BTreeMap<u32, u64> = BTreeMap::new();
+    let mut spent: u64 = 0;
     for (k, page) in pages.iter().enumerate() {
         let sent = page["rows"].as_array().map_or(0, Vec::len);
         if sent as u64 > LINKS_PAGE_ROWS {
@@ -794,6 +832,19 @@ pub fn read_links_pages(
                 page: k,
                 rows: sent,
             });
+        }
+        // Before any row is hashed: the page's rows by their length as sent
+        // against what the pinned header has left (review SUCC-B6 L3). A
+        // header that is not the pinned one is refused just below.
+        let budget = match &run {
+            Some((h, _)) => Some(h.byte_count),
+            None => pinned_header(page, root).map(|h| h.byte_count),
+        };
+        if let Some(of) = budget {
+            let bytes = spent.saturating_add(sent_row_bytes(page));
+            if bytes > of {
+                return Err(RunError::TooManyBytes { page: k, bytes, of });
+            }
         }
         let c = check_rows_answer(page, None, None).map_err(|e| RunError::Page(k, e))?;
         if c.manifest_root != *root {
@@ -849,9 +900,19 @@ pub fn read_links_pages(
             // bytes: rows 0 to `index` need this much of it.
             let t = taken.entry(shard).or_default();
             *t = t.saturating_add(bytes.len() as u64);
+            spent = spent.saturating_add(4 + bytes.len() as u64);
             if let Some(e) = entries.get(&shard) {
-                if t.saturating_add(4 + 4 * (index + 1)) > e.bytes {
+                let need = t.saturating_add(4 + 4 * (index + 1));
+                if need > e.bytes {
                     return Err(RunError::Oversize { shard, of: e.bytes });
+                }
+                // The last row: the file is exactly its entry's size.
+                if index + 1 == e.rows && need != e.bytes {
+                    return Err(RunError::Undersize {
+                        shard,
+                        bytes: need,
+                        of: e.bytes,
+                    });
                 }
             }
             let from = header.schema_of(shard);
@@ -876,6 +937,28 @@ pub fn read_links_pages(
         });
     }
     Ok((header, links))
+}
+
+/// The header of rows answer `page` when it is the one `root` pins
+/// (decoded only, no row checked).
+fn pinned_header(page: &Value, root: &Hash32) -> Option<ManifestHeader> {
+    let b = hex_field(&page["manifest"]["header"], "manifest.header").ok()?;
+    let h = ManifestHeader::try_from_slice(&b).ok()?;
+    (h.root() == *root).then_some(h)
+}
+
+/// The bytes of `page`'s rows with their 4-byte length framing, by the
+/// length of each row's hex as sent (nothing decoded).
+fn sent_row_bytes(page: &Value) -> u64 {
+    page["rows"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|r| {
+            let h = r["row"].as_str().unwrap_or_default();
+            4 + (h.strip_prefix("0x").unwrap_or(h).len() / 2) as u64
+        })
+        .fold(0, u64::saturating_add)
 }
 
 #[cfg(test)]
@@ -1831,9 +1914,33 @@ mod tests {
     /// Review SUCC-B5 H1: entries that name one shard file with fewer bytes
     /// than it holds (one root may be named again, and one-key ranges may
     /// repeat) make a small header for big rows; a reader stops at the first
-    /// row past its entry's bytes, and the fault is the publisher's.
+    /// row past its entry's bytes, and the fault is the publisher's. Here the
+    /// header's total is true (shard 1 claims what shard 0 lacks), so only
+    /// the shard check sees it.
     #[test]
     fn cat_succ_a_reader_takes_no_more_rows_than_the_entries_hold() {
+        let (file, version) = four_entries_of_one_file();
+        let t = file.len() as u64;
+        let files = vec![file.clone(); 4];
+        // Honest entries: every row is read.
+        let honest = version(&[t; 4]);
+        let p = page(&honest, &files, 0..12, None);
+        let (_, links) = read_links_pages(&honest.header.root(), &[p]).expect("complete");
+        assert_eq!(links.rows(), 12);
+        // Shard 0 claims the fewest bytes three rows allow.
+        let small = version(&[16, 2 * t - 16, t, t]);
+        assert_eq!(small.header.byte_count, honest.header.byte_count);
+        assert!(usable(&small.header).is_ok(), "the header alone passes");
+        let p = page(&small, &files, 0..12, None);
+        let e = read_links_pages(&small.header.root(), &[p]).expect_err("refused");
+        assert_eq!(e, RunError::Oversize { shard: 0, of: 16 });
+        assert!(!e.node_fault(), "the publisher signed the entries");
+    }
+
+    /// Four entries that name one file of three 1 KB rows, all of key 1, and
+    /// a links version of them with the given `bytes` per entry.
+    #[allow(clippy::type_complexity)]
+    fn four_entries_of_one_file() -> (Vec<u8>, Box<dyn Fn(&[u64; 4]) -> Manifest>) {
         let s = links_schema();
         let fat: Vec<Vec<u8>> = (0..3)
             .map(|_| {
@@ -1842,13 +1949,11 @@ mod tests {
             .collect();
         let file = encode_shard(&fat);
         let sum = check_shard(&s, &file).expect("ok").summary;
-        let version = |bytes: Option<u64>| {
+        let version = move |bytes: &[u64; 4]| {
             let entries: Vec<ShardEntry> = (0..4)
                 .map(|i| {
                     let mut e = ShardEntry::new(i, &sum);
-                    if let Some(b) = bytes {
-                        e.bytes = b;
-                    }
+                    e.bytes = bytes[i as usize];
                     e
                 })
                 .collect();
@@ -1865,18 +1970,66 @@ mod tests {
             )
             .expect("ok")
         };
+        (file, Box::new(version))
+    }
+
+    /// Review SUCC-B6 L3: before a page's rows are hashed, their length as
+    /// sent is held against what the pinned header's `byte_count` has left:
+    /// entries that all claim the fewest bytes (a 64-byte header for 12 KB
+    /// of rows) are refused at page 0 with no row checked, the node's fault
+    /// (a node that holds the files serves none of them). Garbage rows of
+    /// that size are refused the same way, not after their proofs.
+    #[test]
+    fn cat_succ_a_reader_hashes_no_more_than_the_header_holds() {
+        let (file, version) = four_entries_of_one_file();
         let files = vec![file.clone(); 4];
-        // Honest entries: every row is read.
-        let honest = version(None);
-        let p = page(&honest, &files, 0..12, None);
-        let (_, links) = read_links_pages(&honest.header.root(), &[p]).expect("complete");
-        assert_eq!(links.rows(), 12);
-        // Entries that each claim the fewest bytes three rows allow.
-        let small = version(Some(4 + 4 * 3));
-        assert!(usable(&small.header).is_ok(), "the header alone passes");
+        let small = version(&[16; 4]);
         let p = page(&small, &files, 0..12, None);
         let e = read_links_pages(&small.header.root(), &[p]).expect_err("refused");
-        assert_eq!(e, RunError::Oversize { shard: 0, of: 16 });
+        assert!(
+            matches!(e, RunError::TooManyBytes { page: 0, of: 64, bytes } if bytes > 64),
+            "{e:?}"
+        );
+        assert!(e.node_fault());
+        // An honest version, and a page whose first row is noise as long as
+        // the whole version.
+        let t = file.len() as u64;
+        let honest = version(&[t; 4]);
+        let mut p = page(&honest, &files, 0..12, None);
+        p["rows"][0]["row"] = json!(format!("0x{}", "ab".repeat(4 * t as usize)));
+        let e = read_links_pages(&honest.header.root(), &[p]).expect_err("refused");
+        assert!(matches!(e, RunError::TooManyBytes { page: 0, .. }), "{e:?}");
+        // A later page is held against what the pages before it took.
+        let (m, files) = links_version(1_500, 600);
+        let left = m.header.byte_count;
+        let p0 = page(&m, &files, 0..1_000, None);
+        let mut p1 = page(&m, &files, 1_000..1_500, None);
+        assert!(read_links_pages(&m.header.root(), &[p0.clone(), p1.clone()]).is_ok());
+        p1["rows"][0]["row"] = json!(format!("0x{}", "ab".repeat(left as usize / 2)));
+        let e = read_links_pages(&m.header.root(), &[p0, p1]).expect_err("refused");
+        assert!(matches!(e, RunError::TooManyBytes { page: 1, .. }), "{e:?}");
+    }
+
+    /// Review SUCC-B6 L3: entries that claim more bytes than their rows take
+    /// (a node holds no such file, so it shows `pending` everywhere) are the
+    /// publisher's fault at the shard's last row, not a complete run.
+    #[test]
+    fn cat_succ_a_reader_refuses_a_shard_smaller_than_its_entry() {
+        let (file, version) = four_entries_of_one_file();
+        let t = file.len() as u64;
+        let files = vec![file.clone(); 4];
+        let big = version(&[t, t + 1, t, t]);
+        assert!(usable(&big.header).is_ok());
+        let p = page(&big, &files, 0..12, None);
+        let e = read_links_pages(&big.header.root(), &[p]).expect_err("refused");
+        assert_eq!(
+            e,
+            RunError::Undersize {
+                shard: 1,
+                bytes: t,
+                of: t + 1
+            }
+        );
         assert!(!e.node_fault(), "the publisher signed the entries");
     }
 

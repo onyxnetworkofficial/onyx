@@ -41,6 +41,12 @@ export async function pp6(browser, base, expect) {
 		await pg.goto(base + '#/api');
 		const ref = pg.getByTestId('api-reference');
 		await ref.waitFor();
+		// Review NEWC-R1 H1: the page's check commands are ones the released onyx-check accepts
+		// (an oldest-first answer, whole-number bounds); only the read example asks newest first.
+		const chk = await pg.getByTestId('api-quick-check').innerText();
+		expect(chk.includes('onyx-check --bulk rows.json') && !/order=|--order/.test(chk) && !/\d{4}-\d{2}-\d{2}/.test(chk), 'PP6: the check commands ask oldest first with whole-number bounds (no order=desc, no date)');
+		const reads = await pg.getByTestId('api-quick-cmd').allInnerTexts();
+		expect(reads.length === 3 && (await pg.getByTestId('api-quick-release').innerText()).includes('next release'), `PP6 ${width}: three read commands, and the page says a newest-first check needs the next release`);
 		const ops = await pg.getByTestId('api-op').evaluateAll((els) => els.map((e) => e.querySelector('summary').innerText.replace(/\s+/g, ' ').trim()));
 		const missing = want.filter((w) => !ops.some((t) => t.startsWith(w + ' ')));
 		expect(ops.length === want.length && missing.length === 0, `PP6 ${width}: the Reference lists all ${want.length} operations, method and path (${ops.length} shown; missing ${missing.join(', ') || 'none'})`);

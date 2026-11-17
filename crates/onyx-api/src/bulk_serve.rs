@@ -19,7 +19,7 @@
 //!   latest versions and [`BulkLimits::max_datasets`] datasets; the node at
 //!   most [`BulkLimits::max_total_bytes`] (CL5-5).
 //! - `GET /v1/bulk`, `GET /v1/bulk/{publisher}/{dataset}` and
-//!   `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`: every
+//!   `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=&order=`: every
 //!   row with its Merkle proof, its shard's entry with a proof under the
 //!   manifest, the manifest header, the signed report and the anchor as read
 //!   at a finalized block (rechecked at most [`ANCHOR_RECHECK_SECS`] apart:
@@ -3544,7 +3544,12 @@ impl BulkStore {
     /// `GET /v1/bulk`: every dataset, or with a [`ListQuery`] the datasets
     /// whose `publisher/dataset` holds every search word, one page at a time
     /// in id order. `total` counts every match; `next` is the cursor of the
-    /// page after (`null` on the last).
+    /// page after (`null` on the last). An entry whose key reads as unix
+    /// seconds has `newest` (its newest key's UTC day) and `newest_age_days`
+    /// (whole days behind this node's clock, read once an answer:
+    /// `now_unix`); `fresh` and `sort=newest` use the same keys (READINESS
+    /// A20). Nothing is kept between answers: all of it is read from the
+    /// held signed headers.
     pub fn list(&self, q: &ListQuery) -> Result<Value, ApiError> {
         self.list_with(q, &BTreeMap::new())
     }
@@ -3602,27 +3607,82 @@ impl BulkStore {
             let words = id_words(&id);
             q.any.iter().all(|g| g.iter().any(|t| t.matches(&words)))
         };
+        // The clock is read once an answer: `fresh` and each entry's age
+        // come from it and the signed newest keys, nothing is kept.
+        let now = (self.now)();
+        let listed = |p: &String, d: &String| {
+            matches(p, d)
+                && !removals.get(p).is_some_and(|b| b.removed.contains(d))
+                && !learned.contains(&(p.clone(), d.clone()))
+        };
+        // `fresh=Nd`: a newest key at most N days behind; none (no time, or
+        // dated in the future) is never fresh.
+        let fresh = |newest: Option<i128>| {
+            q.fresh
+                .is_none_or(|n| newest.is_some_and(|k| age_days(k, now) <= n))
+        };
         let (mut total, mut more) = (0usize, false);
         let mut page = Vec::new();
-        for ((p, d), x) in ds.iter() {
-            let Some(h) = x.latest() else { continue };
-            if !matches(p, d)
-                || removals.get(p).is_some_and(|b| b.removed.contains(d))
-                || learned.contains(&(p.clone(), d.clone()))
-            {
-                continue;
+        if q.newest_first {
+            // `sort=newest`: the newest key first, a key that is not a time
+            // (or lies in the future) last, ties in id order. Only this
+            // order collects every match to sort it (review FRESH-R1 L3).
+            let rank = |k: Option<i128>| (k.is_none(), std::cmp::Reverse(k.unwrap_or(0)));
+            let mut found = Vec::new();
+            for ((p, d), x) in ds.iter() {
+                let Some(h) = x.latest() else { continue };
+                let newest = newest_now(&h.manifest.header, now);
+                if listed(p, d) && fresh(newest) {
+                    found.push((rank(newest), p, d, x, h));
+                }
             }
-            total += 1;
-            if q.after.as_ref().is_some_and(|a| (p, d) <= (&a.0, &a.1)) {
-                continue;
+            total = found.len();
+            found.sort_by_key(|(r, p, d, _, _)| (*r, *p, *d));
+            // The cursor's place: by the newest key its dataset has now.
+            let after = match &q.after {
+                None => None,
+                Some(a) => {
+                    let x = ds.get(a).and_then(Dataset::latest).ok_or_else(|| {
+                        bad_request(
+                            "after: no such dataset now; start the list again without after",
+                        )
+                    })?;
+                    Some((rank(newest_now(&x.manifest.header, now)), &a.0, &a.1))
+                }
+            };
+            for (r, p, d, x, h) in found {
+                if after.is_some_and(|a| (r, p, d) <= a) {
+                    continue;
+                }
+                if q.limit.is_some_and(|n| page.len() >= n) {
+                    more = true;
+                    break;
+                }
+                let cat_fork =
+                    forked_pubs.contains(p) && x.versions.iter().any(|h| h.catalog.is_some());
+                page.push((p, d, (h, x.forked.is_some() || cat_fork)));
             }
-            if q.limit.is_some_and(|n| page.len() >= n) {
-                more = true;
-                continue;
+        } else {
+            // Id order: one pass that counts, nothing collected but the page.
+            for ((p, d), x) in ds.iter() {
+                let Some(h) = x.latest() else { continue };
+                if !listed(p, d)
+                    || (q.fresh.is_some() && !fresh(newest_now(&h.manifest.header, now)))
+                {
+                    continue;
+                }
+                total += 1;
+                if q.after.as_ref().is_some_and(|a| (p, d) <= (&a.0, &a.1)) {
+                    continue;
+                }
+                if q.limit.is_some_and(|n| page.len() >= n) {
+                    more = true;
+                    continue;
+                }
+                let cat_fork =
+                    forked_pubs.contains(p) && x.versions.iter().any(|h| h.catalog.is_some());
+                page.push((p, d, (h, x.forked.is_some() || cat_fork)));
             }
-            let cat_fork =
-                forked_pubs.contains(p) && x.versions.iter().any(|h| h.catalog.is_some());
-            page.push((p, d, (h, x.forked.is_some() || cat_fork)));
         }
         let next = more
             .then(|| page.last().map(|(p, d, _)| format!("{p}/{d}")))
@@ -3645,6 +3705,7 @@ impl BulkStore {
                     "license": hd.rights.license, "forked": forked,
                     "created_unix": hd.created_unix,
                 });
+                put_newest(&mut v, hd, now);
                 if let Some(n) = links.get(p).and_then(|l| l.0.get(d)) {
                     v["replaces"] = json!(n.len());
                 }
@@ -3657,7 +3718,10 @@ impl BulkStore {
                 v
             })
             .collect();
-        Ok(json!({"datasets": items, "total": total, "next": next, "catalogs": catalogs}))
+        Ok(json!({
+            "datasets": items, "total": total, "next": next, "catalogs": catalogs,
+            "now_unix": now,
+        }))
     }
 
     /// `GET /v1/bulk/{publisher}/{dataset}`.
@@ -3703,14 +3767,16 @@ impl BulkStore {
             .iter()
             .map(|v| json!({"version": v.manifest.header.version, "root": v.manifest.header.root().to_string(), "digest": v.anchor.digest.to_string()}))
             .collect();
-        Ok(json!({
+        let mut v = json!({
             "publisher": publisher,
             "dataset": dataset,
             "manifest": header_json(&h.manifest),
             "anchor": anchor_json(h),
             "versions": versions,
             "shards": shards,
-        }))
+        });
+        put_newest(&mut v, &h.manifest.header, (self.now)());
+        Ok(v)
     }
 
     /// `GET /v1/bulk/{publisher}/{dataset}/rows`.
@@ -3737,17 +3803,29 @@ impl BulkStore {
     ) -> Result<Value, ApiError> {
         let anchor = anchor_json(&held);
         let manifest = held.manifest;
+        let key_column = manifest.header.schema.key_column().map(|c| c.name.clone());
+        // The unit is claimed, and a date taken, only for a key that is
+        // named as a time and whose signed range reads as unix seconds
+        // (review NEWC-R1 M3).
+        let time_key = key_column.as_deref().is_some_and(|n| {
+            key_is_unix_seconds(n, manifest.header.key_min, manifest.header.key_max)
+        });
+        dates_fit(q, key_column.as_deref(), time_key)?;
         let from = q.from.unwrap_or(i128::MIN);
         let to = q.to.unwrap_or(i128::MAX);
         let mut skip = q.page.saturating_mul(q.limit);
         let mut rows = Vec::new();
         let mut used: Vec<u32> = Vec::new();
         let mut more = false;
-        let candidates: Vec<&ShardEntry> = manifest
+        let mut candidates: Vec<&ShardEntry> = manifest
             .shards
             .iter()
             .filter(|e| e.key_max >= from && e.key_min <= to)
             .collect();
+        // `order=desc`: the same walk from the last shard and the last row.
+        if q.desc {
+            candidates.reverse();
+        }
         for e in candidates {
             if rows.len() as u64 >= q.limit {
                 more = true;
@@ -3768,15 +3846,32 @@ impl BulkStore {
                 skip -= count;
                 continue;
             }
-            let start = lo + skip;
+            let take = (q.limit - rows.len() as u64).min(count - skip);
+            // The rows of this shard in the page: `[start, start + take)`,
+            // counted from `lo` upward or from `hi` downward.
+            let start = if q.desc { hi - skip - take } else { lo + skip };
             skip = 0;
-            let take = (q.limit - rows.len() as u64).min(hi - start);
-            for i in start..start + take {
+            let mut push = |i: u64| -> Result<(), ApiError> {
                 let p = l.tree.proof(i).ok_or_else(|| internal("proof"))?;
                 rows.push(row_json(&manifest.header, e.index, l.row(i as usize), &p));
+                Ok(())
+            };
+            if q.desc {
+                for i in (start..start + take).rev() {
+                    push(i)?;
+                }
+            } else {
+                for i in start..start + take {
+                    push(i)?;
+                }
             }
             used.push(e.index);
-            if start + take < hi {
+            let left = if q.desc {
+                start > lo
+            } else {
+                start + take < hi
+            };
+            if left {
                 more = true;
                 break;
             }
@@ -3799,7 +3894,12 @@ impl BulkStore {
                 "to": q.to.map(|t| t.to_string()),
                 "page": q.page,
                 "limit": q.limit,
+                "order": if q.desc { "desc" } else { "asc" },
                 "root": q.root.map(|r| r.to_string()),
+            },
+            "key": {
+                "column": key_column,
+                "unit": time_key.then_some("unix_seconds"),
             },
             "shards": shards,
             "rows": rows,
@@ -4019,6 +4119,12 @@ pub struct RowsQuery {
     pub page: u64,
     /// Rows per page, 1..=[`MAX_PAGE_ROWS`].
     pub limit: u64,
+    /// Newest first (`order=desc`): the page counts from the largest key
+    /// down, and the rows come in that order.
+    pub desc: bool,
+    /// `from` or `to` was given as a date ([`parse_time`]): the dataset's
+    /// key must read as unix seconds ([`key_is_unix_seconds`]).
+    pub dated: bool,
     /// Serve the held version with this manifest root, not the newest
     /// (`409 bulk_version_not_held` when not held; ADR-0059 amendment 6
     /// item 4: a reader pins every page of one version).
@@ -4075,10 +4181,18 @@ fn id_words(id: &str) -> Vec<&str> {
 /// `publisher/dataset`; letters, digits, `.`, `-`, `_`, `/` and spaces),
 /// `any` (groups split by `;`, terms by `,`: every group must have a term
 /// among the id's whole words, [`AnyTerm`]), `limit` (1..=[`MAX_LIST_PAGE`])
-/// and `after` (the `next` cursor of the page before). None given: every
-/// dataset, as before.
+/// and `after` (the `next` cursor of the page before), `fresh` (`30d`: only
+/// datasets whose newest key is at most that many days behind the node's
+/// clock, [`age_days`]) and `sort` (`id`, or `newest`: the newest key first).
+/// None given: every dataset, as before.
 #[derive(Debug, Default, PartialEq, Eq)]
 pub struct ListQuery {
+    /// `fresh=Nd`: only datasets whose key reads as unix seconds and whose
+    /// newest key is at most `N` whole days behind the clock.
+    pub fresh: Option<u64>,
+    /// `sort=newest`: the newest key first; datasets whose key is not a
+    /// time last; ties in id order.
+    pub newest_first: bool,
     /// Lowercase search words.
     pub words: Vec<String>,
     /// `any` groups: each must match.
@@ -4186,19 +4300,210 @@ pub fn parse_list_query(q: Option<&str>) -> Result<ListQuery, ApiError> {
                     .ok_or_else(|| bad_request("after: publisher/dataset, from the page's next"))?;
                 out.after = Some((p.to_string(), d.to_string()));
             }
+            "fresh" => {
+                out.fresh = Some(
+                    v.strip_suffix('d')
+                        .filter(|n| !n.is_empty() && n.len() <= 4)
+                        .filter(|n| n.bytes().all(|b| b.is_ascii_digit()))
+                        .and_then(|n| n.parse::<u64>().ok())
+                        .filter(|n| (1..=MAX_FRESH_DAYS).contains(n))
+                        .ok_or_else(|| {
+                            bad_request(format!(
+                                "fresh: days as 1d to {MAX_FRESH_DAYS}d, for example 30d"
+                            ))
+                        })?,
+                )
+            }
+            "sort" => {
+                out.newest_first = match v.as_str() {
+                    "id" => false,
+                    "newest" => true,
+                    _ => return Err(bad_request("sort: id or newest")),
+                }
+            }
             _ => return Err(bad_request(format!("unknown query parameter {k}"))),
         }
     }
     Ok(out)
 }
 
-/// Parse `from`, `to` (decimal integers), `page` and `limit`.
+/// Days of a `fresh` filter at most (ten years).
+pub const MAX_FRESH_DAYS: u64 = 3_650;
+
+/// The newest key of a version as unix seconds, when its key reads as unix
+/// seconds ([`key_is_unix_seconds`]: the column is named as a time and the
+/// signed range is plausible). `None` for any other key: such a dataset has
+/// no `newest` and is never called stale (READINESS A20).
+pub fn newest_key(h: &onyx_bulk::ManifestHeader) -> Option<i128> {
+    let name = &h.schema.key_column()?.name;
+    key_is_unix_seconds(name, h.key_min, h.key_max).then_some(h.key_max)
+}
+
+/// Seconds a newest key may lie ahead of the node's clock and still be read
+/// as a day of data (one day: clocks and day-end keys differ a little).
+pub const NEWEST_AHEAD_SECS: i128 = 86_400;
+
+/// Whether the newest key of a version is dated more than
+/// [`NEWEST_AHEAD_SECS`] after `now` (review FRESH-R1 M1). A publisher signs
+/// its own key range: one that signs a key of 2099 must not read as the
+/// freshest dataset for ever. Such a version has no `newest` and no age, is
+/// in no `fresh` list, sorts with the keys that are no time, and says
+/// `newest_in_future`.
+pub fn newest_in_future(h: &onyx_bulk::ManifestHeader, now: u64) -> bool {
+    newest_key(h).is_some_and(|k| k > i128::from(now) + NEWEST_AHEAD_SECS)
+}
+
+/// [`newest_key`] as the answers use it at clock `now`: `None` also for a
+/// key dated in the future ([`newest_in_future`]).
+pub fn newest_now(h: &onyx_bulk::ManifestHeader, now: u64) -> Option<i128> {
+    newest_key(h).filter(|k| *k <= i128::from(now) + NEWEST_AHEAD_SECS)
+}
+
+/// The UTC day of unix seconds `t` as `YYYY-MM-DD`.
+pub fn iso_day(t: i128) -> String {
+    let z = t.div_euclid(86_400) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = yoe + era * 400 + i128::from(m <= 2);
+    format!("{y:04}-{m:02}-{d:02}")
+}
+
+/// Whole days the newest key `newest` (unix seconds) lies behind the clock
+/// `now`: 0 for a key less than a day old, or up to [`NEWEST_AHEAD_SECS`]
+/// ahead of the clock (a key further ahead gets no age at all:
+/// [`newest_now`]). `fresh=Nd` keeps a dataset while this is at most `N`;
+/// readers call it stale past 30.
+pub fn age_days(newest: i128, now: u64) -> u64 {
+    let behind = i128::from(now).saturating_sub(newest).max(0) / 86_400;
+    u64::try_from(behind).unwrap_or(u64::MAX)
+}
+
+/// `newest` and `newest_age_days` of a version on `v`, when its key reads as
+/// unix seconds; `newest_in_future: true` alone when that key is dated in
+/// the future; nothing otherwise.
+fn put_newest(v: &mut Value, h: &onyx_bulk::ManifestHeader, now: u64) {
+    if let Some(k) = newest_now(h, now) {
+        v["newest"] = json!(iso_day(k));
+        v["newest_age_days"] = json!(age_days(k, now));
+    } else if newest_in_future(h, now) {
+        v["newest_in_future"] = json!(true);
+    }
+}
+
+/// Key column names that may hold unix seconds (UTC). The schema has no
+/// unit: the name is the publisher's word for it, and it is believed only
+/// with the key range ([`key_is_unix_seconds`]).
+pub const TIME_KEY_NAMES: [&str; 6] = ["day", "date", "time", "timestamp", "ts", "t"];
+/// The smallest key read as unix seconds: 1973-03-03T09:46:40Z. Below it lie
+/// dates written as numbers (`20260131` is under it) and small counters.
+pub const UNIX_KEY_MIN: i128 = 100_000_000;
+/// The first key no longer read as unix seconds: 2100-01-01T00:00:00Z.
+/// Milliseconds since 1970 are far above it from 1970-02-17 on.
+pub const UNIX_KEY_END: i128 = 4_102_444_800;
+
+/// Whether a key column of this name is one of [`TIME_KEY_NAMES`].
+pub fn is_time_key(name: &str) -> bool {
+    TIME_KEY_NAMES.contains(&name)
+}
+
+/// Whether a dataset's key reads as unix seconds, so the answer may name the
+/// unit and `from` and `to` may be dates (review NEWC-R1 M3): the key column
+/// is named as a time ([`TIME_KEY_NAMES`]), the signed header's `key_min`
+/// and `key_max` both lie in [[`UNIX_KEY_MIN`], [`UNIX_KEY_END`]) (1973-03-03
+/// to 2100-01-01), and for a column named `day` or `date` both are a day's
+/// first second (a multiple of 86,400). Milliseconds, `YYYYMMDD` numbers and
+/// block heights fail it; a date is then refused, never converted wrongly.
+/// It is a reading of the range, not a proof of the unit: a key of another
+/// unit whose whole range falls inside it would pass.
+pub fn key_is_unix_seconds(name: &str, key_min: i128, key_max: i128) -> bool {
+    let inside = |k: i128| (UNIX_KEY_MIN..UNIX_KEY_END).contains(&k);
+    let day = !matches!(name, "day" | "date") || (key_min % 86_400 == 0 && key_max % 86_400 == 0);
+    is_time_key(name) && inside(key_min) && inside(key_max) && day
+}
+
+/// A date is unix seconds: only a key that reads as unix seconds takes one
+/// ([`key_is_unix_seconds`]; the schema has no unit of its own).
+fn dates_fit(q: &RowsQuery, key_column: Option<&str>, unix_seconds: bool) -> Result<(), ApiError> {
+    if !q.dated || unix_seconds {
+        return Ok(());
+    }
+    Err(bad_request(format!(
+        "from and to take a date only for a key in unix seconds: a key column named one of {} whose keys all lie between 1973-03-03 and 2100-01-01 in unix seconds (whole days for day and date). The key column here is {} and does not read as one, so pass whole numbers",
+        TIME_KEY_NAMES.join(", "),
+        key_column.unwrap_or("unnamed")
+    )))
+}
+
+/// Days from 1970-01-01 to a date of the proleptic Gregorian calendar
+/// (`None` for a date that does not exist).
+fn days_from_civil(y: i64, m: i64, d: i64) -> Option<i64> {
+    let leap = (y % 4 == 0 && y % 100 != 0) || y % 400 == 0;
+    let len = match m {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap => 29,
+        2 => 28,
+        _ => return None,
+    };
+    if !(1..=len).contains(&d) {
+        return None;
+    }
+    let y = if m <= 2 { y - 1 } else { y };
+    let era = y.div_euclid(400);
+    let yoe = y.rem_euclid(400);
+    let doy = (153 * (if m > 2 { m - 3 } else { m + 9 }) + 2) / 5 + d - 1;
+    let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+    Some(era * 146_097 + doe - 719_468)
+}
+
+/// `YYYY-MM-DD` or `YYYY-MM-DDThh:mm:ss` with an optional `Z`, always UTC,
+/// as unix seconds. A date alone is its first second, or with `end` its last
+/// (so `to=2026-01-31` holds the whole day).
+pub fn parse_time(v: &str, end: bool) -> Option<i128> {
+    let num = |s: &str, n: usize| {
+        (s.len() == n && s.bytes().all(|c| c.is_ascii_digit()))
+            .then(|| s.parse::<i64>().ok())
+            .flatten()
+    };
+    let (date, time) = match v.split_once('T') {
+        Some((d, t)) => (d, Some(t.strip_suffix('Z').unwrap_or(t))),
+        None => (v, None),
+    };
+    let mut d = date.split('-');
+    let (y, m, day) = (num(d.next()?, 4)?, num(d.next()?, 2)?, num(d.next()?, 2)?);
+    if d.next().is_some() {
+        return None;
+    }
+    let secs = match time {
+        None if end => 86_399,
+        None => 0,
+        Some(t) => {
+            let mut p = t.split(':');
+            let (h, mi, s) = (num(p.next()?, 2)?, num(p.next()?, 2)?, num(p.next()?, 2)?);
+            if p.next().is_some() || h > 23 || mi > 59 || s > 59 {
+                return None;
+            }
+            h * 3600 + mi * 60 + s
+        }
+    };
+    Some(i128::from(days_from_civil(y, m, day)? * 86_400 + secs))
+}
+
+/// Parse `from`, `to` (whole numbers, or dates for a day or time key:
+/// [`parse_time`]), `page`, `limit`, `order` (`asc`, `desc`) and `root`.
 pub fn parse_rows_query(q: Option<&str>) -> Result<RowsQuery, ApiError> {
     let mut out = RowsQuery {
         from: None,
         to: None,
         page: 0,
         limit: DEFAULT_PAGE_ROWS,
+        desc: false,
+        dated: false,
         root: None,
     };
     let mut seen: Vec<&str> = Vec::new();
@@ -4208,13 +4513,30 @@ pub fn parse_rows_query(q: Option<&str>) -> Result<RowsQuery, ApiError> {
             return Err(bad_request(format!("{k} given twice")));
         }
         seen.push(k);
-        let int = |what: &str| {
-            onyx_bulk::row::parse_int(v)
-                .map_err(|_| bad_request(format!("{what} must be a whole number")))
+        // A whole number as before; anything else must be a date.
+        let mut key = |what: &str, end: bool| match onyx_bulk::row::parse_int(v) {
+            Ok(n) => Ok(n),
+            Err(_) => {
+                // `%3A` for the colons of a time.
+                let t = url_decode(v).and_then(|v| parse_time(&v, end));
+                out.dated |= t.is_some();
+                t.ok_or_else(|| {
+                    bad_request(format!(
+                        "{what} must be a whole number (the key, unix seconds for a day or time key) or a UTC date: 2026-01-31 or 2026-01-31T00:00:00Z"
+                    ))
+                })
+            }
         };
         match k {
-            "from" => out.from = Some(int("from")?),
-            "to" => out.to = Some(int("to")?),
+            "from" => out.from = Some(key("from", false)?),
+            "to" => out.to = Some(key("to", true)?),
+            "order" => {
+                out.desc = match v {
+                    "asc" => false,
+                    "desc" => true,
+                    _ => return Err(bad_request("order must be asc or desc")),
+                }
+            }
             "page" => {
                 out.page = v
                     .parse::<u64>()

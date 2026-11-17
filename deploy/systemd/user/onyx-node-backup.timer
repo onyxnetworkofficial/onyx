@@ -1,0 +1,16 @@
+# Runs onyx-node-backup.service once a day after 02:30 UTC: after the early-contributor record's
+# daily upload (00:30 UTC) and long before the on-chain archive's refresh (about 12:30 UTC), so a
+# snapshot rarely catches a publisher mid-upload. A missed run (machine off) starts at the next
+# boot. Install: see onyx-node-backup.service. Not enabled by any script.
+
+[Unit]
+Description=Onyx API node backup, daily after 02:30 UTC
+
+[Timer]
+OnCalendar=*-*-* 02:30:00 UTC
+RandomizedDelaySec=900
+Persistent=true
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

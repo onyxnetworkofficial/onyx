@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { anyGroups, anyValue } from '../src/lib/glossary.ts';
-import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints } from '../src/lib/datasets.ts';
+import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints, staleSince, STALE_DAYS } from '../src/lib/datasets.ts';
 
 const good = {
 	publisher: 'onchain-archive',
@@ -175,4 +175,50 @@ test('a chart draws only plain-number columns, never a table of series', () => {
 		{ v: -2, text: '-2', head: '2026-08-28' }
 	]);
 	assert.deepEqual(chartColumns({ ...s, columns: ['day', 'series', 'i', 'v00'] }), []);
+});
+
+test('freshness: the newest day the node says and age, both or neither; stale only past 30 days (A20)', () => {
+	assert.equal(STALE_DAYS, 30);
+	const d = item({ ...good, newest: '2026-08-28', newest_age_days: 80 });
+	assert.deepEqual([d.newest, d.ageDays], ['2026-08-28', 80]);
+	assert.equal(staleSince(d), '2026-08-28');
+	// The 30-day edge: 30 whole days behind is not stale, 31 is.
+	assert.equal(staleSince(item({ ...good, newest: '2026-10-17', newest_age_days: 30 })), null);
+	assert.equal(staleSince(item({ ...good, newest: '2026-10-16', newest_age_days: 31 })), '2026-10-16');
+	assert.equal(staleSince(item({ ...good, newest: '2026-11-13', newest_age_days: 0 })), null);
+	// A key that is not a time: the node sends neither field; nothing is shown, never stale.
+	const plain = item({ ...good, key_min: '0', key_max: '900000' });
+	assert.deepEqual([plain.newest, plain.ageDays, staleSince(plain)], [null, null, null]);
+	// The page never reads a day out of the key itself: only the node says the key is a time.
+	assert.equal(staleSince(item(good)), null);
+	// Review FRESH-R1 M1: the node says the newest key is dated in the future. No day is kept
+	// (even one the node sends beside it), and it is neither fresh nor stale.
+	for (const more of [{}, { newest: '2099-12-31', newest_age_days: 0 }, { newest: '2026-08-28', newest_age_days: 80 }]) {
+		const f = item({ ...good, key_max: '4102358400', newest_in_future: true, ...more });
+		assert.deepEqual([f.future, f.newest, f.ageDays, staleSince(f)], [true, null, null, null], JSON.stringify(more));
+	}
+	assert.equal(d.future, false);
+	assert.equal(item({ ...good, newest_in_future: 'yes' }).future, false);
+	// Out of shape: both dropped, the dataset stays listed.
+	for (const bad of [
+		{ newest: '2026-08-28' },
+		{ newest_age_days: 80 },
+		{ newest: '<b>2026</b>', newest_age_days: 80 },
+		{ newest: '2026-13-01', newest_age_days: 80 },
+		{ newest: 20260828, newest_age_days: 80 },
+		{ newest: '2026-08-28', newest_age_days: -1 },
+		{ newest: '2026-08-28', newest_age_days: '80' },
+		{ newest: '2026-08-28', newest_age_days: 1.5 }
+	]) {
+		const x = item({ ...good, ...bad });
+		assert.deepEqual([x.dataset, x.newest, x.ageDays, staleSince(x)], [good.dataset, null, null, null], JSON.stringify(bad));
+	}
+});
+
+test('the list URL asks the node for fresh datasets only when told to (A20)', () => {
+	assert.equal(new URL(listUrl('btc', null), 'http://x').searchParams.get('fresh'), null);
+	const u = new URL(listUrl('btc', 'onchain-archive/btc.a', 50, true), 'http://x');
+	assert.equal(u.searchParams.get('fresh'), '30d');
+	assert.equal(u.searchParams.get('after'), 'onchain-archive/btc.a');
+	assert.equal(listUrl('', null, 50, true), '/v1/bulk?fresh=30d&limit=50');
 });

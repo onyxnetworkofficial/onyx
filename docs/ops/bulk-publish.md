@@ -12,21 +12,35 @@ for Base Sepolia to make your anchor final). Later versions: about 30 minutes, m
 
 ## Before you start (once)
 
-1. **Pick a neutral publisher name and domain.** The name is public and permanent. It must not
-   be your name, a person's name, a company or product name, or anything that points to Onyx or
-   to you. Use a short descriptive id in lowercase with dots or dashes, for example
+1. **Pick a neutral publisher name and domain.** The name (your *publisher id*) is public and
+   permanent: it is written into the book on chain and into every answer. It is a label for the
+   data, not a signature of who you are. So it must describe the data and nothing else: not your
+   name or any person's, not a company or product name, and not the word Onyx or anything that
+   reads as if the network itself published the data. A reader must not be able to tell from the
+   id who is behind it; what they trust is your key and your signed rights statement, never the
+   name. Use a short descriptive id in lowercase with dots or dashes, for example
    `onchain-metrics.pub`, and a domain you control that is equally neutral (for example a new
    domain or a subdomain used only for this). You need to be able to put one file on that domain
    over HTTPS.
    The book records the domain as your *origin*, and one origin belongs to one publisher. An
    origin may also be a domain and a path (`example.org/archive`): the keys document is then at
    `https://<origin>/.well-known/onyx-source-keys.json`.
-2. **Ask the Onyx operator for three things:** the node address (`https://...`), the signed book
-   address (`0x...`, the `signedBook` of the node's deployment manifest), and who the reviewer
-   is. The node must run with `ONYX_BULK_DIR` (docs/ops/config.md).
+2. **Note the test network's two addresses and how to reach the reviewer.**
+   - Node address: `https://onyx.cryptagraph.com` (the hosted test node; it takes bulk uploads).
+   - Signed book address: `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` (the `OnyxSignedBook` contract on
+     Base Sepolia, chain id 84532; listed in `deploy/early-record/contracts.json` and
+     docs/ops/deployment.md).
+   - The reviewer registers your key before you can anchor. Reach the reviewer in one way: open an
+     issue on the public repository, https://github.com/onyxnetworkofficial/onyx/issues, titled
+     `Publisher registration: <publisher id>` (step 3 below says what to put in it). The issue is
+     public, so it holds only what the book makes public anyway.
+
+   On another network or your own node, ask its operator for the same two addresses; that node
+   must run with `ONYX_BULK_DIR` (docs/ops/config.md).
 3. **Get the tools**: on Linux x86-64, download `onyx-publish-linux-x86_64.tar.gz` from the latest
    test-network release (the Add data page links it) and unpack it; the programs are in
-   `onyx-publish/bin/`. Elsewhere, build them (about 15 minutes): in the Onyx folder run
+   `onyx-publish/bin/`. Elsewhere, build them (about 15 minutes, with a Rust toolchain):
+   `git clone https://github.com/onyxnetworkofficial/onyx && cd onyx`, then
    `cargo build --release -p onyx-publish -p onyx-check`; they are then in `target/release/`.
 4. **Make sure the data is yours to share.** Only data you own or may share, whose terms let
    anyone redistribute it, and that names no individual person. You will sign a statement saying
@@ -46,9 +60,11 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
    `onyx-publish keys-doc --key publisher.key --publisher <publisher id> --out onyx-source-keys.json`
    Put that file on your domain so that
    `https://<your domain>/.well-known/onyx-source-keys.json` shows it.
-3. **Ask the reviewer to register your key (wait: minutes to a day).** Send the reviewer your
-   publisher id, your domain and your address. The reviewer opens your keys document, checks it,
-   and registers the key in the signed book (see "For the operator").
+3. **Ask the reviewer to register your key (wait: minutes to a day).** Open the issue named in
+   "Before you start" step 2 with three lines: your publisher id, your domain and your address
+   (`0x...`). Never the key file, and no personal details. The reviewer opens your keys document,
+   checks it, registers the key in the signed book (see "For the operator") and answers in the
+   issue.
 4. **Get test ETH for your address (5 minutes).** Use a Base Sepolia faucet (Base's documentation
    lists them under "Network faucets"). One anchor costs about 250,000 gas, a tiny amount of
    test ETH.
@@ -96,6 +112,45 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
     only; about 12 requests and 31 MB for a year of daily catalogs). It reports `"fault"`
     `publisher` or `node` when it refuses, and says what it cannot catch without
     `--scan-keys-from` (ADR-0059 amendment 3).
+
+## Check an answer yourself
+
+Anyone can check rows a node served, a publisher or a reader, without trusting the node.
+`onyx-check` is the program that does it: it proves each row up to the manifest root, checks the
+publisher's signature over that root, and reads on a chain node you choose that the book recorded
+and accepts that signature.
+
+- **Where it ships:** in `onyx-publish-linux-x86_64.tar.gz` of the latest test-network release
+  (https://github.com/onyxnetworkofficial/onyx/releases), next to `onyx-publish` in
+  `onyx-publish/bin/`; or built from the source with `cargo build --release -p onyx-check`.
+- **One full check** of rows of a dataset on the hosted test node, oldest first (replace the two
+  ids and the two keys; a row's key is a whole number, unix seconds for a day or time series, so
+  1767225600 is 2026-01-01 and 1769817600 is 2026-01-31):
+
+  ```sh
+  curl -s "https://onyx.cryptagraph.com/v1/bulk/<publisher id>/<dataset id>/rows?from=1767225600&to=1769817600&limit=100" > rows.json
+  onyx-check --bulk rows.json --publisher <publisher id> --dataset <dataset id> \
+    --from 1767225600 --to 1769817600 \
+    --rpc https://sepolia.base.org --chain-id 84532 --book 0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5
+  ```
+
+  This is the form the released `onyx-check` (v0.3.1-testnet) reads: an answer asked oldest first
+  with whole-number keys.
+
+  It prints one JSON report and exits 0 with `"ok": true` only when every row is proven and the
+  book holds the signature. Exit 1: refused (a changed row, a wrong publisher, an unknown key).
+  Exit 3: nothing decided (your chain node could not be read): try again.
+- Pass the same `--from` and `--to` you asked, so a row outside what you asked is refused.
+  `GET /v1/bulk?q=<words>` lists dataset ids.
+- **A newest-first page** (`rows?order=desc`) and dates in place of keys need the next release of
+  `onyx-check`, or a build from the source today; the released one refuses such an answer ("rows
+  skip"). With the newer one pass `--order desc` (and `--page N` for a later page): it refuses an
+  answer in another order, and for page 0 without `--to` it proves the page starts at the
+  dataset's newest row (`"newestProven": true` in the report). Without that check, "newest" is
+  the node's word.
+- What no check proves: the answer's `query`, `key` and `next_page` fields (the report's
+  `notProven` says so), and that a page other than a proven newest one starts or ends where it
+  should.
 
 ## Add more data later
 
@@ -145,9 +200,8 @@ amendment 5): every earlier shard keeps its bytes, its root and the schema it wa
    column, never changes a column's nullability, a text column or the key column, and never
    narrows a scale. For those changes, and after 8 schemas, start a **new dataset id** (for example
    `<dataset id>-2`): build its version 1 from the whole history with the new schema, list it in
-   your next catalog, and end the old id in the same catalog with a tombstone
-   (`onyx-publish catalog-build ... --remove <old id>`, ADR-0059 amendment 4). Onyx has no link
-   from the old id to the new one yet (ROADMAP S23), so say it wherever you announce your data.
+   your next catalog, then end the old id with a tombstone that links it to the new one: see
+   "Move a dataset to a new id" below.
 5. Who can read a widened dataset: nodes store a format-2 manifest only with `ONYX_BULK_FORMAT2=on`
    (docs/ops/config.md); a node that does not yet keeps serving your earlier version, and a node
    that upgrades later refuses your next versions ("versions are taken in order") until it gets the
@@ -162,6 +216,46 @@ amendment 5): every earlier shard keeps its bytes, its root and the schema it wa
 6. A widened dataset cannot back a storage deal yet: the deployed OnyxStorage reads format-1
    headers only, and storage nodes refuse a deal on a format-2 manifest. Deals on widened datasets
    need a new OnyxStorage.
+
+### Move a dataset to a new id
+
+A move ends the old id and, in the same catalog, links it to the new one (ADR-0059 amendment 6):
+the old id then answers `410` with `successor`, and readers can check where the data went.
+Moves need catalogs (see "Many datasets with one anchor" below).
+
+1. Build the new id's version 1 from the whole history under the new schema
+   (`onyx-publish build --dataset <new id> ...`).
+2. In catalog n, list the new id; the old id stays as it is. Sign, anchor and upload catalog n,
+   then `upload --dir <new id folder> --catalog n` to every node.
+3. Check the new id on every node: every shard stored, `onyx-check --bulk` on a sample of rows.
+   Keep both ids served for an overlap: a day at least; a week lets readers compare rows.
+4. In a later catalog, move the old id: `onyx-publish catalog-build --publisher <publisher id>
+   --dirs LIST --prev <catalog file> --move <old id>=<new id> --links-out links-1 --out <file>`.
+   From the second move on, add `--links <last links folder>` (the version the previous catalog
+   lists) and a new `--links-out`. Sign, anchor and upload the catalog, then
+   `upload --dir links-1 --catalog <number>` to every node before the other folders.
+5. Check: `GET /v1/bulk/<publisher id>/<old id>` answers `410` with `successor`, and `onyx-check
+   --successor` on its `/successor` answer exits 0.
+
+Both steps can go in one catalog, but the old id then stops before the new one's shards are up.
+Example (made up): `example.flows` moves to `example.flows-2` after its source dropped a column.
+
+- The tool refuses a new id that is not live in the catalog it builds, an id under
+  `onyx.successors` (reserved for links), an old id also in `--remove` or `--dirs`, a
+  `--links` folder the previous catalog does not list, and an existing `--links-out` folder.
+  A link names a dataset live in its own catalog: to move the new id on later, move it in a
+  later catalog (a chain follows up to 8 links).
+- A wrong link is fixed in the next catalog: `--relink <old id>=<id>`; `--unlink <old id>` takes
+  it back (the old id then ends `retracted`). The last row for a tombstone wins; no key is ever
+  at stake. One catalog writes all its moves in one links version.
+- Keep every links folder: each version names the one before, and `upload` steps back to it.
+- A links generation holds 65,536 rows, 32 MiB and 4,096 shards (one shard per catalog that
+  writes links). The tool warns at 90 % of each and refuses past them; then
+  `--links-next-generation` starts `onyx.successors.2` with only the links that act, and ends
+  the full generation in the same catalog.
+- Until a node holds the links version the catalog lists, its 410 says `pending`: upload the
+  links folder first. Nodes older than successor links answer 410 without `successor`, so say
+  the move wherever you announce your data as well.
 
 ### When your source changes
 

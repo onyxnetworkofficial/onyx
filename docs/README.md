@@ -31,6 +31,7 @@
 | Path | What |
 |---|---|
 | [`NORTH-STAR.md`](NORTH-STAR.md) | The north star: what the partners asked for, what makes Onyx new, and the build list |
+| [`READINESS.md`](READINESS.md) | What stands before a public beta, outside publishers and real money |
 | [`STORAGE-NETWORK.md`](STORAGE-NETWORK.md) | The storage network: how Onyx keeps hundreds of terabytes from many publishers on bonded storage nodes (the roadmap master document, ADR-0060) |
 | [`TRACKER.md`](TRACKER.md) | The vision, every idea, and the decision log |
 | [`adr/`](adr/) | Architecture decision records, one per decision (index: DECISIONS.md) |

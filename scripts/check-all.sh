@@ -168,13 +168,27 @@ scripts/check-secrets.sh
 # - ROADMAP S26 (THREATS EARLY-4, EARLY-9, EARLY-12, EARLY-19): the early-contributor record's daily
 #   run with stub tools: verify on the second node and the privacy scan gate publication, one
 #   catalog a day, a rerun resumes and sends nothing twice, no node URL or key path printed.
+# - THREATS OPS-BACKUP-1, OPS-BACKUP-2: the API node's backup against a local fake server (no ssh,
+#   about 40 s): files 0600 and folders 0700, no key file copied, an unchanged file hard-linked to the
+#   previous snapshot, the newest N kept, a dropped connection tried again, a partial copy continued,
+#   a tiers.json naming a missing shard refused, a DEST that is not 0700 or sits in a git checkout
+#   refused, no planted secret printed; review BAK-R1: an emptied or shrunken store refused (exit 4)
+#   and nothing pruned, weekly copies kept, a store still changing or a failed drill no snapshot, the
+#   server binary and unit copied, a deploy during the copy refused, a clock going back refused, the
+#   copy synced before its rename, old drill folders deleted, --check-fresh and the alert units.
+# - THREATS BAK-R1 (restore drill, offline, about 2 s): keccak-256 vectors, the state journal reader
+#   (a damaged line or a wrong header fails, a torn last line passes, nothing printed), the
+#   allow-listed local config, the node's settings passed as environment with a fixed systemd-run
+#   description, the backup folder's lock.
 side_by_side \
   "python3 -I scripts/health-watch-tests.py" \
   "python3 -I scripts/refresh-onchain-tests.py" \
   "scripts/storage-sepolia-tests.sh" \
   "scripts/remote-check.sh --self-test" \
   "python3 -I scripts/refresh-eth-onchain-tests.py" \
-  "python3 -I scripts/early-record-daily-tests.py"
+  "python3 -I scripts/early-record-daily-tests.py" \
+  "scripts/backup-node.sh --self-test" \
+  "scripts/restore-drill.sh --self-test"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.
 python3 -I scripts/recount-chain-input.py --self-test

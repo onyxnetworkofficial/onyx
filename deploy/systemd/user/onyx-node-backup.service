@@ -1,0 +1,71 @@
+# The live API node's daily backup (THREATS OPS-BACKUP-1, BAK-R1; docs/ops/deployment.md "Backups"). A
+# systemd *user* unit on the operator's machine, started once a day by onyx-node-backup.timer. It runs
+# scripts/backup-node.sh: read only on the server (rsync over ssh with `sudo -n nice -n 19 ionice -c3
+# rsync`, capped at ONYX_BACKUP_BWLIMIT KiB/s), the restore drill on the copy
+# (scripts/restore-drill.sh --full), then one dated snapshot hard-linked to the previous one; the
+# newest ONYX_BACKUP_KEEP, the oldest of this and each of the 4 weeks before it and of this and each
+# of the 3 months before it kept. A failure is logged by its own instance of the template
+# onyx-node-backup-alert@.service (review BAK-R2-M3); onyx-node-backup-fresh.timer checks every 6
+# hours that the newest snapshot is younger than 30 hours. Not installed by any script; to install:
+#
+#   for u in onyx-node-backup.service onyx-node-backup.timer onyx-node-backup-alert@.service \
+#            onyx-node-backup-fresh.service onyx-node-backup-fresh.timer; do
+#     install -D -m 0644 deploy/systemd/user/$u ~/.config/systemd/user/$u
+#   done
+#   install -D -m 0600 /dev/null ~/.config/onyx/node-backup.env    # then fill it in (below)
+#   install -d -m 0700 ~/onyx-backups ~/onyx-backups/node
+#   scripts/backup-node.sh             # the first run by hand (10.0 GB on 2026-11-16)
+#   systemctl --user daemon-reload
+#   systemctl --user enable --now onyx-node-backup.timer onyx-node-backup-fresh.timer
+#   loginctl enable-linger "$USER"     # keep user timers running while logged out
+#
+# The ssh alias (ONYX_BACKUP_HOST) must log in without a prompt (BatchMode: a key with no
+# passphrase, or a running agent) and the server account must have passwordless sudo for
+# `nice -n 19 ionice -c3 rsync`. The drill needs a release onyx-check (ONYX_CHECK_BIN) and runs the
+# snapshot's own onyx-node under `systemd-run --user --scope -p MemoryMax=8G -p RuntimeMaxSec=3h`,
+# outside this unit's memory cap and cgroup: a scope whose drill was killed is stopped by the next
+# run (review BAK-R2-L1). The drill compares with the live node over its public URL, or over ssh to
+# ONYX_BACKUP_HOST (its own http://127.0.0.1:8080, read only) when that URL fails (BAK-R2-L5).
+# ~/.config/onyx/node-backup.env, one assignment a line, no quotes, no comment after a value:
+#   # an Onyx checkout
+#   ONYX_BACKUP_REPO=<path>
+#   # the snapshots' folder: mode 0700, outside every git checkout
+#   ONYX_BACKUP_DEST=<home>/onyx-backups/node
+#   ONYX_BACKUP_KEEP=7
+#   ONYX_BACKUP_HOST=onyx-web
+#   # rsync's cap in KiB/s (0: none)
+#   ONYX_BACKUP_BWLIMIT=25000
+#   # a release onyx-check
+#   ONYX_CHECK_BIN=<path>/release/onyx-check
+#
+# Within a run an rsync whose connection drops gets 4 tries (1, 2 and 3 minutes apart). A failed run
+# (the server unreachable, a full disk, an upload that kept the store changing, a failed drill) exits
+# 1 and is started again after 30 minutes, at most 3 starts in 6 hours; its partial copy is continued
+# by the next run. Exit 2 (refused: DEST, arguments, the clock) and 4 (the copy looks like a loss on
+# the server: check it, then run by hand with --allow-shrink) are not retried.
+# `journalctl --user -u onyx-node-backup` shows the summary line.
+#
+# No filesystem sandbox (ProtectSystem=, ProtectHome=, PrivateTmp=, ReadWritePaths=): in a user unit
+# those need unprivileged user namespaces, which this machine's AppArmor policy blocks, so they would
+# do nothing here (review BAK-R1-L2). The script's own checks are the controls: DEST 0700 and
+# outside every git checkout, files 0600, no key copied, no content printed.
+
+[Unit]
+Description=Onyx API node backup, daily
+After=network-online.target
+StartLimitIntervalSec=6h
+StartLimitBurst=3
+OnFailure=onyx-node-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/onyx/node-backup.env
+ExecStart=/usr/bin/bash ${ONYX_BACKUP_REPO}/scripts/backup-node.sh
+TimeoutStartSec=3h
+Restart=on-failure
+RestartSec=30min
+RestartPreventExitStatus=2 4
+MemoryMax=2G
+Nice=10
+IOSchedulingClass=idle
+NoNewPrivileges=yes

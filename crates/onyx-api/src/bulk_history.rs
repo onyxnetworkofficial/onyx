@@ -15,6 +15,7 @@ use crate::bulk_serve::{
     call_at, decision_block, read_anchor_at, read_digest_at, read_sequence_at, word, AnchorState,
     At, Standing,
 };
+use crate::bulk_successor::{check_off_chain, found_json, settle, Found, MAX_SUCCESSOR_ANSWER};
 use crate::roots::JsonRpc;
 use crate::storage::{HttpGet, MAX_MANIFEST_ANSWER};
 use borsh::BorshDeserialize;
@@ -23,7 +24,8 @@ use onyx_bulk::catalog::{
     sequence_for_catalog, CatalogFile, CatalogFiles, CatalogLeaf, WalkError, Walker,
     MAX_CATALOG_BYTES, MAX_FILES_BYTES,
 };
-use onyx_bulk::manifest::{root_of_header_bytes, Manifest, FORMAT, FORMAT_2};
+use onyx_bulk::manifest::{root_of_header_bytes, Manifest, ManifestHeader, FORMAT, FORMAT_2};
+use onyx_bulk::successor::{generation_id, MAX_LINK_GENERATIONS};
 use onyx_bulk::wire::{hex0x, hex_field, Checked};
 use onyx_core::{keccak256, Hash32, SignedReport, SourceId, Value as Val};
 use serde_json::{json, Value};
@@ -88,20 +90,21 @@ impl HistoryOutcome {
 /// What the report says a check without a key scan cannot catch.
 pub const HISTORY_LIMIT: &str = "a key that signed nothing in this walk and that you did not name (--keys) or scan (--scan-keys-from) is not read: a second catalog, a second version root, or a newer catalog under such a key is not caught here; nodes that hold the original catalogs mark a rewrite forked";
 
-enum Stop {
+/// Why a check stopped: refused (whose fault, why) or undecided.
+pub(crate) enum Stop {
     Refused(&'static str, String),
     Undecided(String),
 }
 
-fn node(s: impl Into<String>) -> Stop {
+pub(crate) fn node(s: impl Into<String>) -> Stop {
     Stop::Refused("node", s.into())
 }
 
-fn publisher_fault(s: impl Into<String>) -> Stop {
+pub(crate) fn publisher_fault(s: impl Into<String>) -> Stop {
     Stop::Refused("publisher", s.into())
 }
 
-fn undecided(s: impl Into<String>) -> Stop {
+pub(crate) fn undecided(s: impl Into<String>) -> Stop {
     Stop::Undecided(s.into())
 }
 
@@ -114,11 +117,15 @@ fn key_registered_topic() -> Hash32 {
 /// Waits between tries of a busy GET, and how many tries (a fixed wait: the
 /// node's `retry-after` is 1 s for the rate limit and 10 s for busy files).
 pub const RETRY_SECS: u64 = 10;
-const TRIES: u32 = 7;
+pub(crate) const TRIES: u32 = 7;
 
 /// GET `url`: the body on 200, `None` on 404; a busy node (429, 503) is tried
 /// again after [`RETRY_SECS`] (the bulk rate limit, amendment 3 item 6).
-async fn fetch(get: &dyn HttpGet, url: &str, max: usize) -> Result<Option<Vec<u8>>, Stop> {
+pub(crate) async fn fetch(
+    get: &dyn HttpGet,
+    url: &str,
+    max: usize,
+) -> Result<Option<Vec<u8>>, Stop> {
     for _ in 0..TRIES {
         let (status, body) = get
             .get(url, max)
@@ -135,6 +142,30 @@ async fn fetch(get: &dyn HttpGet, url: &str, max: usize) -> Result<Option<Vec<u8
                 )))
             }
         }
+    }
+    Err(undecided(format!(
+        "{}: the node stayed busy",
+        crate::x402::url_origin(url)
+    )))
+}
+
+/// GET `url`: the status and body, a busy node (429, 503) tried again as
+/// [`fetch`] does.
+pub(crate) async fn fetch_status(
+    get: &dyn HttpGet,
+    url: &str,
+    max: usize,
+) -> Result<(u16, Vec<u8>), Stop> {
+    for _ in 0..TRIES {
+        let (status, body) = get
+            .get(url, max)
+            .await
+            .map_err(|e| undecided(format!("{}: {e}", crate::x402::url_origin(url))))?;
+        if status == 429 || status == 503 {
+            tokio::time::sleep(Duration::from_secs(RETRY_SECS)).await;
+            continue;
+        }
+        return Ok((status, body));
     }
     Err(undecided(format!(
         "{}: the node stayed busy",
@@ -469,6 +500,11 @@ async fn run(
     let dataset = checked.header.dataset.clone();
     let base = opts.node.trim_end_matches('/').to_string();
     let mut walker = Walker::new(publisher.clone(), dataset.clone());
+    // The links generations, for the catalog that first listed a used row
+    // (ADR-0059 amendment 6 item 7).
+    for g in 1..=MAX_LINK_GENERATIONS {
+        walker.follow(&generation_id(g).unwrap_or_default());
+    }
     let mut newest: Option<u64> = None;
     let mut at: Option<At> = None;
     let mut rules: Option<(String, CatalogFile)> = None;
@@ -514,6 +550,27 @@ async fn run(
     let at = match at {
         Some(a) => a,
         None => decision_block(rpc, chain_id).await.map_err(undecided)?,
+    };
+    // A removed dataset: where the publisher moved it, from this node's
+    // successor answer, whose catalog must be the walk's newest (ADR-0059
+    // amendment 6 item 7; review SUCC-R2 L3). Every chain read of it is
+    // the walk's: its catalog's anchor and the catalog after it.
+    let succ = if rules.is_none() && walker.removed().is_some() {
+        let chain = (rpc, chain_id, book, at);
+        Some(
+            successor_in_walk(
+                get,
+                chain,
+                &base,
+                &dataset,
+                &mut walker,
+                &mut newest,
+                &mut rules,
+            )
+            .await?,
+        )
+    } else {
+        None
     };
     let mut st = State {
         rpc,
@@ -728,9 +785,24 @@ async fn run(
         }
     }
 
+    let successor = match &succ {
+        None => Value::Null,
+        Some(Err(note)) => note.clone(),
+        Some(Ok(f)) => {
+            let mut v = found_json(f, &publisher.0, &dataset);
+            let marks = early_marks(get, &st.base, &walker, f).await;
+            for (h, m) in v["hops"].as_array_mut().into_iter().flatten().zip(marks) {
+                for (k, x) in m.as_object().into_iter().flatten() {
+                    h[k] = x.clone();
+                }
+            }
+            v
+        }
+    };
     Ok(json!({
         "ok": removed.is_none(),
         "removed": removed,
+        "successor": successor,
         "catalogs": steps.len(),
         "newest": newest,
         "entered": walker.entered().map(|s| s.number),
@@ -756,6 +828,175 @@ async fn run(
         "keysScanned": scanned.map(|(from, to)| json!({"from": from, "to": to})),
         "limit": if scanned.is_some() { Value::Null } else { json!(HISTORY_LIMIT) },
     }))
+}
+
+/// Files answers the walk's one extension to the successor answer's catalog
+/// may take.
+const MAX_EXTENSION_ASKS: u32 = 1_024;
+
+/// The successor answer of the walk's removed dataset from the history
+/// node (ADR-0059 amendment 6 item 7), checked off chain: its catalog must
+/// be the walk's newest; a newer one extends the walk once, and an older
+/// one, or one the walk cannot reach, leaves the check undecided. A node
+/// with no successor (an old node's 404, a learned removal, a fork) or one
+/// that has not settled its links gives a note instead: the removal stands
+/// (exit 4) either way.
+async fn successor_in_walk(
+    get: &dyn HttpGet,
+    (rpc, chain_id, book, at): (&dyn JsonRpc, u64, [u8; 20], At),
+    base: &str,
+    dataset: &str,
+    walker: &mut Walker,
+    newest: &mut Option<u64>,
+    rules: &mut Option<(String, CatalogFile)>,
+) -> Result<Result<Found, Value>, Stop> {
+    let publisher = walker
+        .steps
+        .first()
+        .map(|s| s.report.payload.source.0.clone())
+        .unwrap_or_default();
+    let url = format!("{base}/v1/bulk/{publisher}/{dataset}/successor");
+    let (status, body) = fetch_status(get, &url, MAX_SUCCESSOR_ANSWER).await?;
+    if status != 200 {
+        return Ok(Err(json!({
+            "status": "unavailable",
+            "httpStatus": status,
+            "why": "the node answers no successor (a node older than successor links, a removal it learned, or a fork)",
+        })));
+    }
+    let a: Value =
+        serde_json::from_slice(&body).map_err(|_| node("the successor answer is not JSON"))?;
+    if let Some(s @ ("pending" | "forked")) = a["end"]["status"].as_str() {
+        return Ok(Err(json!({
+            "status": s,
+            "why": "the node has not settled the links of its newest catalog: ask again later",
+        })));
+    }
+    let f = match check_off_chain(get, Some(base), &a, &publisher, dataset).await {
+        Ok(f) => f,
+        Err(off) => return Err(settle(rpc, chain_id, &book, at, off).await),
+    };
+    let n = f.catalog.number;
+    let top = newest.unwrap_or(0);
+    if n < top {
+        return Err(undecided(format!(
+            "the successor answer is from catalog {n}, older than the newest this node serves ({top}): ask again"
+        )));
+    }
+    let mut asks = 0u32;
+    while walker.next_number() <= n {
+        let from = walker.next_number();
+        // Every ask must move the walk on, and the extension is bounded
+        // (review SUCC-B7 M1: files numbered past `n` were asked for again
+        // and again).
+        asks += 1;
+        if asks > MAX_EXTENSION_ASKS {
+            return Err(undecided(format!(
+                "the successor answer is from catalog {n}, more than {MAX_EXTENSION_ASKS} files answers past the walk: check again"
+            )));
+        }
+        let url = format!("{base}/v1/bulk/catalogs/{publisher}/files?from={from}");
+        let Some(body) = fetch(get, &url, MAX_FILES_BYTES + MAX_CATALOG_BYTES).await? else {
+            return Err(undecided(format!(
+                "the successor answer is from catalog {n}, and this node does not serve catalog {from}: the walk cannot reach it; ask again"
+            )));
+        };
+        let files = CatalogFiles::try_from_slice(&body)
+            .map_err(|_| node("the catalog files answer does not decode"))?;
+        if files.files.is_empty() {
+            return Err(node("the catalog files answer holds no catalog"));
+        }
+        for file in files.files.iter().take_while(|x| x.header.number <= n) {
+            match walker.take(file) {
+                Ok(()) => {}
+                Err(WalkError::Node(e)) => return Err(node(e)),
+                Err(WalkError::Rules(e)) => {
+                    *rules = Some((e, file.clone()));
+                    return Ok(Err(json!({"status": "unchecked"})));
+                }
+            }
+        }
+        if walker.next_number() == from {
+            return Err(node(format!(
+                "asked for the catalog files from {from}, the node sent none at or below catalog {n}, which its successor answer is from"
+            )));
+        }
+    }
+    *newest = Some(top.max(n));
+    let ours = usize::try_from(n).ok().and_then(|i| walker.steps.get(i));
+    if ours.map(|s| s.root) != Some(f.catalog.root()) {
+        return Err(undecided(format!(
+            "the successor answer's catalog {n} is not the one this node's walk took"
+        )));
+    }
+    Ok(Ok(f))
+}
+
+/// For each hop of `f`: the catalog that first listed its row (the first
+/// version of the used generation holding the row's position, found by
+/// asking for the headers of a few of the generation's versions, `GET
+/// /v1/bulk/manifests/{root}`), the catalog that first listed its
+/// tombstone, and `early` when the row came first (information only: a row
+/// acts only on the exact tombstone it names; review SUCC-R1 M1). A header
+/// the node does not serve leaves them null.
+async fn early_marks(get: &dyn HttpGet, base: &str, walker: &Walker, f: &Found) -> Vec<Value> {
+    let Some(u) = &f.used else {
+        return Vec::new();
+    };
+    // The generation's versions in the walk: (version, root, first catalog).
+    let mut versions: Vec<(u32, Hash32, u64)> = Vec::new();
+    for s in &walker.steps {
+        let leaf = s.leaf.iter().chain(&s.followed).find(|l| l.dataset == u.id);
+        if let Some(l) = leaf.filter(|l| !l.is_tombstone()) {
+            if versions.last().is_none_or(|v| v.0 != l.version) {
+                versions.push((l.version, l.root, s.number));
+            }
+        }
+    }
+    let mut rows: BTreeMap<Hash32, u64> = BTreeMap::from([(u.root, u.header.row_count)]);
+    let mut out = Vec::new();
+    for h in &f.chain.hops {
+        let (mut lo, mut hi) = (0usize, versions.len());
+        let mut known = true;
+        while lo < hi && known {
+            let mid = (lo + hi) / 2;
+            let root = versions[mid].1;
+            let count = match rows.get(&root) {
+                Some(c) => Some(*c),
+                None => row_count_of(get, base, &root).await,
+            };
+            match count {
+                Some(c) => {
+                    rows.insert(root, c);
+                    if c > h.position {
+                        hi = mid;
+                    } else {
+                        lo = mid + 1;
+                    }
+                }
+                None => known = false,
+            }
+        }
+        let first = versions.get(lo).filter(|_| known).map(|v| v.2);
+        let tomb = walker.tombstoned(&h.from);
+        out.push(json!({
+            "firstCatalog": first,
+            "tombstoneCatalog": tomb,
+            "early": first.zip(tomb).map(|(r, t)| r < t),
+        }));
+    }
+    out
+}
+
+/// The row count of the manifest with `root`, from its header as the node
+/// serves it, when it hashes to `root`.
+async fn row_count_of(get: &dyn HttpGet, base: &str, root: &Hash32) -> Option<u64> {
+    let url = format!("{base}/v1/bulk/manifests/{root}");
+    let body = fetch(get, &url, MAX_MANIFEST_ANSWER).await.ok()??;
+    let a: Value = serde_json::from_slice(&body).ok()?;
+    let b = hex_field(&a["header"], "header").ok()?;
+    let h = ManifestHeader::try_from_slice(&b).ok()?;
+    (h.root() == *root).then_some(h.row_count)
 }
 
 /// Another report `d` under key `k` where the walk holds one (a catalog
@@ -803,7 +1044,7 @@ fn log_source(data: &[u8]) -> Option<String> {
 /// The publisher's keys from `KeyRegistered` logs, `from` to the block `at`,
 /// `range` blocks a query: a log whose source decodes as another publisher's
 /// is skipped, every other is confirmed by `keyState(key).source`.
-async fn scan_keys(
+pub(crate) async fn scan_keys(
     rpc: &dyn JsonRpc,
     book: &[u8; 20],
     publisher: &SourceId,

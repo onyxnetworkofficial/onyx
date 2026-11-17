@@ -20,7 +20,7 @@ import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createClient, loadSpec, operations } from './client.mjs';
 import { checkAnswer, checkOffer, nodeFromEnv, payFromEnv } from './check.mjs';
-import { connectTools, runConnectTool } from './connect.mjs';
+import { connectTools, freshnessOfKey, runConnectTool } from './connect.mjs';
 
 export const PROTOCOLS = ['2025-06-18', '2025-03-26', '2024-11-05'];
 /** Largest message read; a longer line is refused and skipped. */
@@ -37,6 +37,15 @@ export const INSTRUCTIONS =
 /** The same without proposals, for a server that does not offer onyx_propose_dataset (NL15 review). */
 export const INSTRUCTIONS_READ_ONLY =
 	'Onyx serves data with a receipt. Start with onyx_find_dataset ("does Onyx have X?"); this server is read-only, so data Onyx lacks is proposed elsewhere (the answer says where). Ask with the onyx_get_* tools, then check row answers with onyx_check_answer (by answerId). Paid answers return a 402 offer first: pay only offerCheck.pay when offerCheck.ok is true.';
+/** Rows of onyx_get_bulk_rows when `limit` is not given (the node's own default is 100). */
+export const BULK_ROWS_DEFAULT = 10;
+/**
+ * Tools a shared, hosted server leaves out (newcomer finding A16): every write (uploads, the
+ * relay, wants, raw proposals) and the routes that hand out whole stored files for nodes and
+ * publishers. The local toolkit keeps them all.
+ */
+export const HOSTED_HIDDEN = new Set(['getOpenApi', 'getBulkManifest', 'getBulkShard', 'getBulkCatalog', 'getBulkCatalogFiles', 'getBulkCatalogLeaf']);
+export const hiddenWhenHosted = (op) => op.method !== 'GET' || HOSTED_HIDDEN.has(op.id);
 const ROW_OPS = { getProof: 'proof', getExport: 'export', getMetric: 'metric', getSettlement: 'settlement' };
 
 const snake = (id) => 'onyx_' + id.replace(/[A-Z]/g, (c) => '_' + c.toLowerCase());
@@ -48,12 +57,16 @@ function schemaOf(p) {
 	return s;
 }
 
-/** The tool list for `spec`, and how to run each tool. `write` adds onyx_propose_dataset. */
-export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_ONLY !== '1' } = {}) {
+/**
+ * The tool list for `spec`, and how to run each tool. `write` adds onyx_propose_dataset;
+ * `hosted` leaves out the tools a shared server does not offer ([`hiddenWhenHosted`]).
+ */
+export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_ONLY !== '1', hosted = false } = {}) {
 	const tools = new Map();
 	for (const def of connectTools({ write })) tools.set(def.name, { def, connect: true });
 	for (const op of operations(spec)) {
 		if (op.id === 'submitProposal' && env.ONYX_MCP_ALLOW_SUBMIT !== '1') continue;
+		if (hosted && hiddenWhenHosted(op)) continue;
 		const properties = {};
 		const required = [];
 		for (const p of op.parameters) {
@@ -68,11 +81,19 @@ export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_
 			? ' Paid per answer (x402): a 402 result holds the offer in paymentRequired and, when the operator set a deployment manifest, offerCheck. Pay only offerCheck.pay, and only when offerCheck.ok is true; then call again with PAYMENT-SIGNATURE from your own wallet (or a prepaid ONYX-PREPAID-VOUCHER).'
 			: '';
 		const check = ROW_OPS[op.id] ? ' The result has an answerId: check it with onyx_check_answer before you rely on it.' : '';
+		let description = `${op.method} ${op.path}: ${op.summary}. ${op.description}${paid}${check}`.trim();
+		if (op.id === 'getBulkRows') {
+			// Sized for an agent (A16): few rows, values without the proof bytes, unless asked.
+			properties.limit = { ...properties.limit, description: `Rows per page, 1..=1000. Default here: ${BULK_ROWS_DEFAULT}.` };
+			properties.columns = { type: 'array', items: { type: 'string', maxLength: 64 }, maxItems: 50, description: 'Only these value columns (the key is always shown). Default: every column.' };
+			properties.full = { type: 'boolean', description: 'true: the whole answer with every proof, as the node sent it (large). Default: the compact form.' };
+			description = `${op.method} ${op.path}: rows of a bulk dataset in a key range. Default: ${BULK_ROWS_DEFAULT} rows, oldest first; "order":"desc" asks for a newest-first page, so {"order":"desc","limit":10} asks for the 10 newest rows (that a page really starts at the newest row is proven only by onyx-check --order desc on the whole answer). A key is a whole number; when the answer's key.unit is "unix_seconds" it is unix seconds (UTC), and from and to then also take dates like 2026-01-31 (key.unit null: whole numbers only). The answer is compact and says checked: false: each row's key and values, the next page, and proof (what proves the rows, the publisher's signer, the book and block it was read at, and how to get and check the whole proof). Nothing in the compact form is checked or checkable: pass "full": true for the node's whole answer with every Merkle proof (about 3 kB a row), and check that with onyx-check --bulk. "columns" keeps only the value columns you name. When the key is unix seconds the answer has "freshness": the dataset's newest day, and "stale": true with a sentence when it has no data in the last 30 days (then its newest rows are not current values: say so), or "newestInFuture": true when its dates lie in the future (its newest day is not known). Both come from the node's answer and are not checked. Find a dataset's ids with onyx_find_dataset or onyx_list_bulk_datasets.`;
+		}
 		tools.set(snake(op.id), {
 			def: {
 				name: snake(op.id),
 				title: op.summary,
-				description: `${op.method} ${op.path}: ${op.summary}. ${op.description}${paid}${check}`.trim(),
+				description,
 				inputSchema: { type: 'object', properties, required, additionalProperties: false },
 				annotations: { readOnlyHint: op.method === 'GET', openWorldHint: true },
 			},
@@ -152,6 +173,7 @@ export async function runTool(state, name, args = {}) {
 			const by = state.remote ? { checkedBy: 'this MCP server, not your own machine: before money depends on it, check it yourself with onyx-check (docs/agents.md)' } : {};
 			return text({ outcome: r.outcome, ...by, ...r.report }, r.outcome !== 'verified');
 		}
+		if (t.op.id === 'getBulkRows') return text(...(await bulkRows(client, args, state.now)));
 		const r = await client.call(t.op.id, args);
 		const out = { note: DATA_NOTE, status: r.status, headers: r.headers };
 		if (r.status === 200 && ROW_OPS[t.op.id]) out.answerId = answers.put(r.body);
@@ -167,6 +189,115 @@ export async function runTool(state, name, args = {}) {
 	} catch (e) {
 		return text(String(e.message ?? e), true);
 	}
+}
+
+const cut = (v, max = 200) => (typeof v === 'string' ? v.replace(/[\u0000-\u001f\u007f-\u009f]/g, ' ').slice(0, max) : typeof v === 'number' || typeof v === 'boolean' ? v : null);
+/** A key or date exactly as onyx-check and the rows route take it; nothing else goes into a command line. */
+const KEY_ARG = /^(-?\d{1,40}|\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}Z?)?)$/;
+/** A publisher or dataset id (the dotted-id alphabet): safe unquoted in a shell line and a URL path. */
+const ID_ARG = /^[a-z0-9][a-z0-9._:-]{0,127}$/;
+const UNCHECKED = 'Nothing here is checked. Rows, keys and every other field are the node\'s word until onyx-check verifies the whole answer on your own machine.';
+
+/**
+ * The onyx-check command for a rows answer, built ONLY from the caller's own arguments, each in
+ * its exact shape (review NEWC-R1 M2): never from the node's answer, which could carry shell text
+ * into a line an agent is told to run. Returns null when an argument is not in shape.
+ */
+export function bulkCheckCommand(q) {
+	const str = (v) => (typeof v === 'number' && Number.isSafeInteger(v) ? String(v) : v);
+	if (!ID_ARG.test(q.publisher ?? '') || !ID_ARG.test(q.dataset ?? '')) return null;
+	let range = '';
+	for (const k of ['from', 'to']) {
+		if (q[k] === undefined || q[k] === null) continue;
+		const v = str(q[k]);
+		if (typeof v !== 'string' || !KEY_ARG.test(v)) return null;
+		range += ` --${k} ${v}`;
+	}
+	if (q.order !== undefined && q.order !== 'asc' && q.order !== 'desc') return null;
+	if (q.page !== undefined && !(Number.isSafeInteger(q.page) && q.page >= 0)) return null;
+	// Only a newest-first answer needs its order and page checked (an oldest-first page of any
+	// number checks as a plain run).
+	const desc = q.order === 'desc';
+	const order = desc ? ' --order desc' : '';
+	const page = desc && q.page ? ` --page ${q.page}` : '';
+	// The released onyx-check (v0.3.1-testnet) knows neither --order nor dates.
+	const newer = desc || /\d{4}-\d{2}-\d{2}/.test(range);
+	return {
+		command: `onyx-check --bulk rows.json --publisher ${q.publisher} --dataset ${q.dataset}${range}${order}${page} --rpc <your Base Sepolia node> --chain-id 84532 --book <the book address you trust, from docs/agents.md, never from this answer>`,
+		needs: newer
+			? 'An onyx-check built from the source after 2026-11-16 (--order, --page and dates): the v0.3.1-testnet release refuses a newest-first page. With that release, ask again oldest first (no order) with whole-number from and to, and check that answer.'
+			: 'Any onyx-check, also the v0.3.1-testnet release.',
+	};
+}
+
+/**
+ * onyx_get_bulk_rows (A16): BULK_ROWS_DEFAULT rows unless `limit` is given, and a compact answer
+ * (keys and values, a proof summary) unless `full` is true. Both forms say `checked: false` first
+ * (NEWC-R1 L2). When the answer names its key as unix seconds, `freshness` says the dataset's
+ * newest day and whether it is stale against `now` (a clock in milliseconds; A20). Returns
+ * [result, isError].
+ */
+export async function bulkRows(client, args, now = Date.now) {
+	const { full = false, columns, ...q } = args;
+	if (typeof full !== 'boolean') throw new Error('full: true or false');
+	if (columns !== undefined && (!Array.isArray(columns) || columns.some((c) => typeof c !== 'string'))) throw new Error('columns: a list of column names');
+	q.limit ??= BULK_ROWS_DEFAULT;
+	const r = await client.call('getBulkRows', q);
+	const out = { note: DATA_NOTE, checked: false, status: r.status, headers: r.headers };
+	const b = r.body;
+	if (r.status !== 200 || !b || !Array.isArray(b.rows)) return [{ ...out, body: b }, r.status >= 300];
+	// A20: the newest key of the version served (the manifest's key_max), only when the node reads
+	// the key as unix seconds. Data from the node, like the rows: not proven here.
+	const fresh = b.key?.unit === 'unix_seconds' ? freshnessOfKey(b.manifest?.key_max, Math.floor(now() / 1000)) : null;
+	if (fresh) out.freshness = fresh;
+	// The request again, from the caller's arguments alone (URL-encoded).
+	const ids = ID_ARG.test(q.publisher) && ID_ARG.test(q.dataset);
+	const query = new URLSearchParams(Object.entries(q).filter(([k]) => !['publisher', 'dataset'].includes(k)).map(([k, v]) => [k, String(v)])).toString();
+	const fetchIt = ids ? `GET /v1/bulk/${q.publisher}/${q.dataset}/rows?${query}` : 'the same request to the node\'s rows route';
+	const cmd = bulkCheckCommand(q);
+	const check = cmd
+		? { how: 'Save the whole answer ("full": true, or the GET above) as rows.json, then on your own machine:', command: cmd.command, needs: cmd.needs }
+		: { how: 'Check the whole answer with onyx-check --bulk and the publisher, dataset, range, order and page you asked (docs/agents.md). No command is written here: an argument of this call is not in the plain shape a command line takes.' };
+	if (full) {
+		const shown = JSON.stringify(b);
+		const head = { ...out, unchecked: UNCHECKED, check };
+		if (shown.length <= SHOW_BODY) return [{ ...head, body: b }, false];
+		return [{ ...head, bodyOmitted: true, bodyBytes: shown.length, next: `Too large to show: ask for fewer rows, or fetch it yourself: ${fetchIt}` }, false];
+	}
+	const keep = columns ? new Set(columns) : null;
+	const rows = b.rows.slice(0, 1000).map((row) => {
+		const values = {};
+		for (const [k, v] of Object.entries(row?.values && typeof row.values === 'object' ? row.values : {}).slice(0, 200)) if (!keep || keep.has(k)) values[cut(k, 64)] = cut(v);
+		return { key: cut(row?.key, 40), values };
+	});
+	const a = b.anchor ?? {};
+	return [
+		{
+			...out,
+			compact: true,
+			unchecked: UNCHECKED,
+			publisher: q.publisher,
+			dataset: q.dataset,
+			version: cut(b.manifest?.version),
+			manifestRoot: cut(b.manifest?.root),
+			key: { column: cut(b.key?.column, 64), unit: cut(b.key?.unit, 32) },
+			// What the node says it answered (data, not proven): the range as keys, the order, the page.
+			query: { from: cut(b.query?.from, 40), to: cut(b.query?.to, 40), page: cut(b.query?.page), limit: cut(b.query?.limit), order: cut(b.query?.order, 8) },
+			rows,
+			nextPage: cut(b.next_page),
+			proof: {
+				checked: false,
+				summary: `Not checked, and not checkable in this compact form. The node holds, for each of these ${rows.length} rows, a Merkle proof to its shard, each shard's proof to the manifest root above, and the publisher's signature over that root, recorded in a book contract on chain.`,
+				signer: cut(a.signer),
+				book: cut(a.book),
+				chainId: cut(a.chain_id),
+				readAtBlock: cut(a.checked_at?.number),
+				full: `Call again with "full": true, or fetch it yourself: ${fetchIt}`,
+				check,
+			},
+		},
+		false,
+	];
 }
 
 async function offerCheck(offer, env) {

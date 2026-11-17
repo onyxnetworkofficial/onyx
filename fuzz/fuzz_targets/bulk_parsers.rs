@@ -6,13 +6,16 @@
 //! catalog header, a leaf proof and its report, THREATS FUZZ-8), as Borsh
 //! parts and as the JSON the leaf route answers, through the storage node's
 //! own check (`onyx_api::bulk_serve::check_leaf_answer`, review FUZZ-8-R1).
+//! Selector 8: a successor answer as a reader checks it off chain (ADR-0059
+//! amendment 6 item 7, `onyx_api::bulk_successor::check_answer_offline`,
+//! page 0 only) and an absence proof's parts (`proves_absent`).
 //! The first byte picks the parser. None may panic or allocate without bound (THREATS
 //! FUZZ-7: no target covered `onyx-bulk` before 2026-11-08).
 #![no_main]
 
 use borsh::BorshDeserialize;
 use libfuzzer_sys::fuzz_target;
-use onyx_bulk::catalog::{Catalog, CatalogFiles, CatalogHeader, LeafProof, Walker};
+use onyx_bulk::catalog::{AbsenceProof, Catalog, CatalogFiles, CatalogHeader, LeafProof, Walker};
 use onyx_bulk::manifest::Manifest;
 use onyx_bulk::shard::check_shard;
 use onyx_core::{SignedReport, SourceId};
@@ -21,7 +24,7 @@ fuzz_target!(|data: &[u8]| {
     let Some((&sel, b)) = data.split_first() else {
         return;
     };
-    match sel % 8 {
+    match sel % 9 {
         0 => {
             // The header's Borsh is written by hand (ADR-0059 amendment 5:
             // `earlier` only in format 2): every manifest that decodes,
@@ -90,6 +93,24 @@ fuzz_target!(|data: &[u8]| {
                 let _ = h.proves(&lp);
                 let _ = (lp.leaf.is_tombstone(), lp.leaf.row(), h.root());
                 let _ = onyx_bulk::catalog::verify(&h, &r);
+            }
+        }
+        8 => {
+            // A successor answer past the JSON layer, every check a reader
+            // runs before any chain read; and an absence proof's parts.
+            if let Ok(v) = serde_json::from_slice::<serde_json::Value>(b) {
+                let dataset = v["dataset"]
+                    .as_str()
+                    .unwrap_or("synthetic.metrics")
+                    .to_owned();
+                let _ = onyx_api::bulk_successor::check_answer_offline(
+                    "example.publisher",
+                    &dataset,
+                    &v,
+                );
+            }
+            if let Ok((h, id, p)) = <(CatalogHeader, String, AbsenceProof)>::try_from_slice(b) {
+                let _ = h.proves_absent(&id, &p);
             }
         }
         _ => {

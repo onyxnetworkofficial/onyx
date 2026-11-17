@@ -12,6 +12,8 @@
 	import ApiReference from '#lib/components/ApiReference.svelte';
 	import spec from '../../../static/openapi.json';
 	import { operations } from '#lib/openapi.ts';
+	import { PAGE, RELEASE, REPO } from '#lib/release.ts';
+	import { checkCommands, quickCommands } from '#lib/quickstart.ts';
 
 	let demo = $state.raw<Demo | null>(null);
 	let pill = $state<{ state: PillState; text: string }>({ state: 'idle', text: 'Not checked' });
@@ -20,6 +22,7 @@
 	// W4: the sample shows from the small demo file; the verifier (1.8 MiB gzip) loads only
 	// when the button below asks it to check the proof.
 	onMount(() => {
+		if (location.protocol === 'https:') origin = location.origin;
 		loadDemo()
 			.then((d) => (demo = d))
 			.catch((e) => (loadError = String(e)));
@@ -46,6 +49,13 @@
 			tx: null
 		};
 	});
+
+	// Newcomer test (A14): the three calls a first reader needs, as real commands against this
+	// site's own node (the page's origin when a node serves it, else the hosted test node). The
+	// commands are in lib/quickstart.ts: the check ones are those the released onyx-check accepts.
+	let origin = $state('https://onyx.cryptagraph.com');
+	const quick = $derived(quickCommands(origin));
+	const checkCmd = $derived(checkCommands(origin));
 
 	let tab = $state<'request' | 'response'>('response');
 	// PP6: the paid data routes, from the OpenAPI file (the Reference below lists every route).
@@ -91,6 +101,41 @@
 
 <div class="wrap">
 	{#if loadError}<p class="section">Could not load the demo data: {loadError}</p>{/if}
+	<section class="section quick" data-testid="api-quick">
+		<h2>Get data in 3 commands</h2>
+		<p class="qnote">Free to read on the test network: no key, no sign-up. Every answer is JSON.</p>
+		<ol class="qsteps">
+			{#each quick as q, i (q.cmd)}
+				<li>
+					<span class="qwhat"><span class="qn" aria-hidden="true">{i + 1}</span>{q.what}</span>
+					<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+					<pre class="code qcmd" tabindex="0" role="region" aria-label={`Command ${i + 1}`} data-testid="api-quick-cmd">{q.cmd}</pre>
+				</li>
+			{/each}
+		</ol>
+		<p class="qnote">
+			A row's key is a whole number; for a daily series it is the day's first second in unix time (UTC), so 2026-01-01 is
+			<code>1767225600</code>. Narrow the last command with <code>from=</code> and <code>to=</code>.
+		</p>
+		<h3 class="qcheck">Check an answer yourself</h3>
+		<p class="qnote">
+			<code>onyx-check</code> proves every row of a saved answer against the publisher's signature and the record on Base Sepolia, read
+			through a chain node you choose. It prints a report and exits 0 only when everything holds. The example saves January 2026,
+			oldest first, and checks it.
+		</p>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save an answer and check it" data-testid="api-quick-check">{checkCmd}</pre>
+		<p class="qnote" data-testid="api-quick-get">
+			Get <code>onyx-check</code> from the <a href={PAGE} target="_blank" rel="noopener">release page</a> (the command-line file for
+			Linux holds it), or build it from the <a href={REPO} target="_blank" rel="noopener">source code</a> with
+			<code class="cmd">cargo build --release -p onyx-check</code>.
+		</p>
+		<p class="qnote" data-testid="api-quick-release">
+			The released <code>onyx-check</code> ({RELEASE}) checks an answer read oldest first with whole-number keys, as above. Checking
+			a newest-first page (<code>order=desc</code>) needs the next release, or a build from the source today: add
+			<code>--order desc</code>, and it also proves the page starts at the newest row.
+		</p>
+	</section>
 	<section class="section grid">
 		<h2 class="span">Paid data routes</h2>
 		<div class="eps" class:solo={!sample}>
@@ -199,6 +244,60 @@
 </div>
 
 <style>
+	/* A14: the three commands. Each is a block that scrolls sideways on a wide screen and wraps
+	   on a phone (a long command in a line of text would push the page wider than the screen). */
+	.quick {
+		display: grid;
+		gap: var(--sp-4);
+	}
+	.quick > :is(h2, h3, p) {
+		margin: 0;
+	}
+	.qnote {
+		max-width: 68ch;
+		line-height: var(--lh-body);
+		color: var(--muted);
+	}
+	.qsteps {
+		list-style: none;
+		margin: 0;
+		padding: 0;
+		display: grid;
+		gap: var(--sp-4);
+	}
+	.qsteps li {
+		display: grid;
+		gap: var(--sp-2);
+		min-width: 0;
+	}
+	.qwhat {
+		display: flex;
+		align-items: baseline;
+		gap: var(--sp-2);
+	}
+	.qn {
+		font-family: var(--mono);
+		font-size: var(--text-xs);
+		font-weight: 600;
+		color: var(--accent);
+		background: var(--accent-soft);
+		border-radius: var(--radius-sm);
+		padding: var(--sp-0) var(--sp-2);
+	}
+	.qcmd {
+		min-width: 0;
+		max-width: 100%;
+	}
+	.qcheck {
+		margin-top: var(--sp-3);
+	}
+	@media (max-width: 760px) {
+		.qcmd {
+			white-space: pre-wrap;
+			overflow-wrap: anywhere;
+			overflow-x: hidden;
+		}
+	}
 	.perks {
 		display: flex;
 		flex-wrap: wrap;

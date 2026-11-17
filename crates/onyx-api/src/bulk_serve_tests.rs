@@ -387,6 +387,208 @@ pub(crate) async fn published_keys(
     (m, files)
 }
 
+/// `order=desc` (newcomer finding A15): the newest rows first, the same
+/// proofs, pages that meet the ascending ones row for row.
+#[tokio::test]
+async fn rows_newest_first_check_and_page_like_the_ascending_ones() {
+    let w = world();
+    published(&w).await;
+    // The newest 3 rows, across no shard edge, then across the edge at 20.
+    let a = w.rows("order=desc&limit=3").await.expect("ok");
+    let c = onyx_bulk::wire::check_rows_answer(&a, None, None).expect("ok");
+    assert!(c.descending);
+    assert_eq!(
+        c.rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+        vec![29, 28, 27]
+    );
+    assert_eq!(a["query"]["order"], json!("desc"));
+    assert_eq!(a["next_page"], json!(1));
+    assert_eq!(a["shards"].as_array().expect("ok").len(), 1);
+    // The whole request checked (review NEWC-R1 M1): proven to start at the
+    // newest row; the second page is a plain newest-first page.
+    let newest_first = onyx_bulk::wire::RowsAsked {
+        desc: true,
+        ..Default::default()
+    };
+    assert!(
+        onyx_bulk::wire::check_rows_asked(&a, &newest_first)
+            .expect("ok")
+            .newest_proven
+    );
+    let second = w.rows("order=desc&limit=3&page=1").await.expect("ok");
+    assert!(onyx_bulk::wire::check_rows_asked(&second, &newest_first).is_err());
+    let asked = onyx_bulk::wire::RowsAsked {
+        page: 1,
+        ..newest_first
+    };
+    assert!(
+        !onyx_bulk::wire::check_rows_asked(&second, &asked)
+            .expect("ok")
+            .newest_proven
+    );
+    // Pages of 4 from the top: 8 pages, each checks, every row once.
+    let mut keys = Vec::new();
+    for page in 0..8 {
+        let a = w
+            .rows(&format!("order=desc&limit=4&page={page}"))
+            .await
+            .expect("ok");
+        let c = onyx_bulk::wire::check_rows_answer(&a, None, None).expect("ok");
+        keys.extend(c.rows.iter().map(|r| r.2));
+        assert_eq!(a["next_page"].is_null(), page == 7, "page {page}");
+    }
+    assert_eq!(keys, (0..30).rev().collect::<Vec<i128>>());
+    // With a range: the range's own newest rows.
+    let a = w.rows("from=8&to=12&order=desc&limit=4").await.expect("ok");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(8), Some(12)).expect("ok");
+    assert_eq!(
+        c.rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+        vec![12, 11, 10, 9]
+    );
+    assert_eq!(a["next_page"], json!(1));
+    let a = w
+        .rows("from=8&to=12&order=desc&limit=4&page=1")
+        .await
+        .expect("ok");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(8), Some(12)).expect("ok");
+    assert_eq!(c.rows.iter().map(|r| r.2).collect::<Vec<_>>(), vec![8]);
+    assert_eq!(a["next_page"], Value::Null);
+    // `asc` is the order without the parameter; anything else is refused.
+    let a = w.rows("order=asc&limit=2").await.expect("ok");
+    assert_eq!(a["query"]["order"], json!("asc"));
+    assert_eq!(a["rows"][0]["key"], json!("0"));
+    assert_eq!(
+        code(w.rows("order=newest").await.expect_err("bad")),
+        "bad_request"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Dates in `from` and `to` (A15): unix seconds, UTC, a date alone is the
+/// whole day; whole numbers as before.
+#[test]
+fn rows_query_takes_dates_and_whole_numbers() {
+    let q = |s: &str| parse_rows_query(Some(s));
+    let ok = |s: &str| q(s).expect(s);
+    assert_eq!(ok("from=1767225600").from, Some(1_767_225_600));
+    assert!(!ok("from=-5&to=1767225600").dated);
+    let d = ok("from=2026-01-01&to=2026-01-01");
+    assert_eq!((d.from, d.to), (Some(1_767_225_600), Some(1_767_311_999)));
+    assert!(d.dated);
+    assert_eq!(ok("from=2026-01-01T00:00:01Z").from, Some(1_767_225_601));
+    assert_eq!(ok("to=2026-01-01T12%3A30%3A00").to, Some(1_767_270_600));
+    assert_eq!(ok("from=1970-01-01").from, Some(0));
+    assert_eq!(ok("from=1969-12-31").from, Some(-86_400));
+    assert_eq!(ok("from=2024-02-29").from, Some(1_709_164_800));
+    assert_eq!(ok("to=2000-12-31T23:59:59Z").to, Some(978_307_199));
+    for bad in [
+        "from=2026-1-1",
+        "from=2026-02-30",
+        "from=2025-02-29",
+        "from=2026-13-01",
+        "from=2026-01-01T24:00:00Z",
+        "from=2026-01-01T00:00",
+        "from=2026-01-01+01:00",
+        "from=20260101x",
+        "from=yesterday",
+        "from=",
+        "from=2026-01-02&to=2026-01-01",
+        "order=desc&order=asc",
+    ] {
+        assert_eq!(code(q(bad).expect_err(bad)), "bad_request", "{bad}");
+    }
+    assert!(q("from=x").expect_err("x").message.contains("2026-01-31"));
+}
+
+/// A date is taken, and the unit named, only for a key that reads as unix
+/// seconds (review NEWC-R1 M3): named as a time and with its whole signed
+/// range between 1973 and 2100; never from the column's name alone.
+#[tokio::test]
+async fn a_date_needs_a_key_that_reads_as_unix_seconds() {
+    // Keys 1,700,000,000..+30 in a column named `t`: seconds of 2023-11-14.
+    let w = world();
+    published_keys(&w, 1_700_000_000..1_700_000_030).await;
+    let a = w
+        .rows("from=2023-11-14&to=2023-11-14&limit=2")
+        .await
+        .expect("ok");
+    assert_eq!(a["key"], json!({"column": "t", "unit": "unix_seconds"}));
+    assert_eq!(a["query"]["from"], json!("1699920000"));
+    assert_eq!(a["query"]["to"], json!("1700006399"));
+    assert_eq!(a["rows"].as_array().expect("rows").len(), 2);
+    onyx_bulk::wire::check_rows_answer(&a, Some(1_699_920_000), Some(1_700_006_399)).expect("ok");
+    let a = w.rows("from=2023-11-15").await.expect("ok");
+    assert_eq!(a["rows"], json!([]));
+    let _ = std::fs::remove_dir_all(&w.dir);
+    // Keys 0..30 in the same column: not unix seconds by their range. No
+    // unit is claimed and a date is refused; whole numbers work as before.
+    let w = world();
+    published(&w).await;
+    let a = w.rows("from=0&to=5").await.expect("ok");
+    assert_eq!(a["key"], json!({"column": "t", "unit": null}));
+    let e = w.rows("from=1970-01-01").await.expect_err("refused");
+    assert_eq!(e.code, "bad_request");
+    assert!(
+        e.message.contains("whole numbers") && e.message.contains("1973-03-03"),
+        "{}",
+        e.message
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[test]
+fn only_a_named_time_key_in_the_unix_range_reads_as_unix_seconds() {
+    let day = 86_400i128;
+    // The live shape: a `day` column of days' first seconds.
+    assert!(key_is_unix_seconds("day", 1_279_324_800, 1_794_528_000));
+    assert!(key_is_unix_seconds("t", UNIX_KEY_MIN, UNIX_KEY_END - 1));
+    for (name, lo, hi, why) in [
+        (
+            "height",
+            1_279_324_800,
+            1_794_528_000,
+            "not named as a time",
+        ),
+        ("ts", 1_279_324_800_000, 1_794_528_000_000, "milliseconds"),
+        (
+            "ts",
+            1_279_324_800,
+            1_794_528_000_000,
+            "milliseconds at the end",
+        ),
+        ("day", 20_100_717, 20_261_113, "YYYYMMDD"),
+        (
+            "date",
+            2_010_071_700,
+            2_026_111_300,
+            "YYYYMMDDHH: in range, not whole days",
+        ),
+        (
+            "day",
+            1_279_324_801,
+            1_794_528_000,
+            "a day key off the day's first second",
+        ),
+        ("t", 0, 30, "small counters"),
+        ("t", -5, 1_794_528_000, "before 1973"),
+        ("t", UNIX_KEY_MIN - 1, UNIX_KEY_MIN, "just under the range"),
+        ("t", UNIX_KEY_END - 1, UNIX_KEY_END, "2100 and later"),
+        ("day", 800_000, 820_000, "a block height named day"),
+    ] {
+        assert!(!key_is_unix_seconds(name, lo, hi), "{why}");
+    }
+    assert_eq!(UNIX_KEY_END % day, 0);
+    let dated = parse_rows_query(Some("from=2026-01-01")).expect("q");
+    let plain = parse_rows_query(Some("from=5")).expect("q");
+    assert!(dates_fit(&dated, Some("day"), true).is_ok());
+    assert!(dates_fit(&plain, Some("height"), false).is_ok());
+    for col in ["height", "day"] {
+        let e = dates_fit(&dated, Some(col), false).expect_err("refused");
+        assert_eq!(e.code, "bad_request");
+        assert!(e.message.contains(col) && e.message.contains("whole numbers"));
+    }
+}
+
 #[tokio::test]
 async fn publish_upload_and_query_with_client_check() {
     let w = world();
@@ -1442,6 +1644,248 @@ async fn cat_r1_l2_a_dataset_enters_after_its_own_versions() {
     );
     let _ = std::fs::remove_dir_all(&w.dir);
     let _ = std::fs::remove_dir_all(&w2.dir);
+}
+
+/// A dataset named `name` with the rows of `keys` (its manifest alone).
+async fn post_named(w: &World, name: &str, keys: std::ops::Range<i128>) {
+    let files = shard_files(keys, 10);
+    let entries = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ShardEntry::new(i as u32, &check_shard(&schema(), f).expect("ok").summary))
+        .collect();
+    let b = Manifest::build(
+        NewVersion {
+            dataset: name.into(),
+            publisher: SourceId("example.publisher".into()),
+            created_unix: T0,
+            schema: schema(),
+            rights: rights(),
+        },
+        None,
+        entries,
+    )
+    .expect("ok");
+    let rb = sign(&b);
+    w.node.anchor(&rb);
+    w.post(&b, &rb).await.expect("ok");
+}
+
+/// READINESS A20: the list and the info say how fresh a dataset is. A key
+/// that reads as unix seconds gives `newest` (its UTC day) and
+/// `newest_age_days` against the node's clock at the answer; `fresh=30d`
+/// keeps a dataset to the last second of its 30th day and `sort=newest`
+/// orders by the newest key. A key that is not a time has no `newest`, is
+/// never in a `fresh` list and sorts last. Nothing is built or read from the
+/// chain for it.
+#[tokio::test]
+async fn the_list_says_how_fresh_each_dataset_is() {
+    const DAY: i128 = 86_400;
+    let w = world();
+    let t0 = i128::from(T0);
+    // Newest keys: 2 days back; 31 days less a second back; 80 days back;
+    // and keys 0..30, which are no time.
+    let edge = t0 - 31 * DAY + 1;
+    post_named(&w, "synthetic.fresh", t0 - 2 * DAY..t0 - 2 * DAY + 3).await;
+    post_named(&w, "synthetic.edge", edge - 2..edge + 1).await;
+    post_named(&w, "synthetic.old", t0 - 80 * DAY - 2..t0 - 80 * DAY + 1).await;
+    post_named(&w, "synthetic.heights", 0..30).await;
+    let (reads, jobs) = (w.node.reads(), w.store.succ_jobs());
+    let list = |q: &str| {
+        w.store
+            .list(&parse_list_query(Some(q)).expect(q))
+            .expect("ok")
+    };
+    let ids = |v: &Value| -> Vec<String> {
+        v["datasets"]
+            .as_array()
+            .expect("ok")
+            .iter()
+            .map(|d| {
+                let d = d["dataset"].as_str().expect("ok");
+                d.trim_start_matches("synthetic.").to_string()
+            })
+            .collect()
+    };
+    let entry = |v: &Value, d: &str| {
+        v["datasets"]
+            .as_array()
+            .expect("list")
+            .iter()
+            .find(|e| e["dataset"] == format!("synthetic.{d}"))
+            .cloned()
+            .expect("listed")
+    };
+    let all = list("");
+    assert_eq!(ids(&all), ["edge", "fresh", "heights", "old"], "id order");
+    assert_eq!(all["now_unix"], json!(T0));
+    let f = entry(&all, "fresh");
+    assert_eq!(
+        (f["newest"].clone(), f["newest_age_days"].clone()),
+        (json!("2027-01-13"), json!(1))
+    );
+    let e = entry(&all, "edge");
+    assert_eq!(
+        (e["newest"].clone(), e["newest_age_days"].clone()),
+        (json!("2026-12-15"), json!(30))
+    );
+    let o = entry(&all, "old");
+    assert_eq!(
+        (o["newest"].clone(), o["newest_age_days"].clone()),
+        (json!("2026-10-27"), json!(80))
+    );
+    // Not a time: no field at all, so nothing can call it stale.
+    let h = entry(&all, "heights");
+    assert!(h.get("newest").is_none() && h.get("newest_age_days").is_none());
+    // fresh: the edge is in at 30 days and 86,399 seconds.
+    let fresh = list("fresh=30d");
+    assert_eq!(ids(&fresh), ["edge", "fresh"]);
+    assert_eq!(fresh["total"], json!(2));
+    assert_eq!(ids(&list("fresh=1d")), ["fresh"]);
+    assert_eq!(ids(&list("fresh=3650d")), ["edge", "fresh", "old"]);
+    assert_eq!(ids(&list("fresh=30d&q=old")).len(), 0);
+    // sort=newest: the newest key first, no time last; pages follow it.
+    assert_eq!(
+        ids(&list("sort=newest")),
+        ["fresh", "edge", "old", "heights"]
+    );
+    assert_eq!(ids(&list("sort=id")), ids(&all));
+    let p1 = list("sort=newest&limit=2");
+    assert_eq!(ids(&p1), ["fresh", "edge"]);
+    assert_eq!(p1["total"], json!(4));
+    assert_eq!(p1["next"], json!("example.publisher/synthetic.edge"));
+    let p2 = list("sort=newest&limit=2&after=example.publisher%2Fsynthetic.edge");
+    assert_eq!(ids(&p2), ["old", "heights"]);
+    assert_eq!(p2["next"], Value::Null);
+    let p3 = list("sort=newest&limit=1&after=example.publisher%2Fsynthetic.old");
+    assert_eq!(ids(&p3), ["heights"]);
+    assert_eq!(
+        ids(&list(
+            "sort=newest&fresh=30d&limit=1&after=example.publisher%2Fsynthetic.fresh"
+        )),
+        ["edge"]
+    );
+    let gone = w
+        .store
+        .list(
+            &parse_list_query(Some("sort=newest&after=example.publisher%2Fnot.held")).expect("ok"),
+        )
+        .expect_err("no such cursor");
+    assert_eq!(gone.status, StatusCode::BAD_REQUEST);
+    // The info says the same.
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.edge")
+        .expect("ok");
+    assert_eq!(
+        (info["newest"].clone(), info["newest_age_days"].clone()),
+        (json!("2026-12-15"), json!(30))
+    );
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.heights")
+        .expect("ok");
+    assert!(info.get("newest").is_none() && info.get("newest_age_days").is_none());
+    // One second on the node's clock: the edge is 31 days behind. The
+    // answer follows the clock at the answer, nothing is kept from before.
+    w.clock.fetch_add(1, Ordering::Relaxed);
+    let later = list("fresh=30d");
+    assert_eq!(ids(&later), ["fresh"]);
+    assert_eq!(later["now_unix"], json!(T0 + 1));
+    assert_eq!(
+        entry(&list(""), "edge")["newest_age_days"],
+        json!(31),
+        "the day and the age, not a kept answer"
+    );
+    assert_eq!(
+        w.store
+            .info("example.publisher", "synthetic.edge")
+            .expect("ok")["newest_age_days"],
+        json!(31)
+    );
+    assert_eq!(ids(&list("fresh=31d")), ["edge", "fresh"]);
+    // A newest key up to a day ahead of the clock: age 0, never negative.
+    w.clock.store(T0 - 3 * 86_400 + 2, Ordering::Relaxed);
+    let ahead = entry(&list(""), "fresh");
+    assert_eq!(
+        (ahead["newest"].clone(), ahead["newest_age_days"].clone()),
+        (json!("2027-01-13"), json!(0))
+    );
+    assert!(ahead.get("newest_in_future").is_none());
+    assert_eq!(ids(&list("fresh=1d")), ["fresh"]);
+    // Review FRESH-R1 M1: one second more and the key is dated in the
+    // future. A publisher signs its own key range, so such a key is no
+    // news: no day, no age, in no fresh list, sorted with the keys that are
+    // no time, and marked.
+    w.clock.store(T0 - 3 * 86_400 + 1, Ordering::Relaxed);
+    let all = list("");
+    let e = entry(&all, "fresh");
+    assert_eq!(e["newest_in_future"], json!(true));
+    assert!(e.get("newest").is_none() && e.get("newest_age_days").is_none());
+    for d in ["edge", "old", "heights"] {
+        assert!(entry(&all, d).get("newest_in_future").is_none(), "{d}");
+    }
+    assert_eq!(list("fresh=1d")["total"], json!(0));
+    assert_eq!(ids(&list("fresh=3650d")), ["edge", "old"]);
+    assert_eq!(ids(&list("sort=newest&fresh=3650d")), ["edge", "old"]);
+    assert_eq!(
+        ids(&list("sort=newest")),
+        ["edge", "old", "fresh", "heights"],
+        "a key of the future never tops the newest"
+    );
+    let info = w
+        .store
+        .info("example.publisher", "synthetic.fresh")
+        .expect("ok");
+    assert_eq!(info["newest_in_future"], json!(true));
+    assert!(info.get("newest").is_none() && info.get("newest_age_days").is_none());
+    // Between `old` (80 days back) and `edge`: `old` is the only dated one,
+    // so it leads; the future ones follow in id order with `heights`.
+    w.clock.store(T0 - 60 * 86_400, Ordering::Relaxed);
+    assert_eq!(
+        ids(&list("sort=newest")),
+        ["old", "edge", "fresh", "heights"]
+    );
+    assert_eq!(ids(&list("fresh=3650d")), ["old"]);
+    let p2 = list("sort=newest&limit=2&after=example.publisher%2Fsynthetic.edge");
+    assert_eq!(ids(&p2), ["fresh", "heights"]);
+    // Every listing above came from the held signed headers: no chain
+    // read, no index build.
+    assert_eq!((w.node.reads(), w.store.succ_jobs()), (reads, jobs));
+    for bad in [
+        "fresh=30",
+        "fresh=d",
+        "fresh=0d",
+        "fresh=3651d",
+        "fresh=-1d",
+        "fresh=1.5d",
+        "fresh=%2B5d",
+        "fresh=30d&fresh=7d",
+        "sort=",
+        "sort=rows",
+        "sort=NEWEST",
+    ] {
+        let e = parse_list_query(Some(bad)).expect_err(bad);
+        assert_eq!(e.status, StatusCode::BAD_REQUEST, "{bad}");
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// The day of a key and its age in whole days (READINESS A20).
+#[test]
+fn a_newest_key_reads_as_a_day_and_an_age() {
+    assert_eq!(iso_day(0), "1970-01-01");
+    assert_eq!(iso_day(86_399), "1970-01-01");
+    assert_eq!(iso_day(951_782_400), "2000-02-29");
+    assert_eq!(iso_day(1_794_528_000), "2026-11-13");
+    assert_eq!(iso_day(4_102_444_799), "2099-12-31");
+    for t in [100_000_000i128, 1_709_164_800, 1_767_225_600, 1_798_761_599] {
+        assert_eq!(parse_time(&iso_day(t), false), Some(t - t % 86_400));
+    }
+    assert_eq!(age_days(1_000_000, 1_000_000), 0);
+    assert_eq!(age_days(1_000_000, 1_000_000 + 86_399), 0);
+    assert_eq!(age_days(1_000_000, 1_000_000 + 86_400), 1);
+    assert_eq!(age_days(2_000_000, 1_000_000), 0);
 }
 
 /// `GET /v1/bulk` search and pages: every word must be in
@@ -9296,7 +9740,9 @@ async fn cat_succ_a_start_reads_only_catalogs_that_remove_and_queues_them_first(
     for q in ["example.aaa", "example.bbb"] {
         a_links_publisher_of(&m.w, q, &[vec![inert_row(1)]], false).await;
     }
-    a_links_publisher(&m.w, "example.zzz", 1).await;
+    // Bigger than the publisher's version: the smaller goes first (SUCC-B6
+    // L1).
+    a_links_publisher(&m.w, "example.zzz", 3).await;
     for q in [
         "example.publisher",
         "example.aaa",
@@ -9335,4 +9781,1047 @@ async fn cat_succ_a_start_reads_only_catalogs_that_remove_and_queues_them_first(
         again.replaces_all().get("example.aaa").map(|r| r.1),
         Some(0)
     );
+}
+
+// --- Build review SUCC-B6 ---
+
+/// Review SUCC-B6 (the reviewer's guard check): a shard the index waited
+/// for, sent again after the job it woke failed its read, queues nothing.
+/// Only `State::set_wait` dropping the old waiter stops it; without that,
+/// every re-send of the shard is one more full read of the version.
+#[tokio::test]
+async fn cat_succ_a_waited_shard_sent_again_after_a_failed_read_reads_nothing() {
+    let w = world();
+    let q = "example.second";
+    let s = onyx_bulk::successor::links_schema();
+    let mut r = rights();
+    r.source = SourceId(q.into());
+    let fx = encode_shard(&[inert_row(1)]);
+    let sx = check_shard(&s, &fx).expect("x").summary;
+    let fr = encode_shard(&[inert_row(2)]);
+    let sr = check_shard(&s, &fr).expect("r").summary;
+    // R is held under a data dataset (links schema, its true entry there).
+    let data = Manifest::build(
+        NewVersion {
+            dataset: "synthetic.fat".into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 4,
+            schema: s.clone(),
+            rights: r.clone(),
+        },
+        None,
+        vec![ShardEntry::new(0, &sr)],
+    )
+    .expect("data");
+    // The links version: X (true), then R with a false size.
+    let mut er = ShardEntry::new(1, &sr);
+    er.bytes += 1;
+    let links = Manifest::build(
+        NewVersion {
+            dataset: LINKS.into(),
+            publisher: SourceId(q.into()),
+            created_unix: T0 + 5,
+            schema: s,
+            rights: r,
+        },
+        None,
+        vec![ShardEntry::new(0, &sx), er],
+    )
+    .expect("links");
+    let c = a_removing_catalog(
+        &w,
+        q,
+        vec![
+            CatalogLeaf::of(&data.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    )
+    .await;
+    let n = c.header.number;
+    w.post_in(&data, n).await.expect("data manifest");
+    w.store
+        .accept_shard(
+            q,
+            "synthetic.fat",
+            &sr.root,
+            &HeaderMap::new(),
+            Body::from(fr),
+        )
+        .await
+        .expect("R");
+    w.post_in(&links, n).await.expect("links manifest");
+    w.store.succ_settle(q).await;
+    assert_eq!(w.store.succ_reads(), 0, "waits for X");
+    let hm = HeaderMap::new();
+    let send_x = || {
+        w.store
+            .accept_shard(q, LINKS, &sx.root, &hm, Body::from(fx.clone()))
+    };
+    send_x().await.expect("X");
+    w.store.succ_settle(q).await;
+    let reads = w.store.succ_reads();
+    assert_eq!(reads, 2, "X loaded, R refused by its size");
+    assert!(!w.store.replaces_all().contains_key(q), "pending");
+    let jobs = w.jobs_of(q);
+    for _ in 0..3 {
+        send_x().await.expect("X again");
+        w.store.succ_settle(q).await;
+    }
+    assert_eq!(w.jobs_of(q), jobs, "X sent again queues no job");
+    assert_eq!(w.store.succ_reads(), reads, "and reads nothing");
+}
+
+/// A JSON-RPC that counts calls and, like a real one, is not ready at once.
+struct SlowRpc {
+    inner: Arc<Node>,
+    calls: AtomicU64,
+}
+
+impl JsonRpc for SlowRpc {
+    fn call<'a>(&'a self, method: &'a str, p: Value) -> BoxFuture<'a, Result<Value, String>> {
+        self.calls.fetch_add(1, Ordering::SeqCst);
+        Box::pin(async move {
+            tokio::task::yield_now().await;
+            self.inner.call(method, p).await
+        })
+    }
+}
+
+/// Review SUCC-B6 M1 (the reviewer's attack): in a stale "not held" window
+/// every successor answer spawned its own background chain read (250 calls
+/// for 50 answers), and a failed read left the verdict stale, so each
+/// answer after it read again (50 with the RPC down). Now the first answer
+/// claims the window's one read, and a failed read writes "not held" anew,
+/// as `fork_stands` does (review CAT-6 L3).
+#[tokio::test]
+async fn cat_succ_a_stale_verdict_is_read_once_however_many_answers() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m.w.settle().await;
+    let rpc = Arc::new(SlowRpc {
+        inner: m.w.node.clone(),
+        calls: AtomicU64::new(0),
+    });
+    let c = m.w.clock.clone();
+    let s = started(
+        BulkStore::open(
+            pin(),
+            rpc.clone(),
+            Arc::new(move || c.load(Ordering::Relaxed)),
+            &m.w.dir,
+            &m.w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("reopen"),
+    );
+    s.succ_settle("example.publisher").await;
+    let digest = s
+        .datasets
+        .read()
+        .expect("lock")
+        .get(&("example.publisher".into(), LINKS.into()))
+        .expect("held")
+        .versions[0]
+        .report
+        .payload
+        .digest();
+    s.mark(digest, false);
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    // One answer alone: how many calls one background read makes.
+    let before = rpc.calls.load(Ordering::SeqCst);
+    let a = s
+        .successor_answer("example.publisher", "synthetic.metrics")
+        .await
+        .expect("answer");
+    assert_eq!(a["links"], Value::Null);
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    let one = rpc.calls.load(Ordering::SeqCst) - before;
+    assert!(one > 0, "a background read");
+    // Stale again; fifty answers in the same window.
+    s.mark(digest, false);
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let before = rpc.calls.load(Ordering::SeqCst);
+    for _ in 0..50 {
+        let _ = s
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await;
+    }
+    for _ in 0..2_000 {
+        tokio::task::yield_now().await;
+    }
+    let fifty = rpc.calls.load(Ordering::SeqCst) - before;
+    // The RPC down: a failed read writes "not held" anew, so the answers
+    // after it read nothing in this window.
+    s.mark(digest, false);
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    m.w.node.0.lock().expect("lock").down = true;
+    let before = rpc.calls.load(Ordering::SeqCst);
+    for _ in 0..50 {
+        let _ = s
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await;
+        for _ in 0..20 {
+            tokio::task::yield_now().await;
+        }
+    }
+    let down = rpc.calls.load(Ordering::SeqCst) - before;
+    assert!(
+        fifty <= 2 * one && down <= 2,
+        "one read is {one} chain calls; 50 answers in one stale window made {fifty}; \
+         with the RPC down, 50 answers one at a time made {down}"
+    );
+    // The claim is let go after each read: a later stale window reads.
+    m.w.node.0.lock().expect("lock").down = false;
+    m.w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let before = rpc.calls.load(Ordering::SeqCst);
+    let _ = s
+        .successor_answer("example.publisher", "synthetic.metrics")
+        .await;
+    for _ in 0..200 {
+        tokio::task::yield_now().await;
+    }
+    assert!(rpc.calls.load(Ordering::SeqCst) > before, "read again");
+}
+
+/// Review SUCC-B6 L1: at start, among the publishers whose catalog removes
+/// a dataset, the one with the smallest links version is built first, not
+/// the first by name: publishers named to sort first with big versions do
+/// not hold back an honest 410 at every restart.
+#[tokio::test]
+async fn cat_succ_a_start_builds_the_smallest_links_version_first() {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    for (q, n) in [("example.aaa", 2_000), ("example.aab", 500)] {
+        a_links_publisher(&m.w, q, n).await;
+    }
+    for q in ["example.publisher", "example.aaa", "example.aab"] {
+        m.w.store.succ_settle(q).await;
+    }
+    let again = Arc::new(
+        BulkStore::open(
+            pin(),
+            m.w.node.clone(),
+            Arc::new(|| T0),
+            &m.w.dir,
+            &m.w.dir.join("warm"),
+            BulkLimits::default(),
+        )
+        .expect("reopen"),
+    );
+    again.succ_hold();
+    again.succ_start();
+    let order = ["example.publisher", "example.aab", "example.aaa"];
+    assert_eq!(again.succ_queued(), order.map(String::from).to_vec());
+    again.succ_release();
+    for q in order {
+        again.succ_settle(q).await;
+        assert!(again.replaces_all().contains_key(q), "{q} built");
+    }
+}
+
+// --- The reader's successor check (ADR-0059 amendment 6 item 7) ---
+
+use crate::bulk_successor::{
+    check_successor, check_successor_unchecked, SuccessorOpts, SuccessorOutcome,
+};
+
+fn sopts(keys: Vec<[u8; 20]>, scan_from: Option<u64>) -> SuccessorOpts {
+    SuccessorOpts {
+        node: Some("http://node".into()),
+        keys,
+        scan_from,
+        logs_range: 50,
+    }
+}
+
+/// The node's successor answer for `dataset`, once its index is built.
+async fn answer_of(w: &World, dataset: &str) -> Value {
+    w.settle().await;
+    w.store
+        .successor_answer("example.publisher", dataset)
+        .await
+        .expect("answer")
+}
+
+/// The reader's check of `answer` against the world's node and book.
+async fn succ_check_with(
+    w: &World,
+    get: &dyn crate::storage::HttpGet,
+    dataset: &str,
+    answer: &Value,
+    o: &SuccessorOpts,
+) -> SuccessorOutcome {
+    check_successor(
+        get,
+        w.node.as_ref(),
+        CHAIN,
+        BOOK,
+        answer,
+        "example.publisher",
+        dataset,
+        o,
+    )
+    .await
+}
+
+async fn succ_check(
+    w: &World,
+    dataset: &str,
+    answer: &Value,
+    o: &SuccessorOpts,
+) -> SuccessorOutcome {
+    let get = RouterGet(routes(w.store.clone()));
+    succ_check_with(w, &get, dataset, answer, o).await
+}
+
+fn succ_refused(o: SuccessorOutcome) -> (&'static str, String) {
+    match o {
+        SuccessorOutcome::Refused(f, w) => (f, w),
+        other => panic!("not refused: {}", other.report()),
+    }
+}
+
+fn succ_undecided(o: SuccessorOutcome) -> String {
+    match o {
+        SuccessorOutcome::Undecided(w) => w,
+        other => panic!("not undecided: {}", other.report()),
+    }
+}
+
+/// [`a_move`] with its links version held: the old id's successor is live.
+async fn a_held_move() -> Move {
+    let m = a_move().await;
+    m.w.post_in(&m.links, 1).await.expect("links manifest");
+    m.w.put_in(LINKS, &m.links.shards[0].root, m.links_file.clone())
+        .await;
+    m
+}
+
+#[tokio::test]
+async fn bulk_successor_a_move_verifies_on_chain() {
+    let m = a_held_move().await;
+    let a = answer_of(&m.w, "synthetic.metrics").await;
+    let o = succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    let v = o.report();
+    assert_eq!(v["ok"], json!(true));
+    assert_eq!(v["chainChecked"], json!(true));
+    assert_eq!(
+        v["hops"],
+        json!([{"from": "synthetic.metrics", "version": 2, "row": "1", "position": 0, "to": "synthetic.new"}])
+    );
+    assert_eq!(
+        v["end"],
+        json!({"status": "live", "dataset": "synthetic.new", "version": 1})
+    );
+    assert_eq!(v["catalog"]["number"], json!(1));
+    assert_eq!(v["generation"], json!(1));
+    assert_eq!(v["links"]["pages"], json!(1));
+    assert_eq!(v["checkedAt"]["number"], json!(100));
+    assert!(v["limit"].is_string(), "no scan: the limit is stated");
+    assert_eq!(v["note"], json!(crate::bulk_successor::SUCCESSOR_NOTE));
+    // Off chain only: never verified.
+    let get = RouterGet(routes(m.w.store.clone()));
+    let u =
+        check_successor_unchecked(&get, &a, "example.publisher", "synthetic.metrics", None).await;
+    assert_eq!(u.code(), 3);
+    assert_eq!(u.report()["chainChecked"], json!(false));
+    assert_eq!(u.report()["end"]["status"], json!("live"));
+    // Another dataset than the one asked, or an end the proofs do not give:
+    // the node's.
+    let (f, why) = succ_refused(succ_check(&m.w, "synthetic.new", &a, &sopts(vec![], None)).await);
+    assert_eq!(f, "node", "{why}");
+    let mut claimed = a.clone();
+    claimed["end"]["status"] = json!("removed");
+    let (f, why) =
+        succ_refused(succ_check(&m.w, "synthetic.metrics", &claimed, &sopts(vec![], None)).await);
+    assert_eq!(f, "node");
+    assert!(why.contains("not what its proofs give"), "{why}");
+    // A leaf proof of another catalog: the node's.
+    let mut other = a.clone();
+    other["chain"][1] = a["chain"][0].clone();
+    assert_eq!(
+        succ_refused(succ_check(&m.w, "synthetic.metrics", &other, &sopts(vec![], None)).await).0,
+        "node"
+    );
+    // The catalog's report not anchored at the caller's block: undecided.
+    m.w.node
+        .0
+        .lock()
+        .expect("ok")
+        .reports
+        .remove(&sign_catalog(&m.c1).payload.digest());
+    let why = succ_undecided(succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], None)).await);
+    assert!(why.contains("catalog 1"), "{why}");
+    let _ = (&m.old, &m.new, &m.c0);
+    let _ = std::fs::remove_dir_all(&m.w.dir);
+}
+
+/// A move whose links version holds `fillers` rows for made-up tombstones,
+/// then the row that moves `synthetic.metrics` to `synthetic.new`, `per`
+/// rows a shard; catalog 1 lists it and the node holds it all.
+async fn a_big_move(fillers: usize, per: usize) -> (World, Manifest) {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let old = manifest(&files, None, T0);
+    let new = manifest_of("synthetic.new", &shard_files(0..10, 10), T0 + 1);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&old.header), CatalogLeaf::of(&new.header)],
+    );
+    w.take(&c0).await;
+    let mut rows: Vec<Vec<u8>> = (0..fillers)
+        .map(|i| {
+            link_row(
+                i as i128 + 1,
+                &format!("synthetic.x{i}"),
+                2,
+                &Hash32([9; 32]),
+                Some("synthetic.new"),
+            )
+        })
+        .collect();
+    rows.push(link_row(
+        fillers as i128 + 1,
+        "synthetic.metrics",
+        2,
+        &old.header.root(),
+        Some("synthetic.new"),
+    ));
+    let shards: Vec<Vec<Vec<u8>>> = rows.chunks(per).map(<[Vec<u8>]>::to_vec).collect();
+    let (links, links_files) = links_version_of(&shards, None, T0 + 15);
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    w.take(&c1).await;
+    w.post_in(&links, 1).await.expect("links manifest");
+    for (f, e) in links_files.iter().zip(&links.shards) {
+        assert!(w.put_in(LINKS, &e.root, f.clone()).await.is_success());
+    }
+    (w, links)
+}
+
+#[tokio::test]
+async fn bulk_successor_a_withheld_row_is_the_nodes_fault() {
+    // 1,001 rows: page 0 in the answer, page 1 from the node.
+    let (w, links) = a_big_move(1_000, 600).await;
+    let a = answer_of(&w, "synthetic.metrics").await;
+    let o = succ_check(&w, "synthetic.metrics", &a, &sopts(vec![], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    assert_eq!(o.report()["links"]["pages"], json!(2));
+    assert_eq!(o.report()["hops"][0]["position"], json!(1_000));
+    // Without --node the second page cannot be read: nothing decided.
+    let no_node = SuccessorOpts {
+        node: None,
+        ..sopts(vec![], None)
+    };
+    let why = succ_undecided(succ_check(&w, "synthetic.metrics", &a, &no_node).await);
+    assert!(why.contains("--node"), "{why}");
+    // Page 1 answered 404, 409 or 410: an honest node does that after a
+    // set-aside or when `--node` is another node that lags, so nothing is
+    // decided (review SUCC-B7 L1).
+    let page1 = format!("root={}&page=1", links.header.root());
+    for status in [404, 409, 410] {
+        let get = HookGet {
+            inner: RouterGet(routes(w.store.clone())),
+            hook: |u: &str| u.contains(&page1).then(|| (status, b"{}".to_vec())),
+        };
+        let why = succ_undecided(
+            succ_check_with(&w, &get, "synthetic.metrics", &a, &sopts(vec![], None)).await,
+        );
+        assert!(why.contains("links page 1"), "{status}: {why}");
+    }
+    // Page 1 sent empty, or page 0 sent again: the node's.
+    let page0 = serde_json::to_vec(&a["links"]).expect("json");
+    let mut empty = a["links"].clone();
+    empty["rows"] = json!([]);
+    let empty = serde_json::to_vec(&empty).expect("json");
+    for (name, answer) in [("empty", (200, empty)), ("page 0 again", (200, page0))] {
+        let get = HookGet {
+            inner: RouterGet(routes(w.store.clone())),
+            hook: |u: &str| u.contains(&page1).then(|| answer.clone()),
+        };
+        let (f, why) = succ_refused(
+            succ_check_with(&w, &get, "synthetic.metrics", &a, &sopts(vec![], None)).await,
+        );
+        assert_eq!(f, "node", "{name}: {why}");
+    }
+    // A row taken out of page 0: the run does not join.
+    let mut short = a.clone();
+    short["links"]["rows"].as_array_mut().expect("rows").pop();
+    let (f, why) =
+        succ_refused(succ_check(&w, "synthetic.metrics", &short, &sopts(vec![], None)).await);
+    assert_eq!(f, "node");
+    assert!(why.contains("row"), "{why}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+#[tokio::test]
+async fn bulk_successor_an_old_catalog_is_undecided_when_a_scanned_key_holds_the_next() {
+    let m = a_held_move().await;
+    let a = answer_of(&m.w, "synthetic.metrics").await;
+    // Catalog 2 under the publisher's other key, which this node never got.
+    let c2 = catalog_of(Some(&m.c1), T0 + 30, m.c1.leaves.clone());
+    let r2 = cat::sign(&SECRET2, &c2.header).expect("ok");
+    m.w.node.anchor_by(&r2, &SECRET2);
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    // Unknown to the check: the stated limit.
+    let o = succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    assert_eq!(
+        o.report()["limit"],
+        json!(crate::bulk_successor::SUCCESSOR_LIMIT)
+    );
+    // Named by the caller, or found by a key scan: an old catalog.
+    let why = succ_undecided(
+        succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![signer2], None)).await,
+    );
+    assert!(why.contains("catalog 2"), "{why}");
+    {
+        let mut b = m.w.node.0.lock().expect("ok");
+        b.sources
+            .insert(r2.payload.key, keccak256(publisher().0.as_bytes()));
+        b.logs.push((0x31, r2.payload.key));
+    }
+    let why =
+        succ_undecided(succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], Some(0))).await);
+    assert!(why.contains("catalog 2"), "{why}");
+    // Withdrawn for good, it no longer counts.
+    m.w.node.withdraw(&r2);
+    let o = succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], Some(0))).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    assert_eq!(o.report()["keysScanned"]["from"], json!(0));
+    // Under the catalog's own key, no option is needed.
+    let c2 = catalog_of(Some(&m.c1), T0 + 31, m.c1.leaves.clone());
+    m.w.node.anchor(&sign_catalog(&c2));
+    let why = succ_undecided(succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![], None)).await);
+    assert!(why.contains("catalog 2"), "{why}");
+    let _ = std::fs::remove_dir_all(&m.w.dir);
+}
+
+#[tokio::test]
+async fn bulk_successor_every_end_but_live_is_exit_4() {
+    let w = world();
+    let p = Hash32([5; 32]);
+    let mut ids: Vec<String> = ["a", "b", "c", "d", "e"]
+        .iter()
+        .map(|s| format!("synthetic.{s}"))
+        .collect();
+    ids.extend((0..=9).map(|i| format!("synthetic.t{i}")));
+    let c0 = catalog_of(None, T0 + 10, ids.iter().map(|d| other_leaf(d)).collect());
+    w.take(&c0).await;
+    let row = |n: i128, from: &str, to: Option<&str>| link_row(n, from, 2, &p, to);
+    let mut rows = vec![
+        row(1, "synthetic.b", Some("synthetic.c")),
+        row(2, "synthetic.b", None),
+        row(3, "synthetic.c", Some("synthetic.gone")),
+        row(4, "synthetic.d", Some("synthetic.e")),
+        row(5, "synthetic.e", Some("synthetic.d")),
+    ];
+    for i in 0..9 {
+        rows.push(row(
+            6 + i,
+            &format!("synthetic.t{i}"),
+            Some(&format!("synthetic.t{}", i + 1)),
+        ));
+    }
+    let (links, file) = links_version(&rows, None, T0 + 15);
+    let mut leaves: Vec<CatalogLeaf> = c0
+        .leaves
+        .iter()
+        .map(|l| {
+            if l.dataset == "synthetic.t9" {
+                l.clone()
+            } else {
+                l.tombstone().expect("t")
+            }
+        })
+        .collect();
+    leaves.push(CatalogLeaf::of(&links.header));
+    let c1 = catalog_of(Some(&c0), T0 + 20, leaves);
+    w.take(&c1).await;
+    w.post_in(&links, 1).await.expect("links manifest");
+    w.put_in(LINKS, &links.shards[0].root, file).await;
+    for (start, status, last) in [
+        ("synthetic.a", "removed", "synthetic.a"),
+        ("synthetic.b", "retracted", "synthetic.b"),
+        ("synthetic.c", "not_listed", "synthetic.gone"),
+        ("synthetic.d", "cycle", "synthetic.d"),
+        ("synthetic.t0", "too_long", "synthetic.t8"),
+    ] {
+        let a = answer_of(&w, start).await;
+        let o = succ_check(&w, start, &a, &sopts(vec![], None)).await;
+        assert_eq!(o.code(), 4, "{start}: {}", o.report());
+        assert_eq!(o.report()["end"]["status"], json!(status), "{start}");
+        assert_eq!(o.report()["end"]["dataset"], json!(last), "{start}");
+        assert_eq!(o.report()["ok"], json!(false));
+    }
+    // No links dataset at all: no_links.
+    let n = world();
+    let c0 = catalog_of(None, T0 + 10, vec![other_leaf("synthetic.a")]);
+    n.take(&c0).await;
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![other_leaf("synthetic.a").tombstone().expect("t")],
+    );
+    n.take(&c1).await;
+    let a = answer_of(&n, "synthetic.a").await;
+    let o = succ_check(&n, "synthetic.a", &a, &sopts(vec![], None)).await;
+    assert_eq!(o.code(), 4, "{}", o.report());
+    assert_eq!(o.report()["end"]["status"], json!("no_links"));
+    assert_eq!(o.report()["generation"], Value::Null);
+    for d in [&w.dir, &n.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+#[tokio::test]
+async fn bulk_successor_an_old_nodes_404_is_exit_3() {
+    let m = a_held_move().await;
+    // An old node: 404 on the route, or its 410 with no successor.
+    let gone =
+        m.w.store
+            .rows(
+                "example.publisher",
+                "synthetic.metrics",
+                &parse_rows_query(Some("")).expect("q"),
+            )
+            .await
+            .expect_err("removed");
+    for answer in [
+        json!({"error": {"code": "not_found", "message": "no route"}}),
+        json!({"error": {"code": gone.code, "message": gone.message}}),
+    ] {
+        let o = succ_check(&m.w, "synthetic.metrics", &answer, &sopts(vec![], None)).await;
+        assert_eq!(o.code(), 3, "{}", o.report());
+        assert!(succ_undecided(o).contains("not a successor answer"));
+    }
+    // A pending answer decides nothing either.
+    let p = a_move().await;
+    let a =
+        p.w.store
+            .successor_answer("example.publisher", "synthetic.metrics")
+            .await
+            .expect("answer");
+    assert_eq!(a["end"]["status"], json!("pending"));
+    assert_eq!(
+        succ_check(&p.w, "synthetic.metrics", &a, &sopts(vec![], None))
+            .await
+            .code(),
+        3
+    );
+    for d in [&m.w.dir, &p.w.dir] {
+        let _ = std::fs::remove_dir_all(d);
+    }
+}
+
+/// The node's read routes and peer routes together: what a history check
+/// with a successor reads.
+fn reader_get(w: &World) -> RouterGet {
+    RouterGet(routes(w.store.clone()).merge(peer_routes(w.store.clone())))
+}
+
+/// A history to follow: `synthetic.metrics` (rows checked in catalog 0)
+/// moves to `synthetic.new` in catalog 1, whose links version also holds a
+/// row, written early, that moves `synthetic.new` on to `synthetic.newer`;
+/// catalog 2 removes `synthetic.new`. The successor answer at catalog 1,
+/// and the catalogs with their reports.
+async fn a_followed_history() -> (
+    World,
+    onyx_bulk::wire::Checked,
+    Value,
+    Vec<(Catalog, SignedReport)>,
+) {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let old = manifest(&files, None, T0);
+    let new = manifest_of("synthetic.new", &shard_files(0..10, 10), T0 + 1);
+    let newer = manifest_of("synthetic.newer", &shard_files(0..10, 10), T0 + 2);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![
+            CatalogLeaf::of(&old.header),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&newer.header),
+        ],
+    );
+    let r0 = sign_catalog(&c0);
+    w.take(&c0).await;
+    w.post_in(&old, 0).await.expect("old");
+    w.upload_all(&old, &files).await;
+    let ck = checked_rows(&w).await;
+    let (links, file) = links_version(
+        &[
+            link_row(
+                1,
+                "synthetic.metrics",
+                2,
+                &old.header.root(),
+                Some("synthetic.new"),
+            ),
+            link_row(
+                2,
+                "synthetic.new",
+                2,
+                &new.header.root(),
+                Some("synthetic.newer"),
+            ),
+        ],
+        None,
+        T0 + 15,
+    );
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&newer.header),
+            CatalogLeaf::of(&links.header),
+        ],
+    );
+    let r1 = sign_catalog(&c1);
+    w.take(&c1).await;
+    w.post_in(&links, 1).await.expect("links manifest");
+    w.put_in(LINKS, &links.shards[0].root, file).await;
+    let a1 = answer_of(&w, "synthetic.metrics").await;
+    let mut leaves = c1.leaves.clone();
+    let i = c1.find("synthetic.new").expect("listed");
+    leaves[i] = leaves[i].tombstone().expect("t");
+    let c2 = catalog_of(Some(&c1), T0 + 30, leaves);
+    let r2 = sign_catalog(&c2);
+    w.take(&c2).await;
+    w.settle().await;
+    (w, ck, a1, vec![(c0, r0), (c1, r1), (c2, r2)])
+}
+
+/// ADR-0059 amendment 6 item 7 (`--history`): a removed dataset's report
+/// gains `successor`, checked at the walk's block; the exit stays 4. Each
+/// hop names the catalog that first listed its row and its tombstone, and a
+/// row written before its tombstone is marked `early`.
+#[tokio::test]
+async fn cat_succ_the_history_check_follows_a_link_and_still_reports_removed() {
+    let (w, ck, _, _) = a_followed_history().await;
+    let get = reader_get(&w);
+    let o = history_with(&w, &ck, &get).await;
+    assert_eq!(o.code(), 4, "{}", o.report());
+    let v = o.report();
+    assert_eq!(v["removed"]["catalog"], json!(1));
+    let s = &v["successor"];
+    assert_eq!(
+        s["end"],
+        json!({"status": "live", "dataset": "synthetic.newer", "version": 1})
+    );
+    assert_eq!(s["catalog"]["number"], json!(2));
+    let hop = |i: usize, k: &str| s["hops"][i][k].clone();
+    assert_eq!(
+        (
+            hop(0, "to"),
+            hop(0, "firstCatalog"),
+            hop(0, "tombstoneCatalog"),
+            hop(0, "early")
+        ),
+        (json!("synthetic.new"), json!(1), json!(1), json!(false))
+    );
+    assert_eq!(
+        (
+            hop(1, "to"),
+            hop(1, "firstCatalog"),
+            hop(1, "tombstoneCatalog"),
+            hop(1, "early")
+        ),
+        (json!("synthetic.newer"), json!(1), json!(2), json!(true))
+    );
+    // An old node (no successor route): the removal stands, with a note.
+    let old = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| u.ends_with("/successor").then(|| (404, b"{}".to_vec())),
+    };
+    let o = history_with(&w, &ck, &old).await;
+    assert_eq!(o.code(), 4, "{}", o.report());
+    assert_eq!(o.report()["successor"]["status"], json!("unavailable"));
+    // A successor answer whose proofs fail: the node's.
+    let mut bad = w
+        .store
+        .successor_answer("example.publisher", "synthetic.metrics")
+        .await
+        .expect("answer");
+    bad["end"]["status"] = json!("removed");
+    let bad = serde_json::to_vec(&bad).expect("json");
+    let lying = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| u.ends_with("/successor").then(|| (200, bad.clone())),
+    };
+    assert_eq!(refused(history_with(&w, &ck, &lying).await).0, "node");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review SUCC-R2 L3: the successor answer's catalog must be the walk's
+/// newest. A newer one extends the walk once; one the walk cannot reach,
+/// or an older one, leaves the check undecided (exit 3).
+#[tokio::test]
+async fn cat_succ_the_history_check_needs_the_successor_catalog_in_its_walk() {
+    let (w, ck, a1, cs) = a_followed_history().await;
+    // The walk stops at catalog 1; the answer is from catalog 2: extended.
+    let first = files_of(&cs[..2], 1);
+    let short = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| u.ends_with("files?from=0").then(|| (200, first.clone())),
+    };
+    let o = history_with(&w, &ck, &short).await;
+    assert_eq!(o.code(), 4, "{}", o.report());
+    assert_eq!(o.report()["newest"], json!(2));
+    assert_eq!(o.report()["successor"]["catalog"]["number"], json!(2));
+    // The walk cannot reach catalog 2: undecided.
+    let gone = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| {
+            if u.ends_with("files?from=0") {
+                Some((200, first.clone()))
+            } else {
+                u.ends_with("files?from=2").then(|| (404, b"{}".to_vec()))
+            }
+        },
+    };
+    let why = undecided(history_with(&w, &ck, &gone).await);
+    assert!(why.contains("catalog 2"), "{why}");
+    // An answer from catalog 1 while the walk reached catalog 2: undecided.
+    let a1 = serde_json::to_vec(&a1).expect("json");
+    let stale = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| u.ends_with("/successor").then(|| (200, a1.clone())),
+    };
+    let why = undecided(history_with(&w, &ck, &stale).await);
+    assert!(why.contains("older"), "{why}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+// --- Build review SUCC-B7 (THREATS SUCC-B7) ---
+
+/// SUCC-B7 M1: a history node that answers the walk's extension (`files?from=2`,
+/// toward the successor answer's catalog 2) with a catalog numbered past it
+/// moves the walk nowhere. Asked once, it is the node's fault; before the
+/// fix the check asked again without end.
+#[tokio::test]
+async fn succ_b7_a_files_answer_past_the_successor_catalog_is_the_nodes_fault() {
+    let (w, ck, _, cs) = a_followed_history().await;
+    let first = files_of(&cs[..2], 1);
+    let (c2, _) = &cs[2];
+    let c3 = catalog_of(Some(c2), T0 + 40, c2.leaves.clone());
+    let r3 = sign_catalog(&c3);
+    let past = files_of(&[(c3, r3)], 3);
+    let asked = AtomicU64::new(0);
+    let hostile = HookGet {
+        inner: reader_get(&w),
+        hook: |u: &str| {
+            if u.ends_with("files?from=0") {
+                Some((200, first.clone()))
+            } else if u.ends_with("files?from=2") {
+                // Cut the loop so a regression fails instead of hanging.
+                if asked.fetch_add(1, Ordering::SeqCst) >= 100 {
+                    Some((500, b"{}".to_vec()))
+                } else {
+                    Some((200, past.clone()))
+                }
+            } else {
+                None
+            }
+        },
+    };
+    let (fault, why) = refused(history_with(&w, &ck, &hostile).await);
+    assert_eq!(asked.load(Ordering::SeqCst), 1, "{why}");
+    assert_eq!(fault, "node", "{why}");
+    assert!(why.contains("from 2"), "{why}");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// SUCC-B7 M2: a second live catalog of the answer's number under another
+/// key of the publisher the check knows (`--keys`, a scan) is the
+/// publisher's fault, as `--history` rules; before the fix only the next
+/// number was read and the check exited 0 on the branch the node served.
+#[tokio::test]
+async fn succ_b7_a_second_catalog_of_the_same_number_under_a_known_key_is_refused() {
+    let m = a_held_move().await;
+    let a = answer_of(&m.w, "synthetic.metrics").await;
+    // The publisher's other key signs another catalog 1, with no move.
+    let c1b = catalog_of(Some(&m.c0), T0 + 21, m.c0.leaves.clone());
+    let r1b = cat::sign(&SECRET2, &c1b.header).expect("ok");
+    m.w.node.anchor_by(&r1b, &SECRET2);
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    let (fault, why) =
+        succ_refused(succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![signer2], None)).await);
+    assert_eq!(fault, "publisher", "{why}");
+    assert!(
+        why.contains("catalog 1") && why.contains("two live reports"),
+        "{why}"
+    );
+    // Disputed, nothing is decided; withdrawn for good, it no longer counts.
+    m.w.node.dispute(&r1b);
+    let why = succ_undecided(
+        succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![signer2], None)).await,
+    );
+    assert!(why.contains("catalog 1"), "{why}");
+    m.w.node.withdraw(&r1b);
+    let o = succ_check(&m.w, "synthetic.metrics", &a, &sopts(vec![signer2], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    assert_eq!(o.report()["keys"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&m.w.dir);
+}
+
+/// SUCC-B7 L2: a part under the catalog's signature that breaks its own
+/// rules is the publisher's fault only when that catalog's report reads
+/// anchored at the caller's block; any key can sign a catalog naming a
+/// publisher, so otherwise nothing is decided.
+#[tokio::test]
+async fn succ_b7_a_signed_fault_is_the_publishers_only_once_its_catalog_reads_anchored() {
+    use crate::bulk_history::Stop;
+    use crate::bulk_successor::{settle, Off};
+    let m = a_held_move().await;
+    let signed = |secret: &[u8; 32]| Off::Signed {
+        why: "the signed links version breaks its own header".into(),
+        report: Box::new(cat::sign(secret, &m.c1.header).expect("ok")),
+        signer: onyx_bulk::anchor::address_of(secret).expect("ok"),
+        number: 1,
+    };
+    let at = decision_block(m.w.node.as_ref(), CHAIN)
+        .await
+        .expect("block");
+    let verdict = |off| settle(m.w.node.as_ref(), CHAIN, &BOOK, at, off);
+    // The catalog the book holds: the publisher's.
+    assert!(matches!(
+        verdict(signed(&SECRET)).await,
+        Stop::Refused("publisher", _)
+    ));
+    // The same catalog signed by a key the book never saw: undecided.
+    match verdict(signed(&[0x77; 32])).await {
+        Stop::Undecided(why) => assert!(why.contains("not known to be the publisher's"), "{why}"),
+        Stop::Refused(f, why) => panic!("refused ({f}): {why}"),
+    }
+    // Off chain only (`--unchecked`), a signed fault never names the publisher.
+    let _ = std::fs::remove_dir_all(&m.w.dir);
+}
+
+/// THREATS CAT-SUCC-8 and CAT-SUCC-1 (review SUCC-B7 L4): the reader's check
+/// around a set-aside and a key rotation. A thief's catalog links the old id
+/// to the thief's dataset; once the book withdraws it, the answer taken from
+/// it is undecided, and its links version, set aside, is no longer served
+/// (undecided, not the node's fault). The publisher's replacement under its
+/// next key checks to the publisher's own target, with the old key named.
+#[tokio::test]
+async fn succ_b7_the_reader_follows_a_set_aside_and_a_key_rotation() {
+    let (w, old, new, c0, _c1, r1, thiefs) = a_thiefs_move("synthetic.thief").await;
+    let stolen = answer_of(&w, "synthetic.metrics").await;
+    let o = succ_check(&w, "synthetic.metrics", &stolen, &sopts(vec![], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    assert_eq!(o.report()["end"]["dataset"], json!("synthetic.thief"));
+    let (own, own_file) = links_version(&[move_row(1, &old, "synthetic.new")], None, T0 + 45);
+    w.replace_1(
+        &c0,
+        &r1,
+        vec![
+            CatalogLeaf::of(&old.header).tombstone().expect("t"),
+            CatalogLeaf::of(&new.header),
+            CatalogLeaf::of(&own.header),
+        ],
+    )
+    .await;
+    // The thief's answer after the book withdrew its catalog.
+    let why =
+        succ_undecided(succ_check(&w, "synthetic.metrics", &stolen, &sopts(vec![], None)).await);
+    assert!(why.contains("withdrew"), "{why}");
+    // Its links version is set aside: a page of it is not served.
+    let e = w
+        .store
+        .rows(
+            "example.publisher",
+            LINKS,
+            &parse_rows_query(Some(&format!("root={}&page=1", thiefs.header.root()))).expect("q"),
+        )
+        .await
+        .expect_err("set aside");
+    assert_eq!(e.status, StatusCode::NOT_FOUND);
+    // The replacement, signed by the publisher's next key.
+    w.post_in(&own, 1).await.expect("own links");
+    w.put_in(LINKS, &own.shards[0].root, own_file).await;
+    let a = answer_of(&w, "synthetic.metrics").await;
+    let signer1 = onyx_bulk::anchor::address_of(&SECRET).expect("ok");
+    let signer2 = onyx_bulk::anchor::address_of(&SECRET2).expect("ok");
+    let o = succ_check(&w, "synthetic.metrics", &a, &sopts(vec![signer1], None)).await;
+    assert_eq!(o.code(), 0, "{}", o.report());
+    let v = o.report();
+    assert_eq!(v["end"]["dataset"], json!("synthetic.new"));
+    assert_eq!(v["signer"], json!(hex0x(&signer2)));
+    assert_eq!(v["keys"].as_array().map(Vec::len), Some(2));
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review NEWC-R1 (its property test): for every range, limit and page, the
+/// newest-first walk is the oldest-first walk reversed, and every page passes
+/// the check of the whole request (order and page asked).
+#[tokio::test]
+async fn newest_first_pages_equal_the_reversed_oldest_first_ones_for_every_range() {
+    let w = world();
+    published(&w).await;
+    for from in -1i128..=31 {
+        for to in from..=31 {
+            for limit in [1u64, 2, 3, 7, 10, 11, 30, 31] {
+                let mut walk = Vec::new();
+                for desc in [false, true] {
+                    let mut keys = Vec::new();
+                    let mut page = 0u64;
+                    loop {
+                        let o = if desc { "desc" } else { "asc" };
+                        let a = w
+                            .rows(&format!(
+                                "from={from}&to={to}&limit={limit}&page={page}&order={o}"
+                            ))
+                            .await
+                            .expect("ok");
+                        let asked = onyx_bulk::wire::RowsAsked {
+                            from: Some(from),
+                            to: Some(to),
+                            desc,
+                            page,
+                        };
+                        let c = onyx_bulk::wire::check_rows_asked(&a, &asked).unwrap_or_else(|e| {
+                            panic!("check {from} {to} {limit} {page} {o}: {e:?}")
+                        });
+                        let n = c.rows.len();
+                        assert_eq!(c.descending, desc, "{from} {to} {limit} {page}");
+                        keys.extend(c.rows.iter().map(|r| r.2));
+                        if a["next_page"].is_null() {
+                            break;
+                        }
+                        assert!(
+                            n > 0,
+                            "empty page with a next: {from} {to} {limit} {page} {o}"
+                        );
+                        page += 1;
+                        assert!(page < 100);
+                    }
+                    walk.push(keys);
+                }
+                let want: Vec<i128> = (from.max(0)..=to.min(29)).collect();
+                assert_eq!(walk[0], want, "asc {from} {to} {limit}");
+                walk[1].reverse();
+                assert_eq!(walk[1], want, "desc {from} {to} {limit}");
+            }
+        }
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
 }

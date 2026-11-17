@@ -140,7 +140,16 @@ Count: 27 gates, 12 verified, 15 open (9 of the open ones are launch blockers, g
   `TimeoutStopSec=75s` and its state under `/var/lib/onyx` (local disk); payments off, so the state
   dir holds no receipts yet. 2026-11-08: `onyx-node --check-config` runs on the server before
   every start (the unit's `ExecStartPre`, errors not ignored): "config ok: chain 84532, settlement
-  0xe4be...e8f, payments Off, indexer on" at the 17:35 UTC start. Open: a state backup before
+  0xe4be...e8f, payments Off, indexer on" at the 17:35 UTC start. 2026-11-16: a daily backup of
+  the bulk store, state, row batches, `/etc/onyx` and the binary with its unit
+  (`scripts/backup-node.sh`, read only on the server; 10.0 GB; refuses a shrunken or emptied store,
+  state, row batches or config against every kept snapshot, keeps one a week for 4 weeks and one
+  a month for 3 months) and a restore drill (`scripts/restore-drill.sh`), which the backup also
+  runs with `--full` on every copy before it counts (reviews BAK-R1, BAK-R2): snapshot
+  2026-11-16T175605Z, DRILL PASS, 22 checks (the snapshot's own binary, the salt and the intake
+  journal, health, both publishers' newest catalogs, 7 datasets through `onyx-check --bulk` equal
+  to the live node, all 21,625 shards hashing to their names). Open: install the backup, alert
+  template and freshness units (written, not installed); the owner's offline copy of the `/etc/onyx` keys; a fresh backup right before
   payments go on (a server session, at the final deploy). Needs: `onyx-node --check-config` exit 0; `ONYX_INDEX_HEALTH=summary`;
   `ONYX_TRUSTED_PROXIES` set to the proxy only; `TimeoutStopSec=75s`; state dir on local disk with a
   backup; `ONYX_RPC_URL` a node we trust (or the URL as a 0600 file). Evidence:

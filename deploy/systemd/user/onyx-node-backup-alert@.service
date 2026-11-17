@@ -1,0 +1,21 @@
+# Logs a failed or stale API node backup (THREATS BAK-R1-M3, BAK-R2-M3; docs/ops/deployment.md
+# "Backups"). A template: onyx-node-backup.service and onyx-node-backup-fresh.service each name
+# `OnFailure=onyx-node-backup-alert@%n.service`, so each failure starts its own instance, the
+# instance name being the failed unit. One handler shared by two units loses its MONITOR_*
+# variables on systemd 259 once both units are loaded (the line said " failed: result , exit
+# status  ("; review BAK-R2-M3), so the handler reads the failed unit's result and exit status
+# itself with `systemctl --user show`. It logs one line with the tag onyx-node-backup-alert to the
+# journal: no mail, no outside service. Check it with:
+#   journalctl --user -t onyx-node-backup-alert --since -1d
+# Exit status 1: failed, the next run continues; 2: refused (DEST, arguments, the clock); 4: the
+# copy looks like a loss on the server (scripts/backup-node.sh --allow-shrink, only after checking
+# the server). `$$` is a dollar sign for bash, `%i` the failed unit's name.
+# Install: see onyx-node-backup.service. scripts/backup-node.sh --self-test runs this ExecStart with
+# systemctl and logger stand-ins.
+
+[Unit]
+Description=Onyx API node backup: log the failure of %i
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/bash -c 'u=$$1; r=$$(systemctl --user show -p Result --value "$$u"); s=$$(systemctl --user show -p ExecMainStatus --value "$$u"); logger -t onyx-node-backup-alert -p user.err "$$u failed: result $${r:-unknown}, exit status $${s:-unknown} (1: failed, the next run continues; 2: refused; 4: a likely loss on the server, see --allow-shrink; journalctl --user -u $$u)"' onyx-node-backup-alert %i

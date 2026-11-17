@@ -430,6 +430,170 @@ Not in the file, so the host has to provide it:
   only if its node URL has no API key, else store it with the secrets).
 - **Operator key**: keep an offline copy; on loss, the owner rotates the reporter
   (`OnyxRevenue.setReporter`) to a new key.
+- **Bulk store** (`/var/lib/onyx/bulk`, CL5): the publishers' datasets the node holds (manifests,
+  catalogs, shard files, `tiers.json`; 10.0 GB on 2026-11-16). A publisher can upload again, but not
+  every publisher keeps every old version, and a full re-upload takes hours: back it up.
+
+### The daily backup (THREATS OPS-BACKUP-1, BAK-R1, BAK-R2)
+
+`scripts/backup-node.sh` runs on the operator's machine and pulls, read only, from the server:
+`rsync` over ssh with `sudo -n nice -n 19 ionice -c3 rsync` on the server (lowest CPU and disk
+priority, so the node and an upload in progress go first) and a cap of 25,000 KiB/s (`--bwlimit`);
+nothing on the server is stopped or written.
+
+| Part in the snapshot | From the server | Notes |
+|---|---|---|
+| `bulk/` | `/var/lib/onyx/bulk` | `tiers.json` first, then the rest, again until a pass copies nothing. A store still changing after 3 passes (an upload in progress) fails the run: a manifest could name a shard the copy missed. The node refuses to start when `tiers.json` names a shard that is not on disk (`TieredStore::load`), so such a copy fails the run too |
+| `state/` | `/var/lib/onyx/state` | Copied while the node runs: a journal may end in a torn last line, which it cuts off on open; `SNAPSHOT.json` records each file's sha256. `wants.salt` must be there, and every file of the previous snapshot's `state/`; no state file may have been emptied |
+| `cas/` | `/var/lib/onyx/cas` | Row batches (kilobytes); the same shrink rules as the bulk store |
+| `etc-onyx/` | `/etc/onyx` | `node.env`, `deployment.json`, `catalog.json`, `observations/`, `track/`, `storage/*.env` and the rest, every `*.key` left out (below). Every file of the previous snapshot's `etc-onyx/` and every file `node.env` names under `/etc/onyx` must be there |
+| `server/` | `/usr/local/bin/onyx-node`, `/etc/systemd/system/onyx-node.service` | The binary and its unit (and drop-ins), nothing else of either folder. The binary's sha256 is read on the server before and after the copy and must equal the copy's: a deploy in between fails the run |
+
+- **Where**: `~/onyx-backups/node/<UTC time>/` (the script refuses a folder that is not mode 0700,
+  not yours, or inside a git checkout; every file is 0600, every folder 0700; it never prints a
+  file's content). Each snapshot has `SNAPSHOT.json` (time, `build`: `sha256:` and the binary's
+  sha256, since the node names no commit; file counts and bytes per part, the state files'
+  sha256, the tier counts, the bulk passes and the kept snapshots it was compared with) and
+  `DRILL.txt` (the drill's lines, below).
+- **Checked before it counts**: the copy becomes a snapshot only when `scripts/restore-drill.sh
+  --full` passes on it: the snapshot's own binary opens it, every shard reads back through the node
+  and hashes to its name, every dataset's newest manifest has all its shards, samples match the live
+  node. Refused with exit 4 (a likely loss on the server; nothing pruned, not retried): a copy that
+  lacks `tiers.json`, `node.env`, `deployment.json`, `state/wants.salt`, the binary or a file
+  `node.env` names under `/etc/onyx` (the setting is named, never its value); whose bulk store or
+  row batches hold more than 10% fewer files or bytes than the largest kept snapshot; from which
+  more than 10% of the files of the previous, the largest or the oldest kept snapshot are gone
+  (counted by name, so new uploads hide no loss, and a shard by its root, so a tier move is no
+  loss; rsync's own deleted count is 0 when it fills a new folder with `--link-dest`); or that
+  misses a file of the previous snapshot's `state/` or `etc-onyx/`, or has a state file emptied
+  (review BAK-R2-M1, M2). The kept snapshots compared are those from the newest taken with
+  `--allow-shrink` on. Check the server; a shrink that is meant (a publisher's removal) is taken by
+  hand with `--allow-shrink`, and the runs after it compare with that snapshot onward. A clock at or
+  before the newest snapshot is refused (exit 2). The copy is flushed to disk (`sync -f`) before
+  its rename.
+- **How often, how long**: once a day after 02:30 UTC by the user timer
+  [`onyx-node-backup.timer`](../../deploy/systemd/user/onyx-node-backup.timer) (install steps in
+  [its service](../../deploy/systemd/user/onyx-node-backup.service); written, not installed yet).
+  Unchanged files are hard links to the previous snapshot (`rsync --link-dest`), so a day costs only
+  the new files. Kept: the newest 7 snapshots (`--keep N`), the oldest snapshot of this calendar
+  week and of each of the 4 weeks before it (`--weeks W`; with daily runs the oldest is 28 to 34
+  days old) and the oldest of this calendar month and of each of the 3 months before it
+  (`--months M`; 3 to 4 months back), at most 16 snapshots; nothing is pruned by a run that made no
+  snapshot. (Before review BAK-R2-M1 the oldest weekly copy was 15 to 21 days old.) A dropped
+  connection is tried again (4 tries, 1, 2 and 3 minutes apart); a run that still fails leaves
+  `.partial-<time>`, which the next run continues. A drill holds the folder's `.lock` shared, so
+  no run prunes under it; a drill folder (`.drill.*`, it holds a `node.env` copy) left by a killed
+  drill is deleted by the next run after a day, and a drill node's scope whose drill is gone (a
+  SIGKILL) is stopped before the lock (the node never holds the lock itself; BAK-R2-L1).
+- **Alerts**: a failed run (after its retries) or a refused one logs one line tagged
+  `onyx-node-backup-alert` with the unit, its result and its exit status: each service names
+  `OnFailure=onyx-node-backup-alert@%n.service`, its own instance of the
+  [alert template](../../deploy/systemd/user/onyx-node-backup-alert@.service), which reads the
+  failed unit's result with `systemctl --user show` (systemd 259 empties the `MONITOR_*` variables
+  when two units share one handler; BAK-R2-M3). Every 6 hours [`onyx-node-backup-fresh.timer`](../../deploy/systemd/user/onyx-node-backup-fresh.timer)
+  runs `scripts/backup-node.sh --check-fresh 30`, which fails (and logs the same way) when the
+  newest snapshot is older than 30 hours, or named more than an hour in the future (a wrong clock).
+  Check with `journalctl --user -t onyx-node-backup-alert --since -1d`. The user units have no filesystem sandbox: `ProtectSystem=` and the like need
+  unprivileged user namespaces in a user unit, which this machine's AppArmor policy blocks, so the
+  script's own checks are the controls.
+- **Keys (owner)**: `*.key` of `/etc/onyx` (the operator key, the five storage nodes'
+  `storage/n*.key`) are never in a snapshot. An offline copy of them is the owner's job, kept
+  apart from the snapshots; no backup run, drill or agent copies or reads them. Without that copy
+  a restored server has neither (for the operator key, the owner rotates the reporter, above).
+- **Size and time** (2026-11-16): the bulk store is 10,032,452,817 bytes in 65,060 files (21,625
+  shards, all hot), plus 5 state files, 4 row batches, 20 config files and the binary (14.6 MB) with
+  its unit. The first run took 461 s and copied 5.6 GB: it continued a run the network had dropped
+  after 4.3 GB; the next took 41 s and copied 1 file. The run after that day's publish
+  (onchain-archive catalog 13) took 436 s: 66 s to copy 1,783 files (19.6 MB), the rest the
+  `--full` drill on the copy (21 checks; reading back all 9.96 GB of shards through the node took
+  314 s). Three snapshots take 9.7 GiB on disk together. After review BAK-R2, the run of 17:56 UTC
+  took 429 s: 1 file copied (1,040 bytes), compared with the kept snapshots 2026-11-16T160104Z
+  (the oldest) and 2026-11-16T164840Z (the previous and largest), nothing refused, its `--full`
+  drill PASS with 22 checks (the shard read-back 322 s); 4 snapshots kept, none pruned.
+- **Tested**: `scripts/backup-node.sh --self-test` (in check-all, about 40 s, 66 cases) against
+  local fake servers: modes, no key file, hard links, pruning by count, week and month (400 daily
+  runs), a dropped connection tried again, a partial copy continued, a missing shard, an emptied
+  or shrunken store, a slow loss against the largest kept snapshot, a loss hidden by new uploads,
+  a tier move, an emptied `state/` or `cas/`, a state file emptied, config files gone, a store
+  still changing, a failed or passing drill, the binary and unit and a deploy during the copy, a
+  clock going back, the sync before the rename, old drill folders and stale drill scopes,
+  `--check-fresh` (a snapshot in the future too) and the alert template (its ExecStart run with
+  stand-ins), the lock, a DEST that is open or inside a git checkout, no planted secret printed.
+  `scripts/restore-drill.sh --self-test` (in check-all, 29 cases, with stand-ins on 127.0.0.1) for
+  the drill's parts that run offline: the journals and their binding, the salt, the config filter,
+  the node's launch (no lock descriptor), the `--full` shard check, the live node's reads (public
+  URL, then ssh); the drill itself against the live node (below).
+
+### Restore the API node
+
+Rehearse first, on the operator's machine (no server change):
+
+1. Pick the snapshot: the newest folder in `~/onyx-backups/node/`; its `DRILL.txt` is the drill
+   the backup ran on it.
+2. `scripts/restore-drill.sh [--full] ~/onyx-backups/node/<time>` (about 40 s; 395 s with `--full`
+   on 2026-11-16). It holds the
+   folder's lock shared, then starts the snapshot's own `server/onyx-node` on 127.0.0.1 from a
+   scratch copy next to the snapshot (bulk store hard-linked, the rest copied). The config is the
+   snapshot's `node.env` filtered through an allow-list (the store, the catalog, the deployment,
+   the indexer, limits; paths moved into the copy) plus 127.0.0.1, an http public URL, payments and
+   erasure off, no request limit and the public chain node; no key, no intake, no salted labels.
+   An allow-listed setting naming a file no snapshot holds (outside `/etc/onyx` and `/var/lib/onyx`,
+   or missing from the snapshot) is a FAIL that names the setting, never its value; the settings
+   left out are named in a NOTE line (BAK-R2-L4: on 2026-11-16 the 6 left out were `ONYX_LISTEN`,
+   `ONYX_PUBLIC_URL`, `ONYX_RPC_URL`, `ONYX_TRUSTED_PROXIES`, `ONYX_PAYMENTS` and `ONYX_SUBMISSIONS`,
+   none naming a file outside the backup).
+   The settings reach the node as environment only (`systemd-run` gets a fixed `--description`,
+   so the journal never sees them) and only counts and setting names are printed. The node gets
+   neither lock descriptor and its scope stops after 3 hours (`RuntimeMaxSec`). Before the start
+   it requires `state/wants.salt` (32 bytes) and reads every checksummed state journal the way the
+   node does (each line's checksum, the header, the batches), the ones the drill's node does not
+   open included: intake, bound to no chain, and once payments are on `receipts.jsonl`,
+   `settle-intents.jsonl`, `credits-in-flight.jsonl` and `self-settle/pending-settles.jsonl`, each
+   bound to the snapshot's `deployment.json` chain and `revenue` contract (BAK-R2-M2). It reads the
+   live node over its public URL, or, when that fails (Caddy, TLS or DNS down), over ssh to the
+   server with `curl http://127.0.0.1:8080/...` there, read only, and says so (BAK-R2-L5). It
+   checks `/v1/health`, each
+   publisher's newest catalog number and root against the live node's catalog of that number, and
+   at least five datasets (both publishers, one widened format-2 dataset): their rows pass
+   `onyx-check --bulk` on Base Sepolia with the live node's digest and manifest root for the same
+   version; `--full` adds every shard and every newest manifest (above; every shard is counted
+   whatever fails on it, and the bytes read must equal the files', BAK-R2-L2). After the stop:
+   the node read `wants.salt` (at every start) and it is unchanged; no file of the snapshot changed.
+   Then the copy is deleted. Every line must be PASS and the last `DRILL PASS`. When the live node
+   has published since the snapshot, its lines say so: they compare the snapshot's catalog number
+   and dataset versions with the live node's copies of them.
+
+Then on the server (a new one, or the old one after a disk loss), as root:
+
+1. Install the same build: `server/onyx-node` of the snapshot (its sha256 is the snapshot's
+   `build`) to `/usr/local/bin/onyx-node` 0755, and `server/onyx-node.service` to
+   `/etc/systemd/system/` 0644 (or deploy with `scripts/deploy-api.sh`, which also writes Caddy
+   and the connection cap). Keep the node stopped (`systemctl stop onyx-node`).
+2. Configuration: copy `etc-onyx/` to `/etc/onyx/`, then set the modes `deploy-api.sh` uses:
+   folders 0755, files 0644, `node.env` 0600, `storage/` 0700 with its files 0600. The owner puts
+   the keys back from the offline copy (`operator.key` 0600 only when payments are on; the storage
+   nodes' `storage/n*.key` 0600).
+3. Data: copy `bulk/`, `state/` and `cas/` to `/var/lib/private/onyx/` (`/var/lib/onyx` links
+   there), for example `rsync -a --delete <snapshot>/bulk/ /var/lib/private/onyx/bulk/`, then
+   `chown -R root:root` the three folders: systemd gives a `StateDirectory=` whose owner does not
+   match the service's (`DynamicUser=`) user to that user, every file below included, at the next
+   start (systemd.exec, `StateDirectory=`). The drill does not rehearse this step. Restore the state
+   only to the same deployment (same chain and contracts; the journals refuse another).
+4. `systemctl daemon-reload`, `onyx-node --check-config` (the unit's `ExecStartPre` runs it too),
+   `systemctl start onyx-node`, then check `/v1/health` (`status` ok) and that `GET /v1/bulk` lists
+   the snapshot's catalogs. Anything uploaded after the snapshot is not in it: the publishers
+   upload those catalogs and versions again.
+
+Last drill: 2026-11-16 18:00 UTC, `--full`, the backup's own drill on the copy that became
+snapshot `2026-11-16T175605Z` (after review BAK-R2): `DRILL PASS`, 22 checks (the snapshot's own
+binary is the server's build, `wants.salt` 32 bytes, the intake journal reads back bound to no
+chain, `--check-config`, health, catalogs early-record 19 and onchain-archive 13 equal to the live
+node's newest over its public URL, 9,047 datasets, 7 datasets through `onyx-check --bulk`
+including the format-2 `onchain-archive/1inch.rcap-hodl-profit-loss`, all 21,625 shards
+(9,958,828,653 bytes, every file's size) hashing to their names, all 9,047 newest manifests
+complete, a clean stop, `wants.salt` read and unchanged, the snapshot unchanged); the 6 settings
+left out named in a NOTE line. The drill before it, 2026-11-16 16:57 UTC on `2026-11-16T164840Z`,
+passed 21 checks. See the [launch checklist](launch-checklist.md) LC-9.
 
 ## Upgrade and rollback
 

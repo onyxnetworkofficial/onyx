@@ -24,6 +24,7 @@ use onyx_core::{
 };
 use onyx_labels::attest::{eip191_recover, eip191_sign_with, secret_address};
 use onyx_merkle::{MerkleTree, Proof};
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Domain tag of [`CatalogHeader::root`].
 pub const CATALOG_DOMAIN: &[u8] = b"onyx-bulk-catalog-v1";
@@ -627,16 +628,24 @@ pub struct WalkStep {
     pub signer: [u8; 20],
     /// The followed dataset's leaf, when this catalog lists it.
     pub leaf: Option<CatalogLeaf>,
+    /// The leaves of the other ids followed ([`Walker::follow`]) this
+    /// catalog lists, in id order.
+    pub followed: Vec<CatalogLeaf>,
 }
 
 /// A publisher's catalogs from 0, each checked as a node checks it before it
 /// takes it (`validate`, the report signs the header, the append-only
 /// successor of the one before), following one dataset (ADR-0059 amendment 3
-/// item 2). Only the last catalog is kept whole.
+/// item 2) and any other ids named before the walk ([`Walker::follow`]:
+/// the links generations, amendment 6 item 7). Only the last catalog is
+/// kept whole; the first catalog of every tombstone is kept, so a chain's
+/// hops, known only after the walk, find theirs ([`Walker::tombstoned`]).
 pub struct Walker {
     publisher: SourceId,
     dataset: String,
     prev: Option<Catalog>,
+    followed: BTreeSet<String>,
+    tombstones: BTreeMap<String, u64>,
     /// Every catalog taken, from 0.
     pub steps: Vec<WalkStep>,
 }
@@ -648,8 +657,24 @@ impl Walker {
             publisher,
             dataset,
             prev: None,
+            followed: BTreeSet::new(),
+            tombstones: BTreeMap::new(),
             steps: Vec::new(),
         }
+    }
+
+    /// Also record `id`'s leaf in each catalog taken from now on
+    /// ([`WalkStep::followed`]).
+    pub fn follow(&mut self, id: &str) {
+        if id != self.dataset {
+            self.followed.insert(id.to_string());
+        }
+    }
+
+    /// The first catalog that lists `id` as a tombstone (from there every
+    /// catalog does, with that same leaf: amendment 4 item 2).
+    pub fn tombstoned(&self, id: &str) -> Option<u64> {
+        self.tombstones.get(id).copied()
     }
 
     /// The number the next catalog must have.
@@ -688,6 +713,16 @@ impl Walker {
             c.check_successor(p).map_err(|e| rules(e.to_string()))?;
         }
         let leaf = c.find(&self.dataset).map(|i| c.leaves[i].clone());
+        let followed = self
+            .followed
+            .iter()
+            .filter_map(|id| c.find(id).map(|i| c.leaves[i].clone()))
+            .collect();
+        for t in c.leaves.iter().filter(|l| l.is_tombstone()) {
+            if !self.tombstones.contains_key(&t.dataset) {
+                self.tombstones.insert(t.dataset.clone(), n);
+            }
+        }
         self.steps.push(WalkStep {
             number: n,
             root: c.header.root(),
@@ -695,6 +730,7 @@ impl Walker {
             report: f.report.clone(),
             signer,
             leaf,
+            followed,
         });
         self.prev = Some(c);
         Ok(())
@@ -1007,6 +1043,26 @@ mod tests {
         w.take(&f0).expect("0");
         w.take(&f1).expect("1");
         assert_eq!(w.entered().map(|s| s.number), Some(1));
+        // Other ids followed (amendment 6 item 7), and each tombstone's
+        // first catalog.
+        let t = leaf("a.x", 2, 1, 3).tombstone().expect("t");
+        let c2 = Catalog::build(
+            src(),
+            Some(&c1),
+            120,
+            vec![t.clone(), leaf("b.x", 1, 0, 2), leaf("c.x", 1, 0, 4)],
+        )
+        .expect("c2");
+        let mut w = Walker::new(src(), "c.x".into());
+        w.follow("b.x");
+        w.follow("z.x");
+        w.follow("c.x");
+        for f in [&f0, &f1, &file(&c2, FileLeaves::Diff(vec![t.clone()]))] {
+            w.take(f).expect("taken");
+        }
+        assert_eq!(w.steps[2].followed, vec![leaf("b.x", 1, 0, 2)]);
+        assert_eq!(w.tombstoned("a.x"), Some(2));
+        assert_eq!(w.tombstoned("b.x"), None);
         // A whole file in place of the diff rebuilds the same catalog.
         let mut w = Walker::new(src(), "a.x".into());
         w.take(&f0).expect("0");

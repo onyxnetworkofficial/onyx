@@ -23,8 +23,9 @@
 //! to the header's `shards_root`, the header to the manifest root, and the
 //! root to the publisher's signature; it checks every row fits the schema,
 //! lies in the asked key range, and that the rows are one contiguous run (no
-//! row skipped inside a page). The chain read (the book recorded that report
-//! and accepts it) is left to the caller, who reads its own node.
+//! row skipped inside a page), read upward or, for `order=desc`, downward.
+//! The chain read (the book recorded that report and accepts it) is left to
+//! the caller, who reads its own node.
 //!
 //! A manifest anchored through a catalog (ADR-0059 amendment 1) carries
 //! `anchor.catalog`: the report then signs the catalog root, and the check adds
@@ -265,8 +266,71 @@ pub struct Checked {
     /// The catalog the report signs, when the manifest is anchored through
     /// one (ADR-0059 amendment 1); `None` for the manifest's own report.
     pub catalog: Option<CatalogHeader>,
-    /// `(shard, index, key)` of every row, in order.
+    /// `(shard, index, key)` of every row, in the answer's order.
     pub rows: Vec<(u32, u64, i128)>,
+    /// The rows run from the newest key down (`order=desc`): each row is the
+    /// one right before its predecessor in the answer. After
+    /// [`check_rows_asked`]: the order asked (one row alone has no direction
+    /// of its own).
+    pub descending: bool,
+    /// [`check_rows_asked`] only: the page is proven to start at the
+    /// dataset's newest row (asked newest first, page 0, no upper bound: its
+    /// first row is the last row of the last shard of the signed header).
+    pub newest_proven: bool,
+}
+
+/// What the caller asked the rows route for ([`check_rows_asked`]): its own
+/// request, never the answer's `query`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RowsAsked {
+    /// Smallest key asked (inclusive; `None` is open).
+    pub from: Option<i128>,
+    /// Largest key asked (inclusive; `None` is open).
+    pub to: Option<i128>,
+    /// Asked newest first (`order=desc`).
+    pub desc: bool,
+    /// The page asked (0-based).
+    pub page: u64,
+}
+
+/// [`check_rows_answer`] for the whole request (review NEWC-R1 M1): the rows
+/// must also run in the order asked, and a newest-first page 0 with no upper
+/// bound must start at the dataset's newest row, which the signed header
+/// fixes (the last row of shard `shard_count - 1`), so a node cannot answer
+/// "the newest N rows" with an older run. Other page edges stay unproven
+/// (THREATS CL5-9).
+pub fn check_rows_asked(answer: &Value, asked: &RowsAsked) -> Result<Checked, WireError> {
+    let mut c = check_rows_answer(answer, asked.from, asked.to)?;
+    if c.rows.len() > 1 && c.descending != asked.desc {
+        return Err(falsity(if asked.desc {
+            "the rows run oldest first, but you asked newest first (order=desc)"
+        } else {
+            "the rows run newest first, but you asked oldest first: pass the order you asked (--order desc)"
+        }));
+    }
+    c.descending = asked.desc;
+    let h = &c.header;
+    if asked.desc
+        && asked.page == 0
+        && asked.to.is_none()
+        && asked.from.is_none_or(|f| h.key_max >= f)
+    {
+        // The last row of the last shard: `index + 1 == leaf_count` under a
+        // proof whose leaf count is the proven entry's row count.
+        let last = h.shard_count.checked_sub(1);
+        let newest = c.rows.first().is_some_and(|(shard, index, _)| {
+            Some(*shard) == last
+                && answer["rows"][0]["proof"]["leaf_count"].as_u64() == Some(index + 1)
+        });
+        if !newest {
+            return Err(falsity(format!(
+                "the page does not start at the dataset's newest row (key {}): rows newer than its first row are left out (if you asked a later page, pass it: --page)",
+                h.key_max
+            )));
+        }
+        c.newest_proven = true;
+    }
+    Ok(c)
 }
 
 /// Check a range answer for the asked key range `[from, to]` (inclusive;
@@ -343,6 +407,7 @@ pub fn check_rows_answer(
     }
 
     let mut rows = Vec::new();
+    let mut descending = false;
     let mut prev: Option<(u32, u64)> = None;
     for (i, r) in answer["rows"]
         .as_array()
@@ -396,8 +461,21 @@ pub fn check_rows_answer(
                 .iter()
                 .find(|x| x.index == ps)
                 .is_some_and(|x| pi + 1 == x.rows);
-            let next = (shard == ps && p.index == pi + 1)
+            let up = (shard == ps && p.index == pi + 1)
                 || (shard == ps + 1 && p.index == 0 && last_of_prev);
+            // `order=desc`: the same run read from its end (the row before,
+            // or the last row of the shard before).
+            let down = (shard == ps && p.index + 1 == pi)
+                || (shard + 1 == ps && pi == 0 && p.index + 1 == e.rows);
+            // The first pair sets the direction; every later pair keeps it.
+            let next = match rows.len() {
+                1 => {
+                    descending = down && !up;
+                    up || down
+                }
+                _ if descending => down,
+                _ => up,
+            };
             if !next {
                 return Err(falsity(format!(
                     "rows skip between row {} and row {i}",
@@ -417,6 +495,8 @@ pub fn check_rows_answer(
         signer,
         catalog,
         rows,
+        descending,
+        newest_proven: false,
     })
 }
 
@@ -507,6 +587,185 @@ mod tests {
         );
         assert_eq!(c.manifest_root, m.header.root());
         assert_eq!(c.signer, anchor::address_of(&SECRET).expect("ok"));
+    }
+
+    /// `order=desc`: the same run from its end checks; a run that turns
+    /// around, or skips a row on the way down, does not.
+    #[test]
+    fn a_descending_run_checks_and_a_turn_or_skip_fails() {
+        let (a, _) = fixture();
+        let up = a["rows"].as_array().expect("rows").clone();
+        let with = |rows: Vec<Value>| {
+            let mut b = a.clone();
+            b["rows"] = Value::Array(rows);
+            b
+        };
+        let down: Vec<Value> = up.iter().rev().cloned().collect();
+        let c = check_rows_answer(&with(down.clone()), Some(3), Some(6)).expect("ok");
+        assert!(c.descending);
+        assert_eq!(
+            c.rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+            vec![6, 5, 4, 3]
+        );
+        assert!(
+            !check_rows_answer(&a, Some(3), Some(6))
+                .expect("ok")
+                .descending
+        );
+        // One row alone has no direction.
+        let one = check_rows_answer(&with(vec![up[1].clone()]), None, None).expect("ok");
+        assert!(!one.descending);
+        for (name, rows) in [
+            (
+                "turns",
+                vec![down[0].clone(), down[1].clone(), down[0].clone()],
+            ),
+            ("skips", vec![down[0].clone(), down[2].clone()]),
+            (
+                "skips over the shard edge",
+                vec![down[0].clone(), down[3].clone()],
+            ),
+            (
+                "up then down",
+                vec![up[0].clone(), up[1].clone(), up[0].clone()],
+            ),
+            ("the same row twice", vec![up[0].clone(), up[0].clone()]),
+        ] {
+            assert!(
+                check_rows_answer(&with(rows), Some(3), Some(6)).is_err(),
+                "{name}"
+            );
+        }
+    }
+
+    /// Review NEWC-R1 M1 (its attack test, turned around): a "newest first"
+    /// page that hides the newest rows, and a descending answer to an
+    /// ascending question, pass [`check_rows_answer`] and are refused by
+    /// [`check_rows_asked`]; the honest newest page is proven newest.
+    #[test]
+    fn a_newest_first_page_that_hides_newer_rows_is_refused() {
+        let (a, m) = fixture();
+        let up = a["rows"].as_array().expect("rows").clone();
+        let mut hides = a.clone();
+        hides["rows"] = Value::Array(up.iter().rev().cloned().collect());
+        // The signed header says the newest key is 9: rows 9, 8, 7 are hidden.
+        assert_eq!((m.header.key_max, m.shards[1].rows), (9, 5));
+        let c = check_rows_answer(&hides, None, None).expect("the plain check passes");
+        assert_eq!((c.rows[0].0, c.rows[0].1, c.rows[0].2), (1, 1, 6));
+        let newest_first = RowsAsked {
+            desc: true,
+            ..RowsAsked::default()
+        };
+        let e = check_rows_asked(&hides, &newest_first).expect_err("hidden rows");
+        assert!(e.to_string().contains("newest row (key 9)"), "{e}");
+        // With the upper bound the caller asked, the same page is a range
+        // page: it checks, and is not called newest. So is a later page.
+        for asked in [
+            RowsAsked {
+                to: Some(6),
+                ..newest_first
+            },
+            RowsAsked {
+                page: 1,
+                ..newest_first
+            },
+        ] {
+            let c = check_rows_asked(&hides, &asked).expect("ok");
+            assert!(c.descending && !c.newest_proven);
+        }
+        // A lower bound above every key: the empty page is right.
+        let mut empty = a.clone();
+        empty["rows"] = json!([]);
+        let above = RowsAsked {
+            from: Some(10),
+            ..newest_first
+        };
+        assert!(!check_rows_asked(&empty, &above).expect("ok").newest_proven);
+        // A lower bound the newest key meets: an empty page hides rows.
+        let below = RowsAsked {
+            from: Some(8),
+            ..newest_first
+        };
+        assert!(check_rows_asked(&empty, &below).is_err());
+        assert!(check_rows_asked(&empty, &newest_first).is_err());
+        // The direction asked: a downward answer to an upward question, and
+        // the other way round, are refused.
+        let asc = RowsAsked::default();
+        let e = check_rows_asked(&hides, &asc).expect_err("direction");
+        assert!(e.to_string().contains("--order desc"), "{e}");
+        assert!(check_rows_asked(
+            &a,
+            &RowsAsked {
+                to: Some(6),
+                ..newest_first
+            }
+        )
+        .is_err());
+        assert!(!check_rows_asked(&a, &asc).expect("ok").descending);
+        // One row has no direction: the report carries the one asked.
+        let mut one = a.clone();
+        one["rows"] = json!([up[3].clone()]);
+        let c = check_rows_asked(
+            &one,
+            &RowsAsked {
+                to: Some(6),
+                ..newest_first
+            },
+        )
+        .expect("ok");
+        assert!(c.descending);
+    }
+
+    /// The honest newest page (the last rows of the last shard, downward)
+    /// is proven newest; the same rows minus the first are not.
+    #[test]
+    fn the_newest_page_is_proven_newest() {
+        let (a, m) = fixture();
+        let schema = m.header.schema.clone();
+        let rows: Vec<Vec<u8>> = (5..10i128)
+            .map(|t| {
+                encode_row(&schema, &[Cell::Int(t), Cell::Decimal(format!("{t}.25"))]).expect("ok")
+            })
+            .collect();
+        let file = encode_shard(&rows);
+        let c = check_shard(&schema, &file).expect("ok");
+        let page = |idx: &[u64]| {
+            let mut b = a.clone();
+            b["rows"] = Value::Array(
+                idx.iter()
+                    .map(|i| {
+                        row_json(
+                            &m.header,
+                            1,
+                            c.rows[*i as usize],
+                            &c.tree.proof(*i).expect("ok"),
+                        )
+                    })
+                    .collect(),
+            );
+            b
+        };
+        let asked = RowsAsked {
+            desc: true,
+            ..RowsAsked::default()
+        };
+        let ck = check_rows_asked(&page(&[4, 3, 2]), &asked).expect("newest");
+        assert!(ck.newest_proven && ck.descending);
+        assert_eq!(
+            ck.rows.iter().map(|r| r.2).collect::<Vec<_>>(),
+            vec![9, 8, 7]
+        );
+        assert!(
+            check_rows_asked(&page(&[4]), &asked)
+                .expect("one row")
+                .newest_proven
+        );
+        assert!(check_rows_asked(&page(&[3, 2]), &asked).is_err());
+        // A forged leaf count cannot make an older row "the last": the proof
+        // binds it to the entry's row count.
+        let mut forged = page(&[3, 2]);
+        forged["rows"][0]["proof"]["leaf_count"] = json!(4);
+        assert!(check_rows_asked(&forged, &asked).is_err());
     }
 
     /// The fixture's manifest anchored through a catalog of three datasets

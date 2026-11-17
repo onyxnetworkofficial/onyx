@@ -721,7 +721,17 @@ pub struct BulkAsked {
     pub from: Option<i128>,
     /// Largest key asked.
     pub to: Option<i128>,
+    /// Asked newest first (`order=desc`, `--order desc`): an answer running
+    /// the other way is refused (review NEWC-R1 M1).
+    pub desc: bool,
+    /// The page asked (`--page`, 0 when not given). A newest-first page 0
+    /// with no `to` must start at the dataset's newest row.
+    pub page: u64,
 }
+
+/// What a bulk report says of the answer fields no proof covers (review
+/// NEWC-R1 L1).
+pub const BULK_NOT_PROVEN: &str = "the answer's `query`, `key` (the key column's name and unit) and `next_page` are the node's own words, not proven: the range, order and page checked are the ones you passed to this check";
 
 /// The completeness note every bulk report carries (THREATS CL5-9).
 pub const BULK_COMPLETENESS: &str = "every row returned is proven and the page has no gap inside it; rows at the edges of the page (or a page answered empty) are not proven complete yet";
@@ -787,6 +797,13 @@ impl BulkOutcome {
                     "digest": c.digest.to_string(),
                     "signer": format!("0x{}", hex::encode(c.signer)),
                     "rows": c.rows.len(),
+                    // The order asked and checked: with `desc`, firstKey is
+                    // the largest key of the page.
+                    "order": if c.descending { "desc" } else { "asc" },
+                    // Whether the page is proven to start at the dataset's
+                    // newest row (asked newest first, page 0, no `to`).
+                    "newestProven": c.newest_proven,
+                    "notProven": BULK_NOT_PROVEN,
                     "firstKey": c.rows.first().map(|r| r.2.to_string()),
                     "lastKey": c.rows.last().map(|r| r.2.to_string()),
                     "completeness": BULK_COMPLETENESS,
@@ -881,8 +898,8 @@ async fn newer_format(
 }
 
 /// Check a `GET /v1/bulk/{publisher}/{dataset}/rows` answer for the asked
-/// key range: the proofs and signature off chain
-/// ([`onyx_bulk::wire::check_rows_answer`]), then, with `node` =
+/// key range, order and page: the proofs and signature off chain
+/// ([`onyx_bulk::wire::check_rows_asked`]), then, with `node` =
 /// `(rpc, chain id, book)`, the book read at the caller's own finalized block
 /// ([`onyx_api::bulk_serve::read_anchor`]).
 pub async fn check_bulk(
@@ -890,7 +907,13 @@ pub async fn check_bulk(
     asked: &BulkAsked,
     node: Option<(&dyn JsonRpc, u64, [u8; 20])>,
 ) -> BulkOutcome {
-    let checked = match onyx_bulk::wire::check_rows_answer(answer, asked.from, asked.to) {
+    let rows_asked = onyx_bulk::wire::RowsAsked {
+        from: asked.from,
+        to: asked.to,
+        desc: asked.desc,
+        page: asked.page,
+    };
+    let checked = match onyx_bulk::wire::check_rows_asked(answer, &rows_asked) {
         Ok(c) => c,
         // A newer header format whose root the signed report verifies: not
         // this check's to decide, but only for the dataset asked (review

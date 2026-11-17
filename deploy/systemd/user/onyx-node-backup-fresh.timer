@@ -1,0 +1,14 @@
+# Runs onyx-node-backup-fresh.service every 6 hours (THREATS BAK-R1-M3): with the daily backup after
+# 02:30 UTC and a 30-hour limit, a missed or failed day is logged within 36 hours. Install: see
+# onyx-node-backup.service. Not enabled by any script.
+
+[Unit]
+Description=Onyx API node backup freshness check, every 6 hours
+
+[Timer]
+OnCalendar=*-*-* 00/6:45:00 UTC
+Persistent=true
+AccuracySec=60
+
+[Install]
+WantedBy=timers.target

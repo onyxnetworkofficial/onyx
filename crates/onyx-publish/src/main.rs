@@ -16,6 +16,8 @@
 //! # One anchor for many manifests (ADR-0059 amendment 1):
 //! onyx-publish catalog-build  --publisher <source id> --dirs LIST --out FILE [--prev FILE]
 //!                             [--remove DATASET[,DATASET...]]
+//!                             [--links DIR] --links-out DIR2 --move OLD=NEW[,...]
+//!                             [--relink OLD=NEW[,...]] [--unlink OLD[,...]] [--links-next-generation]
 //! onyx-publish catalog-sign   --key publisher.key --catalog FILE
 //! onyx-publish catalog-anchor --catalog FILE --rpc URL --chain-id N --book 0x… --gas-key FILE
 //! onyx-publish catalog-upload --catalog FILE --node URL [--wait-secs N]
@@ -27,6 +29,13 @@
 //! own report. The catalog's report goes next to it as `FILE.report`.
 //! `--remove` ends each named dataset with a tombstone (ADR-0059 amendment 4):
 //! nodes stop serving it, and a later folder of it in LIST is skipped.
+//! `--move OLD=NEW` (ADR-0059 amendment 6) ends OLD the same way and, in the
+//! same catalog, lists the next version of the publisher's links dataset
+//! (`onyx.successors`, written into `--links-out` after `--links`, the
+//! version the previous catalog lists): readers of OLD follow it to NEW.
+//! `--relink` and `--unlink` fix or retract the link of an OLD removed
+//! before; `--links-next-generation` starts the next links generation when
+//! one is full. Upload the links folder with `upload --catalog N` first.
 //!
 //! A later version keeps the previous version's schema unless `build --widen`
 //! widens it (ADR-0059 amendment 5): a decimal's scale grows, a non-key int
@@ -56,6 +65,10 @@ use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+mod links;
+#[cfg(test)]
+mod succ_e2e;
 
 const USAGE: &str =
     "usage: onyx-publish <keygen|address|keys-doc|synth|build|schema-fit|sign|anchor|upload|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
@@ -118,7 +131,7 @@ fn main() -> ExitCode {
 struct Opts(BTreeMap<String, String>);
 
 /// Options that take no value.
-const FLAGS: &[&str] = &["widen"];
+const FLAGS: &[&str] = &["widen", "links-next-generation"];
 /// What a flag stores in [`Opts`] (it is given, with no value).
 static FLAG_ON: String = String::new();
 
@@ -545,6 +558,12 @@ fn build_cmd(o: &Opts) -> Res<()> {
         "created",
         "shard-mib",
     ])?;
+    if onyx_bulk::successor::is_links_id(o.req("dataset")?) {
+        return Err(format!(
+            "{} is reserved for successor links (ADR-0059 amendment 6): catalog-build --move, --relink or --unlink writes its versions",
+            o.req("dataset")?
+        ));
+    }
     let schema_text =
         std::fs::read_to_string(o.req("schema")?).map_err(|e| format!("--schema: {e}"))?;
     let schema_json: Value =
@@ -622,6 +641,26 @@ fn build_cmd(o: &Opts) -> Res<()> {
         },
         &out,
     )?;
+    write_built(&out, &built, prev_dir)?;
+    let m = &built.manifest;
+    println!(
+        "BUILT version={} format={} rows={} new_rows={} shards={} new_shards={} bytes={} secs={:.1} root={}",
+        m.header.version,
+        m.header.format,
+        m.header.row_count,
+        built.input_rows,
+        m.header.shard_count,
+        built.new_shards.len(),
+        m.header.byte_count,
+        t.elapsed().as_secs_f64(),
+        m.header.root()
+    );
+    Ok(())
+}
+
+/// Write `built`'s `manifest.bin` and its summary `manifest.json` into
+/// `out`, with `prev_dir`, the previous version's folder relative to `out`.
+fn write_built(out: &Path, built: &Built, prev_dir: Option<String>) -> Res<()> {
     let m = &built.manifest;
     std::fs::write(out.join("manifest.bin"), m.to_bytes()).map_err(|e| e.to_string())?;
     let summary = json!({
@@ -647,18 +686,6 @@ fn build_cmd(o: &Opts) -> Res<()> {
     }
     std::fs::write(out.join("manifest.json"), format!("{summary:#}\n"))
         .map_err(|e| e.to_string())?;
-    println!(
-        "BUILT version={} format={} rows={} new_rows={} shards={} new_shards={} bytes={} secs={:.1} root={}",
-        m.header.version,
-        m.header.format,
-        m.header.row_count,
-        built.input_rows,
-        m.header.shard_count,
-        built.new_shards.len(),
-        m.header.byte_count,
-        t.elapsed().as_secs_f64(),
-        m.header.root()
-    );
     Ok(())
 }
 
@@ -1711,7 +1738,20 @@ fn report_path(catalog: &Path) -> PathBuf {
 /// plus every other dataset of `--prev`, written to `--out` (never over an
 /// existing file: a catalog is kept before it is signed, review CAT-R1 M3).
 fn catalog_build_cmd(o: &Opts) -> Res<()> {
-    o.only(&["publisher", "dirs", "out", "prev", "remove"])?;
+    o.only(&[
+        "publisher",
+        "dirs",
+        "out",
+        "prev",
+        "remove",
+        "links",
+        "links-out",
+        "move",
+        "relink",
+        "unlink",
+        "links-next-generation",
+    ])?;
+    let link_opts = links::link_opts(o)?;
     let publisher = SourceId(o.req("publisher")?.to_string());
     let out = PathBuf::from(o.req("out")?);
     if out.exists() {
@@ -1741,12 +1781,24 @@ fn catalog_build_cmd(o: &Opts) -> Res<()> {
                 .collect()
         })
         .unwrap_or_default();
+    if let Some(d) = remove.iter().find(|d| onyx_bulk::successor::is_links_id(d)) {
+        return Err(format!(
+            "--remove {d}: reserved for successor links; --links-next-generation ends a links generation"
+        ));
+    }
     let mut listed = 0usize;
+    let mut built: BTreeMap<String, Manifest> = BTreeMap::new();
     let (mut skipped, mut removed) = (0usize, 0usize);
     for d in list.lines().map(str::trim).filter(|l| !l.is_empty()) {
         let m = read_manifest(Path::new(d))?;
         if m.header.publisher != publisher {
             return Err(format!("{d}: another publisher ({})", m.header.publisher.0));
+        }
+        if onyx_bulk::successor::is_links_id(&m.header.dataset) {
+            return Err(format!(
+                "{d}: {} is reserved for successor links: --move, --relink and --unlink list its versions",
+                m.header.dataset
+            ));
         }
         if remove.contains(&m.header.dataset) {
             return Err(format!(
@@ -1768,6 +1820,7 @@ fn catalog_build_cmd(o: &Opts) -> Res<()> {
             m.header.dataset.clone(),
             onyx_bulk::CatalogLeaf::of(&m.header),
         );
+        built.insert(m.header.dataset.clone(), m);
         listed += 1;
     }
     for d in &remove {
@@ -1786,17 +1839,46 @@ fn catalog_build_cmd(o: &Opts) -> Res<()> {
     let created = prev
         .as_ref()
         .map_or(now_unix(), |p| now_unix().max(p.header.created_unix + 1));
+    // Successor links (ADR-0059 amendment 6 item 8): the tombstones and the
+    // links version in this one catalog.
+    let moved = link_opts.as_ref().map_or(0, |l| l.moves());
+    if let Some(lo) = &link_opts {
+        links::apply(
+            lo,
+            &publisher,
+            prev.as_ref(),
+            &mut leaves,
+            &built,
+            &remove,
+            created,
+        )?;
+    }
     let c = onyx_bulk::Catalog::build(
         publisher,
         prev.as_ref(),
         created,
         leaves.into_values().collect(),
     )
-    .map_err(|e| e.to_string())?;
-    std::fs::write(&out, borsh::to_vec(&c).map_err(|e| e.to_string())?)
-        .map_err(|e| format!("{}: {e}", out.display()))?;
+    .map_err(|e| {
+        if let Some(lo) = &link_opts {
+            lo.discard();
+        }
+        e.to_string()
+    })?;
+    // A catalog that is not written leaves no links version behind: no
+    // catalog would list it, and its folder would block the next run
+    // (review SUCC-B7 L3).
+    let written = borsh::to_vec(&c)
+        .map_err(|e| e.to_string())
+        .and_then(|b| std::fs::write(&out, b).map_err(|e| format!("{}: {e}", out.display())));
+    if let Err(e) = written {
+        if let Some(lo) = &link_opts {
+            lo.discard();
+        }
+        return Err(e);
+    }
     println!(
-        "CATALOG number={} leaves={} listed={listed} removed={removed} skipped={skipped} root={} out={}",
+        "CATALOG number={} leaves={} listed={listed} removed={removed} moved={moved} skipped={skipped} root={} out={}",
         c.header.number,
         c.header.leaf_count,
         c.header.root(),

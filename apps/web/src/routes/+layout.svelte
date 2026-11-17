@@ -15,6 +15,7 @@
 	import { motion } from '#lib/motion.svelte.ts';
 	import { fadeSections } from '#lib/fade.ts';
 	import { FOOTER_NAV, PRIMARY_NAV } from '#lib/nav.ts';
+	import { REPO } from '#lib/release.ts';
 	let palette: CommandPalette;
 	let { children } = $props();
 
@@ -157,6 +158,11 @@
 		<div class="fline">
 			<span class="fstate"><span class="dot" aria-hidden="true"></span>Testnet only · {PUBLIC ? 'early preview' : 'private preview'}</span>
 			<span>Every check runs in your browser, on the network's own code.</span>
+			<!-- Newcomer test (A14): the public source and how to connect an AI, from every page. -->
+			<span class="fmore" data-testid="footer-more">
+				<a href={REPO} target="_blank" rel="noopener">Source code</a>
+				<a href={`${REPO}/blob/main/docs/agents.md`} target="_blank" rel="noopener">Connect an AI</a>
+			</span>
 		</div>
 	</div>
 </footer>
@@ -440,6 +446,21 @@
 		text-transform: uppercase;
 		color: var(--ink);
 	}
+	.fmore {
+		flex-basis: 100%;
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--sp-1) var(--sp-6);
+	}
+	.fmore a {
+		color: var(--muted);
+		text-decoration: none;
+	}
+	.fmore a:hover {
+		color: var(--ink);
+		text-decoration: underline;
+		text-decoration-color: var(--accent-line);
+	}
 	.fstate .dot {
 		width: 8px;
 		height: 8px;
@@ -480,7 +501,8 @@
 			gap: 0 var(--sp-8);
 		}
 		/* W2: each page link a 44 x 44 px tap target. */
-		.fnav a {
+		.fnav a,
+		.fmore a {
 			display: inline-flex;
 			align-items: center;
 			min-height: 44px;

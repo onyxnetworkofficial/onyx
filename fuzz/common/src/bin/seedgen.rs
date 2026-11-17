@@ -975,6 +975,46 @@ fn bulk(o: &mut Out) {
         }
         o.sel("bulk_parsers", &format!("learn-json-{i}"), 7, body.as_bytes());
     }
+    // A successor answer for the tombstone (ADR-0059 amendment 6 item 7,
+    // selector 8; review SUCC-B7 L4): the catalog signed, every links
+    // generation proven absent, the tombstone's leaf proven, so the chain
+    // ends `no_links`. It must pass the reader's off-chain check, so the
+    // fuzzer starts past the signature.
+    let gens: Option<Vec<serde_json::Value>> = (1..=onyx_bulk::successor::MAX_LINK_GENERATIONS)
+        .map(|g| {
+            let id = onyx_bulk::successor::generation_id(g)?;
+            let ap = borsh::to_vec(&c1.absence_proof(&id)?).ok()?;
+            Some(serde_json::json!({"dataset": id, "generation": g, "absent": onyx_fuzz_common::hex0x(&ap)}))
+        })
+        .collect();
+    let parts = (
+        gens,
+        c1.leaf_proof(0).and_then(|lp| borsh::to_vec(&lp).ok()),
+        borsh::to_vec(&c1.header),
+        borsh::to_vec(&r1),
+    );
+    if let (Some(gens), Some(lb), Ok(hb), Ok(rb)) = parts {
+        let answer = serde_json::json!({
+            "publisher": "example.publisher", "dataset": "synthetic.metrics",
+            "catalog": {"number": c1.header.number, "header": onyx_fuzz_common::hex0x(&hb), "report": onyx_fuzz_common::hex0x(&rb)},
+            "generations": gens,
+            "chain": [{"dataset": "synthetic.metrics", "leaf": onyx_fuzz_common::hex0x(&lb)}],
+            "end": {"status": "no_links", "dataset": "synthetic.metrics", "hops": []},
+            "links": null,
+        });
+        match onyx_api::bulk_successor::check_answer_offline("example.publisher", "synthetic.metrics", &answer) {
+            Ok(end) if end == "no_links" => o.sel("bulk_parsers", "successor-answer", 8, answer.to_string().as_bytes()),
+            other => eprintln!("seedgen: bulk successor answer does not check: {other:?}"),
+        }
+    } else {
+        eprintln!("seedgen: bulk successor answer does not encode");
+    }
+    if let Some(Ok(b)) = c1
+        .absence_proof("onyx.successors")
+        .map(|ap| borsh::to_vec(&(c1.header.clone(), "onyx.successors".to_string(), ap)))
+    {
+        o.sel("bulk_parsers", "absence-proof", 8, &b);
+    }
     let changed: Vec<CatalogLeaf> = c1
         .leaves
         .iter()

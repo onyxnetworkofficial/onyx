@@ -21,7 +21,17 @@ const ds = (name, extra = {}) => ({
 	created_unix: 1_793_727_822,
 	...extra
 });
-const ALL = ['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n));
+// READINESS A20: the node says each dataset's newest day and its age. btc.alpha is current,
+// btc.beta stopped 80 days back, eth.gamma is at the 30-day edge (not stale), and eth.wide has a
+// key the node does not read as a time (neither field: nothing shown, never stale).
+const FRESHNESS = {
+	'btc.alpha': { newest: '2026-11-13', newest_age_days: 3 },
+	'btc.beta': { newest: '2026-08-28', newest_age_days: 80 },
+	'eth.gamma': { newest: '2026-10-17', newest_age_days: 30 }
+};
+const ALL = ['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n, FRESHNESS[n] ?? {}));
+// Review FRESH-R1 M1: a dataset whose newest key is dated in the future (found by its own name).
+const AHEAD = ds('sol.ahead', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 });
 const WIDE = ['day', 'series', 'i', 'j', ...Array.from({ length: 60 }, (_, i) => `v${String(i).padStart(2, '0')}`)];
 
 function rowsAnswer(name) {
@@ -55,6 +65,8 @@ export async function datasets(browser, base, expect) {
 		const errors = [];
 		const asked = [];
 		let busy = false;
+		// Review FRESH-R1 M2: a node that does not know `fresh` refuses it (400), as the live one did.
+		let oldNode = false;
 		pg.on('pageerror', (e) => errors.push(String(e)));
 		await pg.exposeFunction('__xss', () => errors.push('a hostile name ran script'));
 		await pg.route('**/v1/bulk?*', (route) => {
@@ -64,7 +76,11 @@ export async function datasets(browser, base, expect) {
 			const groups = anyOf(u.searchParams.get('any'));
 			const after = u.searchParams.get('after');
 			const limit = Number(u.searchParams.get('limit') ?? 50);
-			const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`));
+			const fresh = u.searchParams.get('fresh');
+			if (fresh && oldNode) return route.fulfill({ status: 400, json: { error: { code: 'bad_request', message: 'unknown query parameter fresh' } } });
+			if (groups.length && matchesAny(groups, 'onchain-archive/sol.ahead')) return route.fulfill({ json: { datasets: fresh ? [] : [AHEAD], total: fresh ? 0 : 1, next: null } });
+			// The node's `fresh=30d`: a newest day at most 30 days behind; no newest day, left out.
+			const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`)).filter((d) => !fresh || (fresh === '30d' && d.newest_age_days <= 30));
 			const rest = hit.filter((d) => !after || `${d.publisher}/${d.dataset}` > after);
 			// The fake pages 2 at a time whatever the limit, so "Show more" is reached with 4 datasets.
 			const n = Math.min(limit, 2);
@@ -86,6 +102,24 @@ export async function datasets(browser, base, expect) {
 		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: the first page lists the node's first datasets (${await names()})`);
 		expect((await pg.getByTestId('datasets-count').innerText()).includes('2 of 4'), `${at}: "Showing 2 of 4"`);
 		expect((await pg.getByTestId('datasets-updated').first().innerText()).trim() === '2026-11-03', `${at}: each dataset shows the day its version was made`);
+		// READINESS A20: the newest day on every time dataset, and a plain mark on the stale one.
+		const F = await pg.evaluate(() =>
+			[...document.querySelectorAll('[data-testid="datasets-row"]')].map((li) => {
+				const m = li.querySelector('[data-testid="datasets-stale"]');
+				const cs = m ? getComputedStyle(m) : null;
+				return {
+					id: li.querySelector('[data-testid="datasets-id"]')?.textContent.trim(),
+					newest: li.querySelector('[data-testid="datasets-newest"]')?.textContent.trim() ?? null,
+					stale: m ? m.textContent.replace(/\s+/g, ' ').trim() : null,
+					// Not colour alone: words, and a dashed frame.
+					framed: cs ? cs.borderTopStyle === 'dashed' && parseFloat(cs.borderTopWidth) >= 1 : null,
+					inside: m ? m.getBoundingClientRect().right <= innerWidth + 1 : null
+				};
+			})
+		);
+		expect(JSON.stringify(F.map((x) => [x.id, x.newest, x.stale])) === JSON.stringify([['btc.alpha', '2026-11-13', null], ['btc.beta', '2026-08-28', '!No data after 2026-08-28']]), `${at}: each dataset shows its newest day; the one that stopped says "No data after", the detail line's words (review FRESH-R1 L1) (${JSON.stringify(F)})`);
+		expect(F[1].framed === true && F[1].inside === true, `${at}: the mark is words in a dashed frame, inside the page`);
+		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the list with its marks does not scroll sideways`);
 		expect(!(await pg.content()).includes('onerror=__xss'), `${at}: an item out of shape is dropped, never printed`);
 		// The CSP would refuse the handler anyway, so the canary cannot fire: check the markup
 		// itself (review of WEB-CSP-1, finding 3).
@@ -94,6 +128,63 @@ export async function datasets(browser, base, expect) {
 		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 4, null, { timeout: 15000 }).catch(() => {});
 		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide']), `${at}: "Show more" follows next (${await names()})`);
 		expect((await pg.getByTestId('datasets-more').count()) === 0, `${at}: no "Show more" on the last page`);
+		const marks = async () => pg.evaluate(() => [...document.querySelectorAll('[data-testid="datasets-row"]')].filter((li) => li.querySelector('[data-testid="datasets-stale"]')).map((li) => li.querySelector('[data-testid="datasets-id"]').textContent.trim()));
+		const newestOf = async (id) => pg.evaluate((id) => [...document.querySelectorAll('[data-testid="datasets-row"]')].find((li) => li.querySelector('[data-testid="datasets-id"]').textContent.trim() === id)?.querySelector('[data-testid="datasets-newest"]')?.textContent.trim() ?? null, id);
+		expect(JSON.stringify(await marks()) === '["btc.beta"]', `${at}: 30 days behind is not marked, and a key that is no time is never marked (${await marks()})`);
+		expect((await newestOf('eth.gamma')) === '2026-10-17' && (await newestOf('eth.wide')) === null, `${at}: a key that is no time shows no newest day`);
+		// The filter asks the node for fresh datasets only, and "All" brings the rest back.
+		expect((await pg.getByTestId('datasets-all').getAttribute('aria-pressed')) === 'true' && (await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed')) === 'false', `${at}: the list starts with all datasets`);
+		await pg.getByTestId('datasets-fresh').click();
+		await pg.waitForFunction(() => /2 of 2/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma']) && asked.some((s) => new URLSearchParams(s).get('fresh') === '30d') && (await pg.getByTestId('datasets-stale').count()) === 0, `${at}: "Updated in the last 30 days" asks the node's fresh=30d and lists only those (${await names()})`);
+		expect((await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed')) === 'true', `${at}: the chosen filter says so (aria-pressed)`);
+		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the filter fits the page`);
+		await pg.getByTestId('datasets-all').click();
+		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: "All" lists every dataset again (${await names()})`);
+		// Review FRESH-R1 M2: the filter against a node without `fresh`: the page says the filter is
+		// not available, turns it back and lists all; it never says the node has no datasets.
+		oldNode = true;
+		await pg.getByTestId('datasets-fresh').click();
+		await pg.getByTestId('datasets-filter-off').waitFor({ timeout: 15000 }).catch(() => {});
+		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		const O = {
+			note: (await pg.getByTestId('datasets-filter-off').allInnerTexts()).join(' '),
+			none: await pg.getByTestId('datasets-none').count(),
+			all: await pg.getByTestId('datasets-all').getAttribute('aria-pressed'),
+			fresh: await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed'),
+			names: await names()
+		};
+		expect(/30-day filter is not available/.test(O.note) && O.none === 0 && O.all === 'true' && O.fresh === 'false' && JSON.stringify(O.names) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: a node without the filter: the page says so, turns the switch back and lists all (${JSON.stringify(O)})`);
+		oldNode = false;
+		await pg.getByTestId('datasets-fresh').click();
+		await pg.waitForFunction(() => /2 of 2/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		expect((await pg.getByTestId('datasets-filter-off').count()) === 0 && JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma']), `${at}: once the node takes the filter the note goes`);
+		await pg.getByTestId('datasets-all').click();
+		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		// Review FRESH-R1 M1: dates in the future are said plainly: no newest day, no "fresh".
+		await pg.getByTestId('datasets-q').fill('sol ahead');
+		await pg.getByTestId('datasets-future').waitFor({ timeout: 15000 }).catch(() => {});
+		const A = {
+			future: (await pg.getByTestId('datasets-future').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(),
+			newest: await pg.getByTestId('datasets-newest').count(),
+			stale: await pg.getByTestId('datasets-stale').count(),
+			inside: await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
+		};
+		expect(/Dates in the future: the newest day is not known/.test(A.future) && A.newest === 0 && A.stale === 0 && A.inside, `${at}: a dataset dated in the future says so and shows no newest day (${JSON.stringify(A)})`);
+		await pg.getByTestId('datasets-fresh').click();
+		await pg.getByTestId('datasets-empty').waitFor({ timeout: 15000 }).catch(() => {});
+		expect((await pg.getByTestId('datasets-row').count()) === 0, `${at}: a dataset dated in the future is not in the 30-day list`);
+		await pg.getByTestId('datasets-all').click();
+		await pg.getByTestId('datasets-q').fill('');
+		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		// The opened stale dataset says its rows end there (the dataset view).
+		await pg.getByTestId('datasets-open').nth(1).click();
+		await pg.getByTestId('datasets-sample').waitFor({ timeout: 15000 }).catch(() => {});
+		const stale = (await pg.getByTestId('datasets-detail-stale').allInnerTexts()).join(' ');
+		expect(/no data after 2026-08-28/.test(stale) && /not current values/.test(stale), `${at}: an opened stale dataset says its rows are not current (${stale})`);
+		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the opened stale dataset does not scroll the page sideways`);
+		await pg.getByTestId('datasets-open').nth(1).click();
 		await pg.getByTestId('datasets-q').fill('ETH  Wide');
 		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 1, null, { timeout: 15000 }).catch(() => {});
 		expect(JSON.stringify(await names()) === '["eth.wide"]' && asked.some((s) => new URLSearchParams(s).get('any') === 'eth*;wide*'), `${at}: a search sends the node's whole-word any search and shows the matches (${await names()})`);

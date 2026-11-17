@@ -19,6 +19,7 @@
 pub mod arrival;
 pub mod bulk_history;
 pub mod bulk_serve;
+pub mod bulk_successor;
 pub mod cache;
 pub mod catalog;
 pub mod client;

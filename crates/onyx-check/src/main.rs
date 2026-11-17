@@ -6,17 +6,23 @@
 //!            [--registry 0x… [--ladder-state ~/.onyx/ladders]]
 //! onyx-check --answer - --asked @asked.json --unchecked
 //! onyx-check --offer offer.json --manifest deploy.json --max-amount 10000 --rpc https://…
-//! onyx-check --bulk rows.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N] \
+//! onyx-check --bulk rows.json --publisher ID --dataset ID [--min-version N] [--from N|DATE] [--to N|DATE] [--order asc|desc] [--page N] \
 //!            (--rpc https://sepolia.base.org --chain-id 84532 --book 0x… | --unchecked) \
 //!            [--history https://node [--keys 0x…,0x…] [--scan-keys-from N [--logs-range N]]]
+//! onyx-check --successor answer.json --publisher ID --dataset ID \
+//!            (--rpc https://sepolia.base.org --chain-id 84532 --book 0x… | --unchecked) \
+//!            [--node https://node] [--keys 0x…,0x…] [--scan-keys-from N [--logs-range N]]
 //! ```
-//! Writes one JSON report to stdout. Exit 0 verified (or payable), 1 refused,
-//! 2 usage error, 3 nothing decided (your node could not be read, your
-//! settings are wrong, or `--bulk` met a manifest header format newer than
-//! this check whose root the publisher signed: update onyx-check), 4
-//! (`--history` only) every check held but the
-//! publisher has since removed the dataset with a tombstone (ADR-0059
-//! amendment 4).
+//! Writes one JSON report to stdout. Exit 0 verified (or payable; for
+//! `--successor`, the chain ends at a live dataset), 1 refused, 2 usage
+//! error, 3 nothing decided (your node could not be read, your settings are
+//! wrong, `--bulk` met a manifest header format newer than this check whose
+//! root the publisher signed: update onyx-check, or `--successor` got no
+//! successor answer, an old catalog or `--unchecked`), 4 (`--history`) every
+//! check held but the publisher has since removed the dataset with a
+//! tombstone (ADR-0059 amendment 4), or (`--successor`) the chain ends
+//! otherwise: removed, retracted, not listed, no links, a cycle or too long
+//! (amendment 6).
 
 use onyx_api::roots::HttpJsonRpc;
 use onyx_api::x402::{check_facilitator_url, HyperPost};
@@ -32,9 +38,12 @@ use std::time::Duration;
 const USAGE: &str = "usage: onyx-check --answer <file|-> --asked <json|@file> \
 (--rpc <url> --chain-id <n> --contract <0x…> [--registry <0x…> [--ladder-state <dir>]] \
 | --unchecked)\n   or: onyx-check --offer <file|-> \
---manifest <file> --max-amount <n> --rpc <url>\n   or: onyx-check --bulk <file|-> --publisher <id> --dataset <id> [--min-version <n>] [--from <n>] [--to <n>] \
+--manifest <file> --max-amount <n> --rpc <url>\n   or: onyx-check --bulk <file|-> --publisher <id> --dataset <id> [--min-version <n>] [--from <n|date>] [--to <n|date>] [--order asc|desc] [--page <n>] \
 (--rpc <url> --chain-id <n> --book <0x…> | --unchecked) \
-[--history <node url> [--keys <0x…,0x…>] [--scan-keys-from <block> [--logs-range <n>]]]";
+[--history <node url> [--keys <0x…,0x…>] [--scan-keys-from <block> [--logs-range <n>]]]\n   \
+or: onyx-check --successor <file|-> --publisher <id> --dataset <id> \
+(--rpc <url> --chain-id <n> --book <0x…> | --unchecked) [--node <node url>] \
+[--keys <0x…,0x…>] [--scan-keys-from <block> [--logs-range <n>]]";
 
 /// Each node call gives up after this long.
 const RPC_TIMEOUT: Duration = Duration::from_secs(20);
@@ -61,6 +70,13 @@ enum Mode {
         node: Option<(String, u64, [u8; 20])>,
         history: Option<onyx_api::bulk_history::HistoryOpts>,
     },
+    Successor {
+        answer: String,
+        publisher: String,
+        dataset: String,
+        node: Option<(String, u64, [u8; 20])>,
+        opts: onyx_api::bulk_successor::SuccessorOpts,
+    },
 }
 
 const VALUED: &[&str] = &[
@@ -77,6 +93,8 @@ const VALUED: &[&str] = &[
     "--bulk",
     "--from",
     "--to",
+    "--order",
+    "--page",
     "--book",
     "--publisher",
     "--dataset",
@@ -85,6 +103,8 @@ const VALUED: &[&str] = &[
     "--keys",
     "--scan-keys-from",
     "--logs-range",
+    "--successor",
+    "--node",
 ];
 
 fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> {
@@ -105,16 +125,42 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
             _ => return Err(UsageError(format!("unknown argument {a}\n{USAGE}"))),
         }
     }
+    if let Some(answer) = v.remove("--successor") {
+        return successor_args(answer, v, unchecked);
+    }
     if let Some(answer) = v.remove("--bulk") {
+        // A key, or a UTC date as the rows route takes it for a day or time
+        // key (`--to` with a date alone: the whole day).
         let int = |k: &str, v: Option<String>| {
             v.map(|x| {
                 x.parse::<i128>()
-                    .map_err(|_| UsageError(format!("{k}: not a whole number: {x}")))
+                    .ok()
+                    .or_else(|| onyx_api::bulk_serve::parse_time(&x, k == "--to"))
+                    .ok_or_else(|| {
+                        UsageError(format!(
+                            "{k}: not a whole number or a UTC date (2026-01-31 or 2026-01-31T00:00:00Z): {x}"
+                        ))
+                    })
             })
             .transpose()
         };
         let from = int("--from", v.remove("--from"))?;
         let to = int("--to", v.remove("--to"))?;
+        // The order and page asked (review NEWC-R1 M1): never read from the
+        // answer.
+        let desc = match v.remove("--order").as_deref() {
+            None | Some("asc") => false,
+            Some("desc") => true,
+            Some(x) => return Err(UsageError(format!("--order: asc or desc, not {x}"))),
+        };
+        let page = v
+            .remove("--page")
+            .map(|x| {
+                x.parse::<u64>()
+                    .map_err(|_| UsageError(format!("--page: not a whole number: {x}")))
+            })
+            .transpose()?
+            .unwrap_or(0);
         let publisher = v.remove("--publisher").ok_or_else(|| {
             UsageError("--bulk needs --publisher: the publisher you asked for".into())
         })?;
@@ -198,6 +244,8 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
                 min_version,
                 from,
                 to,
+                desc,
+                page,
             },
             node,
             history,
@@ -292,6 +340,89 @@ fn parse_args(mut it: impl Iterator<Item = String>) -> Result<Mode, UsageError> 
         asked,
         node,
         bind,
+    })
+}
+
+/// `--successor` (ADR-0059 amendment 6 item 7): the answer, the publisher
+/// and dataset asked, your chain node or `--unchecked`, and what the chain
+/// part reads.
+fn successor_args(
+    answer: String,
+    mut v: BTreeMap<String, String>,
+    unchecked: bool,
+) -> Result<Mode, UsageError> {
+    let publisher = v.remove("--publisher").ok_or_else(|| {
+        UsageError("--successor needs --publisher: the publisher you asked for".into())
+    })?;
+    let dataset = v.remove("--dataset").ok_or_else(|| {
+        UsageError("--successor needs --dataset: the removed dataset you asked for".into())
+    })?;
+    let node = match (
+        v.remove("--rpc"),
+        v.remove("--chain-id"),
+        v.remove("--book"),
+        unchecked,
+    ) {
+        (Some(rpc), Some(c), Some(b), false) => {
+            rpc_url(&rpc)?;
+            let c = c
+                .parse::<u64>()
+                .map_err(|_| UsageError(format!("--chain-id: not a number: {c}")))?;
+            Some((rpc, c, address(&b)?))
+        }
+        (None, None, None, true) => None,
+        _ => {
+            return Err(UsageError(format!(
+                "--successor needs your own chain node (--rpc, --chain-id, --book) or --unchecked\n{USAGE}"
+            )))
+        }
+    };
+    let base = v
+        .remove("--node")
+        .map(|u| {
+            check_facilitator_url(&u)
+                .map(|()| u)
+                .map_err(|e| UsageError(format!("--node: {e}")))
+        })
+        .transpose()?;
+    let keys = v
+        .remove("--keys")
+        .map(|k| k.split(',').map(address).collect::<Result<Vec<_>, _>>())
+        .transpose()?
+        .unwrap_or_default();
+    let num = |k: &str, x: Option<String>| {
+        x.map(|x| {
+            x.parse::<u64>()
+                .map_err(|_| UsageError(format!("{k}: not a number: {x}")))
+        })
+        .transpose()
+    };
+    let scan_from = num("--scan-keys-from", v.remove("--scan-keys-from"))?;
+    let logs_range = num("--logs-range", v.remove("--logs-range"))?;
+    if logs_range.is_some() && scan_from.is_none() {
+        return Err(UsageError("--logs-range goes with --scan-keys-from".into()));
+    }
+    if node.is_none() && (!keys.is_empty() || scan_from.is_some()) {
+        return Err(UsageError(
+            "--keys and --scan-keys-from are read on your chain node: not with --unchecked".into(),
+        ));
+    }
+    if let Some(k) = v.keys().next() {
+        return Err(UsageError(format!(
+            "{k} is not an option of --successor\n{USAGE}"
+        )));
+    }
+    Ok(Mode::Successor {
+        answer,
+        publisher,
+        dataset,
+        node,
+        opts: onyx_api::bulk_successor::SuccessorOpts {
+            node: base,
+            keys,
+            scan_from,
+            logs_range: logs_range.unwrap_or(200),
+        },
     })
 }
 
@@ -392,6 +523,32 @@ fn run() -> Result<(Value, i32), UsageError> {
                     )))
                 }
             }
+        }
+        Mode::Successor {
+            answer,
+            publisher,
+            dataset,
+            node,
+            opts,
+        } => {
+            let answer = json_arg(&answer, "answer", false)?;
+            let get = onyx_api::storage::HyperGet::new(HISTORY_TIMEOUT);
+            let o = match node {
+                None => runtime()?.block_on(onyx_api::bulk_successor::check_successor_unchecked(
+                    &get,
+                    &answer,
+                    &publisher,
+                    &dataset,
+                    opts.node.as_deref(),
+                )),
+                Some((url, chain, book)) => {
+                    let rpc = HttpJsonRpc::new(url, HyperPost::for_rpc(RPC_TIMEOUT));
+                    runtime()?.block_on(onyx_api::bulk_successor::check_successor(
+                        &get, &rpc, chain, book, &answer, &publisher, &dataset, &opts,
+                    ))
+                }
+            };
+            Ok((o.report(), o.code()))
         }
         Mode::Offer {
             offer,

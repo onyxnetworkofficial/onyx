@@ -1,8 +1,10 @@
 #!/usr/bin/env node
-// Onyx MCP server over HTTP (agent connect, NL21): the same tools as src/mcp.mjs, reachable at
+// Onyx MCP server over HTTP (agent connect, NL21): the read tools of src/mcp.mjs, reachable at
 // one URL, so an AI client connects with one line. MCP "Streamable HTTP" transport (spec
 // 2025-06-18): POST one JSON-RPC message, get one JSON answer; no server-sent stream (GET is 405).
 // Sessions by `Mcp-Session-Id`. Read-only by default; it holds no key and pays for nothing.
+// Tools that write (uploads, the relay, wants) or hand out whole stored files are left out here;
+// the local server (src/mcp.mjs) has them.
 //
 // Settings (environment), besides src/mcp.mjs's ONYX_API_URL, ONYX_CHECK_* and ONYX_PAY_*:
 //   ONYX_MCP_LISTEN          address to listen on; default 127.0.0.1:8090 (put a TLS front before it)
@@ -85,8 +87,9 @@ export function rateLimiter({ rate = RATE, burst = BURST, now = Date.now, max = 
 export function createHttpServer({ env = process.env, fetch, now = Date.now } = {}) {
 	const spec = loadSpec();
 	const write = env.ONYX_MCP_ALLOW_PROPOSE === '1';
-	// The raw submit tool is never offered remotely: onyx_propose_dataset checks first.
-	const tools = buildTools(spec, { ...env, ONYX_MCP_ALLOW_SUBMIT: '0' }, { write });
+	// The raw submit tool is never offered remotely: onyx_propose_dataset checks first. Nor is any
+	// other write (uploads, the relay) or whole-file route: `hosted` (A16); src/mcp.mjs keeps them.
+	const tools = buildTools(spec, { ...env, ONYX_MCP_ALLOW_SUBMIT: '0' }, { write, hosted: true });
 	const clientOptions = { baseUrl: env.ONYX_API_URL || 'http://127.0.0.1:8080', spec, fetch, userAgent: env.ONYX_USER_AGENT || 'onyx-agent/0.1' };
 	createClient(clientOptions); // checks the base URL at start
 	const path = env.ONYX_MCP_PATH || '/mcp';

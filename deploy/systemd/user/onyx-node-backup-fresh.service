@@ -1,0 +1,15 @@
+# The API node backup's freshness check (THREATS BAK-R1-M3, BAK-R2-L3; docs/ops/deployment.md
+# "Backups"), started by onyx-node-backup-fresh.timer: `scripts/backup-node.sh --check-fresh 30`
+# exits 1 when the newest complete snapshot is older than 30 hours (a backup that kept failing, a
+# timer that stopped, a machine that was off) or named in the future (a wrong clock), and the
+# failure is logged by its own instance of onyx-node-backup-alert@.service (review BAK-R2-M3). It
+# reads folder names only. Install: see onyx-node-backup.service.
+
+[Unit]
+Description=Onyx API node backup: is the newest snapshot younger than 30 hours?
+OnFailure=onyx-node-backup-alert@%n.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/onyx/node-backup.env
+ExecStart=/usr/bin/bash ${ONYX_BACKUP_REPO}/scripts/backup-node.sh --check-fresh 30

@@ -24,5 +24,9 @@ hyper-util = { version = "0.1", default-features = false, features = ["client-le
 hyper-rustls = { version = "0.27", default-features = false, features = ["http1", "ring", "tls12", "webpki-tokio"] }
 http-body-util = "0.1"
 
+[dev-dependencies]
+# The successor links end-to-end test serves an in-process node over HTTP.
+axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
+
 [lints]
 workspace = true

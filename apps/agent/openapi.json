@@ -1601,7 +1601,7 @@
       "get": {
         "operationId": "listBulkDatasets",
         "summary": "Bulk datasets this node holds",
-        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); `any` matches whole words, any of a group; `limit` pages them in id order; `after` takes the `next` of the page before. `total` counts every match.",
+        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); `any` matches whole words, any of a group; `fresh` keeps the datasets with data from the last days asked; `limit` pages them in id order, or with `sort=newest` the newest data first; `after` takes the `next` of the page before. `total` counts every match.",
         "tags": [
           "Bulk"
         ],
@@ -1648,6 +1648,29 @@
               "pattern": "^[a-z0-9._:-]+/[a-z0-9._:-]+$"
             },
             "description": "The `next` of the page before (`publisher/dataset`)."
+          },
+          {
+            "name": "fresh",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[0-9]{1,4}d$"
+            },
+            "description": "Days, as `30d` (`1d` to `3650d`): only datasets whose `newest` day is at most that many whole days behind this node's clock (`newest_age_days`). A dataset whose key is not a time, or whose newest key is dated in the future, has no `newest` and is left out."
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "id",
+                "newest"
+              ]
+            },
+            "description": "`id` (the default), or `newest`: the newest key first, datasets whose key is not a time last, ties in id order. With `newest`, `after` is placed by the newest key its dataset has now (400 when this node no longer holds it: start again). A dataset may get new data between two pages and move up: pages may repeat or skip entries, so dedupe by id (or read every match in one answer, without `limit`)."
           }
         ],
         "responses": {
@@ -1741,7 +1764,7 @@
       "get": {
         "operationId": "getBulkRows",
         "summary": "Rows in a key range, each with its proofs",
-        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order, page `page` of `limit` (1..=1000, default 100). Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A dataset whose schema widened (format 2) shows every row under the newest schema; each row's `schema` names the schema it is stored under (BulkRows). A header format your onyx-check does not read is undecided there (exit 3, update onyx-check) only when its root verifies against the signed report and your own node shows the book holding that report for the publisher's key (with `--unchecked`: exit 3 with `chainChecked: false`); anything else is refused. With `root`, the held version with that manifest root is served, not the newest (`bulk_version_not_held` when not held); the answer's `query.root` names it.",
+        "description": "Rows whose key is in [`from`, `to`] (inclusive; both optional), in key order (oldest first; `order=desc` asks newest first, so `order=desc&limit=10` asks for the newest 10 rows; `onyx-check --bulk --order desc` refuses an answer in another order and, for page 0 without `to`, proves the page starts at the dataset's newest row; without that check newest is the node's word), page `page` of `limit` (1..=1000, default 100). A key is a whole number the publisher chose: for a day or time series it is usually unix seconds, UTC (a day is its first second, so 2026-01-01 is 1767225600). The answer's `key` names the key column and, when the key reads as unix seconds, the unit: the column is named `day`, `date`, `time`, `timestamp`, `ts` or `t`, the signed header's `key_min` and `key_max` both lie from 100000000 (1973-03-03) to below 4102444800 (2100-01-01), and for `day` and `date` both are multiples of 86400. Only then do `from` and `to` also take a UTC date (`2026-01-31`: for `to` the whole day) or date and time (`2026-01-31T12:00:00Z`), shown as keys in the answer's `query`; for any other key a date is 400 `bad_request` and `key.unit` is null (milliseconds, `YYYYMMDD` numbers and block heights are never converted). The unit is read from the name and the range, not proven; `query`, `key` and `next_page` are not covered by any proof. Every answer carries its proofs, so it is large: about 6 to 7 kB once, plus the stored row, its values and its proof for each row (about 3 kB a row for a dataset of 20 columns); ask for a small `limit` when you need a few rows. Each row carries its Merkle proof to its shard root; each shard used, its entry with a proof to the manifest's `shards_root`; the answer, the manifest header (Borsh), the publisher's signed report and the anchor read at a finalized block. Check it with `onyx-check --bulk` on your own chain node. `next_page` is null when no later page can hold rows. A catalog dataset whose publisher's catalogs are forked answers `bulk_dataset_forked` with `fork` (THREATS CAT-6). A dataset whose schema widened (format 2) shows every row under the newest schema; each row's `schema` names the schema it is stored under (BulkRows). A header format your onyx-check does not read is undecided there (exit 3, update onyx-check) only when its root verifies against the signed report and your own node shows the book holding that report for the publisher's key (with `--unchecked`: exit 3 with `chainChecked: false`); anything else is refused. With `root`, the held version with that manifest root is served, not the newest (`bulk_version_not_held` when not held); the answer's `query.root` names it.",
         "tags": [
           "Bulk"
         ],
@@ -1758,9 +1781,9 @@
             "required": false,
             "schema": {
               "type": "string",
-              "pattern": "^-?[0-9]+$"
+              "pattern": "^(-?[0-9]+|[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?)$"
             },
-            "description": "Smallest key (a whole number)."
+            "description": "Smallest key: a whole number, or for a key that reads as unix seconds (the answer's `key.unit`) a UTC date `2026-01-31` or date and time `2026-01-31T00:00:00Z`."
           },
           {
             "name": "to",
@@ -1768,9 +1791,22 @@
             "required": false,
             "schema": {
               "type": "string",
-              "pattern": "^-?[0-9]+$"
+              "pattern": "^(-?[0-9]+|[0-9]{4}-[0-9]{2}-[0-9]{2}(T[0-9]{2}:[0-9]{2}:[0-9]{2}Z?)?)$"
             },
-            "description": "Largest key (a whole number)."
+            "description": "Largest key: a whole number, or for a key that reads as unix seconds a UTC date (the whole day) or date and time."
+          },
+          {
+            "name": "order",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "enum": [
+                "asc",
+                "desc"
+              ]
+            },
+            "description": "`asc` (the default): oldest first. `desc`: newest first; pages then count from the largest key down. Rows are proven the same way in both; pass the order you asked to the check (`onyx-check --order desc`), which the v0.3.1-testnet release does not have yet."
           },
           {
             "name": "page",
@@ -5277,7 +5313,7 @@
       },
       "BulkList": {
         "type": "object",
-        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped. A dataset other removed ids link to has `replaces` (a count); a links dataset (`onyx.successors`, ADR-0059 amendment 6) has `role: successors` and its `generation`; each catalog entry has `moved`. Both come only from a links index built for the newest catalog: while it is not built, its links are pending, or the publisher or its links dataset is forked, `moved` is null and no entry has `replaces`.",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order (or as `sort` asks). A dataset whose key reads as unix seconds (the key column is named as a time and the signed key range fits, as `key.unit` of BulkRows) also has `newest`: the UTC day of its newest key, `YYYY-MM-DD`, and `newest_age_days`: whole days from that key to this node's clock, `now_unix`, read once an answer. A publisher signs its own key range, so the node believes no key dated more than one day after its clock: such a dataset has `newest_in_future: true` and neither field, is in no `fresh` list and sorts with the keys that are no time. Other datasets have none of the three, and nothing says how old they are. These fields are read from the signed header, not proven by the listing. Readers call a dataset not updated when `newest_age_days` is over 30. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped. A dataset other removed ids link to has `replaces` (a count); a links dataset (`onyx.successors`, ADR-0059 amendment 6) has `role: successors` and its `generation`; each catalog entry has `moved`. Both come only from a links index built for the newest catalog: while it is not built, its links are pending, or the publisher or its links dataset is forked, `moved` is null and no entry has `replaces`.",
         "properties": {
           "datasets": {
             "type": "array",
@@ -5363,16 +5399,21 @@
                 "leaves"
               ]
             }
+          },
+          "now_unix": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "This node's clock at the answer (unix seconds): what `fresh` and `newest_age_days` count from."
           }
         }
       },
       "BulkDataset": {
         "type": "object",
-        "description": "`manifest` (root, Borsh `header`, `format` (1, or 2 for a dataset whose schema widened, ADR-0059 amendment 5), version, `schema` (the newest), `schemas` (every schema of the dataset, oldest first, each as {until, schema}: it covers the shards from the previous `until` (or 0) up to its own; the newest ends at `shard_count`), rights, counts, key range, shards_root), `anchor` (signed report, digest, report_hash, fact, key, signer, sequence, chain_id, book, recorded_at, accepted_at, checked_at), `versions`, `shards` (entry, proof, tier)."
+        "description": "`manifest` (root, Borsh `header`, `format` (1, or 2 for a dataset whose schema widened, ADR-0059 amendment 5), version, `schema` (the newest), `schemas` (every schema of the dataset, oldest first, each as {until, schema}: it covers the shards from the previous `until` (or 0) up to its own; the newest ends at `shard_count`), rights, counts, key range, shards_root), `anchor` (signed report, digest, report_hash, fact, key, signer, sequence, chain_id, book, recorded_at, accepted_at, checked_at), `versions`, `shards` (entry, proof, tier). When the key reads as unix seconds: `newest` (the UTC day of the newest key) and `newest_age_days` (whole days behind this node's clock), as in BulkList; `newest_in_future: true` alone when that key is dated more than one day after the node's clock; else none."
       },
       "BulkRows": {
         "type": "object",
-        "description": "`manifest`, `anchor` (as BulkDataset), `query`, `shards` (entry with proof under `shards_root`), `rows` ({shard, index, key, row (Borsh hex), values, schema, proof}), `next_page`, `proof` (what each proof binds). Each row is stored, proven and decoded under its shard's schema (`schema_of` the proven shard index); `values` shows it under the newest `manifest.schema` (ADR-0059 amendment 5): a decimal padded with zeros to the newest scale, an int in a column that became decimal with zero fraction digits, a column added later null. Shown values are for display and checks only (a padded decimal may pass the 80 characters of a stored one; never cut it); the proofs cover `row`. `schema` (format 2 only) is the index of the row's schema in `manifest.schemas`. docs/spec/bulk-datasets.md."
+        "description": "`manifest`, `anchor` (as BulkDataset), `query` (what was asked, `from` and `to` as keys, `order`), `key` (`column`: the key column's name; `unit`: `unix_seconds` when the column is named as a time and the signed key range reads as unix seconds, else null; not proven), `shards` (entry with proof under `shards_root`), `rows` ({shard, index, key, row (Borsh hex), values, schema, proof}), `next_page`, `proof` (what each proof binds). Each row is stored, proven and decoded under its shard's schema (`schema_of` the proven shard index); `values` shows it under the newest `manifest.schema` (ADR-0059 amendment 5): a decimal padded with zeros to the newest scale, an int in a column that became decimal with zero fraction digits, a column added later null. Shown values are for display and checks only (a padded decimal may pass the 80 characters of a stored one; never cut it); the proofs cover `row`. `schema` (format 2 only) is the index of the row's schema in `manifest.schemas`. docs/spec/bulk-datasets.md."
       },
       "BulkManifestUpload": {
         "type": "object",

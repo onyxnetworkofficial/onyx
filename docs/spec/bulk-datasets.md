@@ -197,15 +197,38 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   manifest in a format it does not read undecided when that header hashes to the root the walk
   followed, the manifest starts with it and the report is the publisher's for that root and
   version; else the node's fault. At most 8 schemas per dataset.
+- R-BULK-17 (successor links, ADR-0059 amendment 6): a publisher keeps links rows `(n, from,
+  from_version, from_prev, to)` in a reserved dataset, `onyx.successors` and generations `.2` to
+  `.8`, listed in its catalogs; the lowest generation that is live with a readable schema, 1 to
+  65,536 rows, at most 32 MiB and 4,096 shards holds the links. The link of a removed id in catalog
+  C is the last valid row naming exactly its tombstone (version and previous root); a null `to`
+  retracts it. A chain follows at most 8 links in C and ends `live`, `removed`, `retracted`,
+  `not_listed`, `no_links`, `cycle` or `too_long`. A links version enters only through a catalog
+  (422 `bulk_reserved_dataset` with its own report). The 410 of a removed id names its successor;
+  `GET /v1/bulk/{publisher}/{dataset}/successor` gives the proofs, and `rows?root=` serves a held
+  version by root. The reader's check (`onyx-check --successor`) reads every links row as one
+  complete run pinned to its root, follows the chain from proven leaves, reads C's report anchored
+  and, under any key it knows, no other catalog of C's number and no next one at one finalized block: exit 0 live, 4 any other end,
+  1 refused, 3 undecided. `--history` adds `successor` to a removed dataset's report (its catalog
+  must be the walk's newest; the exit stays 4), with `early` for a row written before its
+  tombstone.
 
 ### Routes
-`GET /v1/bulk?q=&limit=&after=` (every dataset, or those whose `publisher/dataset` holds every
-word of `q`, `limit` at a time in id order, `after` the `next` of the page before; `total` counts
-the matches), `GET /v1/bulk/{publisher}/{dataset}`,
-`GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=`, `POST /v1/bulk/manifests`,
+`GET /v1/bulk?q=&limit=&after=&fresh=&sort=` (every dataset, or those whose `publisher/dataset`
+holds every word of `q`, `limit` at a time in id order, `after` the `next` of the page before;
+`total` counts the matches; a dataset whose key reads as unix seconds, by the rule of `key.unit`,
+has `newest`, the UTC day of its newest key, and `newest_age_days`, whole days behind the node's
+clock at the answer (a newest key dated more than a day after that clock gives only
+`newest_in_future`: the publisher signs its own range, THREATS FRESH-R1-M1); `fresh=30d` keeps those
+at most 30 days behind and `sort=newest` lists the newest first; READINESS A20), `GET
+/v1/bulk/{publisher}/{dataset}` (with the same two fields),
+`GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=&order=` (`order=desc`: newest
+first; `from` and `to` are keys, or UTC dates for a key column named as a day or a time),
+`POST /v1/bulk/manifests`,
 `POST /v1/bulk/catalogs`, `GET /v1/bulk/catalogs/{publisher}/{n}`,
 `GET /v1/bulk/catalogs/{publisher}/files?from=`, `GET /v1/bulk/catalogs/{publisher}/leaf/{dataset}`,
-`PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`: docs/api/openapi.json and
+`PUT /v1/bulk/{publisher}/{dataset}/shards/{root}`,
+`GET /v1/bulk/{publisher}/{dataset}/successor`, `rows?root=`: docs/api/openapi.json and
 docs/spec/delivery.md "Bulk datasets".
 
 ### Tools
@@ -215,7 +238,11 @@ catalog-upload` (`upload` steps back to the previous version's folder on "versio
 order");
 `onyx-check --bulk answer.json --publisher ID --dataset ID [--min-version N] [--from N] [--to N]
 --rpc URL --chain-id N --book 0x… [--history NODE [--keys 0x…,0x…] [--scan-keys-from BLOCK
-[--logs-range N]]]`.
+[--logs-range N]]]`;
+`catalog-build ... [--links DIR] --links-out DIR2 --move OLD=NEW | --relink OLD=NEW | --unlink OLD
+| --links-next-generation`;
+`onyx-check --successor answer.json --publisher ID --dataset ID (--rpc URL --chain-id N --book 0x…
+| --unchecked) [--node NODE] [--keys 0x…,0x…] [--scan-keys-from BLOCK [--logs-range N]]`.
 
 ## Assumptions
 - The publisher's domain and keys document are what the reviewer checks before registering the

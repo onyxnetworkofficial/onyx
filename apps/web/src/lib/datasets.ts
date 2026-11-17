@@ -17,12 +17,23 @@ export type Dataset = {
 	license: string;
 	/** When the publisher made this version (unix seconds); null when not given. */
 	created: number | null;
+	/** The UTC day of the newest key ("2026-11-13"), as the node reads it; null when the key is
+	 * not a time (or the node does not say): such a dataset is never called stale. */
+	newest: string | null;
+	/** Whole days from the newest key to the node's clock; null with `newest`. */
+	ageDays: number | null;
+	/** The node says the newest key is dated in the future (review FRESH-R1 M1): no newest day is
+	 * shown, and the dataset is never called fresh or stale. */
+	future: boolean;
 };
 
 export type Page = { items: Dataset[]; total: number; next: string | null };
 
 /** Rows one page asks for (the node allows up to 500). */
 export const PAGE = 50;
+/** Days after which a dataset counts as not updated (READINESS A20): one rule for the mark and
+ * the node's `fresh` filter. */
+export const STALE_DAYS = 30;
 /** Characters of a search at most (the node's MAX_SEARCH_CHARS). */
 export const MAX_SEARCH = 64;
 
@@ -41,16 +52,34 @@ export function cleanSearch(s: string): string {
 }
 
 /** The list URL for a search and the `next` cursor of the page before: what was typed goes as the
- * node's whole-word `any` search, each word with the ids that mean it (#lib/glossary.ts). */
-export function listUrl(q: string, after: string | null = null, limit = PAGE): string {
+ * node's whole-word `any` search, each word with the ids that mean it (#lib/glossary.ts).
+ * `freshOnly` asks the node for the datasets with data from the last STALE_DAYS days only. */
+export function listUrl(q: string, after: string | null = null, limit = PAGE, freshOnly = false): string {
 	const p = new URLSearchParams();
 	if (q) p.set('any', anyValue(anyGroups(q)));
+	if (freshOnly) p.set('fresh', `${STALE_DAYS}d`);
 	p.set('limit', String(limit));
 	if (after) p.set('after', after);
 	return `/v1/bulk?${p}`;
 }
 
 const nat = (v: unknown): number | null => (typeof v === 'number' && Number.isSafeInteger(v) && v >= 0 ? v : null);
+const DAY_TEXT = /^[0-9]{4}-(0[1-9]|1[0-2])-(0[1-9]|[12][0-9]|3[01])$/;
+
+/** The node's `newest` and `newest_age_days`, both or neither; `newest_in_future` wins over both
+ * (a node that sends a day and the future mark together is not believed about the day). */
+function freshness(o: Record<string, unknown>): { newest: string | null; ageDays: number | null; future: boolean } {
+	if (o.newest_in_future === true) return { newest: null, ageDays: null, future: true };
+	const age = nat(o.newest_age_days);
+	if (typeof o.newest !== 'string' || !DAY_TEXT.test(o.newest) || age === null) return { newest: null, ageDays: null, future: false };
+	return { newest: o.newest, ageDays: age, future: false };
+}
+
+/** The last day a dataset has data for when that is over STALE_DAYS days back, else null (also
+ * for a dataset whose key is not a time: nothing says how old it is). */
+export function staleSince(d: Pick<Dataset, 'newest' | 'ageDays'>): string | null {
+	return d.newest !== null && d.ageDays !== null && d.ageDays > STALE_DAYS ? d.newest : null;
+}
 
 /** One list item, or null when any field is out of shape. */
 export function item(v: unknown): Dataset | null {
@@ -72,7 +101,8 @@ export function item(v: unknown): Dataset | null {
 		keyMin: key_min,
 		keyMax: key_max,
 		license: typeof license === 'string' && LICENSE.test(license) ? license : '',
-		created: nat(o.created_unix)
+		created: nat(o.created_unix),
+		...freshness(o)
 	};
 }
 

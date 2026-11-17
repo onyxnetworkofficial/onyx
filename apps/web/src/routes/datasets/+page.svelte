@@ -10,9 +10,13 @@
 	import DatasetChart from '#lib/components/DatasetChart.svelte';
 	import { group } from '#lib/format.ts';
 	import { datasetTitle, meanings, split } from '#lib/glossary.ts';
-	import { MAX_SEARCH, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, listUrl, page as readPage, sample as readSample, size, type Dataset, type Sample } from '#lib/datasets.ts';
+	import { MAX_SEARCH, STALE_DAYS, staleSince, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, listUrl, page as readPage, sample as readSample, size, type Dataset, type Sample } from '#lib/datasets.ts';
 
 	let query = $state('');
+	// READINESS A20: only the datasets with data from the last STALE_DAYS days (the node's `fresh`).
+	let freshOnly = $state(false);
+	// Review FRESH-R1 M2: said when the node does not take the filter (an older node answers 400).
+	let filterOff = $state(false);
 	let items = $state<Dataset[]>([]);
 	let total = $state<number | null>(null);
 	let all = $state<number | null>(null);
@@ -37,7 +41,7 @@
 		busy = true;
 		if (!after) pill = { state: 'run', text: 'Asking the node' };
 		try {
-			const r = await fetch(listUrl(q, after), { headers: { accept: 'application/json' } });
+			const r = await fetch(listUrl(q, after, undefined, freshOnly), { headers: { accept: 'application/json' } });
 			if (my !== seq) return;
 			if (r.status === 429) {
 				pill = { state: 'warn', text: 'Busy: try again in a minute' };
@@ -45,6 +49,13 @@
 			}
 			const p = r.ok && (r.headers.get('content-type') ?? '').includes('json') ? readPage(await r.json()) : null;
 			if (my !== seq) return;
+			if (!p && freshOnly) {
+				// The filtered list failed (a node without `fresh` refuses the parameter): that says
+				// nothing about the node's datasets. Say the filter is off and list all of them.
+				freshOnly = false;
+				filterOff = true;
+				return void load(q, null);
+			}
 			if (!p) {
 				none = true;
 				pill = { state: 'idle', text: 'No datasets here' };
@@ -54,7 +65,7 @@
 			items = after ? [...items, ...p.items] : p.items;
 			total = p.total;
 			next = p.next;
-			if (!q) all = p.total;
+			if (!q && !freshOnly) all = p.total;
 			pill = { state: 'good', text: `${group(p.total)} ${p.total === 1 ? 'dataset' : 'datasets'}${q ? ' found' : ''}` };
 		} catch {
 			if (my === seq) {
@@ -83,6 +94,17 @@
 			remember();
 			load(cleanSearch(query), null);
 		}, 350);
+	}
+
+	function show(fresh: boolean) {
+		if (freshOnly === fresh) return;
+		freshOnly = fresh;
+		filterOff = false;
+		clearTimeout(timer);
+		open = null;
+		missing = null;
+		remember();
+		load(cleanSearch(query), null);
 	}
 
 	async function toggle(d: Dataset) {
@@ -143,8 +165,15 @@
 		<div class="find">
 			<label for="ds-q" class="muted">Names or meanings, for example <span class="mono">bitcoin holders</span>, <span class="mono">whale</span> or <span class="mono">eth supply</span></label>
 			<input id="ds-q" type="search" bind:value={query} oninput={search} maxlength={MAX_SEARCH} spellcheck="false" autocomplete="off" placeholder={all !== null ? `Search ${group(all)} datasets` : 'Search datasets'} data-testid="datasets-q" />
+			<div class="seg" role="group" aria-label="Which datasets to list">
+				<button type="button" class="chipbtn" aria-pressed={!freshOnly} onclick={() => show(false)} data-testid="datasets-all">All</button>
+				<button type="button" class="chipbtn" aria-pressed={freshOnly} onclick={() => show(true)} data-testid="datasets-fresh">Updated in the last {STALE_DAYS} days</button>
+			</div>
 		</div>
 
+		{#if filterOff}
+			<p class="muted" role="status" data-testid="datasets-filter-off">The {STALE_DAYS}-day filter is not available on this node right now. All datasets are listed.</p>
+		{/if}
 		{#if missing}
 			<p class="muted" data-testid="datasets-missing">This node holds no dataset <span class="mono">{missing}</span>. {total ? 'The closest names are below.' : ''}</p>
 		{/if}
@@ -154,6 +183,7 @@
 			<ul class="list" aria-label="Datasets" data-testid="datasets-list">
 				{#each items as d (idOf(d))}
 					{@const id = idOf(d)}
+					{@const since = staleSince(d)}
 					<li class="panel item" data-testid="datasets-row">
 						<button type="button" class="name" aria-expanded={open === id} aria-controls="ds-{id}" onclick={() => toggle(d)} data-testid="datasets-open">
 							<span class="ttl" data-testid="datasets-title">{datasetTitle(d.dataset)}</span>
@@ -165,8 +195,11 @@
 							<div><dt>Covers</dt><dd class="mono">{keyRange(d.keyMin, d.keyMax)}</dd></div>
 							<div><dt>Size</dt><dd class="mono">{size(d.bytes)}</dd></div>
 							<div><dt>Stored</dt><dd class="mono">{d.stored} of {d.shards} {d.shards === 1 ? 'shard' : 'shards'}</dd></div>
-							{#if isoDay(d.created)}<div><dt>Updated</dt><dd class="mono" data-testid="datasets-updated">{isoDay(d.created)}</dd></div>{/if}
+							{#if d.newest}<div><dt>Newest day</dt><dd class="mono" data-testid="datasets-newest">{d.newest}</dd></div>{/if}
+							{#if isoDay(d.created)}<div><dt>Version made</dt><dd class="mono" data-testid="datasets-updated">{isoDay(d.created)}</dd></div>{/if}
 						</dl>
+						{#if since}<p class="stale" data-testid="datasets-stale"><span class="stalemark" aria-hidden="true">!</span><span>No data after <span class="mono">{since}</span></span></p>{/if}
+						{#if d.future}<p class="stale" data-testid="datasets-future"><span class="stalemark" aria-hidden="true">!</span><span>Dates in the future: the newest day is not known</span></p>{/if}
 						{#if open === id}
 							{@const s = samples[id]}
 							<div class="more" id="ds-{id}" data-testid="datasets-detail">
@@ -188,6 +221,7 @@
 										<div class="panel chartbox"><DatasetChart points={chartPoints(s, drawn[id], days)} name={s.columns[drawn[id]]} testid="datasets-chart" /></div>
 									{/if}
 									{@const shown = s.rows.slice(-10)}
+									{#if since}<p class="fine" data-testid="datasets-detail-stale">This dataset has no data after {since}: the chart and the rows below end there, and are not current values.</p>{/if}
 									<p class="fine">The newest {shown.length} {shown.length === 1 ? 'row' : 'rows'}{d.license ? ` · license ${d.license}` : ''} · <a href={toLink('', id)} data-testid="datasets-link">link to this dataset</a></p>
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 									<div class="tablebox sample" tabindex="0" role="region" aria-label="Newest rows of {d.dataset}">
@@ -218,7 +252,7 @@
 				{/if}
 			</div>
 		{:else if total === 0}
-			<p class="muted" data-testid="datasets-empty">No dataset has every word of this search in its name.</p>
+			<p class="muted" data-testid="datasets-empty">{freshOnly ? `No dataset${cleanSearch(query) ? ' with every word of this search in its name' : ''} has data from the last ${STALE_DAYS} days.` : 'No dataset has every word of this search in its name.'}</p>
 		{/if}
 	</section>
 </div>
@@ -232,6 +266,31 @@
 	}
 	.find input {
 		width: 100%;
+	}
+	.find .seg {
+		justify-self: start;
+		flex-wrap: wrap;
+		max-width: 100%;
+	}
+	/* No data in 30 days, or dates in the future: said in words, with a mark and a dashed frame (never colour alone). */
+	.stale {
+		display: inline-flex;
+		align-items: baseline;
+		gap: var(--sp-2);
+		justify-self: start;
+		max-width: 100%;
+		margin: 0;
+		padding: var(--sp-1) var(--sp-2);
+		border: 1px dashed var(--warn);
+		border-radius: var(--radius-sm);
+		font-size: var(--text-sm);
+		color: var(--ink);
+		overflow-wrap: anywhere;
+	}
+	.stalemark {
+		font-family: var(--mono);
+		font-weight: 700;
+		color: var(--warn);
 	}
 	/* The dataset's name opens it: a plain link-coloured line, not a pill button. */
 	.name {
