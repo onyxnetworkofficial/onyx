@@ -18,6 +18,9 @@
 //! - Per publisher at most [`BulkLimits::quota_bytes`] across its datasets'
 //!   latest versions and [`BulkLimits::max_datasets`] datasets; the node at
 //!   most [`BulkLimits::max_total_bytes`] (CL5-5).
+//!   With a limits file (`ONYX_BULK_PUBLISHERS`, ADR-0066 item 10) each
+//!   publisher has its own entry instead, one without an entry is refused
+//!   and a paused one only takes data down (`bulk_publishers.rs`).
 //! - `GET /v1/bulk`, `GET /v1/bulk/{publisher}/{dataset}` and
 //!   `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=&order=`: every
 //!   row with its Merkle proof, its shard's entry with a proof under the
@@ -929,6 +932,9 @@ pub struct BulkStore {
     now: Arc<dyn Fn() -> u64 + Send + Sync>,
     dir: PathBuf,
     limits: BulkLimits,
+    /// Limits per publisher (`ONYX_BULK_PUBLISHERS`, ADR-0066 item 10);
+    /// `None`: the one quota and cap of `limits` for every publisher.
+    granted: Option<PublisherLimits>,
     tiers: Arc<TieredStore<FsCas, FsCas>>,
     datasets: RwLock<BTreeMap<Key, Dataset>>,
     /// Loaded shards by (root, schema hash): the same bytes under another
@@ -1169,6 +1175,7 @@ impl BulkStore {
             now,
             dir: dir.to_path_buf(),
             limits,
+            granted: None,
             tiers: Arc::new(TieredStore::new(
                 FsCas::new(dir.join("hot")),
                 FsCas::new(warm),
@@ -2014,17 +2021,10 @@ impl BulkStore {
         let r = SignedReport::try_from_slice(report)
             .map_err(|_| bad_request("report: not a Borsh SignedReport"))?;
         let signer = cat::verify(&c.header, &r).map_err(|e| bad(format!("signature: {e}")))?;
-        if c.leaves.len() > self.limits.max_datasets {
-            return Err(ApiError::new(
-                StatusCode::PAYLOAD_TOO_LARGE,
-                "bulk_quota_exceeded",
-                format!(
-                    "a publisher may hold at most {} datasets on this node",
-                    self.limits.max_datasets
-                ),
-            ));
-        }
         let publisher = c.header.publisher.0.clone();
+        // Its entry in the limits file, when the node has one (ADR-0066
+        // item 10): none, no upload, and no chain read.
+        let grant = self.grant(&publisher)?;
         let n = c.header.number;
         let now = (self.now)();
         if self
@@ -2050,12 +2050,22 @@ impl BulkStore {
         // One catalog upload of a publisher at a time, and no manifest upload
         // of it meanwhile (review CAT-FIX-R1 M2, M3).
         let _one = self.publisher_lock(&publisher).write().await;
+        // A paused publisher's next catalog that brings data is refused
+        // before the chain is read, also while a fork of it is marked
+        // (review LIM-R1 L1). Evidence still runs below: a catalog whose
+        // number is held, or one that breaks the chain, is read against the
+        // book and marks a fork as for any publisher (LIM-R1 M3).
+        if grant.paused && matches!(self.fit_catalog(&c, &r)?, Fit::Next) {
+            self.catalog_gate(&grant, &c)?;
+        }
         if let Some(f) = self.fork_stands(&publisher).await? {
             return Err(publisher_forked(&f));
         }
-        let known = match self.fit_catalog(&c, &r)? {
+        // `takedown`: this catalog only removes datasets, so the publisher's
+        // own limits do not stand in its way (LIM-R1 M1).
+        let (known, takedown) = match self.fit_catalog(&c, &r)? {
             Fit::Same(status) => return Ok((StatusCode::OK, status)),
-            Fit::Next => None,
+            Fit::Next => (None, self.catalog_gate(&grant, &c)?),
             Fit::Broken(e) => {
                 let f = self.broken_fork(&c, &r, &signer, e).await?;
                 self.mark_fork(&f)?;
@@ -2069,8 +2079,11 @@ impl BulkStore {
                         self.mark_fork(&f)?;
                         return Err(publisher_forked(&f));
                     }
+                    // The withdrawn catalogs are set aside (the book's
+                    // word); the replacement is stored only when the
+                    // publisher's entry takes it.
                     Settle::Done(a) => match self.fit_catalog(&c, &r)? {
-                        Fit::Next => Some(a),
+                        Fit::Next => (Some(a), self.catalog_gate(&grant, &c)?),
                         Fit::Same(status) => return Ok((StatusCode::OK, status)),
                         Fit::Taken(e) | Fit::Broken(e) => return Err(e),
                     },
@@ -2126,7 +2139,7 @@ impl BulkStore {
                 borsh::to_vec(&d).map_err(|_| internal("encode"))?,
             )
         };
-        self.check_catalog_quota(&publisher, rec.len() as u64)?;
+        self.check_catalog_room(&publisher, rec.len() as u64, takedown)?;
         write_durable(&self.catalogs_dir().join(&publisher).join(name), &rec)
             .map_err(|e| internal(format!("bulk store: {e}")))?;
         if let Ok(mut b) = self.catalog_bytes.lock() {
@@ -2456,10 +2469,24 @@ impl BulkStore {
             .unwrap_or(0)
     }
 
+    /// [`Self::check_catalog_room`] for a catalog that is no takedown.
+    #[cfg(test)]
+    fn check_catalog_quota(&self, publisher: &str, add: u64) -> Result<(), ApiError> {
+        self.check_catalog_room(publisher, add, false)
+    }
+
     /// Room for `add` more catalog bytes of `publisher`: its datasets'
     /// latest versions and stored catalogs within its quota, and the node
-    /// within its total (ADR-0059 amendment 2 draft 4 item 7).
-    fn check_catalog_quota(&self, publisher: &str, add: u64) -> Result<(), ApiError> {
+    /// within its total (ADR-0059 amendment 2 draft 4 item 7). A `takedown`
+    /// (a catalog that only removes datasets) is held to the node's total
+    /// alone: a publisher over a lowered grant can still take data down
+    /// (review LIM-R1 M1).
+    fn check_catalog_room(
+        &self,
+        publisher: &str,
+        add: u64,
+        takedown: bool,
+    ) -> Result<(), ApiError> {
         // An erased dataset's bytes are gone (ADR-0059 amendment 4 item 5a).
         let erased = self.erased_datasets();
         let (mine, all) = {
@@ -2489,13 +2516,13 @@ impl BulkStore {
         let mine = mine
             .saturating_add(self.catalog_bytes_of(publisher))
             .saturating_add(add);
-        if mine > self.limits.quota_bytes {
+        let quota = self.grant(publisher)?.quota_bytes;
+        if mine > quota && !takedown {
             return Err(ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "bulk_quota_exceeded",
                 format!(
-                    "a publisher may hold at most {} bytes (datasets and catalogs) on this node",
-                    self.limits.quota_bytes
+                    "a publisher may hold at most {quota} bytes (datasets and catalogs) on this node"
                 ),
             ));
         }
@@ -2661,6 +2688,9 @@ impl BulkStore {
                 format!("signature: {e}"),
             )
         })?;
+        // Before any lock or chain read, also while a fork of the publisher
+        // is marked (ADR-0066 item 10, review LIM-R1 L1).
+        self.refuse_new_data(&m.header)?;
         // The erase lock first, then the publisher's (review CAT-ERASE-R1 H1).
         let _no_erase = self.erase_lock.read().await;
         let _one = self.publisher_lock(&m.header.publisher.0).read().await;
@@ -2689,6 +2719,8 @@ impl BulkStore {
         number: u64,
     ) -> Result<(StatusCode, Value), ApiError> {
         let m = decode_manifest(manifest)?;
+        // Before any lock or chain read (ADR-0066 item 10).
+        self.refuse_new_data(&m.header)?;
         // Held until the version is written: no catalog is set aside meanwhile.
         // The erase lock first, then the publisher's (review CAT-ERASE-R1 H1).
         let _no_erase = self.erase_lock.read().await;
@@ -2795,6 +2827,13 @@ impl BulkStore {
         known: Option<AnchorView>,
     ) -> Result<(StatusCode, Value), ApiError> {
         let h = &m.header;
+        // No manifest from a publisher the limits file does not list
+        // (ADR-0066 item 10). A paused one stores nothing new (`pause_gate`,
+        // beside each `format_gate`), but what it holds is still read against
+        // the book: the same manifest again answers 200, a held root is
+        // re-anchored, and a second anchored manifest for a held version
+        // marks the dataset forked (review LIM-R1 M3, L2).
+        let grant = self.grant(&h.publisher.0)?;
         let key = (h.publisher.0.clone(), h.dataset.clone());
         let root = h.root();
         let now = (self.now)();
@@ -2829,8 +2868,12 @@ impl BulkStore {
             match (h.version, latest) {
                 // A new version is stored: the format gate applies (and to a
                 // replacement of a withdrawn version, below).
-                (1, None) => self.format_gate(h)?,
+                (1, None) => {
+                    pause_gate(&grant)?;
+                    self.format_gate(h)?
+                }
                 (v, Some(prev)) if v == prev.header.version + 1 => {
+                    pause_gate(&grant)?;
                     self.format_gate(h)?;
                     m.check_successor(prev).map_err(|e| {
                         ApiError::new(StatusCode::CONFLICT, "bulk_not_successor", e.to_string())
@@ -2845,7 +2888,13 @@ impl BulkStore {
                     ))
                 }
             }
-            self.check_quota(&ds, &key, h.byte_count)?;
+            // With a limits file, a manifest for a held version is evidence,
+            // not new bytes: a grant lowered below what is held must not hide
+            // a fork (LIM-R1 M3). It is checked below if it is stored after all.
+            let is_held = held.is_some_and(|d| d.versions.len() as u32 >= h.version);
+            if !(self.granted.is_some() && is_held) {
+                self.check_quota(&ds, &key, h.byte_count)?;
+            }
         }
         // A held manifest for this version under another report is read at
         // the same finalized block as this one (review CAT-FIX-R1 M1).
@@ -2939,11 +2988,19 @@ impl BulkStore {
             _ => (None, false),
         };
         let mut ds = self.datasets.write().map_err(|_| internal("lock"))?;
-        self.check_quota(&ds, &key, h.byte_count)?;
+        let evidence = self.granted.is_some()
+            && withdraw.is_none()
+            && ds
+                .get(&key)
+                .is_some_and(|d| d.versions.len() as u32 >= h.version);
+        if !evidence {
+            self.check_quota(&ds, &key, h.byte_count)?;
+        }
         let d = ds.entry(key.clone()).or_default();
         let dir = self.dataset_dir(&key.0, &key.1);
         if let Some(other_root) = withdraw {
             // This manifest would be stored in the withdrawn one's place.
+            pause_gate(&grant)?;
             self.format_gate(h)?;
             let i = h.version as usize - 1;
             if d.versions.get(i).map(|o| o.manifest.header.root()) == Some(other_root) {
@@ -3000,6 +3057,7 @@ impl BulkStore {
                 "another version was taken meanwhile; upload again",
             ));
         }
+        pause_gate(&grant)?;
         write_version(&dir, &m, &r, &anchor, catalog.as_deref())?;
         let body = self.missing_json(&m);
         self.mark(r.payload.digest(), true);
@@ -3070,13 +3128,14 @@ impl BulkStore {
                 count += 1;
             }
         }
-        if publisher_bytes > self.limits.quota_bytes || count > self.limits.max_datasets {
+        let grant = self.grant(&key.0)?;
+        if publisher_bytes > grant.quota_bytes || count > grant.max_datasets {
             return Err(ApiError::new(
                 StatusCode::PAYLOAD_TOO_LARGE,
                 "bulk_quota_exceeded",
                 format!(
                     "a publisher may hold at most {} bytes in {} datasets on this node",
-                    self.limits.quota_bytes, self.limits.max_datasets
+                    grant.quota_bytes, grant.max_datasets
                 ),
             ));
         }
@@ -3172,6 +3231,13 @@ impl BulkStore {
         let (entry, schema) = self.entry_of(publisher, dataset, root)?;
         let done = json!({"root": root.to_string(), "index": entry.index, "stored": true});
         let already = self.tiers.tier(root).is_some();
+        // No shard from a publisher the limits file does not list, and no
+        // new one from a paused publisher (ADR-0066 item 10); a stored shard
+        // sent again is checked and answered as ever (review LIM-R1 L2).
+        let grant = self.grant(publisher)?;
+        if !already {
+            pause_gate(&grant)?;
+        }
         let declared = headers
             .get(header::CONTENT_LENGTH)
             .and_then(|v| v.to_str().ok())
@@ -5384,6 +5450,11 @@ pub use erase::{EraseConfig, EraseMode, ErasePass, MAX_SHARDS_PER_PASS, MIN_GRAC
 #[path = "bulk_learn.rs"]
 mod learn;
 pub use learn::{check_leaf_answer, Learn, LearnPass, Recheck, RemovalsMode};
+
+#[path = "bulk_publishers.rs"]
+mod publishers;
+use publishers::pause_gate;
+pub use publishers::{PublisherGrant, PublisherLimits, MAX_GRANT_GIB, MAX_PUBLISHERS_FILE_BYTES};
 
 #[path = "bulk_succ.rs"]
 mod succ;

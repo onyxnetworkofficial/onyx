@@ -1017,3 +1017,180 @@ fn usage_counts_are_off_by_default() {
         assert!(e.contains("ONYX_USAGE must be on or off"), "{e}");
     }
 }
+
+/// A limits file in a fresh directory, and the settings that name it.
+fn publishers_env(
+    name: &str,
+    text: Option<&str>,
+) -> (std::path::PathBuf, BTreeMap<&'static str, String>) {
+    let dir = std::env::temp_dir().join(format!("onyx-node-{name}-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("dir");
+    let p = dir.join("publishers.json");
+    if let Some(t) = text {
+        std::fs::write(&p, t).expect("write");
+    }
+    let mut m: BTreeMap<&str, String> = base()
+        .into_iter()
+        .map(|(k, v)| (k, v.to_string()))
+        .collect();
+    m.insert("ONYX_BULK_DIR", "/var/lib/onyx/bulk".into());
+    m.insert("ONYX_BULK_PUBLISHERS", p.display().to_string());
+    (dir, m)
+}
+
+fn load_owned(m: &BTreeMap<&'static str, String>) -> Result<NodeConfig, String> {
+    let m = m.clone();
+    NodeConfig::from_env(move |k| m.get(k).cloned(), false)
+}
+
+const TWO_PUBLISHERS: &str = r#"{"reserve_gib": 2, "publishers": [
+  {"id": "first.publisher", "quota_gib": 16, "datasets": 50000, "state": "open"},
+  {"id": "second.publisher", "quota_gib": 1, "datasets": 16, "state": "paused"}]}"#;
+
+/// ADR-0066 item 10 (THREATS PUBON-6, review PUBON-R1 M5): the grants are
+/// summed. The node does not start (and `--check-config` fails, which loads
+/// the same way) when the entries plus the reserve exceed
+/// `ONYX_BULK_MAX_GIB`; at the total it starts with every entry.
+#[test]
+fn grants_plus_the_reserve_over_the_total_stop_the_start() {
+    let (dir, mut m) = publishers_env("pub-sum", Some(TWO_PUBLISHERS));
+    // 16 + 1 + 2 = 19 GiB.
+    m.insert("ONYX_BULK_MAX_GIB", "18".into());
+    let e = load_owned(&m).expect_err("over the total");
+    assert!(
+        e.contains("ONYX_BULK_PUBLISHERS")
+            && e.contains("exceed")
+            && e.contains("ONYX_BULK_MAX_GIB"),
+        "{e}"
+    );
+    m.insert("ONYX_BULK_MAX_GIB", "19".into());
+    let b = load_owned(&m).expect("fits").bulk.expect("bulk");
+    let l = b.publishers.expect("limits");
+    assert_eq!(l.reserve_bytes, 2 << 30);
+    assert_eq!(l.grants.len(), 2);
+    assert!(!l.grants["first.publisher"].paused);
+    assert_eq!(l.grants["first.publisher"].quota_bytes, 16 << 30);
+    assert_eq!(l.grants["first.publisher"].max_datasets, 50_000);
+    assert!(l.grants["second.publisher"].paused);
+    // The node's own quota does not enter the sum: it applies only without
+    // the file.
+    m.insert("ONYX_BULK_QUOTA_GIB", "19".into());
+    load_owned(&m).expect("the one quota is not a grant");
+    // The default total (256 GiB) when none is set.
+    m.remove("ONYX_BULK_MAX_GIB");
+    load_owned(&m).expect("fits the default total");
+    // Without the setting: no limits file, as before.
+    m.remove("ONYX_BULK_PUBLISHERS");
+    assert!(load_owned(&m)
+        .expect("ok")
+        .bulk
+        .expect("bulk")
+        .publishers
+        .is_none());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// ADR-0066 item 10: a limits file that is missing, unreadable as the
+/// format, or carries an unknown field, a second entry for an id or a
+/// number out of range stops the start with a line that names the cause.
+#[test]
+fn a_bad_publishers_file_stops_the_start() {
+    let (dir, m) = publishers_env("pub-bad", None);
+    let e = load_owned(&m).expect_err("missing");
+    assert!(e.starts_with("ONYX_BULK_PUBLISHERS "), "{e}");
+    let p = dir.join("publishers.json");
+    for (text, want) in [
+        ("", "not valid"),
+        ("not json", "not valid"),
+        (r#"{"reserve_gib": 2}"#, "publishers"),
+        (
+            r#"{"reserve_gib": 2, "publishers": [], "comment": "x"}"#,
+            "unknown field",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 1, "datasets": 1, "state": "open", "paused": true}]}"#,
+            "unknown field",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 1, "datasets": 1, "state": "open"}, {"id": "a.b", "quota_gib": 1, "datasets": 1, "state": "open"}]}"#,
+            "two entries",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 0, "datasets": 1, "state": "open"}]}"#,
+            "quota_gib must be",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 1, "datasets": 0, "state": "open"}]}"#,
+            "datasets must be",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 9999999999, "datasets": 1, "state": "open"}]}"#,
+            "quota_gib must be",
+        ),
+        (
+            r#"{"reserve_gib": 0, "publishers": [{"id": "a.b", "quota_gib": 1, "datasets": 1, "state": "stopped"}]}"#,
+            "state must be open or paused",
+        ),
+    ] {
+        std::fs::write(&p, text).expect("write");
+        let e = load_owned(&m).expect_err(text);
+        assert!(
+            e.starts_with("ONYX_BULK_PUBLISHERS ") && e.contains(want),
+            "{text}: {e}"
+        );
+    }
+    // An empty value, and the setting without a bulk store.
+    let mut empty = m.clone();
+    empty.insert("ONYX_BULK_PUBLISHERS", " ".into());
+    assert!(load_owned(&empty)
+        .expect_err("empty")
+        .contains("set but empty"));
+    let mut no_bulk = m.clone();
+    no_bulk.remove("ONYX_BULK_DIR");
+    assert!(load_owned(&no_bulk)
+        .expect_err("no bulk")
+        .contains("ONYX_BULK_PUBLISHERS is set but ONYX_BULK_DIR is not"));
+    std::fs::write(&p, TWO_PUBLISHERS).expect("write");
+    load_owned(&m).expect("a good file starts");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The example in docs/ops/run-api.md "Limits per publisher" is a file the
+/// node takes on the hosted node's total (24 GiB), with room left to grant.
+#[test]
+fn the_documented_limits_file_starts_on_the_hosted_total() {
+    let doc = include_str!("../../../docs/ops/run-api.md");
+    let start = doc.find("{\"reserve_gib\"").expect("the example");
+    let end = start + doc[start..].find("```").expect("the block ends");
+    let (dir, mut m) = publishers_env("pub-doc", Some(&doc[start..end]));
+    m.insert("ONYX_BULK_MAX_GIB", "24".into());
+    let l = load_owned(&m)
+        .expect("the example starts")
+        .bulk
+        .expect("bulk")
+        .publishers
+        .expect("limits");
+    assert_eq!(l.grants.len(), 2);
+    let granted: u64 = l.grants.values().map(|g| g.quota_bytes).sum();
+    assert_eq!((granted + l.reserve_bytes) >> 30, 19, "5 GiB left to grant");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review LIM-R1 L3: a storage node takes the data of its deals, whoever
+/// published it, so a limits file is refused in storage mode.
+#[test]
+fn limits_per_publisher_are_refused_in_storage_mode() {
+    let (dir, mut m) = publishers_env("pub-storage", Some(TWO_PUBLISHERS));
+    load_owned(&m).expect("a query node takes the file");
+    m.insert(
+        "ONYX_STORAGE_CONTRACT",
+        "0x5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e5e".into(),
+    );
+    let e = load_owned(&m).expect_err("storage mode");
+    assert!(
+        e.contains("ONYX_BULK_PUBLISHERS is refused in storage mode"),
+        "{e}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

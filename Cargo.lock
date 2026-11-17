@@ -1146,8 +1146,10 @@ dependencies = [
  "borsh",
  "hex",
  "onyx-core",
+ "onyx-intake",
  "onyx-labels",
  "onyx-merkle",
+ "serde",
  "serde_json",
  "thiserror",
 ]
@@ -1349,6 +1351,7 @@ dependencies = [
  "onyx-api",
  "onyx-bulk",
  "onyx-core",
+ "onyx-fetch",
  "serde_json",
  "tokio",
 ]

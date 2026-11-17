@@ -207,6 +207,7 @@ side_by_side \
   "scripts/backup-node.sh --self-test" \
   "scripts/restore-drill.sh --self-test" \
   "scripts/export-from-backup.sh --self-test" \
+  "scripts/deploy-node-gate.sh --self-test" \
   "scripts/usage-report.sh --self-test"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.

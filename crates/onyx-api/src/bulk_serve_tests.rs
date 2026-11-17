@@ -10825,3 +10825,969 @@ async fn newest_first_pages_equal_the_reversed_oldest_first_ones_for_every_range
     }
     let _ = std::fs::remove_dir_all(&w.dir);
 }
+
+// ---- Limits per publisher (ADR-0066 item 10; THREATS PUBON-6, PUBON-18) ----
+
+/// A limits file's entries: `(id, bytes, datasets, paused)`.
+fn listed(entries: &[(&str, u64, usize, bool)]) -> PublisherLimits {
+    PublisherLimits {
+        reserve_bytes: 0,
+        grants: entries
+            .iter()
+            .map(|(id, quota_bytes, max_datasets, paused)| {
+                (
+                    (*id).to_string(),
+                    PublisherGrant {
+                        quota_bytes: *quota_bytes,
+                        max_datasets: *max_datasets,
+                        paused: *paused,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+/// A world whose node has a limits file.
+fn world_listed(entries: &[(&str, u64, usize, bool)]) -> World {
+    let w = world();
+    let dir = w.dir.clone();
+    drop(w.store);
+    relisted(w.node, w.clock, dir, entries)
+}
+
+/// The node of a world started again on the same directory with `entries`
+/// as its limits file (the file is read at start).
+fn relisted(
+    node: Arc<Node>,
+    clock: Arc<AtomicU64>,
+    dir: PathBuf,
+    entries: &[(&str, u64, usize, bool)],
+) -> World {
+    let c = clock.clone();
+    let store = BulkStore::open(
+        pin(),
+        node.clone(),
+        Arc::new(move || c.load(Ordering::Relaxed)),
+        &dir,
+        &dir.join("warm"),
+        BulkLimits::default(),
+    )
+    .expect("ok")
+    .with_free_per_minute(10_000)
+    .with_publishers(listed(entries))
+    .expect("the limits fit what is held");
+    World {
+        node,
+        store: started(store),
+        clock,
+        dir,
+    }
+}
+
+impl World {
+    /// This world's node restarted with `entries` as its limits file.
+    fn restarted_with(self, entries: &[(&str, u64, usize, bool)]) -> World {
+        let World {
+            node,
+            store,
+            clock,
+            dir,
+        } = self;
+        drop(store);
+        relisted(node, clock, dir, entries)
+    }
+}
+
+/// Version 1 of `dataset` by `publisher`.
+fn manifest_by(publisher: &str, dataset: &str, files: &[Vec<u8>]) -> Manifest {
+    let entries = files
+        .iter()
+        .enumerate()
+        .map(|(i, f)| ShardEntry::new(i as u32, &check_shard(&schema(), f).expect("ok").summary))
+        .collect();
+    Manifest::build(
+        NewVersion {
+            dataset: dataset.into(),
+            publisher: SourceId(publisher.into()),
+            created_unix: T0,
+            schema: schema(),
+            rights: DataRights {
+                source: SourceId(publisher.into()),
+                ..rights()
+            },
+        },
+        None,
+        entries,
+    )
+    .expect("ok")
+}
+
+const ME: &str = "example.publisher";
+const OTHER: &str = "second.publisher";
+
+/// ADR-0066 item 10 (THREATS PUBON-6): with a limits file a publisher has
+/// its entry's bytes and datasets, not the node's one quota, and a
+/// registered publisher without an entry is refused before any chain read.
+#[tokio::test]
+async fn a_publisher_gets_its_entry_and_one_without_an_entry_is_refused() {
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let bytes = m.header.byte_count;
+    // The node's own quota (16 GiB, 64 datasets) would take everything below.
+    let w = world_listed(&[(ME, bytes, 1, false)]);
+    let r = sign(&m);
+    w.node.anchor(&r);
+    assert_eq!(w.post(&m, &r).await.expect("ok").0, StatusCode::CREATED);
+    w.upload_all(&m, &files).await;
+    w.rows("from=0&to=3").await.expect("served");
+    // Its entry's bytes: a second version over them is refused.
+    let v2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 5);
+    let r2 = sign(&v2);
+    w.node.anchor(&r2);
+    let e = w.post(&v2, &r2).await.expect_err("over its entry");
+    assert_eq!(e.status, StatusCode::PAYLOAD_TOO_LARGE);
+    assert_eq!(e.code, "bulk_quota_exceeded");
+    // Its entry's datasets: a second dataset and a catalog of two leaves.
+    let d2 = manifest_by(ME, "synthetic.second", &shard_files(0..1, 1));
+    let rd = sign(&d2);
+    w.node.anchor(&rd);
+    assert_eq!(
+        code(w.post(&d2, &rd).await.expect_err("one dataset")),
+        "bulk_quota_exceeded"
+    );
+    let two = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), other_leaf("synthetic.other")],
+    );
+    let rc = sign_catalog(&two);
+    w.node.anchor(&rc);
+    assert_eq!(
+        code(w.post_catalog(&two, &rc).await.expect_err("two leaves")),
+        "bulk_quota_exceeded"
+    );
+    // A registered publisher the file does not list: refused, no chain read.
+    let om = manifest_by(OTHER, "synthetic.metrics", &files);
+    let or = sign(&om);
+    w.node.anchor(&or);
+    let reads = w.node.reads();
+    let e = w.post(&om, &or).await.expect_err("not listed");
+    assert_eq!(e.status, StatusCode::FORBIDDEN);
+    assert_eq!(e.code, "bulk_publisher_not_listed");
+    let oc = Catalog::build(
+        SourceId(OTHER.into()),
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&om.header)],
+    )
+    .expect("catalog");
+    let ocr = sign_catalog(&oc);
+    w.node.anchor(&ocr);
+    assert_eq!(
+        code(w.post_catalog(&oc, &ocr).await.expect_err("not listed")),
+        "bulk_publisher_not_listed"
+    );
+    assert_eq!(w.node.reads(), reads, "refused before the chain is read");
+    // Through the upload route.
+    let app = upload_routes(w.store.clone());
+    let body = json!({
+        "manifest": hex0x(&om.to_bytes()),
+        "report": hex0x(&borsh::to_vec(&or).expect("ok")),
+    });
+    let res = app
+        .oneshot(
+            Request::post("/v1/bulk/manifests")
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("ok"),
+        )
+        .await
+        .expect("ok");
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let b = res.into_body().collect().await.expect("ok").to_bytes();
+    let v: Value = serde_json::from_slice(&b).expect("json");
+    assert_eq!(v["error"]["code"], "bulk_publisher_not_listed");
+    // The listed publisher is untouched.
+    w.rows("from=0&to=3").await.expect("served");
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// THREATS PUBON-6: a publisher at its own grant is refused alone; another
+/// publisher's upload is taken as before (the node's total has room, since
+/// the grants are summed at start).
+#[tokio::test]
+async fn a_publisher_at_its_quota_does_not_affect_another() {
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let bytes = m.header.byte_count;
+    let w = world_listed(&[(ME, bytes, 4, false), (OTHER, 2 * bytes, 4, false)]);
+    let r = sign(&m);
+    w.node.anchor(&r);
+    assert_eq!(w.post(&m, &r).await.expect("ok").0, StatusCode::CREATED);
+    let v2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 5);
+    let r2 = sign(&v2);
+    w.node.anchor(&r2);
+    assert_eq!(
+        code(w.post(&v2, &r2).await.expect_err("full")),
+        "bulk_quota_exceeded"
+    );
+    // The other publisher still has all of its own grant: two datasets of
+    // the size that filled the first one's.
+    for d in ["synthetic.metrics", "synthetic.more"] {
+        let om = manifest_by(OTHER, d, &files);
+        let or = sign(&om);
+        w.node.anchor(&or);
+        assert_eq!(
+            w.post(&om, &or).await.expect("other").0,
+            StatusCode::CREATED,
+            "{d}"
+        );
+    }
+    let third = manifest_by(OTHER, "synthetic.third", &files);
+    let rt = sign(&third);
+    w.node.anchor(&rt);
+    assert_eq!(
+        code(w.post(&third, &rt).await.expect_err("its own grant")),
+        "bulk_quota_exceeded"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Without a limits file nothing changes: every registered publisher has
+/// the node's one quota and cap, and none needs an entry.
+#[tokio::test]
+async fn without_a_limits_file_every_publisher_has_the_nodes_one_quota() {
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let bytes = m.header.byte_count;
+    let w = world_with(BulkLimits {
+        quota_bytes: bytes,
+        ..BulkLimits::default()
+    });
+    for p in [ME, OTHER] {
+        let m = manifest_by(p, "synthetic.metrics", &files);
+        let r = sign(&m);
+        w.node.anchor(&r);
+        assert_eq!(w.post(&m, &r).await.expect(p).0, StatusCode::CREATED);
+        let over = manifest_by(p, "synthetic.more", &files);
+        let ro = sign(&over);
+        w.node.anchor(&ro);
+        assert_eq!(
+            code(w.post(&over, &ro).await.expect_err("the one quota")),
+            "bulk_quota_exceeded"
+        );
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// ADR-0066 item 10: a paused publisher keeps being served and takes no
+/// manifest, no shard and no catalog that brings data, each refused before
+/// a chain read.
+#[tokio::test]
+async fn a_paused_publisher_is_served_and_takes_no_upload() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let (m, _files) = published(&w).await;
+    // A second dataset whose shard is still missing when the pause starts
+    // (other keys: a shard is stored by its root).
+    let f2 = shard_files(100..110, 10);
+    let d2 = manifest_by(ME, "synthetic.second", &f2);
+    let rd = sign(&d2);
+    w.node.anchor(&rd);
+    assert_eq!(w.post(&d2, &rd).await.expect("ok").0, StatusCode::CREATED);
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, true)]);
+    // Served as before.
+    let rows = w.rows("from=0&to=3").await.expect("served");
+    assert_eq!(rows["rows"].as_array().expect("rows").len(), 4);
+    w.store
+        .info_checked(ME, "synthetic.metrics")
+        .await
+        .expect("info");
+    let reads = w.node.reads();
+    let paused = |e: ApiError| {
+        assert_eq!(e.status, StatusCode::FORBIDDEN);
+        assert_eq!(e.code, "bulk_publisher_paused");
+    };
+    // No manifest: a next version, a new dataset.
+    let v2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 5);
+    let r2 = sign(&v2);
+    w.node.anchor(&r2);
+    paused(w.post(&v2, &r2).await.expect_err("a version"));
+    let d3 = manifest_by(ME, "synthetic.third", &f2);
+    let r3 = sign(&d3);
+    w.node.anchor(&r3);
+    paused(w.post(&d3, &r3).await.expect_err("a dataset"));
+    // No shard, also of a manifest held before the pause.
+    paused(
+        w.store
+            .accept_shard(
+                ME,
+                "synthetic.second",
+                &d2.shards[0].root,
+                &HeaderMap::new(),
+                Body::from(f2[0].clone()),
+            )
+            .await
+            .expect_err("a shard"),
+    );
+    assert!(!w.store.holds_shard(&d2.shards[0].root));
+    // No catalog that lists data (a first catalog: every leaf is new).
+    let c0 = catalog_of(None, T0 + 10, vec![CatalogLeaf::of(&m.header)]);
+    let rc = sign_catalog(&c0);
+    w.node.anchor(&rc);
+    paused(w.post_catalog(&c0, &rc).await.expect_err("a catalog"));
+    paused(w.post_in(&v2, 0).await.expect_err("through a catalog"));
+    assert_eq!(w.node.reads(), reads, "refused before the chain is read");
+    // Opened again, the same uploads are taken.
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, false)]);
+    assert_eq!(w.post(&v2, &r2).await.expect("open").0, StatusCode::CREATED);
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// THREATS PUBON-18 (review PUBON-R1 M6): a paused publisher can take data
+/// down. A catalog in which every leaf is unchanged or a tombstone is taken;
+/// one that changes or adds a dataset is not.
+#[tokio::test]
+async fn a_paused_publisher_may_still_post_a_tombstone_catalog() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let keep = other_leaf("synthetic.other");
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), keep.clone()],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    w.upload_all(&m, &files).await;
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, true)]);
+    w.rows("from=0&to=3").await.expect("served while paused");
+    let paused = |e: ApiError| assert_eq!(e.code, "bulk_publisher_paused");
+    // The held catalog sent again changes nothing: answered as ever.
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("same").0,
+        StatusCode::OK
+    );
+    // A catalog that adds a dataset, or moves one to a next version: refused.
+    let adds = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&m.header),
+            keep.clone(),
+            other_leaf("synthetic.new"),
+        ],
+    );
+    let ra = sign_catalog(&adds);
+    w.node.anchor(&ra);
+    paused(w.post_catalog(&adds, &ra).await.expect_err("adds"));
+    let v2 = manifest(&shard_files(30..40, 10), Some(&m), T0 + 5);
+    let moves = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![CatalogLeaf::of(&v2.header), keep.clone()],
+    );
+    let rm = sign_catalog(&moves);
+    w.node.anchor(&rm);
+    paused(w.post_catalog(&moves, &rm).await.expect_err("a version"));
+    // A tombstone with data beside it: refused whole.
+    let gone = CatalogLeaf::of(&m.header).tombstone().expect("tombstone");
+    let mixed = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![gone.clone(), keep.clone(), other_leaf("synthetic.new")],
+    );
+    let rx = sign_catalog(&mixed);
+    w.node.anchor(&rx);
+    paused(w.post_catalog(&mixed, &rx).await.expect_err("mixed"));
+    assert_eq!(
+        w.store.removed(ME, "synthetic.metrics").expect("read"),
+        None
+    );
+    // The tombstone alone, the other leaf unchanged: taken.
+    let c1 = catalog_of(Some(&c0), T0 + 20, vec![gone, keep]);
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1).await.expect("the takedown").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store.removed(ME, "synthetic.metrics").expect("read"),
+        Some(1)
+    );
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("removed")),
+        "bulk_dataset_removed"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// THREATS PUBON-18: a paused publisher that never posted a catalog removes
+/// a dataset it published under its own reports: a first catalog of
+/// tombstones only is taken.
+#[tokio::test]
+async fn a_paused_publisher_removes_an_own_report_dataset_with_a_first_catalog() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let (m1, _m2) = own_two(&w).await;
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, true)]);
+    let t = CatalogLeaf::of(&m1.header).tombstone().expect("t");
+    let c0 = catalog_of(None, T0 + 10, vec![t]);
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    assert_eq!(
+        w.post_catalog(&c0, &r0).await.expect("taken").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store.removed(ME, "synthetic.metrics").expect("read"),
+        Some(0)
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// The limits file's format (ADR-0066 item 10): every field required, no
+/// other taken, one entry per id, numbers in range, and the grants plus the
+/// reserve within the node's total.
+#[test]
+fn a_limits_file_with_unknown_fields_duplicates_or_bad_numbers_is_refused() {
+    let entry = |id: &str, q: &str, d: &str, s: &str| {
+        format!(r#"{{"id":"{id}","quota_gib":{q},"datasets":{d},"state":"{s}"}}"#)
+    };
+    let file = |reserve: &str, entries: &[String]| {
+        format!(
+            r#"{{"reserve_gib":{reserve},"publishers":[{}]}}"#,
+            entries.join(",")
+        )
+    };
+    let good = file(
+        "2",
+        &[
+            entry("first.publisher", "16", "50000", "open"),
+            entry("second.publisher", "1", "16", "paused"),
+        ],
+    );
+    let l = PublisherLimits::parse(&good).expect("good");
+    assert_eq!(l.reserve_bytes, 2 << 30);
+    assert_eq!(
+        l.grants.get("first.publisher"),
+        Some(&PublisherGrant {
+            quota_bytes: 16 << 30,
+            max_datasets: 50_000,
+            paused: false
+        })
+    );
+    assert_eq!(
+        l.grants.get("second.publisher"),
+        Some(&PublisherGrant {
+            quota_bytes: 1 << 30,
+            max_datasets: 16,
+            paused: true
+        })
+    );
+    // 16 + 1 + 2 GiB: fits 19, not 18 (thirteen grants of 1 GiB on a node
+    // of 24 with 16 held: review PUBON-R1 M5).
+    l.fits(19 << 30).expect("fits");
+    let e = l.fits(18 << 30).expect_err("over");
+    assert!(
+        e.contains("exceed") && e.contains("ONYX_BULK_MAX_GIB"),
+        "{e}"
+    );
+    let many: Vec<String> = std::iter::once(entry("first.publisher", "16", "50000", "open"))
+        .chain((0..13).map(|i| entry(&format!("small-{i}.publisher"), "1", "16", "open")))
+        .collect();
+    assert!(PublisherLimits::parse(&file("0", &many))
+        .expect("parsed")
+        .fits(24 << 30)
+        .is_err());
+    // An empty list is a node that takes no upload.
+    assert!(PublisherLimits::parse(&file("0", &[]))
+        .expect("empty")
+        .grants
+        .is_empty());
+    let one = |q: &str, d: &str, s: &str| file("0", &[entry("a.publisher", q, d, s)]);
+    let bad: Vec<(String, &str)> = vec![
+        ("".into(), "not valid"),
+        ("[]".into(), "not valid"),
+        (r#"{"publishers":[]}"#.into(), "reserve_gib"),
+        (r#"{"reserve_gib":1}"#.into(), "publishers"),
+        (
+            r#"{"reserve_gib":1,"publishers":[],"note":"x"}"#.into(),
+            "unknown field",
+        ),
+        (
+            r#"{"reserve_gib":1,"reserve_gib":2,"publishers":[]}"#.into(),
+            "duplicate field",
+        ),
+        (
+            r#"{"reserve_gib":0,"publishers":[{"id":"a.publisher","quota_gib":1,"datasets":1,"state":"open","contact":"x"}]}"#.into(),
+            "unknown field",
+        ),
+        (
+            r#"{"reserve_gib":0,"publishers":[{"id":"a.publisher","quota_gib":1,"datasets":1}]}"#.into(),
+            "state",
+        ),
+        (
+            file(
+                "0",
+                &[
+                    entry("a.publisher", "1", "1", "open"),
+                    entry("a.publisher", "2", "1", "open"),
+                ],
+            ),
+            "two entries",
+        ),
+        (one("0", "1", "open"), "quota_gib must be"),
+        (one("1048577", "1", "open"), "quota_gib must be"),
+        (one("18446744073709551615", "1", "open"), "quota_gib must be"),
+        (one("99999999999999999999999", "1", "open"), "not valid"),
+        (one("-1", "1", "open"), "not valid"),
+        (one("1.5", "1", "open"), "not valid"),
+        (one("\"1\"", "1", "open"), "not valid"),
+        (one("1", "0", "open"), "datasets must be"),
+        (one("1", "50001", "open"), "datasets must be"),
+        (one("1", "1", "closed"), "state must be open or paused"),
+        (one("1", "1", "Paused"), "state must be open or paused"),
+        (
+            file("1048577", &[]),
+            "reserve_gib must be",
+        ),
+        (
+            file("0", &[entry("Not An Id", "1", "1", "open")]),
+            "not a publisher id",
+        ),
+        (file("0", &[entry("", "1", "1", "open")]), "not a publisher id"),
+    ];
+    for (text, want) in bad {
+        let e = PublisherLimits::parse(&text).expect_err(&text);
+        assert!(e.contains(want), "{text}: {e}");
+    }
+    let huge = format!("{}{}", good, " ".repeat(MAX_PUBLISHERS_FILE_BYTES));
+    assert!(PublisherLimits::parse(&huge)
+        .expect_err("too long")
+        .contains("over"));
+}
+
+// ---- Review LIM-R1 of the limits per publisher ----
+
+/// Review LIM-R1 M1: a takedown is not held to the publisher's own limits.
+/// A grant lowered below what is held, or a dataset cap below the
+/// catalog's leaves, refuses a catalog that adds data and takes one that
+/// only removes a dataset, open or paused.
+#[tokio::test]
+async fn a_takedown_is_taken_over_a_lowered_grant_and_a_small_dataset_cap() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let keep = other_leaf("synthetic.other");
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![CatalogLeaf::of(&m.header), keep.clone()],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("c0");
+    w.post_in(&m, 0).await.expect("v1");
+    w.upload_all(&m, &files).await;
+    // One byte and one dataset: far below the two leaves and the bytes held.
+    let w = w.restarted_with(&[(ME, 1, 1, false)]);
+    let adds = catalog_of(
+        Some(&c0),
+        T0 + 20,
+        vec![
+            CatalogLeaf::of(&m.header),
+            keep.clone(),
+            other_leaf("synthetic.new"),
+        ],
+    );
+    let ra = sign_catalog(&adds);
+    w.node.anchor(&ra);
+    assert_eq!(
+        code(w.post_catalog(&adds, &ra).await.expect_err("adds")),
+        "bulk_quota_exceeded"
+    );
+    let gone = CatalogLeaf::of(&m.header).tombstone().expect("tombstone");
+    let c1 = catalog_of(Some(&c0), T0 + 20, vec![gone.clone(), keep.clone()]);
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    assert_eq!(
+        w.post_catalog(&c1, &r1).await.expect("the takedown").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store.removed(ME, "synthetic.metrics").expect("read"),
+        Some(1)
+    );
+    // Paused as well, the second dataset goes the same way.
+    let w = w.restarted_with(&[(ME, 1, 1, true)]);
+    let c2 = catalog_of(
+        Some(&c1),
+        T0 + 30,
+        vec![gone, keep.tombstone().expect("tombstone")],
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    assert_eq!(
+        w.post_catalog(&c2, &r2).await.expect("paused takedown").0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        w.store.removed(ME, "synthetic.other").expect("read"),
+        Some(2)
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review LIM-R1 M2: the grants alone do not bound the node. A publisher
+/// counts with the larger of its grant and what it holds, one without an
+/// entry with what it holds; a file that does not fit beside that stops
+/// the start and names the publishers, and what fits is said in the log.
+#[tokio::test]
+async fn what_a_node_holds_must_fit_beside_the_grants_at_start() {
+    let w = world();
+    let files = shard_files(0..30, 10);
+    let mut b = 0;
+    for p in [ME, OTHER] {
+        let m = manifest_by(p, "synthetic.metrics", &files);
+        b = m.header.byte_count;
+        let r = sign(&m);
+        w.node.anchor(&r);
+        assert_eq!(w.post(&m, &r).await.expect(p).0, StatusCode::CREATED);
+    }
+    let World {
+        node,
+        store,
+        clock,
+        dir,
+    } = w;
+    drop(store);
+    let open = |total: u64, entries: &[(&str, u64, usize, bool)]| {
+        let c = clock.clone();
+        BulkStore::open(
+            pin(),
+            node.clone(),
+            Arc::new(move || c.load(Ordering::Relaxed)),
+            &dir,
+            &dir.join("warm"),
+            BulkLimits {
+                max_total_bytes: total,
+                ..BulkLimits::default()
+            },
+        )
+        .expect("ok")
+        .with_publishers(listed(entries))
+    };
+    // A grant lowered to one byte and a publisher without an entry: what
+    // both hold fits the total exactly, and the start says who holds what.
+    let lowered: &[(&str, u64, usize, bool)] = &[(ME, 1, 4, false)];
+    assert!(
+        listed(lowered).fits(2 * b - 1).is_ok(),
+        "the grants alone fit"
+    );
+    let s = open(2 * b, lowered).expect("fits");
+    let notes = s.publisher_notes().join("\n");
+    assert!(
+        notes.contains(&format!(
+            "publisher {ME} holds {b} bytes, over its grant of 1"
+        )),
+        "{notes}"
+    );
+    assert!(
+        notes.contains(&format!(
+            "publisher {OTHER} holds {b} bytes and has no entry"
+        )),
+        "{notes}"
+    );
+    drop(s);
+    // One byte less: refused, naming both.
+    let e = open(2 * b - 1, lowered).err().expect("does not fit");
+    assert!(
+        e.contains(&format!("{ME} holds {b} bytes over its grant of 1"))
+            && e.contains(&format!("{OTHER} holds {b} bytes and has no entry"))
+            && e.contains("the node's total"),
+        "{e}"
+    );
+    // A grant larger than what is held counts whole: the unused part is
+    // promised too.
+    let roomy: &[(&str, u64, usize, bool)] = &[(ME, 3 * b, 4, false), (OTHER, b, 4, false)];
+    assert!(open(4 * b - 1, roomy).is_err());
+    let s = open(4 * b, roomy).expect("fits");
+    assert!(s.publisher_notes().is_empty());
+    drop(s);
+    // The reserve counts, and a file that lists no publisher says so.
+    let mut with_reserve = listed(roomy);
+    with_reserve.reserve_bytes = 1;
+    let c = clock.clone();
+    let reopened = BulkStore::open(
+        pin(),
+        node.clone(),
+        Arc::new(move || c.load(Ordering::Relaxed)),
+        &dir,
+        &dir.join("warm"),
+        BulkLimits {
+            max_total_bytes: 4 * b,
+            ..BulkLimits::default()
+        },
+    )
+    .expect("ok");
+    assert!(reopened.with_publishers(with_reserve).is_err());
+    let s = open(2 * b, &[]).expect("holdings fit");
+    assert!(
+        s.publisher_notes()
+            .iter()
+            .any(|n| n.contains("lists no publisher: every bulk upload is refused")),
+        "{:?}",
+        s.publisher_notes()
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Review LIM-R1 M3: a pause does not hide an equivocation. A second
+/// anchored manifest for a version a paused publisher holds marks the
+/// dataset forked, also when its grant is below what it holds.
+#[tokio::test]
+async fn a_paused_publisher_still_forks_on_a_second_anchored_manifest() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    published(&w).await;
+    let w = w.restarted_with(&[(ME, 1, 16, true)]);
+    let other = manifest(&shard_files(0..20, 10), None, T0 + 1);
+    let ro = sign(&other);
+    w.node.anchor(&ro);
+    assert_eq!(
+        code(w.post(&other, &ro).await.expect_err("a fork")),
+        "bulk_dataset_forked"
+    );
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("not served")),
+        "bulk_dataset_forked"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review LIM-R1 M3 and L2: what a paused publisher holds is answered as
+/// for any publisher. The same manifest and a stored shard sent again are
+/// 200, and a held manifest signed again by a new key after a compromise is
+/// re-anchored, so the dataset keeps being served.
+#[tokio::test]
+async fn a_paused_publishers_held_manifest_is_reanchored_and_a_resend_is_200() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let (m, files) = published(&w).await;
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, true)]);
+    let r = sign(&m);
+    assert_eq!(
+        w.post(&m, &r).await.expect("the same again").0,
+        StatusCode::OK
+    );
+    assert_eq!(
+        w.put(&m.shards[0].root, files[0].clone())
+            .await
+            .expect("a stored shard again")
+            .0,
+        StatusCode::OK
+    );
+    w.node.life(&r, 3);
+    w.node.withdraw(&r);
+    let r2 = onyx_bulk::anchor::sign(&SECRET2, &m.header).expect("ok");
+    w.node.anchor_by(&r2, &SECRET2);
+    let (s, v) = w.post(&m, &r2).await.expect("re-anchored");
+    assert_eq!((s, v["reanchored"].clone()), (StatusCode::OK, json!(true)));
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    let a = w
+        .rows("from=0&to=1")
+        .await
+        .expect("served under the new key");
+    let c = onyx_bulk::wire::check_rows_answer(&a, Some(0), Some(1)).expect("ok");
+    assert_eq!(
+        c.signer,
+        onyx_bulk::anchor::address_of(&SECRET2).expect("ok")
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review LIM-R1 M3: a replacement for a withdrawn version is new data. A
+/// paused publisher's is refused and nothing is moved aside; the node falls
+/// back to the version before, as the book says.
+#[tokio::test]
+async fn a_paused_publisher_gets_no_replacement_for_a_withdrawn_version() {
+    let w = world_listed(&[(ME, 1 << 30, 16, false)]);
+    let (m, _) = published(&w).await;
+    let thief = manifest(&shard_files(30..40, 10), Some(&m), T0 + 10);
+    let rt = sign(&thief);
+    w.node.anchor(&rt);
+    w.post(&thief, &rt).await.expect("ok");
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, true)]);
+    w.node.withdraw(&rt);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        w.rows("from=0&to=1").await.expect("ok")["manifest"]["version"],
+        json!(1)
+    );
+    let new_secret = [0x44; 32];
+    let honest = manifest(&shard_files(30..50, 10), Some(&m), T0 + 20);
+    let rh = onyx_bulk::anchor::sign(&new_secret, &honest.header).expect("ok");
+    w.node.anchor_by(&rh, &new_secret);
+    assert_eq!(
+        code(w.post(&honest, &rh).await.expect_err("new data")),
+        "bulk_publisher_paused"
+    );
+    assert!(!w
+        .dir
+        .join("manifests/example.publisher/synthetic.metrics/withdrawn")
+        .exists());
+    // Open again, the replacement is taken.
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, false)]);
+    assert_eq!(
+        w.post(&honest, &rh).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// [`theft`] with the node restarted on a limits file.
+async fn theft_listed(entries: &[(&str, u64, usize, bool)]) -> Theft {
+    let Theft {
+        w,
+        m,
+        c0,
+        c1,
+        r1,
+        bad,
+    } = theft().await;
+    Theft {
+        w: w.restarted_with(entries),
+        m,
+        c0,
+        c1,
+        r1,
+        bad,
+    }
+}
+
+/// Review LIM-R1 M3 (THREATS CAT-6 under a pause): a paused publisher's
+/// catalog whose number is held, or one that breaks the chain, is read
+/// against the book like any other. The same catalog under a new report is
+/// 200; two anchored catalogs that cannot both stand mark the fork.
+#[tokio::test]
+async fn a_paused_publishers_catalogs_still_mark_a_fork() {
+    let t = theft_listed(&[(ME, 1 << 30, 16, true)]).await;
+    let w = &t.w;
+    let (c1b, r1b, _, _) = replacement(&t);
+    let r1s = cat::sign(&SECRET2, &t.c1.header).expect("ok");
+    w.node.anchor_by(&r1s, &SECRET2);
+    assert_eq!(
+        w.post_catalog(&t.c1, &r1s).await.expect("same").0,
+        StatusCode::OK
+    );
+    assert!(!fork_file(w).exists());
+    // An already-taken number with another root, both anchored.
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    assert!(fork_file(w).exists());
+    assert_eq!(
+        code(w.rows("from=0&to=3").await.expect_err("forked")),
+        "bulk_dataset_forked"
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+    // An anchored catalog that is not the successor of the held newest.
+    let t = theft_listed(&[(ME, 1 << 30, 16, true)]).await;
+    let w = &t.w;
+    let leaves = vec![other_leaf("synthetic.thief")];
+    let dropped = Catalog {
+        header: cat::CatalogHeader {
+            format: cat::FORMAT,
+            publisher: publisher(),
+            number: 2,
+            prev: t.c1.header.root(),
+            created_unix: T0 + 60,
+            leaf_count: 1,
+            leaves_root: cat::leaves_tree(&leaves).root(),
+        },
+        leaves,
+    };
+    let rd = sign_catalog(&dropped);
+    w.node.anchor(&rd);
+    assert_eq!(
+        code(w.post_catalog(&dropped, &rd).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    assert!(fork_file(w).exists());
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review LIM-R1 M3: when the book withdrew a paused publisher's catalogs
+/// (a stolen key), they are set aside as the book says, but the replacement
+/// that brings data is not stored until the publisher is open again.
+#[tokio::test]
+async fn a_paused_publishers_withdrawn_catalog_is_set_aside_without_a_replacement() {
+    let t = theft_listed(&[(ME, 1 << 30, 16, true)]).await;
+    let w = &t.w;
+    let (c1b, r1b, _, _) = replacement(&t);
+    w.node.withdraw(&t.r1);
+    w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+    assert_eq!(
+        code(w.post_catalog(&c1b, &r1b).await.expect_err("new data")),
+        "bulk_publisher_paused"
+    );
+    assert_eq!(held_root(w, 1), None, "the thief's catalog is set aside");
+    assert_eq!(held_root(w, 0), Some(t.c0.header.root()));
+    assert_eq!(served_versions(w), vec![1]);
+    let Theft { w, .. } = t;
+    let w = w.restarted_with(&[(ME, 1 << 30, 16, false)]);
+    assert_eq!(
+        w.post_catalog(&c1b, &r1b).await.expect("replaced").0,
+        StatusCode::CREATED
+    );
+    let _ = std::fs::remove_dir_all(&w.dir);
+}
+
+/// Review LIM-R1 L1: the refusals that need no chain come first, also
+/// while a fork of the publisher is marked and due for its next read: a
+/// publisher without an entry, and a paused publisher's new data.
+#[tokio::test]
+async fn limit_refusals_come_before_a_marked_forks_chain_read() {
+    let t = theft().await;
+    let (c1b, r1b, _, _) = replacement(&t);
+    assert_eq!(
+        code(t.w.post_catalog(&c1b, &r1b).await.expect_err("fork")),
+        "bulk_publisher_forked"
+    );
+    let Theft { w, c1, bad, .. } = t;
+    let next = manifest(&shard_files(40..50, 10), Some(&bad), T0 + 70);
+    let rn = sign(&next);
+    let more = catalog_of(
+        Some(&c1),
+        T0 + 80,
+        vec![
+            CatalogLeaf::of(&bad.header),
+            other_leaf("synthetic.thief"),
+            other_leaf("synthetic.new"),
+        ],
+    );
+    let rm = sign_catalog(&more);
+    for (entries, want) in [
+        (
+            &[(OTHER, 1u64 << 30, 16usize, false)][..],
+            "bulk_publisher_not_listed",
+        ),
+        (&[(ME, 1 << 30, 16, true)][..], "bulk_publisher_paused"),
+    ] {
+        let w = relisted(w.node.clone(), w.clock.clone(), w.dir.clone(), entries);
+        assert!(fork_file(&w).exists());
+        w.clock.fetch_add(ANCHOR_RECHECK_SECS, Ordering::Relaxed);
+        let reads = w.node.reads();
+        assert_eq!(code(w.post(&next, &rn).await.expect_err(want)), want);
+        assert_eq!(code(w.post_in(&next, 1).await.expect_err(want)), want);
+        assert_eq!(
+            code(w.post_catalog(&more, &rm).await.expect_err(want)),
+            want
+        );
+        assert_eq!(w.node.reads(), reads, "{want}: no chain read");
+    }
+    let _ = std::fs::remove_dir_all(&w.dir);
+}

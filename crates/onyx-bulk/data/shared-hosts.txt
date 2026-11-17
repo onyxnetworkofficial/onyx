@@ -1,0 +1,164 @@
+# Shared hosts: names under which many unrelated people can publish, so that a
+# name given up there can be taken by someone else (ADR-0066 item 4).
+# One suffix a line. An origin is refused when its host is one of these, ends
+# in one, or holds one as whole labels (onyx_bulk::ids::Origin::shared_host).
+#
+# Provenance: compiled by hand for Onyx, 2026-11-17, from each provider's own
+# public naming scheme (pages hosts, app platforms, object stores and CDNs,
+# tunnels, dynamic DNS, site builders, code hosts whose paths belong to their
+# users). Onyx's own work, under the repository's licence. It is NOT a copy
+# of, and is not derived from, the Public Suffix List: that list is under the
+# Mozilla Public License 2.0, and this repository ships no copyleft material
+# (deny.toml). Being listed says nothing about a provider except that names
+# under it are handed out to anyone.
+#
+# The list is not complete and cannot be. A shared host that is missing here
+# passes the tool; the reviewer reads the origin's host
+# (docs/ops/publisher-review.md, line 7). To add one: add the line, keep each
+# group sorted, and add a case to
+# ids::tests::shared_hosts_of_the_list_and_punycode_are_refused.
+
+# Pages and static sites
+bitbucket.io
+codeberg.page
+gitbook.io
+github.io
+gitlab.io
+neocities.org
+netlify.app
+netlify.com
+pages.dev
+readthedocs.io
+rtfd.io
+surge.sh
+webflow.io
+
+# Code hosts and raw-file hosts (paths belong to users)
+bitbucket.org
+codeberg.org
+github.com
+githubusercontent.com
+gitlab.com
+jsdelivr.net
+pastebin.com
+rawgit.com
+sourceforge.io
+sourceforge.net
+unpkg.com
+
+# App platforms
+adaptable.app
+appspot.com
+azurestaticapps.net
+azurewebsites.net
+cloudapp.net
+cloudfunctions.net
+codesandbox.io
+cyclic.app
+deno.dev
+edgecompute.app
+firebaseapp.com
+firebaseio.com
+fly.dev
+gitpod.io
+glitch.me
+herokuapp.com
+hf.space
+koyeb.app
+now.sh
+ondigitalocean.app
+onrender.com
+pantheonsite.io
+pythonanywhere.com
+railway.app
+repl.co
+replit.app
+replit.dev
+run.app
+stackblitz.io
+streamlit.app
+supabase.co
+vercel.app
+vercel.dev
+web.app
+webcontainer.io
+workers.dev
+zeabur.app
+
+# Object stores, file shares and CDNs
+akamaized.net
+amazonaws.com
+arweave.net
+azureedge.net
+b-cdn.net
+backblazeb2.com
+cloudfront.net
+digitaloceanspaces.com
+dropbox.com
+dropboxusercontent.com
+dweb.link
+edgesuite.net
+fastly.net
+googleapis.com
+googleusercontent.com
+ipfs.io
+r2.dev
+w3s.link
+windows.net
+
+# Tunnels
+cfargotunnel.com
+loca.lt
+localtunnel.me
+ngrok-free.app
+ngrok-free.dev
+ngrok.app
+ngrok.dev
+ngrok.io
+pagekite.me
+serveo.net
+telebit.io
+trycloudflare.com
+
+# Dynamic DNS and wildcard DNS
+afraid.org
+ddns.net
+duckdns.org
+dyndns.org
+dynu.net
+freeddns.org
+hopto.org
+nip.io
+no-ip.biz
+no-ip.org
+serveftp.com
+sslip.io
+sytes.net
+xip.io
+zapto.org
+
+# Site builders, blogs and free hosting
+000webhostapp.com
+altervista.org
+angelfire.com
+blogspot.com
+business.site
+byethost.com
+carrd.co
+godaddysites.com
+infinityfreeapp.com
+itch.io
+jimdofree.com
+myshopify.com
+mystrikingly.com
+notion.site
+squarespace.com
+substack.com
+tripod.com
+tumblr.com
+weebly.com
+wixsite.com
+wordpress.com
+wpcomstaging.com
+wpengine.com
+yolasite.com

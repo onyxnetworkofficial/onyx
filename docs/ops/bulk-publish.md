@@ -7,70 +7,96 @@ docs/spec/bulk-datasets.md; a full local rehearsal: `scripts/bulk-demo.sh local`
 **What you end up with:** your rows on an Onyx node, readable by anyone for free, each row with
 a proof that it is exactly what you signed. One small transaction per version.
 
-**Time:** about 1 hour the first time (most of it waiting: 20 to 40 minutes for the reviewer and
-for Base Sepolia to make your anchor final). Later versions: about 30 minutes, mostly waiting.
+**Time:** about 40 minutes of your own time the first time, and a review of up to 5 days in
+between. Later versions: about 30 minutes, mostly waiting for Base Sepolia.
+
+**Two paths.** If you only know of data Onyx should have, *suggest* it on the website's Add data
+page: five questions, no key, nothing is published. This guide is the other path: you hold data
+and will sign it. That needs a key, an application and a review, once (ADR-0066).
 
 ## Before you start (once)
 
-1. **Pick a neutral publisher name and domain.** The name (your *publisher id*) is public and
-   permanent: it is written into the book on chain and into every answer. It is a label for the
-   data, not a signature of who you are. So it must describe the data and nothing else: not your
-   name or any person's, not a company or product name, and not the word Onyx or anything that
-   reads as if the network itself published the data. A reader must not be able to tell from the
-   id who is behind it; what they trust is your key and your signed rights statement, never the
-   name. Use a short descriptive id in lowercase with dots or dashes, for example
-   `onchain-metrics.pub`, and a domain you control that is equally neutral (for example a new
-   domain or a subdomain used only for this). You need to be able to put one file on that domain
-   over HTTPS.
-   The book records the domain as your *origin*, and one origin belongs to one publisher. An
-   origin may also be a domain and a path (`example.org/archive`): the keys document is then at
-   `https://<origin>/.well-known/onyx-source-keys.json`.
-2. **Note the test network's two addresses and how to reach the reviewer.**
+1. **Pick a neutral publisher id.** The id is public and permanent: it is written into the book
+   on chain and into every answer. It is a label for the data, not a signature of who you are.
+   So it must describe the data and nothing else: not your name or any person's, not a company
+   or product name, and not the word Onyx or anything that reads as if the network itself
+   published the data. A reader must not be able to tell from the id who is behind it; what they
+   trust is your key and your signed rights statement, never the name. Use a short descriptive
+   id in lowercase with dots or dashes, for example (made up) `river-levels.open`.
+   The tools refuse an id that holds the word `official`, `verified`, `reviewer` or `operator`,
+   that contains `onyx` anywhere, or that equals a registered id once `.`, `:`, `-` and `_` are
+   dropped. No id is reserved by asking: the first valid application for an id wins.
+2. **Pick a neutral origin.** The origin is where your keys document lives: an HTTPS host you
+   control, or a host and a path (`data.example.org/river-levels`), equally neutral (a new
+   domain or a subdomain used only for this). You must be able to put files there. The book
+   binds one origin to one publisher for good.
+   - **Lose this origin and you lose the proof of your id.** Keep the domain paid.
+   - An origin is refused when it is a prefix of a registered origin or the other way round
+     (`example.org` and `example.org/a`), and when it is on a shared pages host: someone else
+     could take the name once you give it up.
+   - A domain's registration record can name its owner. Check yours before you apply.
+3. **Note the test network's addresses.**
    - Node address: `https://onyx.cryptagraph.com` (the hosted test node; it takes bulk uploads).
-   - Signed book address: `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` (the `OnyxSignedBook` contract on
-     Base Sepolia, chain id 84532; listed in `deploy/early-record/contracts.json` and
+   - Signed book address: `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` (the `OnyxSignedBook`
+     contract on Base Sepolia, chain id 84532; listed in `deploy/early-record/contracts.json` and
      docs/ops/deployment.md).
-   - The reviewer registers your key before you can anchor. Reach the reviewer in one way: open an
-     issue on the public repository, https://github.com/onyxnetworkofficial/onyx/issues, titled
-     `Publisher registration: <publisher id>` (step 3 below says what to put in it). The issue is
-     public, so it holds only what the book makes public anyway.
+   - The reviewer is reached in one way: an issue on the public repository,
+     https://github.com/onyxnetworkofficial/onyx/issues, titled
+     `Publisher application: <publisher id>` (step 7 says what goes in it). The issue is public
+     and shows the account that opens it.
 
-   On another network or your own node, ask its operator for the same two addresses; that node
-   must run with `ONYX_BULK_DIR` (docs/ops/config.md).
-3. **Get the tools**: on Linux x86-64, download `onyx-publish-linux-x86_64.tar.gz` from the latest
+   On another network or your own node, ask its operator for the same addresses; that node must
+   run with `ONYX_BULK_DIR` (docs/ops/config.md).
+4. **Get the tools**: on Linux x86-64, download `onyx-publish-linux-x86_64.tar.gz` from the latest
    test-network release (the Add data page links it) and unpack it; the programs are in
    `onyx-publish/bin/`. Elsewhere, build them (about 15 minutes, with a Rust toolchain):
    `git clone https://github.com/onyxnetworkofficial/onyx && cd onyx`, then
    `cargo build --release -p onyx-publish -p onyx-check`; they are then in `target/release/`.
-4. **Make sure the data is yours to share.** Only data you own or may share, whose terms let
-   anyone redistribute it, and that names no individual person. You will sign a statement saying
-   so (step 7 below does it for you).
+   If your download answers `unknown command apply`, it is from before the onboarding commands
+   (`apply`, `doctor`, `verify-application`, `request`): build from the source.
+5. **Make sure the data is yours to share.** Only data you own or may share, whose terms let
+   anyone redistribute it, and that names no individual person. You sign a statement saying so
+   (step 4 does it for you), and the reviewer reads your first dataset.
+
+**One reviewer, on a test network.** One person holds the one key that can register a
+publisher, and decides within 5 days. A registration cannot be undone, so the review comes
+first. What the reviewer checks: [publisher-review.md](publisher-review.md).
 
 ## Step by step
 
-All commands below are run in one folder, for example `~/onyx-publisher`. Replace the values in
-`<...>`.
+All commands are run in one folder, for example `~/onyx-publisher`. Replace the values in
+`<...>`. The subfolder `site/` mirrors your origin: what is in it goes online, nothing else.
+At any time, `onyx-publish doctor` names the step that is missing and the command for it; it
+sends nothing.
 
-1. **Make your test key (1 minute).**
-   `onyx-publish keygen --out publisher.key`
-   It prints only your address (`0x...`). The key file is readable by you only. Copy it to a USB
-   stick or another safe offline place now: if you lose it you need a new key (see "If something
-   goes wrong"). Never send the key file to anyone; send only the address.
+| # | Step | Time | Leaves your machine? |
+|---|---|---|---|
+| 1 | Make two keys | 2 minutes | Never |
+| 2 | Make your keys document | 1 minute | Yes, public |
+| 3 | Prepare a small first dataset | depends on you | No |
+| 4 | Build and sign it | 1 minute | Yes, public |
+| 5 | Write your application | 1 minute | Yes, public |
+| 6 | Put `site/` on your origin; run the doctor | 10 minutes | Yes, public |
+| 7 | Point the reviewer at your origin | 2 minutes | Yes, public |
+| 8 | Wait for the decision | up to 5 days | No |
+| 9 | Upload your first dataset | 10 minutes | Yes, public |
+| 10 | Check it like a buyer would | 2 minutes | No |
+
+1. **Make two test keys (2 minutes).**
+   `onyx-publish keygen --out publisher.key`, then `onyx-publish keygen --out spare.key`
+   Each prints only its address (`0x...`) and also writes it next to the key
+   (`publisher.key.address`, `spare.key.address`: public, safe to keep). The key files are
+   readable by you only and are never printed. Move `spare.key` (not `spare.key.address`) to a
+   USB stick or another offline place now. **If you lose your
+   only key, your id is lost**: nobody can prove a new key is yours, and the origin alone is not
+   enough. Never send a key file to anyone.
 2. **Make your keys document (1 minute).**
-   `onyx-publish keys-doc --key publisher.key --publisher <publisher id> --out onyx-source-keys.json`
-   Put that file on your domain so that
-   `https://<your domain>/.well-known/onyx-source-keys.json` shows it.
-3. **Ask the reviewer to register your key (wait: minutes to a day).** Open the issue named in
-   "Before you start" step 2 with three lines: your publisher id, your domain and your address
-   (`0x...`). Never the key file, and no personal details. The reviewer opens your keys document,
-   checks it, registers the key in the signed book (see "For the operator") and answers in the
-   issue.
-4. **Get test ETH for your address (5 minutes).** Use a Base Sepolia faucet (Base's documentation
-   lists them under "Network faucets"). One anchor costs about 250,000 gas, a tiny amount of
-   test ETH.
-5. **Prepare your data (depends on you).** One CSV file with a header line (or JSON Lines), sorted
-   by its key column (usually a time in unix seconds or a block height). Write a `schema.json`
-   that names every column, for example:
+   `onyx-publish keys-doc --key publisher.key --publisher <publisher id> --out site/.well-known/onyx-source-keys.json`
+3. **Prepare a small first dataset (depends on you).** A real one, small: it must fit one shard
+   of at most 8 MiB, and the reviewer reads its rows. It is not a throwaway: it becomes version
+   1 of that dataset, and you add the rest as version 2 after approval. One CSV file with a
+   header line (or JSON Lines), sorted by its key column (usually a time in unix seconds or a
+   block height). Write a `schema.json` that names every column, for example:
    ```json
    {"columns": [
      {"name": "t", "kind": "int"},
@@ -81,28 +107,60 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
    Kinds: `int` (whole numbers), `decimal` (with a fixed number of decimals, `scale`; a value with
    more decimals is refused, never rounded), `text`. There are no floating-point numbers. An
    empty field is allowed only in a column marked `"nullable": true`.
-6. **Build the shards and the manifest (about 1 minute per GB).**
-   `onyx-publish build --schema schema.json --input data.csv --dataset <dataset id> --publisher <publisher id> --license CC0-1.0 --out v1`
-   It checks every row and stops at the first bad one with its line number. `--license` is the
-   license your data is under (an SPDX id such as `CC0-1.0` or `CC-BY-4.0`; add
-   `--attribution "<text>"` if it requires credit). It prints the row and shard counts and the
-   manifest root. Shards are about 8 MiB each (`--shard-mib`, at most 64; keep 8 unless your
-   upload line is fast).
-7. **Sign (seconds).** `onyx-publish sign --key publisher.key --dir v1`
-   This signs the manifest root and the rights statement with your key.
-8. **Anchor on Base Sepolia (1 minute).**
-   `onyx-publish anchor --dir v1 --rpc https://sepolia.base.org --chain-id 84532 --book <signed book address> --gas-key publisher.key`
-   It prints `ANCHORED tx=... block=...`. Running it twice is safe: the second time sends nothing.
-9. **Upload (wait 20 to 40 minutes, then about 1 minute per GB on a fast line).**
-   `onyx-publish upload --dir v1 --node <node address> --wait-secs 3600`
-   The node takes your manifest only once Base Sepolia has made the anchor final, so the command
-   waits and says so every 15 seconds. Then it sends every shard, asks the node again which shards
-   it still misses, sends those again (at most 3 rounds), and prints `UPLOADED ... rounds=N`. When
-   the node answers a 503 that clears by itself (`bulk_chain_unavailable`, `overloaded`,
-   `bulk_busy`), a 429, a proxy's 502, or nothing, the command says so and tries again, up to 8
+4. **Build and sign it (1 minute).**
+   `onyx-publish build --schema schema.json --input data.csv --dataset <dataset id> --publisher <publisher id> --license CC0-1.0 --out site/sample`
+   then `onyx-publish sign --key publisher.key --dir site/sample`
+   `build` checks every row and stops at the first bad one with its line number. `--license` is
+   the license your data is under (an SPDX id such as `CC0-1.0` or `CC-BY-4.0`; add
+   `--attribution "<text>"` if it requires credit). `sign` signs the manifest root and the
+   rights statement with your key. Do steps 4 and 5 in one go: a first application's sample is
+   built within the hour before it.
+5. **Write your application (1 minute).**
+   `onyx-publish apply --key publisher.key --publisher <publisher id> --origin <origin> --data "<one sentence about the data>" --chain-id 84532 --book <signed book address>`
+   It writes `site/.well-known/onyx-publisher-application.json`: your id, origin and address,
+   the hash of your keys document, the sentence, the sample's root, the limits you ask for (1
+   GiB and 16 datasets unless you pass `--quota-gib` and `--datasets`) and an expiry 6 days
+   later, signed with your key for this chain and this book. It has no name, contact or wallet
+   field, and the sentence must hold no e-mail address. Everything in it becomes public.
+   From here on, **never build version 1 of this dataset again**: its signed report is public,
+   and a second version 1 would make the book suspend your key. `build` refuses it.
+6. **Put `site/` on your origin and run the doctor (10 minutes).** Copy the content of `site/`
+   so that `https://<origin>/.well-known/onyx-source-keys.json` shows your keys document (HTTPS,
+   no redirect). Then `onyx-publish doctor --live`
+   It reads the files back from your origin, compares them with the local ones, and prints one
+   line per step: `ok`, `missing` or `problem`, each with the next command (`skipped`: a check
+   this version does not run). When nothing is missing it prints the two lines for step 7.
+   Your spare key counts as there when `spare.key.address` is in the folder; if you made the
+   spare elsewhere, add `--spare-offline`.
+7. **Point the reviewer at your origin (2 minutes).** Open the issue named in "Before you start"
+   step 3 (the repository offers the template "Publisher application") with exactly two lines:
+   your origin and the Keccak of your application file. Never a key file and no personal
+   details. You never send the application itself: the reviewer's check fetches it from your
+   origin, from a hosted machine, so you learn nothing about the reviewer and the reviewer's
+   machine never connects to you.
+8. **Wait for the decision (up to 5 days).** The reviewer answers in the issue: approved, or
+   refused with a reason code. After a refusal, fix the named reason and apply again **with a
+   new key** (the refused key is blocked until its refused sample's report is 7 days old). If
+   the application expired before a decision, run step 5 again with `--reapply`, the same key
+   and the same `site/sample` folder, put the new file on your origin, run `doctor --live`
+   (it says "a re-apply after an expiry") and open a new issue with the new Keccak.
+9. **Upload your first dataset (wait 20 to 40 minutes, then about 10 minutes).**
+   `onyx-publish upload --dir site/sample --node <node address> --wait-secs 3600`
+   The node takes your manifest once the sample's report is recorded in the book and Base
+   Sepolia has made it final, so the command waits and says so every 15 seconds. If the
+   reviewer's answer says the sample is not anchored yet, anchor it yourself first (it needs a
+   little test ETH from a Base Sepolia faucet; Base's documentation lists them under "Network
+   faucets"; one anchor is about 250,000 gas):
+   `onyx-publish anchor --dir site/sample --rpc https://sepolia.base.org --chain-id 84532 --book <signed book address> --gas-key publisher.key`
+   Fund the key from a faucet, not from a wallet with other history: a transfer links the two
+   on chain. If the sample is older than 7 days at approval, its report can no longer be
+   posted: anchor the same folder through your catalog 0 instead ("Many datasets with one
+   anchor" below) and never build it again.
+   When the node answers a 503 that clears by itself (`bulk_chain_unavailable`, `overloaded`,
+   `bulk_busy`), a 429, a proxy's 502, or nothing, `upload` says so and tries again, up to 8
    times in a row, 15 s apart or the node's `retry-after` (`upload`, its recheck and shards, and
-   `catalog-upload` alike); a full node (503 `bulk_node_full`) is refused at once. If it stops halfway,
-   run the same command again: it sends only what the node is still missing.
+   `catalog-upload` alike); a full node (503 `bulk_node_full`) is refused at once. If it stops
+   halfway, run the same command again: it sends only what the node is still missing.
 10. **Check it like a buyer would (2 minutes).**
     `curl -s "<node address>/v1/bulk/<publisher id>/<dataset id>/rows?from=<a key>&to=<a later key>&limit=100" > rows.json`
     then
@@ -112,6 +170,21 @@ All commands below are run in one folder, for example `~/onyx-publisher`. Replac
     only; about 12 requests and 31 MB for a year of daily catalogs). It reports `"fault"`
     `publisher` or `node` when it refuses, and says what it cannot catch without
     `--scan-keys-from` (ADR-0059 amendment 3).
+
+After that you work alone, inside your limits: the rest of your history is version 2 ("Add more
+data later"). Each later anchor needs a little test ETH.
+
+**Register your spare key soon** (15 minutes, then a review). A further key needs the
+cosignature of an active key of your id; control of the origin alone gives nothing.
+
+1. List both keys in your keys document (the spare by its address, from `spare.key.address`):
+   `onyx-publish keys-doc --key publisher.key --also-address <spare address> --publisher <publisher id> --out site/.well-known/onyx-source-keys.json`
+2. Bring `spare.key` back from its offline place, then:
+   `onyx-publish apply --key spare.key --cosign-key publisher.key --publisher <publisher id> --origin <origin> --data "<the same sentence>" --chain-id 84532 --book <signed book address>`
+3. Copy `site/` to your origin, run `onyx-publish doctor --live --key spare.key --spare-offline`,
+   and open the same two-line issue with the new Keccak.
+4. Move `spare.key` offline again. A first application's keys document lists exactly one key;
+   only this later one lists two.
 
 ## Check an answer yourself
 
@@ -307,22 +380,43 @@ catalog anchors cannot back a storage deal yet (ADR-0059 amendment 1 item 7).
 | Message | What it means | What to do |
 |---|---|---|
 | `line N: ...` during build | A row does not fit the schema (a letter in a number, too many decimals, an empty required field, keys out of order) | Fix that line (or the schema) and build again into a new folder |
-| `postReport: would revert` during anchor | The book does not know your key yet, or the key is retired, compromised or suspended | Wait for the reviewer's registration; check your address with `onyx-publish address --key publisher.key` |
+| `postReport: would revert` during anchor | The book does not know your key yet, or the key is retired, compromised or suspended | Wait for the reviewer's decision (step 8); check your address with `onyx-publish address --key publisher.key` |
+| `your application carries version 1 of ...` during build | You are building a second version 1 of your sample's dataset | Add rows with `--prev site/sample` (version 2). Only if the application was never put on your origin: delete it and build again |
+| `this key is blocked until unix N` | Your earlier application with this key was refused, and its sample's report can still be relayed | Apply with a new key, or wait until that time |
 | `this key already anchored another manifest for version N` | You built and anchored a different version N before (each version is signed under a number fixed by the dataset and version) | Never anchor two different manifests for one version: the book would suspend your key. Build the next version with `--prev` instead |
 | `bulk_not_anchored` after the wait | The anchor is not final yet, or not in this node's book | Run upload again later; check `--book` is the node's book |
-| `bulk_quota_exceeded` | The node's limit for one publisher (16 GiB by default) | Ask the operator to raise `ONYX_BULK_QUOTA_GIB` |
+| `bulk_quota_exceeded` | The node's limit for you: your entry in its limits file, or one number for every publisher (16 GiB by default) | Ask the operator for a higher limit |
+| `bulk_publisher_not_listed` | Your key is registered, but this node's operator has not listed your publisher id, so it takes no upload from you | Ask the node's operator for an entry; registration in the book is not a grant of disk on a node |
+| `bulk_publisher_paused` | The node's operator paused your publisher id: your data is still served, new data is not taken | You can still remove a dataset (`catalog-build --remove`); ask the operator why |
 | `bulk_not_servable` when reading | Your key was marked compromised or suspended | See "Lost or stolen key" |
 | `bulk_publisher_forked` or `bulk_dataset_forked` with `fork` | Two anchored catalogs of yours cannot both stand (a stolen key, or two machines publishing) | See "Lost or stolen key"; the mark clears by itself once the book withdraws one side |
 
-**Lost or stolen key.** Tell the reviewer at once, with the time you think it was stolen. The
-reviewer marks the key compromised from that time: what it signed after that time stops counting
-(nodes serve your newest version from before it within 5 minutes; clients refuse the rest at
-once). Make a new key (steps 1 to 4 with the same publisher id and domain; add the new address to
-your keys document). If a thief published a version, publish your own next version from your last
-good folder with the new key: it replaces the thief's. A version of your own made after the theft
-time can be signed again with the new key (`sign`, `anchor`, `upload` on its folder) while it is
-less than 7 days old. A lost (not stolen) key is only retired: what it signed keeps being served,
-and your next version is signed with the new key.
+**Lost or stolen key.** What you ask of the reviewer is always a signed file
+(`onyx-publish request ...`, put at `https://<origin>/.well-known/onyx-publisher-request.json`)
+and a two-line issue with your origin and the file's Keccak. A plain issue changes nothing.
+
+- **Stolen.** At once: take the stolen key's address out of your keys document at the origin,
+  and run `onyx-publish request --key <the stolen key> --kind key-stolen --at <unix time of the
+  theft> ...`. Both are needed: a thief has the key but not your origin. To move to your spare
+  in the same step, add its application cosigned by the stolen key (`apply --key spare.key
+  --cosign-key publisher.key`). The reviewer registers the new key first, then marks the stolen
+  key compromised from the theft time: what it signed after that time stops counting (nodes
+  serve your newest version from before it within 5 minutes; clients refuse the rest at once).
+  If a thief published a version, publish your own next version from your last good folder with
+  the new key: it replaces the thief's. A version of your own made after the theft time can be
+  signed again with the new key (`sign`, `anchor`, `upload` on its folder) while it is less than
+  7 days old.
+- **Lost, and you have another registered key.** `onyx-publish request --key <the other key>
+  --kind retire-key --retire <lost key's address> --at <unix time, now>`: what the lost key
+  signed before that time keeps being served, and your next version is signed with the other
+  key. A time more than an hour back would withdraw what the key signed since then, so it is
+  taken only when you also take the key's address out of your keys document.
+- **Each request is taken once.** It carries a sequence number (the time you made it); to ask
+  again, make a new one. `--kind withdraw` withdraws the application that is in `site/` now,
+  and only the key that signed it can.
+- **Lost, and it was your only key.** There is no rotation: nobody can prove a new key is yours.
+  The data already published stays served. Start a new id on a new origin and publish the
+  history again there.
 
 **A stolen key and catalogs** (THREATS CAT-5, CAT-6), in this order:
 1. The reviewer marks the stolen key compromised (`markCompromised`) with `since` at or before the
@@ -361,11 +455,13 @@ slice 2, copies others made stay, and catalogs already signed keep the old leave
 
 - Run the node with `ONYX_BULK_DIR` (and the signed book pinned in its manifest; docs/ops/config.md
   lists the quota settings).
-- Register a publisher's key only after opening `https://<its domain>/.well-known/onyx-source-keys.json`
-  and checking the name is neutral (no person, company, product or Onyx). The provenance hash is the
-  Keccak of the exact document bytes (`onyx-publish keys-doc` prints it). With the reviewer's key:
-  `cast send <book> 'registerKey(string,address,string,bytes32,string)' <publisher id> <address> <domain> <provenance hash> "bulk publisher reviewed"`
-  (the reviewer key never goes on the node).
+- Give each publisher its own limit with `ONYX_BULK_PUBLISHERS` (run-api.md "Limits per
+  publisher"): list a publisher there before its key is registered, and pause it there
+  (`"state": "paused"`) to stop new data while it can still remove a dataset.
+- Register a publisher's key only after the review in [publisher-review.md](publisher-review.md):
+  `onyx-publish verify-application` on the applicant's files, then the lines only a person can
+  answer. Never open an applicant's origin from the reviewer's machine or the node. The
+  reviewer key never goes on the node.
 - To stop serving a dataset, remove its folder under `ONYX_BULK_DIR/manifests/` and restart.
 - `ONYX_BULK_DIR/catalogs/<publisher>/` holds every 32nd catalog whole (`{n}.bin`) and the others
   as diffs (`{n}.diff`); never delete one in the middle (every later diff up to the next whole one

@@ -261,6 +261,68 @@ or written.
 - The counts are numbers of requests, not of people, and anyone can add requests: they are never a
   basis for rewards or rankings.
 
+## Limits per publisher (`ONYX_BULK_PUBLISHERS`, ADR-0066 item 10)
+
+Without this setting every registered publisher has the same `ONYX_BULK_QUOTA_GIB` and
+`ONYX_BULK_MAX_DATASETS`, so two publishers can together ask for more than `ONYX_BULK_MAX_GIB`
+and the one that comes second gets 503 `bulk_node_full` (THREATS PUBON-6). With it the node takes
+uploads only from the publishers its operator lists, each within its own entry:
+
+```json
+{"reserve_gib": 2,
+ "publishers": [
+  {"id": "onchain-archive", "quota_gib": 16, "datasets": 50000, "state": "open"},
+  {"id": "early-record", "quota_gib": 1, "datasets": 16, "state": "open"}]}
+```
+
+The example lists the publishers registered today on the hosted node: the first keeps the 16 GiB
+and 50,000 datasets it has had, the second gets the grant of a new publisher. On 24 GiB that
+leaves 5 GiB to grant.
+
+- `reserve_gib`: GiB of `ONYX_BULK_MAX_GIB` no entry may use (0 or more). `quota_gib` (1 or more):
+  the publisher's bytes over its datasets' latest versions and its stored catalogs. `datasets`
+  (1 to 50,000): its datasets, and the leaves of one catalog. `state`: `open` or `paused`.
+- Every field is required and no other field is taken; an id appears once. Whole numbers only.
+- **The sum is checked.** The node does not start when the entries' `quota_gib` plus
+  `reserve_gib` exceed `ONYX_BULK_MAX_GIB`. Check a file before a restart:
+  `ONYX_BULK_PUBLISHERS=/path/to/publishers.json onyx-node --check-config` (with the node's other
+  settings).
+- **What is held counts too.** At start each publisher counts with the larger of its
+  `quota_gib` and the bytes it holds, and a publisher without an entry with what it holds. When
+  that plus the reserve exceeds `ONYX_BULK_MAX_GIB` the node does not start and names those
+  publishers. `--check-config` does not open the store, so it does not see this: after lowering
+  a grant or deleting an entry, read the node's first log lines (`bulk limits: ...`).
+- **No entry, no upload.** A publisher the book registered but the file does not list gets 403
+  `bulk_publisher_not_listed` on a manifest, a catalog and a shard. So list a publisher here
+  before its key is registered. What the node already holds of it keeps being served. A file
+  that lists nobody closes the node to every upload; the start says so.
+- **Pause, do not delete.** `"state": "paused"` keeps serving what is held and stores nothing
+  new from the publisher: no new version, no new shard (403 `bulk_publisher_paused`). The
+  publisher can still take data down: a catalog in which every leaf is unchanged or a tombstone
+  is taken (`onyx-publish catalog-build --remove`), also when the publisher is over its entry.
+  A paused publisher cannot add a link for a moved dataset; it can once it is open again. A
+  publisher whose entry was deleted cannot take anything down.
+- **A pause hides nothing.** Something a paused publisher already holds is still checked
+  against the book: the same manifest or catalog again answers 200, a manifest signed again by
+  a new key after a theft is re-anchored, a second anchored manifest or catalog marks the fork,
+  and catalogs the book withdrew are set aside. The replacement data waits until the publisher
+  is open again.
+- **Lowering a grant** below what a publisher holds deletes nothing: the next upload that adds
+  bytes is refused (413 `bulk_quota_exceeded`); a removal is still taken.
+- The file is read at start only. After a change: check it, then restart the node.
+- Not on a storage node: `ONYX_BULK_PUBLISHERS` with `ONYX_STORAGE_CONTRACT` is refused at start.
+- `scripts/deploy-api.sh` installs `<export>/publishers.json` as `/etc/onyx/publishers.json` and
+  sets the variable. Before it changes anything on the server, `scripts/deploy-node-gate.sh`
+  runs there: the new binary's `--check-config` reads the new settings, and a refusal leaves the
+  running node as it was. **An export without the file is refused when the server has one**:
+  put the file in the export, or pass `ONYX_API_LIMITS_OFF=1` to turn the limits off on purpose.
+  An empty `publishers.json` is an error.
+- The node backup copies the file with the rest of `/etc/onyx`, and once a snapshot holds it a
+  copy without it is refused (`scripts/backup-node.sh`); `scripts/export-from-backup.sh` puts it
+  back into a rebuilt export.
+- The numbers are the operator's. No route shows an entry; a refusal names only the asking
+  publisher's own limit.
+
 ## Checks
 - `cargo test -p onyx-api` (router, mock data).
 - `cargo test -p onyx-source-btc --test api` (real fixture round, golden root, x402, settlement

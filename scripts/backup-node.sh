@@ -458,15 +458,31 @@ PY
   mv "$t/catalog-saved" "$s3/etc/onyx/catalog.json" && mv "$t/observations-saved" "$s3/etc/onyx/observations"
   m2 2026-05-02T030004Z
   check "the whole server again is taken (BAK-R2-M2)" '[ "$rc" = 0 ] && [ "$(list_names "$d3")" = 2026-05-02T030004Z ]'
+  # ADR-0066 item 10: the limits per publisher (/etc/onyx/publishers.json, named by
+  # ONYX_BULK_PUBLISHERS) are config like the rest: new, they are taken; once in a snapshot, a
+  # copy without them is refused, whether or not node.env still names them.
+  echo '{"reserve_gib":0,"publishers":[]}' >"$s3/etc/onyx/publishers.json"
+  echo 'ONYX_BULK_PUBLISHERS=/etc/onyx/publishers.json' >>"$s3/etc/onyx/node.env"
+  m2 2026-05-02T030005Z
+  check "a server that gained limits per publisher is taken, the file in the snapshot (ADR-0066 item 10)" '[ "$rc" = 0 ] && [ "$(list_names "$d3")" = 2026-05-02T030005Z ] && cmp -s "$d3/2026-05-02T030005Z/etc-onyx/publishers.json" "$s3/etc/onyx/publishers.json"'
+  mv "$s3/etc/onyx/publishers.json" "$t/publishers-saved"
+  m2 2026-05-02T030006Z
+  check "the limits file gone while node.env names it is refused, by file and by setting name (ADR-0066 item 10)" '[ "$rc" = 4 ] && [ "$(list_names "$d3")" = 2026-05-02T030005Z ] && [[ $out == *"etc-onyx: 1 file of 2026-05-02T030005Z gone (publishers.json)"* ]] && [[ $out == *"the file ONYX_BULK_PUBLISHERS names is not in the copy"* ]]'
+  sed -i '/^ONYX_BULK_PUBLISHERS=/d' "$s3/etc/onyx/node.env"
+  m2 2026-05-02T030007Z
+  check "the limits file gone with its setting (a deploy without it) is refused too: limits went off (ADR-0066 item 10)" '[ "$rc" = 4 ] && [ "$(list_names "$d3")" = 2026-05-02T030005Z ] && [[ $out == *"etc-onyx: 1 file of 2026-05-02T030005Z gone (publishers.json)"* ]] && [[ $out != *"ONYX_BULK_PUBLISHERS"* ]]'
+  mv "$t/publishers-saved" "$s3/etc/onyx/publishers.json" && echo 'ONYX_BULK_PUBLISHERS=/etc/onyx/publishers.json' >>"$s3/etc/onyx/node.env"
+  m2 2026-05-02T030008Z
+  check "with the limits file back the server is taken (ADR-0066 item 10)" '[ "$rc" = 0 ] && [ "$(list_names "$d3")" = 2026-05-02T030008Z ]'
   # READINESS A9, review USE-R1 M1: of the usage counts only finished, folded day files are kept.
   mkdir "$b3/state/usage"
   for i in 2026-02-01 2026-04-20 2026-05-01; do echo "{\"version\":1,\"day\":\"$i\",\"small_folded\":true}" >"$b3/state/usage/$i.json"; done
   for i in 2026-04-21 2026-05-02; do echo "{\"version\":1,\"day\":\"$i\",\"datasets\":{\"pub/quiet\":1},\"small_folded\":false}" >"$b3/state/usage/$i.json"; done
   echo '{"datasets":{"pub/quiet":2}}' >"$b3/state/usage/2026-04-20.json.corrupt"
   echo x >"$b3/state/usage/notes"
-  m2 2026-05-02T030005Z
+  m2 2026-05-02T030009Z
   check "a snapshot keeps folded usage day files only: not today's, yesterday's, an unfolded or a set-aside one (USE-R1 M1)" \
-    '[ "$rc" = 0 ] && [ "$(ls "$d3/2026-05-02T030005Z/state/usage" | paste -sd" ")" = "2026-02-01.json 2026-04-20.json notes" ] && ! grep -rqF "pub/quiet" "$d3/2026-05-02T030005Z" && [[ $out == *"1 usage day file(s) of days not finished were left out"* ]]'
+    '[ "$rc" = 0 ] && [ "$(ls "$d3/2026-05-02T030009Z/state/usage" | paste -sd" ")" = "2026-02-01.json 2026-04-20.json notes" ] && ! grep -rqF "pub/quiet" "$d3/2026-05-02T030009Z" && [[ $out == *"1 usage day file(s) of days not finished were left out"* ]]'
   # The node deletes a day file 90 days after its day: no loss, by age only (review USE-R1 L6).
   rm "$b3/state/usage/2026-02-01.json"
   m2 2026-05-03T030000Z

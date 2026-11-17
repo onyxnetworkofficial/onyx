@@ -80,7 +80,11 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   datasets are not served and its uploads refused; both sides are read again at most every
   300 s, and the mark clears when the book withdraws either side for good (THREATS CAT-6).
 - R-BULK-6 (quotas): per publisher at most `ONYX_BULK_QUOTA_GIB` over its datasets' latest
-  versions and `ONYX_BULK_MAX_DATASETS` datasets; per node `ONYX_BULK_MAX_GIB`.
+  versions and `ONYX_BULK_MAX_DATASETS` datasets; per node `ONYX_BULK_MAX_GIB`. On a node with
+  a limits file (`ONYX_BULK_PUBLISHERS`, ADR-0066 item 10) each publisher has its own entry
+  instead, the entries plus a reserve never exceed the node's total, a publisher without an
+  entry is refused, and a paused one is served, stores nothing new and may only remove
+  datasets (a removal is not held to the publisher's own limits).
 - R-BULK-7 (tiers): shards hot; warm after `ONYX_BULK_WARM_AFTER_DAYS` unread (copied and read
   back before the hot copy is dropped); hot again when read; never cold.
 - R-BULK-9 (sequence): a manifest's anchor uses `sequence_for(dataset, version)`, never another

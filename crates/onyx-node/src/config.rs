@@ -1072,6 +1072,29 @@ impl StorageConfig {
     }
 }
 
+/// The limits file at `path` (`ONYX_BULK_PUBLISHERS`, ADR-0066 item 10),
+/// checked against the node's total: a file that cannot be read, is not the
+/// format, or grants more than the node holds stops the start (THREATS
+/// PUBON-6).
+fn read_publishers(
+    path: &str,
+    max_total_bytes: u64,
+) -> Result<onyx_api::bulk_serve::PublisherLimits, String> {
+    use std::io::Read;
+    let cap = onyx_api::bulk_serve::MAX_PUBLISHERS_FILE_BYTES as u64;
+    let fail = |e: String| format!("ONYX_BULK_PUBLISHERS {path}: {e}");
+    if path.is_empty() {
+        return Err("ONYX_BULK_PUBLISHERS is set but empty".into());
+    }
+    let mut text = String::new();
+    std::fs::File::open(path)
+        .and_then(|f| f.take(cap + 1).read_to_string(&mut text))
+        .map_err(|e| fail(e.to_string()))?;
+    let limits = onyx_api::bulk_serve::PublisherLimits::parse(&text).map_err(&fail)?;
+    limits.fits(max_total_bytes).map_err(&fail)?;
+    Ok(limits)
+}
+
 /// `ONYX_BULK_*` (CL5, ADR-0059).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BulkConfig {
@@ -1093,6 +1116,13 @@ pub struct BulkConfig {
     /// `ONYX_BULK_ERASE_MAX_SHARDS` (10,000): erasing removed datasets
     /// (ADR-0059 amendment 4 item 5a). `on` is refused in storage mode.
     pub erase: onyx_api::bulk_serve::EraseConfig,
+    /// `ONYX_BULK_PUBLISHERS` (unset: none): the limits file, one entry per
+    /// publisher (ADR-0066 item 10). With it a publisher gets its entry's
+    /// bytes and datasets instead of `ONYX_BULK_QUOTA_GIB` and
+    /// `ONYX_BULK_MAX_DATASETS`, one without an entry is refused, and the
+    /// node does not start when the entries plus the reserve exceed
+    /// `ONYX_BULK_MAX_GIB`. Read once, at start.
+    pub publishers: Option<onyx_api::bulk_serve::PublisherLimits>,
 }
 
 impl BulkConfig {
@@ -1109,6 +1139,7 @@ impl BulkConfig {
             "ONYX_BULK_ERASE_HOLD",
             "ONYX_BULK_ERASE_MAX_SHARDS",
             "ONYX_BULK_FORMAT2",
+            "ONYX_BULK_PUBLISHERS",
         ];
         let Some(dir) = get("ONYX_BULK_DIR")
             .map(|p| p.trim().to_string())
@@ -1165,12 +1196,24 @@ impl BulkConfig {
             1_000_000,
         )? as u32;
         let erase = Self::erase_from_env(get, &num)?;
+        // A storage node fetches the manifests and shards of its deals for
+        // any publisher: a limits file would refuse them (review LIM-R1 L3).
+        if get("ONYX_BULK_PUBLISHERS").is_some()
+            && get("ONYX_STORAGE_CONTRACT").is_some_and(|v| !v.trim().is_empty())
+        {
+            return Err("ONYX_BULK_PUBLISHERS is refused in storage mode (ONYX_STORAGE_CONTRACT): a storage node takes the data of its deals, whoever published it (ADR-0066 item 10)".into());
+        }
+        let publishers = match get("ONYX_BULK_PUBLISHERS") {
+            None => None,
+            Some(p) => Some(read_publishers(p.trim(), limits.max_total_bytes)?),
+        };
         Ok(Some(BulkConfig {
             dir,
             warm,
             limits,
             free_per_minute,
             erase,
+            publishers,
         }))
     }
 

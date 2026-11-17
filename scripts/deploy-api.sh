@@ -35,6 +35,20 @@
 #                      the host has no Node 20 or later)
 #   ONYX_API_BULK      large datasets (CL5): ONYX_BULK_DIR=/var/lib/onyx/bulk with 24 GiB in all,
 #                      16 GiB per publisher (SCALE-4), when the export's deployment.json pins a signed book
+#                      With <export>/publishers.json (ADR-0066 item 10, docs/ops/run-api.md "Limits per
+#                      publisher") the file goes to /etc/onyx/publishers.json and ONYX_BULK_PUBLISHERS
+#                      names it: each publisher then has its own entry, one without an entry is
+#                      refused, and the entries plus the reserve must fit the 24 GiB (checked here
+#                      before anything is sent as a hint, and by the new binary on the server before
+#                      the running node is stopped). Without the file the node keeps the one quota
+#                      for every publisher
+#   ONYX_API_LIMITS_OFF  1 turns limits per publisher off on purpose. Without it a deploy whose
+#                      export has no publishers.json is REFUSED when the server has one (review
+#                      LIM-R1 H1: an export rebuilt without the file must not undo the limits)
+#
+# Before anything on the server is changed, scripts/deploy-node-gate.sh runs there: the limits rule
+# above, and the new binary's `onyx-node --check-config` on the new settings (the unit's own
+# ExecStartPre call). A refusal leaves the running node as it was.
 #   ONYX_API_BULK_FORMAT2  1 takes format-2 (widened) manifests (ONYX_BULK_FORMAT2=on, ADR-0059
 #                      amendment 5); default 0. Turn it on only once the live release already reads
 #                      format 2, so a rollback to the kept release still starts (review BULK-WIDEN-R1 M2)
@@ -95,8 +109,39 @@ if [ "${ONYX_API_USAGE:-0}" = 1 ]; then echo ONYX_USAGE=on >>"$stage/node.env"; 
 # source's backfill brings about 5.4 GB in one day, THREATS BULK-SRC-1); up to 50,000 datasets per publisher (the first
 # has about 9,050, ADR-0059 amendment 1). The health watch alerts below 10% or 2 GiB of free disk (OBS-DISK-1).
 bulk=${ONYX_API_BULK:-1}
+bulk_max_gib=24
 if [ "$bulk" != 0 ] && python3 -I -c 'import json,sys; sys.exit(0 if json.load(open(sys.argv[1])).get("signedBook") else 1)' "$export_dir/deployment.json"; then
-  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk ONYX_BULK_MAX_GIB=24 ONYX_BULK_QUOTA_GIB=16 ONYX_BULK_MAX_DATASETS=50000 >>"$stage/node.env"
+  printf '%s\n' ONYX_BULK_DIR=/var/lib/onyx/bulk "ONYX_BULK_MAX_GIB=$bulk_max_gib" ONYX_BULK_QUOTA_GIB=16 ONYX_BULK_MAX_DATASETS=50000 >>"$stage/node.env"
+  # Limits per publisher (ADR-0066 item 10, THREATS PUBON-6): <export>/publishers.json, when present.
+  # The node is the judge of the file: the new binary reads it on the server before the running
+  # node is stopped (scripts/deploy-node-gate.sh). Here only an early hint, before anything is
+  # sent: the file is not empty, is JSON of a sane size, and its whole-number grants plus the
+  # reserve fit the node's total. Everything else is left to the node's own rules.
+  if [ -e "$export_dir/publishers.json" ]; then
+    [ -s "$export_dir/publishers.json" ] || { echo "$export_dir/publishers.json is empty: not a limits file (remove it to deploy without limits per publisher)" >&2; exit 1; }
+    python3 -I - "$export_dir/publishers.json" "$bulk_max_gib" <<'LIMITS' || exit 1
+import json, os, sys
+path, total = sys.argv[1], int(sys.argv[2])
+if os.path.getsize(path) > 1 << 20:
+    sys.exit(f"{path}: over 1 MiB: not a limits file")
+try:
+    doc = json.load(open(path, encoding="utf-8"))
+except ValueError as e:
+    sys.exit(f"{path}: not JSON: {e}")
+entries = doc.get("publishers") if isinstance(doc, dict) else None
+if not isinstance(entries, list):
+    sys.exit(f"{path}: needs reserve_gib and publishers (a list)")
+def whole(v):
+    return v if type(v) is int and v >= 0 else 0
+granted = sum(whole(e.get("quota_gib")) for e in entries if isinstance(e, dict))
+reserve = whole(doc.get("reserve_gib"))
+if granted + reserve > total:
+    sys.exit(f"{path}: the grants ({granted} GiB) plus the reserve ({reserve} GiB) exceed the node's {total} GiB")
+print(f"limits per publisher: {len(entries)} listed, {granted} GiB granted, {reserve} GiB reserve, of {total} GiB (the node checks the file on the server)")
+LIMITS
+    cp "$export_dir/publishers.json" "$stage/publishers.json"
+    echo ONYX_BULK_PUBLISHERS=/etc/onyx/publishers.json >>"$stage/node.env"
+  fi
   if [ "${ONYX_API_BULK_FORMAT2:-0}" = 1 ]; then echo ONYX_BULK_FORMAT2=on >>"$stage/node.env"; fi
 fi
 # Level-2 results stores (ROADMAP B6, scripts/level2-sepolia.sh): <export>/observations/*.json,
@@ -150,6 +195,8 @@ ssh "$host" "rm -rf ~/$remote && install -d -m 700 ~/$remote"
 scp -q "$bin" "$stage/node.env" "$stage/onyx-node.service" "$export_dir/deployment.json" \
   "$export_dir/catalog.json" deploy/caddy/onyx-web.Caddyfile "$host:$remote/"
 [ "$payments" = off ] || scp -q .onyx-testnet/keys/operator.key "$host:$remote/operator.key"
+[ ! -f "$stage/publishers.json" ] || scp -q "$stage/publishers.json" "$host:$remote/publishers.json"
+scp -q scripts/deploy-node-gate.sh "$host:$remote/"
 rsync -a --delete "$export_dir/cas/" "$host:$remote/cas/"
 [ ${#obs[@]} = 0 ] || rsync -a "$stage/observations/" "$host:$remote/observations/"
 [ ! -d "$stage/track" ] || rsync -a "$stage/track/" "$host:$remote/track/"
@@ -158,6 +205,9 @@ rsync -a --delete "$export_dir/cas/" "$host:$remote/cas/"
 ssh "$host" "set -euo pipefail
   trap 'rm -rf ~/$remote' EXIT
   cd ~/$remote
+  # 0. Before anything is changed: limits per publisher are not turned off by accident, and the
+  # new binary takes the new settings (review LIM-R1 H1, M4). A refusal ends the deploy here.
+  ONYX_API_LIMITS_OFF=${ONYX_API_LIMITS_OFF:-0} bash deploy-node-gate.sh .
   # 1. Caddy first: its admin endpoint must be off before the node runs (NS17-R1 finding 2).
   if ! sudo cmp -s onyx-web.Caddyfile /etc/caddy/Caddyfile; then
     caddy validate --config onyx-web.Caddyfile --adapter caddyfile 2>&1 | grep -v '^{' || true
@@ -198,6 +248,14 @@ ssh "$host" "set -euo pipefail
   if [ -d track ]; then
     sudo install -d -m 0755 /etc/onyx/track
     sudo install -m 0644 track/publication.borsh /etc/onyx/track/
+  fi
+  # Limits per publisher (ADR-0066 item 10): root's file, read by the node at start.
+  if [ -f publishers.json ]; then
+    sudo install -m 0644 publishers.json /etc/onyx/publishers.json
+  elif sudo test -e /etc/onyx/publishers.json; then
+    # Reached only with ONYX_API_LIMITS_OFF=1 (step 0 refuses otherwise).
+    echo 'NOTE: limits per publisher are OFF now (one quota for every publisher); the previous file is in /var/backups/onyx-prev/etc-onyx/'
+    sudo rm -f /etc/onyx/publishers.json
   fi
   if [ -f operator.key ]; then
     sudo install -m 0600 operator.key /etc/onyx/operator.key

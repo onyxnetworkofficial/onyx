@@ -26,7 +26,9 @@
 //! catalogs.
 
 pub mod anchor;
+pub mod application;
 pub mod catalog;
+pub mod ids;
 pub mod input;
 pub mod manifest;
 pub mod row;

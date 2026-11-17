@@ -13,6 +13,8 @@
 #   observations/*.json and pins    the level-2 stores, and their pins taken from the
 #                                   ONYX_OBSERVATION_TEMPLATES line of the server's node.env
 #   track/publication.borsh         the track-record publication, when the snapshot has one
+#   publishers.json                 the limits per publisher (ADR-0066 item 10), when the server
+#                                   had them: a redeploy from the rebuilt export keeps them
 #   node.service.env                the server's node.env without the lines deploy-api.sh writes for
 #                                   the host (listen address, public URL, node URL, proxy, health,
 #                                   intake journal, bulk store, level-2 and track paths). The
@@ -77,11 +79,16 @@ build() {
     mkdir "$tmp/track"
     cp "$etc/track/publication.borsh" "$tmp/track/"
   fi
+  # Limits per publisher (ADR-0066 item 10): the server's file, so a redeploy keeps the limits.
+  if grep -q '^ONYX_BULK_PUBLISHERS=' "$etc/node.env"; then
+    [ -s "$etc/publishers.json" ] || die "the snapshot's node.env sets ONYX_BULK_PUBLISHERS but it has no etc-onyx/publishers.json"
+    cp "$etc/publishers.json" "$tmp/publishers.json"
+  fi
   chmod -R go-rwx "$tmp"
   verify "$snap" "$tmp"
   mv -T "$tmp" "$out"
   trap - EXIT
-  echo "EXPORT REBUILT: $out ($(find "$out/cas" -type f | wc -l) row files, $n level-2 stores, track $([ -d "$out/track" ] && echo yes || echo no)); checked by staging"
+  echo "EXPORT REBUILT: $out ($(find "$out/cas" -type f | wc -l) row files, $n level-2 stores, track $([ -d "$out/track" ] && echo yes || echo no), limits per publisher $([ -f "$out/publishers.json" ] && echo yes || echo no)); checked by staging"
   if grep -qx 'ONYX_PAYMENTS=off' "$out/node.service.env"; then
     echo "NOTE: the server ran with payments off, so the export's own payment mode is not in the backup (it matters only for a deploy with ONYX_API_PAYMENTS=1)"
   fi
@@ -136,6 +143,9 @@ for sub in ("observations", "track"):
         sys.exit(f"staging the export does not give the snapshot's {sub}/ files")
     if any(not filecmp.cmp(os.path.join(a, n), os.path.join(b, n), shallow=False) for n in names):
         sys.exit(f"a staged {sub}/ file differs from the snapshot's")
+a, b = os.path.join(etc, "publishers.json"), os.path.join(stage, "publishers.json")
+if "ONYX_BULK_PUBLISHERS" in live and not (os.path.isfile(b) and filecmp.cmp(a, b, shallow=False)):
+    sys.exit("staging the export does not give the snapshot's publishers.json")
 moved = sorted(k for k in staged if k not in exported and staged[k] != live.get(k))
 moved += sorted(k for k in staged if k not in live)
 if moved:
@@ -177,6 +187,7 @@ self_test() {
     echo '{"rounds":[1]}' >"$s/etc-onyx/observations/a.json"
     echo '{"rounds":[2]}' >"$s/etc-onyx/observations/b.json"
     echo publication >"$s/etc-onyx/track/publication.borsh"
+    echo '{"reserve_gib": 2, "publishers": [{"id": "first.publisher", "quota_gib": 16, "datasets": 50000, "state": "open"}, {"id": "second.publisher", "quota_gib": 1, "datasets": 16, "state": "paused"}]}' >"$s/etc-onyx/publishers.json"
     echo "n1 $mark" >"$s/etc-onyx/storage/n1.json"
     echo rows1 >"$s/cas/rows/r1" && echo rows2 >"$s/cas/rows/r2"
     cat >"$s/etc-onyx/node.env" <<EOF
@@ -195,6 +206,7 @@ ONYX_BULK_DIR=/var/lib/onyx/bulk
 ONYX_BULK_MAX_GIB=1
 ONYX_BULK_QUOTA_GIB=1
 ONYX_BULK_MAX_DATASETS=5
+ONYX_BULK_PUBLISHERS=/etc/onyx/publishers.json
 ONYX_OBSERVATIONS=/etc/onyx/observations/a.json,/etc/onyx/observations/b.json
 ONYX_OBSERVATION_TEMPLATES=m.a=0x0a,m.b=0x0b
 ONYX_TRACK_PUBLICATIONS=/etc/onyx/track/publication.borsh
@@ -204,12 +216,13 @@ EOF
   find "$t/snap" -type f -exec sha256sum {} + | sort >"$t/before"
 
   run "$t/snap" "$t/out"
-  check "an export is rebuilt from a snapshot and passes the staging check" '[ "$rc" = 0 ] && [[ $out == *"EXPORT REBUILT: $t/out (2 row files, 2 level-2 stores, track yes); checked by staging"* ]]'
+  check "an export is rebuilt from a snapshot and passes the staging check" '[ "$rc" = 0 ] && [[ $out == *"EXPORT REBUILT: $t/out (2 row files, 2 level-2 stores, track yes, limits per publisher yes); checked by staging"* ]]'
+  check "the limits per publisher are the server's file (ADR-0066 item 10)" 'cmp -s "$t/out/publishers.json" "$t/snap/etc-onyx/publishers.json" && [ "$(stat -c %a "$t/out/publishers.json")" = 600 ]'
   check "it holds what deploy-api.sh asks of an export" '[ -s "$t/out/node.service.env" ] && [ -s "$t/out/deployment.json" ] && [ -s "$t/out/catalog.json" ] && cmp -s "$t/out/cas/rows/r2" "$t/snap/cas/rows/r2" && cmp -s "$t/out/observations/b.json" "$t/snap/etc-onyx/observations/b.json" && cmp -s "$t/out/track/publication.borsh" "$t/snap/etc-onyx/track/publication.borsh"'
   check "the pins are the server's, one per line" '[ "$(cat "$t/out/observations/pins")" = "m.a=0x0a
 m.b=0x0b" ]'
   check "node.service.env keeps the export's settings and no host line" '[ "$(sort "$t/out/node.service.env" | cut -d= -f1 | paste -sd,)" = "ONYX_CATALOG,ONYX_ENV,ONYX_PAYMENTS,ONYX_RIGHTS,ONYX_SALT_NOTE" ]'
-  check "the folder is 0700, node.service.env 0600, nothing beside the export (no storage/, bulk/ or state/)" '[ "$(stat -c %a "$t/out")" = 700 ] && [ "$(stat -c %a "$t/out/node.service.env")" = 600 ] && [ "$(ls "$t/out" | paste -sd,)" = "cas,catalog.json,deployment.json,node.service.env,observations,track" ]'
+  check "the folder is 0700, node.service.env 0600, nothing beside the export (no storage/, bulk/ or state/)" '[ "$(stat -c %a "$t/out")" = 700 ] && [ "$(stat -c %a "$t/out/node.service.env")" = 600 ] && [ "$(ls "$t/out" | paste -sd,)" = "cas,catalog.json,deployment.json,node.service.env,observations,publishers.json,track" ]'
   check "a host setting this deploy-api.sh writes differently is a NOTE with names only" '[[ $out == *"NOTE: this commit'"'"'s deploy-api.sh would set differently from the snapshot: ONYX_BULK_MAX_DATASETS, ONYX_BULK_MAX_GIB, ONYX_BULK_QUOTA_GIB"* ]]'
   check "payments off on the server is said" '[[ $out == *"NOTE: the server ran with payments off"* ]]'
   check "no setting value is printed" '[[ $out != *"$mark"* ]]'
@@ -219,10 +232,10 @@ m.b=0x0b" ]'
   check "an existing OUT is refused" '[ "$rc" = 1 ] && [[ $out == *"exists"* ]] && [ -s "$t/out/node.service.env" ]'
 
   snapshot "$t/plain"
-  rm -r "$t/plain/etc-onyx/observations" "$t/plain/etc-onyx/track"
+  rm -r "$t/plain/etc-onyx/observations" "$t/plain/etc-onyx/track" "$t/plain/etc-onyx/publishers.json"
   sed -i -e '/^ONYX_OBSERVATION/d' -e '/^ONYX_TRACK/d' -e '/^ONYX_SUBMISSIONS/d' -e '/^ONYX_BULK/d' -e 's/^ONYX_PAYMENTS=off/ONYX_PAYMENTS=x402/' "$t/plain/etc-onyx/node.env"
   run "$t/plain" "$t/out-plain"
-  check "a snapshot with no level-2 store, track, intake or bulk store gives an export without them; the payment mode is kept" '[ "$rc" = 0 ] && [ ! -e "$t/out-plain/observations" ] && [ ! -e "$t/out-plain/track" ] && grep -qx ONYX_PAYMENTS=x402 "$t/out-plain/node.service.env" && [[ $out != *NOTE* ]]'
+  check "a snapshot with no level-2 store, track, intake or bulk store gives an export without them; the payment mode is kept" '[ "$rc" = 0 ] && [ ! -e "$t/out-plain/observations" ] && [ ! -e "$t/out-plain/track" ] && [ ! -e "$t/out-plain/publishers.json" ] && [[ $out == *"limits per publisher no"* ]] && grep -qx ONYX_PAYMENTS=x402 "$t/out-plain/node.service.env" && [[ $out != *NOTE* ]]'
 
   snapshot "$t/nonet"
   sed -i 's/^ONYX_ENV=testnet/ONYX_ENV=mainnet/' "$t/nonet/etc-onyx/node.env"
@@ -233,6 +246,19 @@ m.b=0x0b" ]'
   sed -i '/^ONYX_OBSERVATION_TEMPLATES/d' "$t/nopin/etc-onyx/node.env"
   run "$t/nopin" "$t/out-nopin"
   check "level-2 stores without a pin are refused" '[ "$rc" = 1 ] && [[ $out == *"names no pin"* ]] && [ ! -e "$t/out-nopin" ]'
+
+  snapshot "$t/nolimits"
+  rm "$t/nolimits/etc-onyx/publishers.json"
+  run "$t/nolimits" "$t/out-nolimits"
+  check "a snapshot whose node.env sets limits per publisher but lacks the file is refused" '[ "$rc" = 1 ] && [[ $out == *"no etc-onyx/publishers.json"* ]] && [ ! -e "$t/out-nolimits" ]'
+  snapshot "$t/unlisted"
+  sed -i '/^ONYX_BULK_PUBLISHERS=/d' "$t/unlisted/etc-onyx/node.env"
+  run "$t/unlisted" "$t/out-unlisted"
+  check "a limits file the server's node.env does not name is not carried: the export deploys as the server ran" '[ "$rc" = 0 ] && [ ! -e "$t/out-unlisted/publishers.json" ] && [[ $out == *"limits per publisher no"* ]]'
+  snapshot "$t/overgrant"
+  sed -i 's/"reserve_gib": 2/"reserve_gib": 20/' "$t/overgrant/etc-onyx/publishers.json"
+  run "$t/overgrant" "$t/out-overgrant"
+  check "a limits file this deploy-api.sh would refuse fails the staging check and leaves nothing" '[ "$rc" = 1 ] && [[ $out == *"exceed the node"* ]] && [ ! -e "$t/out-overgrant" ]'
 
   snapshot "$t/nocas"
   rm -r "$t/nocas/cas"

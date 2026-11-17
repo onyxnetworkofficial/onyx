@@ -11,9 +11,11 @@ publish.workspace = true
 onyx-core.workspace = true
 onyx-merkle.workspace = true
 onyx-labels.workspace = true
+onyx-intake.workspace = true
 borsh.workspace = true
 thiserror.workspace = true
 hex.workspace = true
+serde.workspace = true
 serde_json.workspace = true
 
 [lints]

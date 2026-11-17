@@ -645,8 +645,10 @@ scripts/export-from-backup.sh ~/onyx-backups/node/<time> "${ONYX_OPS_DIR:-$HOME/
 It only reads the snapshot, refuses an existing target, and writes the folder only after a check
 by staging: `deploy-api.sh`'s own local lines (its checks of the export and the files it stages;
 nothing that reaches a server, refused if they name `ssh`, `scp`, `rsync`, `sudo`, `systemctl` or
-`curl`) run on the new export, and every setting the export carries, every level-2 store and the
-publication must come out as the snapshot has them. It prints setting names and counts, never a
+`curl`) run on the new export, and every setting the export carries, every level-2 store, the
+publication and the limits per publisher (`publishers.json`, when the server's `node.env` sets
+`ONYX_BULK_PUBLISHERS`; ADR-0066 item 10) must come out as the snapshot has them, so a redeploy
+from the rebuilt export keeps the limits. It prints setting names and counts, never a
 value. Limits:
 
 - **Payment mode.** The export keeps the server's `ONYX_PAYMENTS`. A server deployed with payments

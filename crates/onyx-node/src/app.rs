@@ -1095,16 +1095,36 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
                 &b.warm,
                 b.limits,
             )
-            .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?
-            .with_free_per_minute(b.free_per_minute)
-            .with_erase(b.erase.clone())
-            // ADR-0059 amendment 4 item 5a slice 2a: learned removals are a
-            // storage node's (none are learned outside storage mode).
-            .with_removals(
-                c.storage
-                    .as_ref()
-                    .map_or(onyx_api::bulk_serve::RemovalsMode::Off, |s| s.removals),
-            );
+            .map_err(|e| format!("ONYX_BULK_DIR: {e}"))?;
+            // ADR-0066 item 10: with a limits file each publisher has its
+            // own entry and one without an entry is refused.
+            let store = match &b.publishers {
+                Some(l) => {
+                    eprintln!(
+                        "onyx-node: bulk limits per publisher on (ONYX_BULK_PUBLISHERS): {} listed, {} paused; a publisher without an entry is refused",
+                        l.grants.len(),
+                        l.grants.values().filter(|g| g.paused).count()
+                    );
+                    let store = store
+                        .with_publishers(l.clone())
+                        .map_err(|e| format!("ONYX_BULK_PUBLISHERS: {e}"))?;
+                    for note in store.publisher_notes() {
+                        eprintln!("onyx-node: bulk limits: {note}");
+                    }
+                    store
+                }
+                None => store,
+            };
+            let store = store
+                .with_free_per_minute(b.free_per_minute)
+                .with_erase(b.erase.clone())
+                // ADR-0059 amendment 4 item 5a slice 2a: learned removals are a
+                // storage node's (none are learned outside storage mode).
+                .with_removals(
+                    c.storage
+                        .as_ref()
+                        .map_or(onyx_api::bulk_serve::RemovalsMode::Off, |s| s.removals),
+                );
             eprintln!(
                 "onyx-node: bulk datasets on (ONYX_BULK_DIR), anchored in signed book {}",
                 hx(&pin.book)

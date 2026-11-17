@@ -14,6 +14,7 @@ path = "src/main.rs"
 [dependencies]
 onyx-core.workspace = true
 onyx-bulk.workspace = true
+onyx-fetch.workspace = true
 onyx-api = { path = "../onyx-api", features = ["http-client"] }
 borsh.workspace = true
 hex.workspace = true
@@ -25,6 +26,8 @@ hyper-rustls = { version = "0.27", default-features = false, features = ["http1"
 http-body-util = "0.1"
 
 [dev-dependencies]
+# The guarded fetch against a local fixture server (verify-application).
+onyx-fetch = { workspace = true, features = ["fixture"] }
 # The successor links end-to-end test serves an in-process node over HTTP.
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
 

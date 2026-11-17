@@ -5,6 +5,7 @@
 //! onyx-publish keygen   --out publisher.key                   # a fresh TEST key (mode 0600); prints its address only
 //! onyx-publish address  --key publisher.key
 //! onyx-publish keys-doc --key publisher.key --publisher <source id> [--out onyx-source-keys.json]
+//!                       [--also-address 0x…[,0x…]]   # further keys of the id (a spare)
 //! onyx-publish synth    --out data.csv --schema-out schema.json --mib 100   # clearly synthetic test rows
 //! onyx-publish build    --schema schema.json --input data.csv --dataset <id> --publisher <source id>
 //!                       --license CC0-1.0 [--attribution TEXT] --out DIR [--prev DIR [--widen]] [--shard-mib 8]
@@ -12,6 +13,20 @@
 //! onyx-publish sign     --key publisher.key --dir DIR
 //! onyx-publish anchor   --dir DIR --rpc URL --chain-id N --book 0x… --gas-key FILE
 //! onyx-publish upload   --dir DIR --node URL [--wait-secs N] [--catalog N]
+//!
+//! # Becoming a publisher (ADR-0066; the site folder mirrors your origin):
+//! onyx-publish apply    --key publisher.key --publisher <source id> --origin <origin> --data TEXT
+//!                       --chain-id N --book 0x… [--site site] [--sample sample/] [--quota-gib 1]
+//!                       [--datasets 16] [--cosign-key FILE] [--reapply]
+//! onyx-publish doctor   [--dir .] [--publisher <source id>] [--origin <origin>] [--live]
+//!                       [--spare-offline] [--registered FILE] [--decisions PATH]
+//! onyx-publish verify-application (--dir SITE | --origin <origin>) --chain-id N --book 0x…
+//!                       [--hash 0x…] [--registered FILE] [--decisions PATH] [--save DIR]
+//! onyx-publish request  --key publisher.key --kind withdraw|raise|key-stolen|retire-key
+//!                       --publisher <source id> --origin <origin> --chain-id N --book 0x…
+//!                       [--quota-gib N --datasets N] [--at UNIX] [--retire 0x…]
+//! onyx-publish verify-request (--dir SITE | --origin <origin>) --chain-id N --book 0x…
+//!                       [--hash 0x…] [--registered FILE] [--last-sequence N] [--save DIR]
 //!
 //! # One anchor for many manifests (ADR-0059 amendment 1):
 //! onyx-publish catalog-build  --publisher <source id> --dirs LIST --out FILE [--prev FILE]
@@ -45,6 +60,13 @@
 //! previous version's folder when a node lacks it ("versions are taken in
 //! order").
 //!
+//! `verify-application` and `verify-request` print one JSON report: exit 0
+//! passed, 1 refused, 2 usage, 3 nothing decided (the origin could not be
+//! reached), 4 passed what was checked but the book or the records were not
+//! read (never an approval). `doctor`
+//! prints one line per step and sends nothing: exit 0 when nothing is
+//! missing or wrong, else 1.
+//!
 //! Keys are read from files that only their owner can read and are never
 //! printed. Exit 0 done, 1 refused or failed, 2 usage.
 
@@ -67,11 +89,12 @@ use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 mod links;
+mod onboard;
 #[cfg(test)]
 mod succ_e2e;
 
 const USAGE: &str =
-    "usage: onyx-publish <keygen|address|keys-doc|synth|build|schema-fit|sign|anchor|upload|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
+    "usage: onyx-publish <keygen|address|keys-doc|synth|build|schema-fit|sign|anchor|upload|apply|doctor|verify-application|request|verify-request|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
 see the header of crates/onyx-publish/src/main.rs or docs/ops/bulk-publish.md";
 
 type Res<T> = Result<T, String>;
@@ -109,6 +132,22 @@ fn main() -> ExitCode {
         "sign" => sign_cmd(&opts),
         "anchor" => rt.block_on(anchor_cmd(&opts)),
         "upload" => rt.block_on(upload_cmd(&opts)),
+        "apply" => onboard::apply(&opts).map(|s| print!("{s}")),
+        "request" => onboard::request(&opts).map(|s| print!("{s}")),
+        "verify-application" | "verify-request" | "doctor" => {
+            let r = match cmd.as_str() {
+                "doctor" => rt.block_on(onboard::doctor_cmd(&opts)),
+                "verify-request" => rt.block_on(onboard::verify_request_cmd(&opts)),
+                _ => rt.block_on(onboard::verify_cmd(&opts)),
+            };
+            return match r {
+                Ok(code) => ExitCode::from(code),
+                Err(e) => {
+                    eprintln!("onyx-publish {cmd}: {e}");
+                    ExitCode::from(2)
+                }
+            };
+        }
         "catalog-build" => catalog_build_cmd(&opts),
         "catalog-sign" => catalog_sign_cmd(&opts),
         "catalog-anchor" => rt.block_on(catalog_anchor_cmd(&opts)),
@@ -131,7 +170,13 @@ fn main() -> ExitCode {
 struct Opts(BTreeMap<String, String>);
 
 /// Options that take no value.
-const FLAGS: &[&str] = &["widen", "links-next-generation"];
+const FLAGS: &[&str] = &[
+    "widen",
+    "links-next-generation",
+    "live",
+    "reapply",
+    "spare-offline",
+];
 /// What a flag stores in [`Opts`] (it is given, with no value).
 static FLAG_ON: String = String::new();
 
@@ -247,7 +292,12 @@ fn keygen(o: &Opts) -> Res<()> {
     f.write_all(format!("0x{}\n", hex::encode(k)).as_bytes())
         .map_err(|e| format!("{out}: {e}"))?;
     let a = onyx_bulk::anchor::address_of(&k).map_err(|e| e.to_string())?;
+    // The address is public: with it next to where the key was made, the
+    // key file itself can go offline (`doctor`, `keys-doc --also-address`).
+    let note = format!("{out}.address");
+    std::fs::write(&note, format!("{}\n", hx(&a))).map_err(|e| format!("{note}: {e}"))?;
     println!("new test key in {out} (mode 0600); address {}", hx(&a));
+    println!("its address (public) is also in {note}");
     println!("testnet only: never put real funds on it");
     Ok(())
 }
@@ -264,23 +314,39 @@ fn address(o: &Opts) -> Res<()> {
 
 /// The keys document a publisher serves at
 /// `https://<its domain>/.well-known/onyx-source-keys.json` (ADR-0028).
-fn keys_document(publisher: &str, signer: &[u8; 20]) -> String {
+fn keys_document(publisher: &str, signers: &[[u8; 20]]) -> String {
+    let keys: Vec<Value> = signers
+        .iter()
+        .map(|s| json!({"signer": hx(s), "scheme": "eip191"}))
+        .collect();
     format!(
         "{}\n",
-        json!({"version": 1, "source": publisher, "keys": [{"signer": hx(signer), "scheme": "eip191"}]})
+        json!({"version": 1, "source": publisher, "keys": keys})
     )
 }
 
 fn keys_doc(o: &Opts) -> Res<()> {
-    o.only(&["key", "publisher", "out"])?;
+    o.only(&["key", "publisher", "out", "also-address"])?;
     let k = read_key(o.req("key")?)?;
     let publisher = o.req("publisher")?;
     if !onyx_core::ids::is_dotted_id(publisher) {
         return Err("--publisher must be a dotted id (lowercase, e.g. metrics.example)".into());
     }
     let signer = onyx_bulk::anchor::address_of(&k).map_err(|e| e.to_string())?;
-    let doc = keys_document(publisher, &signer);
+    // Further keys of the id by address: a spare's key file stays offline.
+    let mut signers = vec![signer];
+    for a in o.opt("also-address").into_iter().flat_map(|l| l.split(',')) {
+        let a = parse_address(a.trim())?;
+        if signers.contains(&a) {
+            return Err("--also-address names a key twice".into());
+        }
+        signers.push(a);
+    }
+    let doc = keys_document(publisher, &signers);
     if let Some(out) = o.opt("out") {
+        if let Some(d) = Path::new(out).parent() {
+            std::fs::create_dir_all(d).map_err(|e| format!("{}: {e}", d.display()))?;
+        }
         std::fs::write(out, &doc).map_err(|e| format!("{out}: {e}"))?;
         println!("wrote {out}");
     } else {
@@ -557,6 +623,7 @@ fn build_cmd(o: &Opts) -> Res<()> {
         "widen",
         "created",
         "shard-mib",
+        "site",
     ])?;
     if onyx_bulk::successor::is_links_id(o.req("dataset")?) {
         return Err(format!(
@@ -590,6 +657,15 @@ fn build_cmd(o: &Opts) -> Res<()> {
     // The folder of the previous version, for `manifest.json` (see below):
     // found before anything is written, so a refusal leaves no half-built
     // folder.
+    // A second version 1 of the dataset an application here carries would
+    // have another root: once the first one's report is relayed, the book
+    // suspends the key (ADR-0066 item 5, THREATS PUBON-10).
+    if prev.is_none() {
+        let site = Path::new(o.opt("site").unwrap_or("site"));
+        if let Some(root) = onboard::carried_sample(site, &publisher.0, o.req("dataset")?) {
+            return Err(second_version_one(o.req("dataset")?, &root));
+        }
+    }
     let prev_dir = o
         .opt("prev")
         .map(|p| prev_dir_for(p, o.req("out")?))
@@ -656,6 +732,14 @@ fn build_cmd(o: &Opts) -> Res<()> {
         m.header.root()
     );
     Ok(())
+}
+
+/// Why `build` refuses a version 1 of a dataset whose version 1 a local
+/// application already carries.
+fn second_version_one(dataset: &str, root: &Hash32) -> String {
+    format!(
+        "your application carries version 1 of {dataset} (root {root}): a second version 1 would be an equivocation that suspends your key. Add rows with --prev <that folder>. Only if that application was never put on your origin: delete it, then build again"
+    )
 }
 
 /// Write `built`'s `manifest.bin` and its summary `manifest.json` into
@@ -2825,7 +2909,7 @@ mod tests {
 
     #[test]
     fn keys_document_shape() {
-        let doc = keys_document("metrics.example", &[1; 20]);
+        let doc = keys_document("metrics.example", &[[1; 20]]);
         let v: Value = serde_json::from_str(&doc).expect("ok");
         assert_eq!(v["version"], 1);
         assert_eq!(v["keys"][0]["scheme"], "eip191");

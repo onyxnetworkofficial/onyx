@@ -5,7 +5,7 @@ The loop works this list from the top; every change is logged in [TRACKER.md](TR
 State words: TODO, DOING, DONE (with the date), BLOCKED (says on what), OPERATOR (a step only the
 operator can do).
 
-Last update: 2026-11-16.
+Last update: 2026-11-17.
 
 ## A. Must have for a public beta on testnet
 
@@ -27,7 +27,7 @@ Last update: 2026-11-16.
 | A18 | Stale datasets: about 2,700 of 9,047 end before November | BLOCKED | Cause found 2026-11-16: the first publisher's own source files stopped: most Bitcoin files in September, every Solana-chain token in July, three more tokens in September. The exporter and the node publish what the source holds. Needs the publisher's source to resume; A20 makes the age visible meanwhile |
 | A20 | Each dataset shows how fresh it is (newest day, and a "not updated since" mark) in the list, the dataset page, the API listing and the AI connector | DONE 2026-11-16 (live 2026-11-17, node and site at `c7d86526`) | So a reader never takes stale data for current. The node says `newest` and `newest_age_days` and takes `fresh=30d` and `sort=newest`; the list and the open dataset say "No data after" (review FRESH-R1 fixed: a newest key dated in the future is said so and never counts as fresh); the connector marks `stale` and lists fresh matches first; the API page's example is a dataset with data from this month |
 | A21 | A new release of the tools (`onyx-check` with `--successor`, `--order`; `onyx-publish` with moves) so readers can check newest-first pages and successor links | DONE 2026-11-17 | `v0.4.0-testnet` published (15 files); the site links to it; the packaged `onyx-check` proves a newest-first page on the live node |
-| A24 | The public repository's CI is green, and no check step can fail without a message | DOING | Red since 2026-11-04: the hosted runner moved to a newer Node whose test output the smoke script did not read, and the script stopped without a message. Fixed in the repo; green is confirmed after the next public push |
+| A24 | The public repository's CI is green, and no check step can fail without a message | DONE 2026-11-17 | Red from 2026-11-04: the hosted runner moved to a newer Node whose test output the smoke script did not read, and the script stopped without a message. The script now asks for the format it reads, and every step that fails names itself. Green on the public `main` since `2f874a7` |
 | A19 | The home page says first what a data user gets | DONE 2026-11-16 (live 2026-11-17) | The first screen says what Onyx is (data anyone can check: every answer comes with a proof you can verify yourself) and what works today (about 9,000 datasets, the API, the AI assistant), then testnet and no-value notes; adding data is the second call to action. Before, it spoke to contributors first |
 | A22 | Working folders that must survive are not in a cache folder | DONE 2026-11-16 | The level-2, recheck and track scripts keep their state under `$ONYX_OPS_DIR` (default `~/.local/state/onyx`), and the docs put the deploy export there; a script that finds the old folder names the move and stops. A lost export is rebuilt from a node backup snapshot with `scripts/export-from-backup.sh`, checked by staging ([deployment.md](ops/deployment.md#folders-that-must-not-be-deleted)) |
 | A23 | Shell checks cannot be skipped by a pipe's timing | DONE 2026-11-17 | With `pipefail`, a pipe into `grep -q` or `head` can fail although it matched, so a check was skipped in some runs (one such refusal in `export-from-backup.sh` let lines run). All 41 such pipes in the scripts were read: 13 fixed, 28 marked harmless with the reason, and `scripts/check-pipefail-grep.py` in check-all refuses new ones (THREATS OPS-PIPE-1) |
@@ -40,7 +40,7 @@ Last update: 2026-11-16.
 
 | # | Item | State | Notes |
 |---|---|---|---|
-| B1 | A guided sign-up for a new publisher (key registration, first dataset, first catalog) | TODO | Tools exist; not self-serve |
+| B1 | A guided sign-up for a new publisher (key registration, first dataset, first catalog) | DOING: slices 1 and 2 of 4 built | 2026-11-17: ADR-0066 draft 2 after design review PUBON-R1 (ROADMAP S27, THREATS PUBON): a signed application at the applicant's origin that a CI job checks, a reviewer checklist, a public status, summed limits per publisher, a cosignature for a second key, `onyx-publish doctor`. Slice 1 built (2026-11-17): the signed application, `onyx-publish apply`, `verify-application`, `doctor`, `request`, the id and origin rules, the reviewer checklist docs/ops/publisher-review.md, the guide's first steps. Slice 2 built (2026-11-17): limits per publisher on the node (`ONYX_BULK_PUBLISHERS`: an entry per publisher, no entry no upload, the grants summed at start, a paused publisher can still remove a dataset), not deployed yet. Slices 3 and 4 (the reviewer's tool, the CI job, the public record, the website) are not built. No outside key is registered before the limits are live on the hosted node. One question waits for the operator: who reviews when the reviewer is away |
 | B2 | The proposal review queue has a reviewer tool and checklist in use | TODO | ROADMAP S5 |
 | B3 | Storage network: live deals again, deals on catalog-anchored datasets (THREATS CAT-2) | BLOCKED | Needs test ETH and a new OnyxStorage |
 | B4 | Installers opened on real machines (ROADMAP S20) | OPERATOR | |

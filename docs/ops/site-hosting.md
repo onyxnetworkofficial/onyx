@@ -57,6 +57,9 @@ Deploy (after a testnet run with `--export-node`, docs/ops/demo-testnet.md):
 CARGO_TARGET_DIR=~/.cache/onyx-api-target RUSTFLAGS="--remap-path-prefix=$HOME=/build" \
   cargo build --release --locked -p onyx-node
 scripts/deploy-api.sh <export dir> ~/.cache/onyx-api-target/release/onyx-node
+# Before it changes anything on the server it runs scripts/deploy-node-gate.sh there: the new
+# binary's --check-config on the new settings, and no export without publishers.json when the
+# server has limits per publisher (ONYX_API_LIMITS_OFF=1 to turn them off on purpose).
 ```
 
 The script refuses a binary that holds the builder's home folder path and an export that is not
