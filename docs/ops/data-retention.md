@@ -33,6 +33,35 @@ days; older files are deleted by the node. The files hold counts only, nothing a
   Its snapshots are kept by the backup's own schedule (days, weeks, months), which is longer than
   the node's 90 days: a folded day file can live in a monthly snapshot after the node deleted it.
 
+## Proposals (ADR-0039)
+
+A node with `ONYX_SUBMISSIONS` keeps every recorded proposal in its intake journal, and the
+reviewer's decisions in `submissions.decisions.journal` beside it, both owner-only in the node's
+private state directory ([proposal-review.md](proposal-review.md)).
+
+- What a proposal holds: the five answers, a title, a description, the source's name and URLs,
+  and for own data a sample of at most 8 KiB. No contact field exists and the journal keeps no
+  client address; e-mail-shaped text and URLs carrying a secret are refused before recording.
+- A decision holds the receipt id, the content hash, the state, a reason code, the checklist
+  answers and a time. No reviewer name and no free text.
+- **How long:** both journals are append-only and nothing is deleted from them, also after a
+  drop. They are kept until the operator archives the journal by hand at the 10,000 cap; no
+  retention period is enforced by code yet.
+- **`drop` does not erase the proposal's text** (decided 2026-11-17, THREATS REV-Q-4). Erasing
+  would mean rewriting a checksummed journal the running node holds open, and the content hash
+  that ids and decisions are bound to would no longer match its content. A dropped proposal is
+  never shown, fed or published, but its text stays readable to whoever can read the state
+  directory, and in the node backup's snapshots for as long as the backup keeps them (days, weeks,
+  months: `scripts/backup-node.sh`).
+- A proposal dropped for `personal_data` is the case this matters for. Until an erase exists, the
+  operator removes it by hand at the next maintenance stop: with the node stopped, move **both**
+  journals (the intake journal and `submissions.decisions.journal`) into the archive and let the
+  node start new ones, then let the old backup snapshots age out. Never leave the decisions
+  journal beside a new or an older intake journal: its decisions would be orphaned (the node
+  skips them and logs an alert; [proposal-review.md](proposal-review.md) "Recovery"), and receipts
+  not yet decided lose their place in the queue, so decide the waiting ones first. Open: an erase that
+  keeps the receipt and its decision but blanks the free text (ROADMAP S5).
+
 ## Plan
 
 | Data | Where | Kept |

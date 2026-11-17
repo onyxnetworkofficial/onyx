@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { checkSummary, groupedValue, parseReceipt, RECEIPT_STATUS, validReceiptId, type Receipt } from '#lib/submission-receipt.ts';
+	import { checkSummary, groupedValue, parseReceipt, RECEIPT_REASON, RECEIPT_STATUS, validReceiptId, type Receipt } from '#lib/submission-receipt.ts';
 	let { received = null }: { received?: Receipt | null } = $props();
 	import { submitApi } from '#lib/submit-api.svelte.ts';
 	// MP2: the Add data page reads the site's intake.json; this follows it.
@@ -52,6 +52,7 @@
 		<div role="status" data-testid="receipt-status">
 			<p class="mono receipt-id">{receipt.id}</p>
 			<p>{RECEIPT_STATUS[receipt.status]}</p>
+			{#if receipt.reason}<p data-testid="receipt-reason">{RECEIPT_REASON[receipt.reason]}</p>{/if}
 		</div>
 		{#if receipt.check}
 			{@const c = checkSummary(receipt.check)}

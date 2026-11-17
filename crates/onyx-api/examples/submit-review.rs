@@ -3,6 +3,8 @@
 //! `... JOURNAL show ID`
 //! `... JOURNAL decide ID EXPECTED_REVISION EXPECTED_HASH approved|rejected REASON`
 //! Output is private operator data, never a web asset or a public API response.
+//! Run it as the user that owns the journal, never as root. An approval needs the reviewer's
+//! clear first (`onyx-node proposals clear`, docs/ops/proposal-review.md).
 use onyx_api::submit::{SubmitLimits, SubmitStore};
 use serde_json::json;
 use std::path::Path;
@@ -16,6 +18,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if args.len() < 2 {
         return Err("see submit-review --help".into());
     }
+    // Review B2-R1 H1: never as root on the node's state directory.
+    onyx_api::journal::refuse_root("submit-review")?;
     if !Path::new(&args[0]).is_file() {
         return Err("the existing submission journal is required".into());
     }

@@ -48,7 +48,8 @@
 #    is a FAIL), and every checksummed state journal (*.journal and *.jsonl, state/self-settle/
 #    too) is read like the node's journal reader does (each line's keccak-256 sum, the header, the
 #    batches; a torn last line allowed), so the journals the drill's node does not open are checked
-#    too: intake (submissions.journal, bound to no chain) and, once payments are on, the money
+#    too: intake (submissions.journal and the reviewer's submissions.decisions.journal, bound to
+#    no chain) and, once payments are on, the money
 #    journals (receipts.jsonl, settle-intents.jsonl, credits-in-flight.jsonl, pending-settles.jsonl),
 #    each bound to the snapshot's deployment.json chain and OnyxRevenue, as the node binds them.
 #    Contents are never printed.
@@ -81,6 +82,8 @@ start_cap=${ONYX_DRILL_START_SECS:-900}
 check_bin=${ONYX_CHECK_BIN:-$HOME/.cache/onyx-api-target/release/onyx-check}
 max_secs=${ONYX_DRILL_MAX_SECS:-10800}
 ssh_host=${ONYX_DRILL_SSH_HOST:-onyx-web}
+# Review B2-R1 L3: a name that starts with a letter or a digit, so ssh can never read it as an option.
+[[ $ssh_host =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "restore-drill: ONYX_DRILL_SSH_HOST is a host name or ssh alias, not '$ssh_host'" >&2; exit 2; }
 # Test hooks (the self-test only): stand-ins for systemd-run and ssh.
 systemd_run=${ONYX_DRILL_SYSTEMD_RUN:-systemd-run}
 ssh_cmd=${ONYX_DRILL_SSH:-ssh}
@@ -132,11 +135,13 @@ def framed(v):
     body = json.dumps(v, separators=(",", ":")).encode()
     return keccak256(body)[:16].hex().encode() + b" " + body + b"\n"
 # The journals in this format, by file name, with their kind and what the node binds them to
-# (Journal::open refuses another header): intake (crates/onyx-api/src/submit.rs) to no chain; the
+# (Journal::open refuses another header): intake (crates/onyx-api/src/submit.rs) and the reviewer's
+# decisions beside it (submit_decisions.rs, READINESS B2) to no chain; the
 # money journals, kept once payments are on (receipts.rs, intents.rs, reporter.rs credits in
 # flight, self_settle.rs pending settles under state/self-settle/), to the deployment's chain and
 # its OnyxRevenue (`revenue` in deployment.json), in lowercase hex as the node writes it.
-FRAMED = {"submissions.journal": ("onyx-submissions", False), "receipts.jsonl": ("onyx-receipts", True),
+FRAMED = {"submissions.journal": ("onyx-submissions", False),
+          "submissions.decisions.journal": ("onyx-submission-decisions", False), "receipts.jsonl": ("onyx-receipts", True),
           "settle-intents.jsonl": ("onyx-settle-intents", True),
           "credits-in-flight.jsonl": ("onyx-credits-in-flight", True),
           "pending-settles.jsonl": ("onyx-pending-settles", True)}
@@ -494,6 +499,21 @@ self_test() {
   printf '0123 {"ops":[{"add":' >>"$st/submissions.journal"
   out=$(python3 -I -c "$PYJ" check "$st")
   check "a good intake journal passes, a torn last line allowed, no content printed (BAK-R1-L3)" '[[ $out == *"PASS"*"state/submissions.journal: 3 lines (a header and 2 batches, 1 live entries)"*"torn last line"* ]] && [[ $out != *FAIL* ]] && [[ $out != *"$mark"* ]]'
+  # READINESS B2: the reviewer's decisions (clear, hold, drop) are a journal of their own beside
+  # the intake journal; the drill reads it under its own kind, and a snapshot holding decisions passes.
+  local dec=$st/submissions.decisions.journal sid=sub_0123456789abcdef0123456789abcdef
+  printf '%s\n' '{"onyxJournal":2,"kind":"onyx-submission-decisions","chainId":0,"contract":"0x0000000000000000000000000000000000000000"}' \
+    "{\"ops\":[{\"add\":0,\"v\":{\"kind\":\"decision\",\"version\":1,\"submissionId\":\"$sid\",\"hash\":\"0x$mark\",\"revision\":1,\"from\":\"pending_review\",\"to\":\"on_hold\",\"reason\":\"other:$mark\",\"decidedUnix\":1794900000}}]}" \
+    "{\"ops\":[{\"add\":1,\"v\":{\"kind\":\"decision\",\"version\":1,\"submissionId\":\"$sid\",\"hash\":\"0x$mark\",\"revision\":2,\"from\":\"on_hold\",\"to\":\"cleared\",\"checklist\":{\"termsRereadToday\":\"yes\",\"noPersonalData\":\"yes\",\"entitiesOnly\":\"yes\",\"sourcePublicReachable\":\"yes\",\"rightsLevel\":\"allowed\"},\"decidedUnix\":1794900100}}]}" \
+    "{\"ops\":[{\"add\":2,\"v\":{\"kind\":\"decision\",\"version\":1,\"submissionId\":\"$sid\",\"hash\":\"0x$mark\",\"revision\":3,\"from\":\"cleared\",\"to\":\"dropped\",\"reason\":\"terms_forbid\",\"decidedUnix\":1794900200}}]}" \
+    | python3 -I -c "$PYJ" frame >"$dec"
+  out=$(python3 -I -c "$PYJ" check "$st")
+  check "a snapshot with the reviewer's decisions passes: both journals read, no content printed (READINESS B2)" '[[ $out == *"PASS"*"state/submissions.decisions.journal: 4 lines (a header and 3 batches, 3 live entries), every checksum good"* ]] && [[ $out == *"PASS"*"state/submissions.journal: 3 lines"* ]] && [[ $out != *FAIL* ]] && [[ $out != *"$mark"* ]] && [[ $out != *"$sid"* ]]'
+  cp "$st/submissions.journal" "$t/intake.keep"
+  head -c -1 "$t/intake.keep" | sed '$d' >"$dec.as-intake" && mv "$dec.as-intake" "$dec"
+  out=$(python3 -I -c "$PYJ" check "$st")
+  check "an intake journal under the decisions' name fails (READINESS B2)" '[[ $out == *"FAIL"*"state/submissions.decisions.journal: line 1: another kind of journal"* ]]'
+  rm -f "$dec" "$t/intake.keep"
   python3 -I - "$st/submissions.journal" <<'PY'
 import sys
 p = sys.argv[1]

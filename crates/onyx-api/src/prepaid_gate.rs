@@ -238,9 +238,8 @@ impl PrepaidState {
         let mut open = std::fs::OpenOptions::new();
         open.create(true).append(true);
         crate::journal::owner_only(&mut open);
-        let journal = open
-            .open(&path)
-            .and_then(|f| crate::journal::set_owner_only(&path).map(|()| f))
+        // Never through a link under its name, and the mode set on the open file.
+        let journal = crate::journal::open_plain(&mut open, &path, true)
             .map_err(|e| format!("prepaid journal {}: {e}", path.display()))?;
         if keep < text.len() {
             journal

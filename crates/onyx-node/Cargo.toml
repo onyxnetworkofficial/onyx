@@ -31,12 +31,15 @@ serde_json.workspace = true
 axum = { version = "0.8.9", default-features = false, features = ["tokio", "http1", "json", "query"] }
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "signal", "time", "sync"] }
 hyper = { version = "1", default-features = false, features = ["server", "http1"] }
-# Hardware preflight (`doctor`): statvfs and device numbers without unsafe code.
-rustix = { version = "1.1.5", default-features = false, features = ["fs", "process", "std"] }
+# Hardware preflight (`doctor`): statvfs and device numbers without unsafe code. `thread`: the
+# proposal reviewer started as root drops to the journal's owner (`proposals`, review B2-R1 H1).
+rustix = { version = "1.1.5", default-features = false, features = ["fs", "process", "std", "thread"] }
 hyper-util = { version = "0.1", default-features = false, features = ["server", "http1", "tokio", "server-graceful", "service"] }
 
 [dev-dependencies]
 onyx-bulk.workspace = true
+# tests/proposals_cli.rs writes a proposal as the node records it.
+onyx-intake.workspace = true
 onyx-labels.workspace = true
 tokio = { version = "1", default-features = false, features = ["rt-multi-thread", "macros", "net", "time", "io-util", "test-util"] }
 

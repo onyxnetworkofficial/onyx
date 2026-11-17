@@ -37,6 +37,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         [j, i, f, s] if f == "--from-store" => (j, i, Mode::Live(s.clone())),
         _ => return Err(usage.into()),
     };
+    // Review B2-R1 H1: never as root on the node's state directory, before anything there
+    // is looked at.
+    onyx_api::journal::refuse_root("feed-approved")?;
     if !Path::new(journal).is_file() {
         return Err("the existing submission journal is required".into());
     }

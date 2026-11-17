@@ -29,8 +29,27 @@
   "pnpm": {
     "auditConfig": {
       "ignoreGhsas": [
-        "GHSA-gcqx-w48m-w2h4"
+        "GHSA-gcqx-w48m-w2h4",
+        "GHSA-fc5q-39xc-vjpf"
       ]
+    }
+  },
+  "auditExceptions": {
+    "GHSA-gcqx-w48m-w2h4": {
+      "threat": "DEP-4",
+      "package": "deepmerge",
+      "severity": "low",
+      "reason": "Build-time only (merges the Svelte Vite plugin's own config); nothing untrusted is merged and it is not in the shipped site; no patched version exists.",
+      "reviewed": "2026-11-17",
+      "recheck": "2026-12-01"
+    },
+    "GHSA-fc5q-39xc-vjpf": {
+      "threat": "DEP-5",
+      "package": "picomatch",
+      "severity": "high",
+      "reason": "Build-time only (file matching inside vite and svelte-check); every glob pattern comes from this repository's own config, none from a site visitor, and it is not in the shipped site; no patched version exists.",
+      "reviewed": "2026-11-17",
+      "recheck": "2026-12-01"
     }
   }
 }

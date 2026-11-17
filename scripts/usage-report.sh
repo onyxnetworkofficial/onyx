@@ -103,6 +103,12 @@ JSON
   out=$(print_report "$t/esc.json" 5)
   check "a control character never reaches the terminal" '[[ $out != *$'"'"'\e'"'"'* ]] && [[ $out == *"GET ?[2J/x"* ]]'
   check "DAYS is 1-90" '! number 0 1 90 DAYS 2>/dev/null && ! number 91 1 90 DAYS 2>/dev/null && ! number 7x 1 90 DAYS 2>/dev/null && ! number "7;id" 1 90 DAYS 2>/dev/null && number 90 1 90 DAYS && number 08 1 90 DAYS'
+  local h rc refused=0
+  for h in '-oProxyCommand=x' '-v' 'a b' 'a;b' '.x'; do
+    rc=0; out=$(ONYX_USAGE_HOST="$h" bash "$0" 7 2>&1) || rc=$?
+    [ "$rc" = 2 ] && [[ $out == *"host name or ssh alias"* ]] && refused=$((refused + 1))
+  done
+  check "a host that starts like an option or is not a plain name is refused before ssh (B2-R1 L3)" '[ "$refused" = 5 ]'
   echo "usage-report self-test: $ok passed, $bad failed"
   [ "$bad" = 0 ]
 }
@@ -119,6 +125,8 @@ days=${1:-7}; top=${2:-20}
 number "$days" 1 90 DAYS
 number "$top" 1 999 TOP
 host=${ONYX_USAGE_HOST:-${ONYX_SITE_HOST:-onyx-web}}
+# Review B2-R1 L3: a name that starts with a letter or a digit, so it can never be read as an option.
+[[ $host =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "usage-report: ONYX_USAGE_HOST is a host name or ssh alias, not '$host'" >&2; exit 2; }
 bin=${ONYX_USAGE_BIN:-/usr/local/bin/onyx-node}
 state=${ONYX_USAGE_STATE:-/var/lib/onyx/state}
 for v in "$bin" "$state"; do
@@ -131,7 +139,7 @@ if [ "$host" = local ]; then
   "${read_counts[@]}" >"$tmp" || { echo "usage-report: $bin usage failed (see above)" >&2; exit 1; }
 else
   # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-  ssh -o BatchMode=yes "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" >"$tmp" \
+  ssh -o BatchMode=yes -- "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" >"$tmp" \
     || { echo "usage-report: reading the counts on $host failed (see above; it needs sudo -n for $bin)" >&2; exit 1; }
 fi
 print_report "$tmp" "$((10#$top))"

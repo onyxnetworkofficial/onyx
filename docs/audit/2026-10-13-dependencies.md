@@ -119,14 +119,61 @@ cargo-deny 0.20.2 first):
 2. `pnpm audit --audit-level low` in apps/web, any severity fails; skipped with a message when
    offline or when pnpm is missing (the CI image may not have pnpm, DEP-2).
 
+3. Reviewed npm advisories (added 2026-11-17, see below): every id that `pnpm audit` is told to
+   ignore must have a complete, unexpired `auditExceptions` entry; this step runs offline too.
+
 Checked: the gate passes online (exit 0) and through a dead proxy (offline messages, exit 0);
 removing `MITNFA` from `deny.toml` makes it fail (`licenses FAILED`, exit 4).
+
+## Reviewed npm advisories (2026-11-17)
+
+An npm advisory with no fixed release cannot be upgraded away. When the exposure is reviewed and
+accepted, the advisory is ignored by id, for a limited time, in `apps/web/package.json`:
+
+- `pnpm.auditConfig.ignoreGhsas`: the id, so `pnpm audit` does not report it;
+- `auditExceptions.<id>`: `threat` (a THREATS row `DEP-n` that names the id), `package`,
+  `severity`, `reason`, `reviewed` and `recheck` (dates, `recheck` at most 14 days after
+  `reviewed`).
+
+`scripts/check-deps.sh` prints each ignored advisory on every run (`NPM ADVISORY IGNORED`), and
+fails when an ignored id has no entry, an entry has no ignore, a field or the THREATS row is
+missing, the re-check date is more than 14 days after the review, or the re-check date has
+passed. On the re-check date: look for a fixed release (`pnpm view <package> versions`, the
+advisory's patched versions). If there is one, update the lock file (`pnpm install
+--lockfile-only`, then a frozen install, the web tests and both site builds) and remove the id
+and its entry. If there is none, review the exposure again and set new dates. `ignoreCves` is
+refused: one list, by GHSA id.
+
+| Advisory | Package, path | Exposure | Until |
+|---|---|---|---|
+| GHSA-gcqx-w48m-w2h4 (low) | `deepmerge` 4.3.1, through `@sveltejs/vite-plugin-svelte` | build time only, merges the plugin's own config; not in the built site (DEP-4) | 2026-12-01 |
+| GHSA-fc5q-39xc-vjpf (high, CVE-2026-112366) | `picomatch` 4.0.7, through `vite` (directly, and through `tinyglobby` and `fdir`) and `svelte-check` (through `fdir`) | build time only, see below (DEP-5) | 2026-12-01 |
+
+GHSA-fc5q-39xc-vjpf, read on 2026-11-17 from the GitHub Advisory Database
+(https://github.com/advisories/GHSA-fc5q-39xc-vjpf) and `pnpm audit`: `picomatch` through 4.0.7
+takes exponential time when it compiles and runs a single-branch repeated extglob such as `+(*)`
+or `+(*a)` against a short crafted string, which blocks the Node.js process (CVSS 7.5, availability
+only). Affected: every release (`<= 4.0.7`; 4.0.7 is the newest); patched version: none.
+
+- Where: only `apps/web/pnpm-lock.yaml`. `apps/agent` and `apps/contrib` have no dependencies;
+  the lock files of `apps/desktop` and `scripts/desktop-tools` do not hold `picomatch`.
+- Who gives it patterns: Vite, SvelteKit and `svelte-check`, from the repository's own config and
+  source (`vite.config`, `svelte.config`, `tsconfig.json`); `apps/web/src` does not import it and
+  uses no `import.meta.glob`. A site visitor, a publisher's data or an API answer never reaches it.
+- What ships: the site is static files (`@sveltejs/adapter-static`). The newest built site on the
+  build machine (2026-11-15, same lock file) was searched for `picomatch`, `extglob` and `makeRe`:
+  no file matches. The release archives hold Rust binaries and the two dependency-free Node tools.
+- Worst case: a build that hangs, for someone who can already change the build config, which is
+  the right to run any code in that build.
+- No fix on 2026-11-17: `svelte-check` 4.7.8 and `fdir` 6.5.0 (the newest) still depend on it,
+  `vite` depends on it directly, and an override has no unaffected release to point to.
 
 ## Open (THREATS)
 
 - DEP-1 solc 0.8.30 known bugs, none triggered; bump with L2.
 - DEP-2 advisory checks that are skipped: offline runs, CI without pnpm, and the manual Foundry
   and solc checks.
+- DEP-4, DEP-5 npm advisories without a fixed release, ignored by id until 2026-12-01.
 
 ## Repository checks after the change
 

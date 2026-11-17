@@ -32,6 +32,8 @@ Alerts:
 | Dispute opened | Any challenge is posted |
 | Determinism mismatch | Two honest reruns of the same recipe + input give different bytes; page immediately, see [incident-response.md](incident-response.md) |
 | Payment failures | x402 settlement errors above a threshold |
+| Proposal journal near its cap | The node logs a line tagged `onyx-intake-cap-alert` from 80% of the 10,000 recorded cap (at start, then once per further percent). Read with `journalctl -u onyx-node`; not wired to the health watch yet ([proposal-review.md](proposal-review.md)) |
+| Reviewer's decisions unreadable | The node logs `onyx-intake-decisions-alert` and keeps showing the last good decisions ([proposal-review.md](proposal-review.md)) |
 
 ## Open questions
 

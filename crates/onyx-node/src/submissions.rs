@@ -9,10 +9,15 @@ use std::sync::Arc;
 pub fn routes(path: Option<&Path>) -> std::io::Result<Router> {
     match path {
         None => Ok(Router::new()),
-        Some(path) => Ok(onyx_api::submit::routes(Arc::new(SubmitStore::open(
-            path,
-            Some(Arc::new(HttpsFetch::new())),
-            SubmitLimits::default(),
-        )?))),
+        Some(path) => {
+            let store = SubmitStore::open(
+                path,
+                Some(Arc::new(HttpsFetch::new())),
+                SubmitLimits::default(),
+            )?;
+            // ROADMAP S5: one warning line at start when the journal is near its recorded cap.
+            store.warn_if_near_cap();
+            Ok(onyx_api::submit::routes(Arc::new(store)))
+        }
     }
 }

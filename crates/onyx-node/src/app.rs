@@ -1515,6 +1515,9 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
     if args.first().map(String::as_str) == Some("usage") {
         return crate::usage::main(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("proposals") {
+        return crate::proposals::main(&args[1..]);
+    }
     let mut allow_mainnet = false;
     let mut check_only = false;
     let mut health = false;
@@ -1524,7 +1527,7 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
             "--check-config" => check_only = true,
             "healthcheck" => health = true,
             "-h" | "--help" => {
-                println!("usage: onyx-node [--check-config | healthcheck | doctor ... | usage ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)");
+                println!("usage: onyx-node [--check-config | healthcheck | doctor ... | usage ... | proposals ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)\nproposal review: onyx-node proposals --help (docs/ops/proposal-review.md)");
                 return ExitCode::SUCCESS;
             }
             other => {

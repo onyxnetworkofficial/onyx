@@ -273,6 +273,13 @@ PYDATA
 code=$(curl -sS --max-time 20 -o /dev/null -w '%{http_code}' -H 'Content-Type: application/json' --data-binary "@$work/oversize.json" "$api/v1/submit")
 [ "$code" = 413 ] || fail "node intake body cap: $code"
 if "$target/debug/examples/submit-review" "$work/submissions.journal" list >"$work/locked-review.log" 2>&1; then fail "reviewer bypassed the node lock"; fi
+# READINESS B2 (review B2-R1 L1): the reviewer clears the proposal beside the running node, with the
+# checklist; the node shows it without a restart, and only a cleared proposal takes the approval.
+"$target/debug/onyx-node" proposals clear "$receipt_id" --terms-reread yes --no-personal-data yes \
+  --entities-only yes --source-public yes --rights-level allowed --journal "$work/submissions.journal" >"$work/clear.log" \
+  || fail "the reviewer's clear beside the running node"
+cleared=$(curl -sS --max-time 20 "$api/v1/submit/$receipt_id")
+[[ $cleared == *'"status":"cleared"'* ]] || fail "the running node does not show the clear: $cleared"
 stop "$node_pid"; node_pid=""
 "$target/debug/examples/submit-review" "$work/submissions.journal" show "$receipt_id" >"$work/private-review.json"
 "$target/debug/examples/submit-review" "$work/submissions.journal" decide "$receipt_id" 0 "$receipt_hash" approved reviewed >"$work/decision.json"

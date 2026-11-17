@@ -9,7 +9,8 @@
 //!   append-only journal ([`crate::journal`]) as "pending review" (or "held
 //!   for rights review") and returns its id. A refused one is not recorded.
 //! - `GET /v1/submit/{id}`: that submission's status only, plus the observers' public evidence
-//!   once an approved submission was fed ([`feed`]). No listing.
+//!   once an approved submission was fed ([`feed`]), and a reason code from a fixed list once a
+//!   reviewer put it on hold or dropped it ([`decisions`]). No listing.
 //!
 //! Limits: a body cap ([`MAX_BODY`]), per-client budgets per minute and per
 //! UTC day on both POSTs (an IPv6 /48 shares one client's budget), global
@@ -34,6 +35,8 @@ use crate::journal::Binding;
 #[cfg(test)]
 use crate::journal::Journal;
 
+#[path = "submit_decisions.rs"]
+pub mod decisions;
 #[path = "submit_feed.rs"]
 pub mod feed;
 #[path = "submit_review.rs"]
@@ -180,6 +183,10 @@ impl Default for SubmitLimits {
 /// fetcher.
 pub struct SubmitStore {
     ledger: Mutex<review::Ledger>,
+    /// The reviewer's decisions beside the journal, re-read when they change ([`decisions`]).
+    decisions: decisions::Watch,
+    /// Where the warning before the recorded cap goes (the node's log).
+    cap_alert: Arc<dyn Fn(&str) + Send + Sync>,
     /// The feed ledger beside the journal, read once at open ([`feed`]).
     feed: feed::FeedLedger,
     workers: Arc<tokio::sync::Semaphore>,
@@ -230,9 +237,12 @@ impl SubmitStore {
         limits: SubmitLimits,
     ) -> std::io::Result<SubmitStore> {
         let feed = feed::FeedLedger::load(&feed::ledger_path(path.as_ref()))?;
-        let ledger = review::Ledger::open(path, limits.max_recorded)?;
+        let ledger = review::Ledger::open(path.as_ref(), limits.max_recorded)?;
+        let decisions = decisions::Watch::open(path.as_ref(), ledger.records());
         Ok(SubmitStore {
             ledger: Mutex::new(ledger),
+            decisions,
+            cap_alert: Arc::new(|line| eprintln!("onyx-node: {line}")),
             feed,
             workers: Arc::new(tokio::sync::Semaphore::new(MAX_LEDGER_WORKERS)),
             budgets: Caches::new(1, 1),
@@ -251,6 +261,51 @@ impl SubmitStore {
         v.dedup();
         self.allow = v;
         self
+    }
+
+    /// Send the warning before the recorded cap to `sink` instead of the log (tests).
+    pub fn with_cap_alert(mut self, sink: Arc<dyn Fn(&str) + Send + Sync>) -> Self {
+        self.cap_alert = sink;
+        self
+    }
+
+    /// Warn when the journal is at or over [`decisions::CAP_ALERT_PERCENT`] percent of the
+    /// recorded cap (ROADMAP S5): the node calls this once at start; recording calls it at each
+    /// further percent. Returns the line it sent.
+    pub fn warn_if_near_cap(&self) -> Option<String> {
+        let line = decisions::cap_alert(self.recorded(), self.limits.max_recorded)?;
+        (self.cap_alert)(&line);
+        Some(line)
+    }
+
+    /// The alert lines about the reviewer's decisions journal since the start (counts only;
+    /// each was also written to the log with [`decisions::DECISIONS_ALERT_TAG`]).
+    pub fn decision_alerts(&self) -> Vec<String> {
+        self.decisions.alerts()
+    }
+
+    /// How many times the decisions journal was read (tests).
+    #[cfg(test)]
+    pub(crate) fn decision_reads(&self) -> usize {
+        self.decisions.reads()
+    }
+
+    /// The public state of the receipt `id`: the receipt, and the state and reason code a
+    /// proposer may see ([`decisions::public_state`]). Blocking (it may re-read the decisions).
+    pub fn public_status(
+        &self,
+        id: &str,
+    ) -> Result<(review::ReviewItem, String, Option<String>), ReviewError> {
+        let ledger = self.ledger.lock().map_err(|_| ReviewError::Unavailable)?;
+        let item = ledger
+            .records()
+            .get(id)
+            .cloned()
+            .ok_or(ReviewError::NotFound)?;
+        let decided = self.decisions.decided(ledger.records(), id);
+        let (state, reason) = decisions::public_state(&item, decided.as_ref());
+        let (state, reason) = (state.to_owned(), reason.map(str::to_owned));
+        Ok((item, state, reason))
     }
 
     /// Number of recorded submissions.
@@ -514,7 +569,14 @@ async fn submit_inner(
             Some(st.limits.global_submit_per_day),
             "submissions",
         )?;
-        ledger.record(s, now_secs()).map_err(review_api_error)
+        let id = ledger.record(s, now_secs()).map_err(review_api_error)?;
+        let (recorded, cap) = (ledger.recorded(), st.limits.max_recorded);
+        if decisions::cap_alert_due(recorded, cap) {
+            if let Some(line) = decisions::cap_alert(recorded, cap) {
+                (st.cap_alert)(&line);
+            }
+        }
+        Ok(id)
     })
     .await
     .map_err(|_| crate::internal("submission worker failed"))??;
@@ -559,12 +621,15 @@ async fn status(
     let worker = store.clone();
     let item = tokio::task::spawn_blocking(move || {
         let _permit = permit;
-        worker.review_item(&lookup_id)
+        worker.public_status(&lookup_id)
     })
     .await;
     let r = match item {
-        Ok(Ok(item)) => {
-            let mut body = json!({"id": id, "status": item.status});
+        Ok(Ok((item, state, reason))) => {
+            let mut body = json!({"id": id, "status": state});
+            if let Some(reason) = reason {
+                body["reason"] = reason.into();
+            }
             if let Some(check) = store.feed.public_check(&item.id, &item.status, &item.hash) {
                 body["check"] = check;
             }

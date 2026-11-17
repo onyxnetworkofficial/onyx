@@ -92,6 +92,25 @@ async fn call(
     (status, headers, v)
 }
 
+/// The reviewer's clear, which the offline approval needs first (review B2-R1 L1).
+fn clear(dir: &std::path::Path, id: &str, at: u64) {
+    let yes = || "yes".to_string();
+    decisions::decide(
+        &dir.join("submissions.journal"),
+        SubmitLimits::default().max_recorded,
+        id,
+        decisions::Action::Clear(decisions::Checklist {
+            terms_reread_today: yes(),
+            no_personal_data: yes(),
+            entities_only: yes(),
+            source_public_reachable: yes(),
+            rights_level: "allowed".into(),
+        }),
+        at,
+    )
+    .expect("clear");
+}
+
 fn bytes(v: &Value) -> Vec<u8> {
     serde_json::to_vec(v).expect("bytes")
 }
@@ -806,6 +825,13 @@ async fn review_is_durable_private_hash_bound_and_revocable() {
     let hash = receipt["hash"].as_str().expect("test setup/result");
     let item = store.review_item(id).expect("test setup/result");
     let at = item.received_unix + 1;
+    assert!(
+        store
+            .review(id, 0, hash, "approved", "reviewed", at)
+            .is_err(),
+        "no approval before the reviewer's clear (review B2-R1 L1)"
+    );
+    clear(&dir, id, at);
     assert!(store
         .review(id, 0, "wrong", "approved", "reviewed", at)
         .is_err());
@@ -1286,6 +1312,7 @@ async fn a_fed_receipt_shows_the_observers_evidence_and_nothing_private() {
     }
     let at = store.review_item(&ids[0].0).expect("item").received_unix + 1;
     for (id, hash) in &ids {
+        clear(&dir, id, at);
         store
             .review(id, 0, hash, "approved", "reviewed", at)
             .expect("approve");

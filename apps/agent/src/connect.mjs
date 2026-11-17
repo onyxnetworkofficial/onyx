@@ -337,7 +337,7 @@ export function connectTools({ write }) {
 		{
 			name: 'onyx_proposal_status',
 			title: 'Follow a proposal',
-			description: 'The public status of a proposal by its receipt id (sub_…): pending review, held, approved or rejected, and the observers\' value once a round ran.',
+			description: 'The public status of a proposal by its receipt id (sub_…): pending review, held, a reviewer\'s decision (cleared for the next step, on hold or dropped, the last two with a reason code), approved or rejected, and the observers\' value once a round ran. Cleared is not verified or published.',
 			inputSchema: { type: 'object', properties: { id: { type: 'string', pattern: '^sub_[0-9a-f]{32}$' } }, required: ['id'], additionalProperties: false },
 			annotations: { readOnlyHint: true, openWorldHint: true },
 		},

@@ -1106,7 +1106,7 @@
       "get": {
         "operationId": "getReceipt",
         "summary": "A receipt's status",
-        "description": "Public status only, `no-store`. Adds `check` once an approved proposal was fed to the observers.",
+        "description": "Public status only, `no-store`. Adds `reason` (a fixed code) once a reviewer put the proposal on hold or dropped it, and `check` once an approved proposal was fed to the observers.",
         "tags": [
           "Submit"
         ],
@@ -3856,8 +3856,26 @@
               "held_rights_review",
               "held_keyed_source_review",
               "approved",
-              "rejected"
-            ]
+              "rejected",
+              "cleared",
+              "on_hold",
+              "dropped"
+            ],
+            "description": "`cleared`, `on_hold` and `dropped` are a reviewer's decisions (docs/ops/proposal-review.md). `cleared` is not verification or publication."
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "terms_forbid",
+              "personal_data",
+              "not_entities",
+              "duplicate",
+              "unreachable_source",
+              "out_of_scope",
+              "spam",
+              "other"
+            ],
+            "description": "Only with `on_hold` or `dropped`: the reviewer's reason, a code from this list. Never free text."
           },
           "check": {
             "type": "object",

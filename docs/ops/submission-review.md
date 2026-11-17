@@ -3,6 +3,11 @@
 The node records proposals and serves receipt status. Review approval is not verification or
 publication. No submission is automatically added to a public dataset or paid a reward.
 
+**Daily review happens beside the running node** with `onyx-node proposals`
+([proposal-review.md](proposal-review.md): clear, hold, drop, the checklist). This page keeps
+the steps that still need the node stopped: the approval that lets a cleared Treasury proposal be
+fed to the observers, and the feed itself.
+
 ## Enable intake
 
 Use the normal testnet/local node configuration in [config.md](config.md). Create a directory
@@ -19,7 +24,7 @@ are written only to this private operator directory.
 The node's existing connection limits, client attribution, deadlines and budgets cover the routes.
 The store additionally admits at most 16 outstanding disk workers, including cancelled requests.
 The Caddy configuration proxies the two exact POST paths with a 64 KiB cap and receipt GET/HEAD.
-No reviewer endpoint exists. Never copy the journal, local review output or uploaded content into
+No reviewer endpoint exists. Never copy the journal, the decisions journal beside it, local review output or uploaded content into
 `apps/web/static`, a Git commit, an export bundle or a publicly readable directory.
 
 For a same-origin local frontend against the node:
@@ -42,7 +47,10 @@ flag the page remains an honest offline JSON download. No keys belong in either 
    For another page append the last receipt ID. Entries are ordered by ID, not by receipt time.
 4. Inspect one receipt using `... JOURNAL show sub_…`. This output contains private proposal data.
    Read the source and licence evidence independently; a submitter's checkbox is not clearance.
-5. Decide against the exact revision and content hash from show/list:
+5. Only a proposal the reviewer cleared with the checklist can be approved
+   (`onyx-node proposals clear`, [proposal-review.md](proposal-review.md)); an undecided, held or
+   dropped one is refused. Run these tools as the user that owns the journal: they refuse to run
+   as root on the node's state directory. Decide against the exact revision and content hash from show/list:
    `... JOURNAL decide sub_… 0 0x… approved reviewed`.
    Only an accepted pending route can be approved. A held source cannot be cleared by this command.
    Initial rejections use `rejected` plus `rights_unresolved`, `unsupported_source`, `invalid_content`

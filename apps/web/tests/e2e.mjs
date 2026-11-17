@@ -26,7 +26,7 @@ import { download } from './download.mjs';
 import { publish } from './publish.mjs';
 import { ns16 } from './ns16.mjs';
 import { t10 } from './t10.mjs';
-import { pp1Parser } from './pp1.mjs';
+import { b2Parser, b2Receipt, pp1Parser } from './pp1.mjs';
 import { pp6 } from './pp6.mjs';
 import { pp3 } from './pp3.mjs';
 import { pp4 } from './pp4.mjs';
@@ -157,6 +157,11 @@ const runSuites = () =>
 			async () => {
 				try { expect(true, pp1Parser()); } catch (e) { expect(false, `PP1 receipt parser: ${e.message}`); }
 			},
+			// READINESS B2: a reviewer's decision on the receipt, in plain words (canned answers, no API).
+			async () => {
+				try { expect(true, b2Parser()); } catch (e) { expect(false, `B2 receipt parser: ${e.message}`); }
+			},
+			() => b2Receipt(browser, base, expect),
 			// Pre-public loop PP6: the API page's Reference is the OpenAPI file, every route.
 			() => pp6(browser, base, expect),
 			// Pre-public loop PP3: a salted label row checked in the browser (ROADMAP D30).

@@ -66,6 +66,9 @@
 set -euo pipefail
 
 host=${ONYX_BACKUP_HOST:-onyx-web}
+# Review B2-R1 L3: a name that starts with a letter or a digit, so neither ssh nor rsync can read it
+# as an option.
+[[ $host =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || { echo "backup-node: ONYX_BACKUP_HOST is a host name or ssh alias, not '$host'" >&2; exit 2; }
 dest=${ONYX_BACKUP_DEST:-$HOME/onyx-backups/node}
 keep=${ONYX_BACKUP_KEEP:-7}
 weeks=4

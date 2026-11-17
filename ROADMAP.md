@@ -999,6 +999,23 @@ ADR-0038, docs/spec/submissions.md, THREATS SUB-*.
       deploy/caddy/onyx-web.Caddyfile, the connector as `deploy/systemd/onyx-mcp.service` behind
       `/mcp` (read-only); left: the reviewer alert before the recorded cap, the website's Add data
       page against this host, the connector's client address and freshness (THREATS REL-4, REL-5))
+      (2026-11-17, READINESS B2: the reviewer side is built, live after the next node deploy; no
+      proposal has been reviewed with it yet. `onyx-node proposals` (list, show, clear, hold,
+      drop) works on the journal files beside the running node: decisions are appended to
+      `submissions.decisions.journal` (ADR-0039 amendment 3), `clear` needs the checklist (terms
+      re-read that day, no personal data, entities only, a public reachable source, a rights
+      level), `GET /v1/submit/{id}` shows `cleared`, `on_hold` or `dropped` with a fixed reason
+      code, the node warns from 80% of the recorded cap (`onyx-intake-cap-alert`), and
+      `scripts/proposal-review.sh` runs the tool over ssh; docs/ops/proposal-review.md, THREATS
+      REV-Q-1..10. Left: an erase for a dropped proposal's text and a retention period
+      (REV-Q-4), the cap warning in the health watch and an archive for a full journal (REV-Q-8),
+      one decision rehearsed as root on the server (REV-Q-9), a fresh adversarial review, and a
+      step that turns a cleared proposal into a dataset (S4))
+      (2026-11-17, review B2-R1, one High, fixed: the tool never works as root on the state
+      directory (the script starts it as the journal's owner, the tool gives up root itself, no
+      link is followed, no owner is changed); a damaged, vanished or orphaned decisions journal
+      never stops the node or the tool; the offline approval needs a clear; THREATS REVQ-R1-H1..L3.
+      Left as before, and the change of user still needs its rehearsal on the server (REV-Q-9))
 - [ ] S9 Observe on the first paid query (NORTH-STAR NS10, north-star loop NL8): free proposals,
       a hold on a prepaid voucher, a ticket, charge on a final round, release on failure; spec
       docs/spec/paid-observation.md (2026-10-27: slice 1 DONE, ADR-0049: `onyx_api::observe`,

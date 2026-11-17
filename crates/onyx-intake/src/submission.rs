@@ -399,6 +399,12 @@ fn in_ranges(c: char, r: &[(u32, u32)]) -> bool {
     r.iter().any(|(a, b)| (*a..=*b).contains(&n))
 }
 
+/// Whether `c` is a Unicode format character (general category Cf: invisible, and the
+/// direction overrides among them), by the same list the blank rule uses.
+pub fn is_format_char(c: char) -> bool {
+    in_ranges(c, FORMAT)
+}
+
 /// Whether `s` holds nothing visible: only white space and format characters.
 pub fn is_blank(s: &str) -> bool {
     s.chars()

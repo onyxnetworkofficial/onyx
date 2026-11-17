@@ -34,6 +34,10 @@ page). Shared vectors: `fixtures/intake/vectors.json`.
   with a new id), 400, 413, 422 `refused` (with `route`), 429 `rate_limited` or `daily_quota`,
   503 `intake_full` or `intake_unavailable`. Request cap is 64 KiB to carry a bounded sample.
 - `GET /v1/submit/{id}` -> 200 `{id, status}` or 404 `not_found`. All answers `no-store`.
+  After a reviewer's decision (ADR-0039 amendment 3) `status` is `cleared`, `on_hold` or
+  `dropped`, and the last two add `reason`, one code of a fixed list (R-SUB-13).
+- `onyx-node proposals list|show|clear|hold|drop` (`onyx_api::submit::decisions`): the reviewer's
+  tool on the journal files, beside a running node (docs/ops/proposal-review.md).
 - `onyx_api::submit::{SubmitStore, SubmitLimits, PageFetch, HttpsFetch, routes}`;
   `examples/submit-dev.rs` (loopback only).
 
@@ -89,8 +93,18 @@ page). Shared vectors: `fixtures/intake/vectors.json`.
   format/structure, obvious contact or credential patterns, personal-record fields, executable
   markup and spreadsheet-formula-like CSV cells. These heuristics are not a safety or rights proof;
   all payloads remain in the operator-private review journal and require review before approval.
-  Receipt and public status responses remain `{id,status}` only. Metadata-only submissions still
+  Receipt and public status responses carry `{id,status}` (and a reason code, R-SUB-13), never the sample. Metadata-only submissions still
   work, and no public upload path is created.
+
+- **R-SUB-13 (reviewer decisions, ADR-0039 amendment 3).** Decisions are appended to
+  `submissions.decisions.journal`, never to the intake journal, and nothing is rewritten. `clear`
+  only with every checklist line `yes` and a rights level, only on an accepted route; `hold` and
+  `drop` only with a reason from the list; at most three decisions per receipt; `dropped` is
+  final. The public status shows the state and the reason code and nothing else of a decision.
+  The node warns from 80% of the recorded cap. The offline approval needs a `cleared` decision.
+  The tool never works as root on the state directory and follows no link; a damaged or
+  rule-breaking line, or a decision on an unknown receipt, is skipped with an alert and never
+  stops the node (ADR-0039 amendment 4).
 
 ## Assumptions
 - A submitter's answers can be false. The route is advice; a reviewer checks the rights row and
@@ -112,7 +126,7 @@ page). Shared vectors: `fixtures/intake/vectors.json`.
 
 ADR-0039 defines the exact versioned journal, bounded transitions, expected-revision/hash guard,
 strict legacy replay, cancellation-safe serialization and maintenance-mode CLI. Node intake is
-opt-in via `ONYX_SUBMISSIONS`; public status remains exactly `{id,status}` (plus the observers' public `check` once an
+opt-in via `ONYX_SUBMISSIONS`; public status remains `{id,status}` (plus a fixed `reason` code after a hold or a drop, R-SUB-13, and the observers' public `check` once an
 approved receipt was fed: ADR-0039 amendment 1) and never exposes the review queue. The receipt UI must retain a successfully recorded ID, offer an explicit status
 refresh and receipt download, and explain uncertain delivery without automatic POST retries.
 The local review queue and journal are private operator data, never web build assets.

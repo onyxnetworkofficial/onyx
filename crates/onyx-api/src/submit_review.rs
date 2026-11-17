@@ -7,6 +7,10 @@ use serde_json::{json, Value};
 use std::collections::BTreeMap;
 use std::path::Path;
 
+/// Largest intake journal the reviewer's tool reads, in bytes: the recorded cap of 10,000
+/// proposals at the 64 KiB body cap is about 640 MB, with their review lines well under 1 GiB.
+pub const MAX_INTAKE_BYTES: u64 = 1024 * 1024 * 1024;
+
 /// Maximum entries in one private queue page.
 pub const MAX_REVIEW_PAGE: usize = 100;
 const MAX_UNIX: u64 = (1 << 53) - 1;
@@ -154,58 +158,83 @@ fn apply_decision(item: &mut ReviewItem, event: Decision) {
     item.reason = Some(event.reason);
 }
 
+/// Replay the intake journal's live entries into the receipts by id: each submission
+/// revalidated whole, each offline review event applied in order. Anything else refuses.
+pub(super) fn replay(
+    entries: Vec<(u64, Value)>,
+    capacity: usize,
+) -> std::io::Result<BTreeMap<String, ReviewItem>> {
+    if entries.len() > capacity.saturating_mul(3) {
+        return Err(bad());
+    }
+    let mut records: BTreeMap<String, ReviewItem> = BTreeMap::new();
+    for (seq, value) in entries {
+        if value["kind"] == "review" {
+            let event: Decision = serde_json::from_value(value).map_err(|_| bad())?;
+            let item = records.get_mut(&event.submission_id).ok_or_else(bad)?;
+            transition(item, &event).map_err(|_| bad())?;
+            apply_decision(item, event);
+        } else {
+            let raw: Initial = serde_json::from_value(value).map_err(|_| bad())?;
+            let version_ok = (raw.kind.is_none() && raw.version.is_none())
+                || (raw.kind.as_deref() == Some("submission") && raw.version == Some(1));
+            raw.submission.validate().map_err(|_| bad())?;
+            let route = raw.submission.route();
+            if !version_ok
+                || raw.hash != hash_hex(&raw.submission)
+                || raw.status != route.status()
+                || raw.route != route.to_json()
+                || route.outcome == Outcome::Refused
+                || raw.received_unix > MAX_UNIX
+                || records.len() >= capacity
+            {
+                return Err(bad());
+            }
+            let id = submission_id(seq, &raw.hash);
+            let item = ReviewItem {
+                id: id.clone(),
+                hash: raw.hash,
+                status: raw.status,
+                revision: 0,
+                received_unix: raw.received_unix,
+                reviewed_unix: None,
+                reason: None,
+                submission: raw.submission,
+            };
+            if records.insert(id, item).is_some() {
+                return Err(bad());
+            }
+        }
+    }
+    Ok(records)
+}
+
+/// Read the receipts of the intake journal at `path` without its lock and without writing
+/// (the proposal reviewer beside a running node: [`super::decisions`]).
+pub(super) fn read_records(
+    path: &Path,
+    capacity: usize,
+) -> std::io::Result<BTreeMap<String, ReviewItem>> {
+    replay(
+        Journal::read_only_capped(path, JOURNAL_KIND, &BINDING, MAX_INTAKE_BYTES)?,
+        capacity,
+    )
+}
+
 impl Ledger {
     pub(super) fn open(path: impl AsRef<Path>, capacity: usize) -> std::io::Result<Self> {
         let (journal, entries) = Journal::open(path, JOURNAL_KIND, &BINDING)?;
-        if entries.len() > capacity.saturating_mul(3) {
-            return Err(bad());
-        }
-        let mut records: BTreeMap<String, ReviewItem> = BTreeMap::new();
-        for (seq, value) in entries {
-            if value["kind"] == "review" {
-                let event: Decision = serde_json::from_value(value).map_err(|_| bad())?;
-                let item = records.get_mut(&event.submission_id).ok_or_else(bad)?;
-                transition(item, &event).map_err(|_| bad())?;
-                apply_decision(item, event);
-            } else {
-                let raw: Initial = serde_json::from_value(value).map_err(|_| bad())?;
-                let version_ok = (raw.kind.is_none() && raw.version.is_none())
-                    || (raw.kind.as_deref() == Some("submission") && raw.version == Some(1));
-                raw.submission.validate().map_err(|_| bad())?;
-                let route = raw.submission.route();
-                if !version_ok
-                    || raw.hash != hash_hex(&raw.submission)
-                    || raw.status != route.status()
-                    || raw.route != route.to_json()
-                    || route.outcome == Outcome::Refused
-                    || raw.received_unix > MAX_UNIX
-                    || records.len() >= capacity
-                {
-                    return Err(bad());
-                }
-                let id = submission_id(seq, &raw.hash);
-                let item = ReviewItem {
-                    id: id.clone(),
-                    hash: raw.hash,
-                    status: raw.status,
-                    revision: 0,
-                    received_unix: raw.received_unix,
-                    reviewed_unix: None,
-                    reason: None,
-                    submission: raw.submission,
-                };
-                if records.insert(id, item).is_some() {
-                    return Err(bad());
-                }
-            }
-        }
         Ok(Self {
             journal: Some(journal),
-            records,
+            records: replay(entries, capacity)?,
             capacity,
             #[cfg(test)]
             before_publish: None,
         })
+    }
+
+    pub(super) fn records(&self) -> &BTreeMap<String, ReviewItem> {
+        &self.records
     }
 
     fn append(&mut self, value: Value) -> Result<u64, ReviewError> {
@@ -330,6 +359,17 @@ impl SubmitStore {
             reviewed_unix,
         };
         transition(&item, &event)?;
+        // Review B2-R1 L1: the approval that lets a proposal be fed needs the reviewer's
+        // `clear` first, so no proposal is approved without the checklist on record
+        // ([`super::decisions`]); a proposal that is undecided, on hold or dropped is refused.
+        if next == "approved"
+            && !self
+                .decisions
+                .decided(ledger.records(), id)
+                .is_some_and(|d| d.state == super::decisions::CLEARED)
+        {
+            return Err(ReviewError::Invalid);
+        }
         ledger.append(serde_json::to_value(&event).map_err(|_| ReviewError::Invalid)?)?;
         apply_decision(&mut item, event);
         ledger.records.insert(id.into(), item.clone());
