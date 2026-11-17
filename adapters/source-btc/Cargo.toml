@@ -33,6 +33,8 @@ bitcoin.workspace = true
 base64.workspace = true
 
 [dev-dependencies]
+# The origin grammar of a publisher, for the public build guard's check of publishers.json.
+onyx-bulk.workspace = true
 onyx-validator = { path = "../../crates/onyx-validator" }
 # The public-build guard unpacks Brotli files to scan them (AUD-2R-F1).
 brotli-decompressor = "5"

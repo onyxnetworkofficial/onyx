@@ -3796,10 +3796,20 @@ impl BulkStore {
                 v
             })
             .collect();
-        Ok(json!({
+        let mut answer = json!({
             "datasets": items, "total": total, "next": next, "catalogs": catalogs,
             "now_unix": now,
-        }))
+        });
+        if let Some(id) = &q.listed {
+            // Only the asked id's own line: no other publisher's entry and
+            // no number is shown (review S3-R1 M3).
+            answer["limits"] = json!({
+                "on": self.granted.is_some(),
+                "listed": self.granted.as_ref().is_some_and(|l| l.grants.contains_key(id)),
+                "publisher": id,
+            });
+        }
+        Ok(answer)
     }
 
     /// `GET /v1/bulk/{publisher}/{dataset}`.
@@ -4279,6 +4289,9 @@ pub struct ListQuery {
     pub limit: Option<usize>,
     /// Only ids after this `(publisher, dataset)`.
     pub after: Option<(String, String)>,
+    /// `listed=<publisher id>`: also answer whether this node has limits
+    /// per publisher and an entry for that one id (ADR-0066 item 8 step 15).
+    pub listed: Option<String>,
 }
 
 /// `+` as a space and `%XX` escapes; `None` for a broken escape or non-UTF-8.
@@ -4368,6 +4381,12 @@ pub fn parse_list_query(q: Option<&str>) -> Result<ListQuery, ApiError> {
                 if out.any.len() > MAX_ANY_GROUPS || terms > MAX_ANY_TERMS {
                     return Err(bad());
                 }
+            }
+            "listed" => {
+                if !onyx_core::ids::is_dotted_id(&v) {
+                    return Err(bad_request("listed: a publisher id"));
+                }
+                out.listed = Some(v);
             }
             "after" => {
                 let (p, d) = v

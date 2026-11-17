@@ -108,7 +108,7 @@ pub(crate) fn fields_for(b: &Built, key: &[u8; 32], doc: &[u8], created: u64) ->
         publisher: b.manifest.header.publisher.0.clone(),
         origin: ORIGIN.into(),
         signer: addr(key),
-        keys_document_keccak: keccak256(doc),
+        signers_document_keccak: keccak256(doc),
         data: "Daily water levels of 40 public gauges, from the publisher's own sensors.".into(),
         sample: Sample {
             dataset: b.manifest.header.dataset.clone(),
@@ -174,8 +174,8 @@ fn round_trips_and_the_signature_binds_every_field() {
         ),
         ("signer", Box::new(|f| f.signer = addr(&KEY_B))),
         (
-            "keys_document_keccak",
-            Box::new(|f| f.keys_document_keccak.0[0] ^= 1),
+            "signers_document_keccak",
+            Box::new(|f| f.signers_document_keccak.0[0] ^= 1),
         ),
         ("data", Box::new(|f| f.data.push('!'))),
         ("sample.dataset", Box::new(|f| f.sample.dataset.push('x'))),
@@ -847,8 +847,10 @@ fn retire_key_from_an_earlier_time_needs_the_second_proof() {
         (&KEY_A, T0 - 30 * 86_400),
     ] {
         let r = retire(key, at).verify(&NET, T0, &ctx(&listed, &book));
+        // A foreign key (KEY_B, asked by KEY_A) is refused for the listed
+        // document before its time is read (review S3-R1 L3).
         assert!(
-            matches!(&r, Err(Refusal::Request(m)) if m.contains(early)),
+            matches!(&r, Err(Refusal::Request(m)) if m.contains(early) || (key == &KEY_B && m.contains("second proof"))),
             "{at} {r:?}"
         );
     }
@@ -1112,5 +1114,32 @@ fn a_duplicated_json_field_is_refused() {
     assert_eq!(
         strict_json(b"{\"a\": 1, \"b\": [1, {\"c\": null}]}").map(|v| v["a"].clone()),
         Ok(json!(1))
+    );
+}
+
+/// Review S3-R1 L3: one signature from an active key must not retire
+/// another key of the id for good.
+#[test]
+fn another_key_is_retired_only_with_the_changed_keys_document() {
+    let book = [reg(&KEY_A, KeyLife::Active), reg(&KEY_B, KeyLife::Active)];
+    let retire = |key: &[u8; 32]| Ask::RetireKey {
+        key: addr(key),
+        at_unix: T0,
+    };
+    let both = keys_doc(ID, &[&KEY_A, &KEY_B]);
+    let e = request(retire(&KEY_B), &KEY_A)
+        .verify(&NET, T0, &ctx(&both, &book))
+        .expect_err("the document still lists the other key");
+    assert!(e.to_string().contains("second proof"), "{e}");
+    // The key itself needs no second proof for a time now.
+    assert_eq!(
+        request(retire(&KEY_B), &KEY_B).verify(&NET, T0, &ctx(&both, &book)),
+        Ok(())
+    );
+    // With the document changed (the origin's holder agrees), it passes.
+    let only_a = keys_doc(ID, &[&KEY_A]);
+    assert_eq!(
+        request(retire(&KEY_B), &KEY_A).verify(&NET, T0, &ctx(&only_a, &book)),
+        Ok(())
     );
 }

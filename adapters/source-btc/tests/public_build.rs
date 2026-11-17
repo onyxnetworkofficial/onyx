@@ -151,6 +151,11 @@ const DATA_FILES: &[&str] = &[
 /// Other exact paths the site ships.
 const EXACT: &[&str] = &[
     "index.html",
+    // ADR-0066 item 9: the status list of publisher decisions, written by
+    // scripts/check-publishers.py from deploy/publishers/. It holds
+    // publisher ids, origins and key addresses, so it is taken only in its
+    // exact shape ([`publishers_problems`]): no other field, no free text.
+    PUBLISHERS,
     // ADR-0045: the API description (docs/api/openapi.json): routes and schemas, no data.
     "openapi.json",
     "og.jpg",
@@ -245,6 +250,253 @@ fn bundled(name: &str, ext: &str) -> bool {
         && name
             .bytes()
             .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
+}
+
+/// The status list of publisher decisions, at the root of a build only.
+const PUBLISHERS: &str = "publishers.json";
+/// A publisher's states in the list, an open application's, and the reason
+/// codes (ADR-0066 item 9; scripts/check-publishers.py).
+const PUBLISHER_STATES: &[&str] = &[
+    "approved",
+    "approved (record)",
+    "registered-before-record",
+    "paused",
+    "retired",
+];
+const APPLICATION_STATES: &[&str] = &["received", "refused", "withdrawn", "expired"];
+const REASON_CODES: &[&str] = &[
+    "name-not-neutral",
+    "name-taken",
+    "origin-unreachable",
+    "origin-overlap",
+    "sample-failed",
+    "rights-unclear",
+    "personal-data",
+    "not-hostable",
+    "duplicate",
+    "no-capacity",
+    "no-cosignature",
+    "malformed",
+    "bad-signature",
+    "wrong-network",
+    "expired",
+    "bad-time",
+    "keys-document",
+    "signer-blocked",
+];
+
+/// `0x` and exactly `bytes` bytes of lowercase hex.
+fn is_hex0x(v: &serde_json::Value, bytes: usize) -> bool {
+    v.as_str().is_some_and(|s| {
+        s.len() == 2 + 2 * bytes
+            && s.starts_with("0x")
+            && s[2..]
+                .bytes()
+                .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+    })
+}
+
+fn is_date(v: &serde_json::Value) -> bool {
+    v.as_str().is_some_and(|s| {
+        s.len() == 10
+            && s.bytes().enumerate().all(|(i, c)| {
+                if i == 4 || i == 7 {
+                    c == b'-'
+                } else {
+                    c.is_ascii_digit()
+                }
+            })
+    })
+}
+
+/// The fields of `v`: every one of `required`, and besides them at most
+/// `optional`.
+fn only_fields(
+    v: &serde_json::Value,
+    required: &[&str],
+    optional: &[&str],
+    what: &str,
+    bad: &mut Vec<String>,
+) -> bool {
+    let Some(m) = v.as_object() else {
+        bad.push(format!("{what} is not an object"));
+        return false;
+    };
+    let mut ok = true;
+    for k in required {
+        if !m.contains_key(*k) {
+            bad.push(format!("{what} has no {k}"));
+            ok = false;
+        }
+    }
+    // The field's name is not repeated: it could be the text to keep out.
+    let extra = m
+        .keys()
+        .filter(|k| !required.contains(&k.as_str()) && !optional.contains(&k.as_str()))
+        .count();
+    if extra > 0 {
+        bad.push(format!(
+            "{what} has {extra} field(s) the status list does not have"
+        ));
+        ok = false;
+    }
+    ok
+}
+
+/// The status list is exactly its schema: the known fields, ids in the id
+/// grammar, origins in the origin grammar, 20-byte addresses, 32-byte
+/// transaction hashes, states and reasons from the fixed lists. Any other
+/// field or shape is refused, so the file can carry no free text.
+fn publishers_problems(raw: &[u8]) -> Vec<String> {
+    let mut bad = Vec::new();
+    let v: serde_json::Value = match serde_json::from_slice(raw) {
+        Ok(v) => v,
+        Err(e) => return vec![format!("{PUBLISHERS} does not parse: {e}")],
+    };
+    if !only_fields(
+        &v,
+        &["version", "publishers", "applications"],
+        &["chain_id", "book"],
+        PUBLISHERS,
+        &mut bad,
+    ) {
+        return bad;
+    }
+    let str_in =
+        |v: &serde_json::Value, list: &[&str]| v.as_str().is_some_and(|s| list.contains(&s));
+    let top: [(bool, &str); 4] = [
+        (v["version"] == 1, "version is not 1"),
+        (
+            v["chain_id"].is_null() || v["chain_id"].is_u64(),
+            "chain_id is not a number",
+        ),
+        (
+            v["book"].is_null() || is_hex0x(&v["book"], 20),
+            "book is not a 20-byte address",
+        ),
+        (
+            v["publishers"].is_array() && v["applications"].is_array(),
+            "publishers and applications are lists",
+        ),
+    ];
+    bad.extend(
+        top.iter()
+            .filter(|(ok, _)| !ok)
+            .map(|(_, t)| (*t).to_string()),
+    );
+    let empty = Vec::new();
+    for (i, p) in v["publishers"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .enumerate()
+    {
+        let what = format!("publisher {}", i + 1);
+        if !only_fields(
+            p,
+            &[
+                "publisher",
+                "state",
+                "date",
+                "origin",
+                "signers",
+                "registered",
+            ],
+            &["reason"],
+            &what,
+            &mut bad,
+        ) {
+            continue;
+        }
+        let rules: [(bool, &str); 7] = [
+            (
+                p["publisher"]
+                    .as_str()
+                    .is_some_and(onyx_core::ids::is_dotted_id),
+                "publisher is not a publisher id",
+            ),
+            (
+                p["origin"]
+                    .as_str()
+                    .is_some_and(|o| onyx_bulk::ids::Origin::parse(o).is_ok()),
+                "origin is not in the origin grammar",
+            ),
+            (
+                str_in(&p["state"], PUBLISHER_STATES),
+                "state is not a publisher's state",
+            ),
+            (is_date(&p["date"]), "date is not YYYY-MM-DD"),
+            (
+                p["signers"]
+                    .as_array()
+                    .is_some_and(|a| a.iter().all(|s| is_hex0x(s, 20))),
+                "signers are 20-byte addresses",
+            ),
+            (
+                p["registered"].as_array().is_some_and(|a| {
+                    a.iter().all(|r| {
+                        r.as_object().is_some_and(|m| m.len() == 2)
+                            && is_hex0x(&r["tx"], 32)
+                            && r["block"].is_u64()
+                    })
+                }),
+                "registered is a list of a transaction hash and a block",
+            ),
+            (
+                p["reason"].is_null() || str_in(&p["reason"], REASON_CODES),
+                "reason is not a reason code",
+            ),
+        ];
+        bad.extend(
+            rules
+                .iter()
+                .filter(|(ok, _)| !ok)
+                .map(|(_, t)| format!("{what}: {t}")),
+        );
+    }
+    for (i, a) in v["applications"]
+        .as_array()
+        .unwrap_or(&empty)
+        .iter()
+        .enumerate()
+    {
+        let what = format!("application {}", i + 1);
+        if !only_fields(
+            a,
+            &["application", "state", "date"],
+            &["reason", "blocks_signer_until"],
+            &what,
+            &mut bad,
+        ) {
+            continue;
+        }
+        let rules: [(bool, &str); 5] = [
+            (
+                is_hex0x(&a["application"], 32),
+                "application is not a 32-byte hash",
+            ),
+            (
+                str_in(&a["state"], APPLICATION_STATES),
+                "state is not an open application's state",
+            ),
+            (is_date(&a["date"]), "date is not YYYY-MM-DD"),
+            (
+                a["reason"].is_null() || str_in(&a["reason"], REASON_CODES),
+                "reason is not a reason code",
+            ),
+            (
+                a["blocks_signer_until"].is_null() || a["blocks_signer_until"].is_u64(),
+                "blocks_signer_until is not a number",
+            ),
+        ];
+        bad.extend(
+            rules
+                .iter()
+                .filter(|(ok, _)| !ok)
+                .map(|(_, t)| format!("{what}: {t}")),
+        );
+    }
+    bad
 }
 
 /// The exact allowlist of a public build (AUD-2R-F1), by path relative to the
@@ -794,6 +1046,9 @@ fn problems(rel: &str, raw: &[u8], refs: &Refs) -> Vec<String> {
             "{} unlisted bitcoin address(es) (L8-F1)",
             unknown.len()
         ));
+    }
+    if rel == PUBLISHERS {
+        bad.extend(publishers_problems(raw));
     }
     if rel.ends_with("demo.json") {
         match serde_json::from_slice::<serde_json::Value>(raw) {
@@ -2155,6 +2410,174 @@ fn the_fallback_guard_refuses_label_derived_totals() {
             fallback_problems(name, raw, &t),
             Vec::<String>::new(),
             "{name}"
+        );
+    }
+}
+
+/// ADR-0066 item 9: the status list of publisher decisions is on the
+/// allowlist only in its exact shape. The committed list passes; a list
+/// with one more field, contact text, a profile link, or a value outside
+/// its grammar is refused, and so is the file anywhere but at the root.
+#[test]
+fn the_guard_takes_the_publishers_list_only_in_its_exact_shape() {
+    let refs = refs();
+    let real = std::fs::read(root().join("apps/web/static/publishers.json")).expect("the list");
+    assert_eq!(problems(PUBLISHERS, &real, &refs), Vec::<String>::new());
+    let good: serde_json::Value = serde_json::from_slice(&real).expect("json");
+    assert!(
+        good["publishers"].as_array().is_some_and(|p| !p.is_empty()),
+        "the committed list names the registered publishers"
+    );
+    // A list with every optional field, as the checker writes it.
+    let mut full = good.clone();
+    full["publishers"][0]["reason"] = "rights-unclear".into();
+    full["publishers"][0]["state"] = "approved (record)".into();
+    full["applications"] = serde_json::json!([
+        {"application": format!("0x{}", "ab".repeat(32)), "state": "refused", "date": "2026-11-17",
+         "reason": "rights-unclear", "blocks_signer_until": 1_795_478_700u64},
+        {"application": format!("0x{}", "cd".repeat(32)), "state": "received", "date": "2026-11-17"},
+    ]);
+    assert_eq!(
+        problems(PUBLISHERS, full.to_string().as_bytes(), &refs),
+        Vec::<String>::new()
+    );
+
+    type Change<'a> = &'a dyn Fn(&mut serde_json::Value);
+    let refused = |name: &str, change: Change, why: &str| {
+        let mut v = full.clone();
+        change(&mut v);
+        let p = problems(PUBLISHERS, v.to_string().as_bytes(), &refs);
+        assert!(p.iter().any(|x| x.contains(why)), "{name}: {p:?}");
+    };
+    let extra = "field(s) the status list does not have";
+    let mail = format!("someone{}mail-host.co.invalid", '@');
+    refused(
+        "an extra field",
+        &|v| v["publishers"][0]["note"] = "x".into(),
+        extra,
+    );
+    refused("an extra top field", &|v| v["operator"] = "x".into(), extra);
+    refused(
+        "an extra application field",
+        &|v| v["applications"][0]["data"] = "Daily water levels.".into(),
+        extra,
+    );
+    refused(
+        "an extra field of a registration",
+        &|v| v["publishers"][0]["registered"][0]["by"] = "x".into(),
+        "registered is a list",
+    );
+    refused(
+        "a missing field",
+        &|v| {
+            v["publishers"][0]
+                .as_object_mut()
+                .expect("object")
+                .remove("signers");
+        },
+        "has no signers",
+    );
+    // Contact text: the shape refuses it, and the e-mail rule counts it.
+    refused(
+        "an e-mail as a field",
+        &|v| v["publishers"][0]["contact"] = mail.clone().into(),
+        "e-mail address(es) (L9A-8)",
+    );
+    refused(
+        "an e-mail as a field",
+        &|v| v["publishers"][0]["contact"] = mail.clone().into(),
+        extra,
+    );
+    refused(
+        "an e-mail as an origin",
+        &|v| v["publishers"][0]["origin"] = mail.clone().into(),
+        "origin is not in the origin grammar",
+    );
+    refused(
+        "an e-mail as an origin",
+        &|v| v["publishers"][0]["origin"] = mail.clone().into(),
+        "e-mail address(es) (L9A-8)",
+    );
+    refused(
+        "an e-mail as a reason",
+        &|v| v["applications"][0]["reason"] = mail.clone().into(),
+        "reason is not a reason code",
+    );
+    // A profile link passes the origin grammar (a host and a path): the
+    // profile rule refuses it.
+    refused(
+        "a profile link as an origin",
+        &|v| v["publishers"][0]["origin"] = "github.com/some-person".into(),
+        "social-media profile link(s) (L9A-8)",
+    );
+    refused(
+        "a profile link as a field",
+        &|v| v["applications"][0]["see"] = "https://x.com/some_person".into(),
+        "social-media profile link(s) (L9A-8)",
+    );
+    // Values outside their grammar.
+    refused(
+        "an id that is a name",
+        &|v| v["publishers"][0]["publisher"] = "Some Person".into(),
+        "publisher is not a publisher id",
+    );
+    refused(
+        "an origin with a scheme",
+        &|v| v["publishers"][0]["origin"] = "https://data.example.org".into(),
+        "origin is not in the origin grammar",
+    );
+    refused(
+        "a state in free text",
+        &|v| v["publishers"][0]["state"] = "approved, run by the operator".into(),
+        "state is not a publisher's state",
+    );
+    refused(
+        "a publisher's state for an application",
+        &|v| v["applications"][0]["state"] = "approved".into(),
+        "state is not an open application's state",
+    );
+    refused(
+        "a short address",
+        &|v| v["publishers"][0]["signers"][0] = "0x1234".into(),
+        "signers are 20-byte addresses",
+    );
+    refused(
+        "an address in capitals",
+        &|v| v["book"] = format!("0x{}", "AB".repeat(20)).into(),
+        "book is not a 20-byte address",
+    );
+    refused(
+        "a date with text",
+        &|v| v["publishers"][0]["date"] = "2026-11-17 by hand".into(),
+        "date is not YYYY-MM-DD",
+    );
+    refused(
+        "another kind of address as a signer",
+        &|v| v["publishers"][0]["signers"][0] = "not-an-address".into(),
+        "signers are 20-byte addresses",
+    );
+    refused(
+        "another version",
+        &|v| v["version"] = 2.into(),
+        "version is not 1",
+    );
+    assert!(problems(PUBLISHERS, b"[]", &refs)
+        .iter()
+        .any(|x| x.contains("is not an object")));
+    assert!(problems(PUBLISHERS, b"{", &refs)
+        .iter()
+        .any(|x| x.contains("does not parse")));
+    // Only at the root, and never compressed.
+    for rel in [
+        "data/publishers.json",
+        "publishers.json.gz",
+        "level2/publishers.json",
+    ] {
+        assert!(
+            problems(rel, &real, &refs)
+                .iter()
+                .any(|x| x.contains("allowlist")),
+            "{rel}"
         );
     }
 }

@@ -1432,6 +1432,7 @@ dependencies = [
  "http-body-util",
  "onyx-api",
  "onyx-btc-schema",
+ "onyx-bulk",
  "onyx-chain-schema",
  "onyx-coordinator",
  "onyx-core",

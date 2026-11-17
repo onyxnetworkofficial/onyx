@@ -1,0 +1,64 @@
+name: publisher-application
+# ADR-0066 item 7 (THREATS PUBON-12, PUBON-14, PUBON-15): fetch a publisher applicant's files on a
+# hosted runner, so the reviewer's machine and the node never connect to a host the applicant
+# runs. The job reads; it decides nothing. The reviewer downloads the artifact and checks the saved
+# bytes again offline with the book read from a chain node (docs/ops/publisher-review.md).
+#
+# Rules (scripts/check-workflows.py):
+# - no secret, and a token that can only read;
+# - the issue's text is anyone's: it is written to a file from an environment variable and read
+#   by the tool as a file (`--pointer`), never placed inside a command;
+# - the book is not read here (a hosted runner has no chain node of ours), so the report ends with
+#   exit 4 at best: never an approval.
+on:
+  issues:
+    types: [opened, edited]
+
+permissions:
+  contents: read
+
+# One run per issue: an issue edited again and again cancels its older runs instead of piling
+# them up (review S3-R1 L7).
+concurrency:
+  group: publisher-application-${{ github.event.issue.number }}
+  cancel-in-progress: true
+
+jobs:
+  fetch:
+    if: startsWith(github.event.issue.title, 'Publisher application:')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - name: Install pinned toolchain (rust-toolchain.toml)
+        run: rustup show active-toolchain || rustup toolchain install
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          # Anyone can open an issue: this job reads the cache and never writes it.
+          save-if: false
+      - name: Build the publisher tool
+        run: cargo build --locked --release -p onyx-publish --bin onyx-publish
+      - name: The issue's text, as a file
+        env:
+          ISSUE_BODY: ${{ github.event.issue.body }}
+        run: printf '%s' "$ISSUE_BODY" > "$RUNNER_TEMP/pointer.txt"
+      - name: Fetch the applicant's files and run every check that needs no person
+        run: |
+          mkdir -p out
+          code=0
+          target/release/onyx-publish verify-application --pointer "$RUNNER_TEMP/pointer.txt" \
+            --chain-id 84532 --book 0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5 \
+            --decisions deploy/publishers --save out/artifact > out/report.json || code=$?
+          echo "$code" > out/exit-code.txt
+          echo "verify-application exit $code (0 passed, 1 refused, 3 nothing decided, 4 the book was not read)"
+          # A wrong pointer (2) or an origin that did not answer (3) fails the job; a refusal is a result.
+          [ "$code" = 0 ] || [ "$code" = 1 ] || [ "$code" = 4 ]
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: always()
+        with:
+          name: publisher-application-${{ github.event.issue.number }}
+          path: out/
+          if-no-files-found: warn
+          retention-days: 14

@@ -324,7 +324,7 @@ pub struct Fields {
     /// The key's address.
     pub signer: [u8; 20],
     /// Keccak of the keys document's exact bytes.
-    pub keys_document_keccak: Hash32,
+    pub signers_document_keccak: Hash32,
     /// One sentence about the data. Never a name or a contact.
     pub data: String,
     /// The first dataset.
@@ -644,14 +644,14 @@ impl Application {
             .cosignature
             .map_or("null".to_string(), |c| s(&hex0x(&c)));
         format!(
-            "{{\"version\": {}, \"chain_id\": {}, \"book\": \"{}\",\n \"publisher\": {}, \"origin\": {},\n \"signer\": \"{}\", \"keys_document_keccak\": \"{}\",\n \"data\": {},\n \"sample\": {{\"dataset\": {}, \"manifest_root\": \"{}\", \"bytes\": {},\n            \"path\": {}}},\n \"asks\": {{\"quota_gib\": {}, \"datasets\": {}}},\n \"created_unix\": {}, \"expires_unix\": {},\n \"signature\": \"{}\", \"cosignature\": {}}}\n",
+            "{{\"version\": {}, \"chain_id\": {}, \"book\": \"{}\",\n \"publisher\": {}, \"origin\": {},\n \"signer\": \"{}\", \"signers_document_keccak\": \"{}\",\n \"data\": {},\n \"sample\": {{\"dataset\": {}, \"manifest_root\": \"{}\", \"bytes\": {},\n            \"path\": {}}},\n \"asks\": {{\"quota_gib\": {}, \"datasets\": {}}},\n \"created_unix\": {}, \"expires_unix\": {},\n \"signature\": \"{}\", \"cosignature\": {}}}\n",
             f.version,
             f.chain_id,
             hex0x(&f.book),
             s(&f.publisher),
             s(&f.origin),
             hex0x(&f.signer),
-            hex0x(&f.keys_document_keccak.0),
+            hex0x(&f.signers_document_keccak.0),
             s(&f.data),
             s(&f.sample.dataset),
             hex0x(&f.sample.manifest_root.0),
@@ -681,7 +681,7 @@ impl Application {
                 "publisher",
                 "origin",
                 "signer",
-                "keys_document_keccak",
+                "signers_document_keccak",
                 "data",
                 "sample",
                 "asks",
@@ -705,9 +705,9 @@ impl Application {
             publisher: text(&m["publisher"], "publisher")?,
             origin: text(&m["origin"], "origin")?,
             signer: unhex(&m["signer"], "signer")?,
-            keys_document_keccak: Hash32(unhex(
-                &m["keys_document_keccak"],
-                "keys_document_keccak",
+            signers_document_keccak: Hash32(unhex(
+                &m["signers_document_keccak"],
+                "signers_document_keccak",
             )?),
             data: text(&m["data"], "data")?,
             sample: Sample {
@@ -767,9 +767,9 @@ impl Application {
             return Err(Refusal::Time("created_unix is in the future"));
         }
 
-        if keccak256(keys_document) != f.keys_document_keccak {
+        if keccak256(keys_document) != f.signers_document_keccak {
             return Err(Refusal::KeysDocument(
-                "its bytes do not hash to keys_document_keccak".into(),
+                "its bytes do not hash to signers_document_keccak".into(),
             ));
         }
         let doc = KeysDocument::parse(keys_document)?;
@@ -1177,7 +1177,7 @@ impl Request {
             }
         };
         format!(
-            "{{\"version\": {VERSION}, \"chain_id\": {}, \"book\": \"{}\",\n \"publisher\": {}, \"origin\": {},\n \"signer\": \"{}\", \"request\": \"{}\",\n \"application\": {application},\n \"key\": {key}, \"at_unix\": {at}, \"asks\": {asks},\n \"sequence\": {}, \"created_unix\": {}, \"expires_unix\": {},\n \"signature\": \"{}\"}}\n",
+            "{{\"version\": {VERSION}, \"chain_id\": {}, \"book\": \"{}\",\n \"publisher\": {}, \"origin\": {},\n \"signer\": \"{}\", \"request\": \"{}\",\n \"application\": {application},\n \"retire\": {key}, \"at_unix\": {at}, \"asks\": {asks},\n \"sequence\": {}, \"created_unix\": {}, \"expires_unix\": {},\n \"signature\": \"{}\"}}\n",
             self.chain_id,
             hex0x(&self.book),
             s(&self.publisher),
@@ -1207,7 +1207,10 @@ impl Request {
                 "signer",
                 "request",
                 "application",
-                "key",
+                // The address of the key to retire. Not named "key": secret
+                // scanners take a field of that name with a hex value for a
+                // credential, and this file is public.
+                "retire",
                 "at_unix",
                 "asks",
                 "sequence",
@@ -1219,7 +1222,7 @@ impl Request {
         if number(&m["version"], "version")? != u64::from(VERSION) {
             return Err(form("version must be 1"));
         }
-        let (app, key, at, asks) = (&m["application"], &m["key"], &m["at_unix"], &m["asks"]);
+        let (app, key, at, asks) = (&m["application"], &m["retire"], &m["at_unix"], &m["asks"]);
         let only = |ok: bool| {
             if ok {
                 Ok(())
@@ -1253,7 +1256,7 @@ impl Request {
             Some("retire-key") => {
                 only(app.is_null() && asks.is_null())?;
                 Ask::RetireKey {
-                    key: unhex(key, "key")?,
+                    key: unhex(key, "retire")?,
                     at_unix: number(at, "at_unix")?,
                 }
             }
@@ -1378,6 +1381,15 @@ impl Request {
                 if !(own || active) {
                     return Err(no(
                         "a key is retired by itself or by another active key of the id",
+                    ));
+                }
+                // One signature must not end ANOTHER key for good: whoever
+                // holds one key of the id (a thief too) could retire the
+                // rest. A foreign key needs the second proof, as a theft
+                // does (review S3-R1 L3).
+                if key != self.signer && !gone_from_document(&key)? {
+                    return Err(no(
+                        "another key of the id is retired only with the second proof: a keys document at the origin that no longer lists it",
                     ));
                 }
                 if at_unix > self.expires_unix {

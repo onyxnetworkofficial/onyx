@@ -787,6 +787,10 @@ node at `https://onyx.cryptagraph.com/v1/` indexes this set, [site-hosting.md](s
 | Record publisher `early-record` (the early-contributor record, ROADMAP S26, ADR-0065; origin onyx.cryptagraph.com/record, keys document at `/record/.well-known/onyx-source-keys.json`; key made 2026-11-15, one anchor a day; docs/ops/early-record.md) | `0x9c32d230b3f5f8abcaf7a2ca7eea077400f9eb70` |
 | Bulk publisher `onchain-archive` (on-chain metrics from its own nodes; origin onyx.cryptagraph.com/archive, keys document at `/archive/.well-known/onyx-source-keys.json`; registered 2026-10-30, block 52364676) | `0xedff5b3070a2ecc6fa06ea7781ec90f6318bee5c` |
 
+The OnyxSignedBook was deployed in block 52118336. Every scan of its `KeyRegistered` events starts
+there: the block is pinned in `onyx_api::bulk_registry::KNOWN_BOOKS`, and `onyx-publish` and
+`book-reviewer` refuse another first block for this book (ADR-0066, review S3-R1 M4).
+
 Markets next to this registry (NORTH-STAR NS11, ADR-0042 amendment 2; `scripts/markets-sepolia.sh
 deploy`, 2026-10-27, block 51006420, 8 transactions, 0.000351 test ETH; the deployer mints tONYX,
 owns the futures and lists facts). The file `<export>/markets.json` names them and every market:

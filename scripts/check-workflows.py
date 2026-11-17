@@ -2,7 +2,10 @@
 """GitHub Actions rules (CL10, THREATS CL10-9): every workflow pins each action to a full commit
 SHA, sets its token's permissions at the top, uses no secret but the repository's own
 GITHUB_TOKEN and never runs on pull_request_target; in desktop.yml only the release job may write
-(contents: write) and it runs only for a pushed v*-testnet tag.
+(contents: write) and it runs only for a pushed v*-testnet tag. A workflow that runs on issues
+(publisher-application.yml, ADR-0066 item 7, THREATS PUBON-15) reads text anyone can write: it has
+no secret at all, no job may write, and no `${{ github.event... }}` text stands inside a `run:`
+command (it reaches a step through `env:` only, and the tool as a file).
 
   python3 -I scripts/check-workflows.py [--self-test]
 """
@@ -52,6 +55,23 @@ def problems(name, text):
         p.append(f"{name}: pull_request_target runs with a write token on outside code")
     if not re.search(r"^permissions:", text, re.M):
         p.append(f"{name}: no top-level permissions (the token's default may write)")
+    if re.search(r"^  issues?(_comment)?:", text, re.M) or re.search(r"^on:\s*\[?[^\n]*\bissues", text, re.M):
+        if SECRET.search(text):
+            p.append(f"{name}: a workflow that runs on issues uses no secret at all")
+        if re.search(r"^\s+[a-z-]+:\s*write\s*$", text, re.M) or re.search(r"^permissions:\s*write-all", text, re.M):
+            p.append(f"{name}: a workflow that runs on issues may only read")
+        in_run, indent = False, 0
+        for i, line in enumerate(text.splitlines(), 1):
+            m = re.match(r"^(\s*)(?:- )?run:(.*)$", line)
+            if m:
+                in_run, indent = True, len(m.group(1))
+                body = m.group(2)
+            elif in_run and line.strip() and len(line) - len(line.lstrip()) <= indent:
+                in_run, body = False, ""
+            else:
+                body = line if in_run else ""
+            if "${{" in body and "github.event" in body:
+                p.append(f"{name}:{i}: issue text inside a command (hand it to the step through env:, and to the tool as a file)")
     if name == "desktop.yml":
         if not re.search(r"^permissions:\s*\{\}\s*$", text, re.M):
             p.append("desktop.yml: top-level permissions must be {}")
@@ -97,6 +117,19 @@ def self_test():
     for what, text in bad.items():
         assert text != good, what
         assert problems("desktop.yml", text), f"self-test: {what} was not caught"
+    issue = (ROOT / ".github" / "workflows" / "publisher-application.yml").read_text()
+    assert problems("publisher-application.yml", issue) == [], problems("publisher-application.yml", issue)
+    env_line = 'run: printf \'%s\' "$ISSUE_BODY" > "$RUNNER_TEMP/pointer.txt"'
+    bad_issue = {
+        "issue text in a command": issue.replace(env_line, 'run: echo "${{ github.event.issue.body }}" > "$RUNNER_TEMP/pointer.txt"'),
+        "issue title in a block command": issue.replace("          mkdir -p out\n", "          mkdir -p out\n          echo ${{ github.event.issue.title }}\n"),
+        "a secret": issue.replace("          ISSUE_BODY: ${{ github.event.issue.body }}", "          ISSUE_BODY: ${{ github.event.issue.body }}\n          TOKEN: ${{ secrets.GITHUB_TOKEN }}"),
+        "a write token": issue.replace("permissions:\n  contents: read", "permissions:\n  contents: read\n  issues: write"),
+    }
+    for what, text in bad_issue.items():
+        assert text != issue, what
+        assert problems("publisher-application.yml", text), f"self-test: {what} was not caught"
+    bad.update(bad_issue)
     print(f"check-workflows self-test: {len(bad)} planted faults caught")
     return 0
 

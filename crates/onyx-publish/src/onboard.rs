@@ -37,6 +37,13 @@ use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
+use onyx_api::bulk_registry::{
+    known_deploy_block, read_book_keys_cached, scan_cache_path, BookKeys, DEFAULT_LOGS_RANGE,
+};
+use onyx_api::roots::{HttpJsonRpc, JsonRpc};
+use onyx_api::x402::{check_facilitator_url, HyperPost};
+use onyx_bulk::application::{check_book_list, KeyLife};
+
 /// The User-Agent of a fetch of an applicant's files: the tool's name only.
 const USER_AGENT: &str = "onyx-publish-verify/1";
 /// The whole deadline of one fetch.
@@ -77,6 +84,134 @@ fn registered(o: &Opts) -> Res<Option<Vec<RegisteredKey>>> {
     RegisteredKey::list_from_json(&b)
         .map(Some)
         .map_err(|e| format!("--registered {p}: {e}"))
+}
+
+/// The book as a chain node shows it (`--rpc`): the keys at one finalized
+/// block, and the node to read the book's mappings again.
+pub(crate) struct ChainBook {
+    pub rpc: Box<dyn JsonRpc>,
+    pub keys: BookKeys,
+}
+
+impl ChainBook {
+    /// The book's keys in the form the checks take. An origin the book
+    /// holds in another form than the registered one stops the tool.
+    pub(crate) fn registered(&self) -> Res<Vec<RegisteredKey>> {
+        let list: Vec<RegisteredKey> = self
+            .keys
+            .keys
+            .iter()
+            .map(|k| RegisteredKey {
+                publisher: k.publisher.clone(),
+                origin: k.origin.clone(),
+                signer: k.signer,
+                life: match (k.life, k.suspended) {
+                    (2, _) => KeyLife::Retired,
+                    (3, _) => KeyLife::Compromised,
+                    (_, true) => KeyLife::Suspended,
+                    _ => KeyLife::Active,
+                },
+            })
+            .collect();
+        check_book_list(&list).map_err(|e| format!("the book: {e}"))?;
+        Ok(list)
+    }
+}
+
+/// The chain node of `--rpc` (https, or http to this machine only).
+pub(crate) fn rpc_of(url: &str) -> Res<HttpJsonRpc<HyperPost>> {
+    check_facilitator_url(url).map_err(|e| e.replacen("facilitator", "chain node", 1))?;
+    Ok(HttpJsonRpc::new(
+        url.to_string(),
+        HyperPost::for_logs(Duration::from_secs(30)),
+    ))
+}
+
+/// The first block to scan: `--from-block`, or a known book's pinned
+/// deploy block, or 0 on a local chain. Any other book needs the option (a
+/// scan from block 0 of a public chain never ends); the reader then checks
+/// that the book did not exist before it (review S3-R1 M4).
+pub(crate) fn from_block(o: &Opts, net: &Network) -> Res<u64> {
+    match (
+        o.opt("from-block"),
+        known_deploy_block(net.chain_id, &net.book),
+    ) {
+        (Some(n), _) => n
+            .parse()
+            .map_err(|_| "--from-block: not a whole number".to_string()),
+        (None, Some(deploy)) => Ok(deploy),
+        (None, None) if net.chain_id == 31_337 => Ok(0),
+        (None, None) => {
+            Err("--rpc needs --from-block N: the block this book was deployed in".into())
+        }
+    }
+}
+
+/// Where a scan of the book is kept between runs: `--scan-cache FILE`, or
+/// for a public chain `<ONYX_OPS_DIR or ~/.local/state/onyx>/book-scan/
+/// <chain>-<book>.json`. A local chain is a new chain every run: no cache
+/// unless one is named.
+pub(crate) fn scan_cache(o: &Opts, net: &Network) -> Option<PathBuf> {
+    if let Some(p) = o.opt("scan-cache") {
+        return Some(PathBuf::from(p));
+    }
+    if net.chain_id == 31_337 {
+        return None;
+    }
+    let base = std::env::var_os("ONYX_OPS_DIR")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local/state/onyx")))?;
+    Some(scan_cache_path(
+        &base.join("book-scan"),
+        net.chain_id,
+        &net.book,
+    ))
+}
+
+/// Read the book's keys from the node at `--rpc` (ADR-0066 item 8 step 3):
+/// `Ok(None)` without the option; `Err((true, why))` for a wrong option,
+/// `Err((false, why))` for a chain that could not be read (nothing decided).
+pub(crate) async fn chain_book(o: &Opts) -> Result<Option<ChainBook>, (bool, String)> {
+    let Some(url) = o.opt("rpc") else {
+        if ["from-block", "logs-range", "scan-cache", "scan-pause-ms"]
+            .iter()
+            .any(|k| o.opt(k).is_some())
+        {
+            return Err((
+                true,
+                "--from-block, --logs-range, --scan-cache and --scan-pause-ms go with --rpc".into(),
+            ));
+        }
+        return Ok(None);
+    };
+    let usage = |e: String| (true, e);
+    if o.opt("registered").is_some() {
+        // The reviewer with a node never takes a list from anyone.
+        return Err(usage(
+            "--rpc and --registered together: with a chain node the book's keys are read from the book, never from a file".into(),
+        ));
+    }
+    let net = network(o).map_err(usage)?;
+    let from = from_block(o, &net).map_err(usage)?;
+    let range = o.num("logs-range", DEFAULT_LOGS_RANGE).map_err(usage)?;
+    let pause = o.num("scan-pause-ms", 0).map_err(usage)?;
+    let rpc = rpc_of(url).map_err(usage)?;
+    let cache = scan_cache(o, &net);
+    let keys = read_book_keys_cached(
+        &rpc,
+        net.chain_id,
+        &net.book,
+        from,
+        range,
+        cache.as_deref(),
+        pause,
+    )
+    .await
+    .map_err(|e| (false, format!("the book was not read: {e}")))?;
+    Ok(Some(ChainBook {
+        rpc: Box::new(rpc),
+        keys,
+    }))
 }
 
 /// The decision records (`--decisions PATH`): one `decision.json`, a JSON
@@ -160,7 +295,7 @@ pub(crate) fn apply(o: &Opts) -> Res<String> {
         publisher: o.req("publisher")?.to_string(),
         origin: o.req("origin")?.to_string(),
         signer,
-        keys_document_keccak: keccak256(&keys),
+        signers_document_keccak: keccak256(&keys),
         data: o.req("data")?.to_string(),
         sample: Sample {
             dataset: m.header.dataset.clone(),
@@ -412,7 +547,7 @@ impl Source {
         Ok(Source::Web(f, origin))
     }
 
-    fn read_local(&self, rel: &str, cap: usize) -> Result<Vec<u8>, String> {
+    pub(crate) fn read_local(&self, rel: &str, cap: usize) -> Result<Vec<u8>, String> {
         let Source::Dir(dir) = self else {
             return Err("not a folder".into());
         };
@@ -484,13 +619,50 @@ pub(crate) struct Review {
     pub save: Option<PathBuf>,
     /// The highest request sequence already taken from the signer.
     pub last_sequence: Option<u64>,
+    /// The request sequences the records hold, by signer (`--decisions`
+    /// of `verify-request`).
+    pub sequences: Option<Vec<([u8; 20], u64)>>,
+    /// The book read from a chain node (`--rpc`); `registered` is then its
+    /// list.
+    pub chain: Option<ChainBook>,
+    /// The applications the record holds as closed (refused, withdrawn or
+    /// expired), by Keccak, with the state (review S3-R1 M1).
+    pub closed: Vec<(String, String)>,
 }
 
 impl Review {
     /// The book counts as read with a list that holds at least one key: an
     /// empty list says nothing about what is free (review APPLY-R1 M3).
-    fn book_read(&self) -> bool {
-        self.registered.as_ref().is_some_and(|r| !r.is_empty())
+    ///
+    /// A book read from a chain node counts with no key too: what it shows
+    /// as free is read again from the book's own mappings
+    /// (`BookKeys::confirm_free`).
+    pub(crate) fn book_read(&self) -> bool {
+        self.chain.is_some() || self.registered.as_ref().is_some_and(|r| !r.is_empty())
+    }
+    /// Put the chain's book in place of a handed-in list.
+    pub(crate) fn with_chain(mut self, chain: Option<ChainBook>) -> Res<Review> {
+        if let Some(c) = &chain {
+            self.registered = Some(c.registered()?);
+            self.registered_keccak = None;
+        }
+        self.chain = chain;
+        Ok(self)
+    }
+    /// The highest sequence taken from `signer`: `--last-sequence` and
+    /// the records, whichever is higher; `None` when neither was read.
+    fn last_sequence_of(&self, signer: &[u8; 20]) -> Option<u64> {
+        let recorded = self.sequences.as_ref().map(|s| {
+            s.iter()
+                .filter(|(k, _)| k == signer)
+                .map(|(_, n)| *n)
+                .max()
+                .unwrap_or(0)
+        });
+        match (self.last_sequence, recorded) {
+            (Some(a), Some(b)) => Some(a.max(b)),
+            (a, b) => a.or(b),
+        }
     }
     fn keep(&self, rel: &str, b: &[u8]) -> Result<(), String> {
         let Some(d) = &self.save else {
@@ -517,6 +689,12 @@ impl Review {
                 "registered": self.registered.as_ref().map(|r| json!({
                     "count": r.len(),
                     "keccak": self.registered_keccak.map(|k| k.to_string()),
+                })),
+                "bookRead": self.chain.as_ref().map(|c| json!({
+                    "finalizedBlock": c.keys.at.0,
+                    "blockHash": c.keys.at.1.to_string(),
+                    "fromBlock": c.keys.from_block,
+                    "reviewer": hx(&c.keys.reviewer),
                 })),
                 "records": self.records.as_ref().map(|r| json!({"count": r.len()})),
                 "blocksSignerUntil": Value::Null,
@@ -607,7 +785,7 @@ macro_rules! fetch {
 pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
     let mut not_checked = Vec::new();
     if !rv.book_read() {
-        not_checked.push("the book: whether the id, the origin and the signer are free, and a second key's cosigner (hand in --registered FILE with the book's keys; an empty list does not count)");
+        not_checked.push("the book: whether the id, the origin and the signer are free, and a second key's cosigner (read it with --rpc URL --from-block N; or hand in --registered FILE with the book's keys, where an empty list does not count)");
     }
     if rv.records.is_none() {
         not_checked.push("refused and expired records: whether this signer is blocked (hand in --decisions PATH)");
@@ -615,7 +793,7 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
     if rv.hash.is_none() {
         not_checked.push("the pointer's hash: whether this is the application the issue names (hand in --hash); without it no refusal blocks a signer");
     }
-    not_checked.push("the rehearsal on a local chain and node (slice 3)");
+    not_checked.push("the rehearsal of this sample on a local chain and node (scripts/publisher-onboard-anvil.sh rehearses the whole flow with a made-up applicant)");
     let mut run = rv.start("onyx-publish verify-application", src, not_checked);
     run.report["forThePerson"] = json!(FOR_THE_PERSON);
 
@@ -642,6 +820,7 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
     run.report["publisher"] = json!(f.publisher);
     run.report["origin"] = json!(f.origin);
     run.report["signer"] = json!(hx(&f.signer));
+    run.report["sampleManifestRoot"] = json!(f.sample.manifest_root.to_string());
     run.report["data"] = json!(f.data);
     run.report["asks"] = json!({"quotaGib": f.asks.quota_gib, "datasets": f.asks.datasets});
     run.report["createdUnix"] = json!(f.created_unix);
@@ -666,6 +845,17 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
         // read, the bound is the application's own time: a first sample is
         // never built after it.
         run.report["blocksSignerUntil"] = json!(blocks_signer_until(f.created_unix));
+    }
+    // A closed application stays closed: the record holds this very file
+    // as refused, withdrawn or expired. The applicant applies again with a
+    // new file (review S3-R1 M1).
+    if let Some((_, state)) = rv.closed.iter().find(|(k, _)| *k == keccak.to_string()) {
+        return run.end(
+            "record",
+            "duplicate",
+            format!("the record holds this application as {state}: a closed application is not taken up again; apply again with a new file"),
+            1,
+        );
     }
     if let Some(o) = &rv.origin {
         if *o != f.origin {
@@ -698,6 +888,23 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
     let none_rec = Vec::new();
     let reg = rv.registered.as_ref().unwrap_or(&none_reg);
     let rec = rv.records.as_ref().unwrap_or(&none_rec);
+    if let Some(c) = &rv.chain {
+        // What the scanned logs show as free is free in the book's own
+        // mappings: a scan that started late decides nothing.
+        if let Err(e) = c
+            .keys
+            .confirm_free(
+                c.rpc.as_ref(),
+                &rv.net.book,
+                &f.publisher,
+                &f.origin,
+                &f.signer,
+            )
+            .await
+        {
+            return run.end("book", "not-decided", e, 3);
+        }
+    }
     let standing = match app.verify(&rv.net, rv.now, &keys, reg, rec) {
         Ok(s) => s,
         Err(e) => return run.refuse("application", &e),
@@ -709,7 +916,7 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
     };
     run.report["standing"] = json!(name);
     run.report["cosigner"] = json!(cosigner);
-    run.report["keysDocumentKeccak"] = json!(f.keys_document_keccak.to_string());
+    run.report["signersDocumentKeccak"] = json!(f.signers_document_keccak.to_string());
     run.ok(
         "application",
         format!(
@@ -781,8 +988,8 @@ pub(crate) async fn verify(src: &Source, rv: &Review) -> (Value, u8) {
 /// code (0, 1, 3 or 4).
 pub(crate) async fn verify_request(src: &Source, rv: &Review) -> (Value, u8) {
     let mut not_checked = Vec::new();
-    if rv.last_sequence.is_none() {
-        not_checked.push("whether this request was taken before (hand in --last-sequence N: the highest sequence taken from this key, 0 for none)");
+    if rv.last_sequence.is_none() && rv.sequences.is_none() {
+        not_checked.push("whether this request was taken before (hand in --decisions PATH, the record folder, or --last-sequence N: the highest sequence taken from this key, 0 for none)");
     }
     if rv.hash.is_none() {
         not_checked.push(
@@ -806,7 +1013,7 @@ pub(crate) async fn verify_request(src: &Source, rv: &Review) -> (Value, u8) {
     };
     let withdraw = matches!(r.ask, Ask::Withdraw { .. });
     if !withdraw && !rv.book_read() {
-        not_checked.push("the book: whether the signer is a key of this id and may ask this (hand in --registered FILE)");
+        not_checked.push("the book: whether the signer is a key of this id and may ask this (--rpc URL --from-block N, or --registered FILE)");
     }
     run.report["notChecked"] = json!(not_checked);
     if let Some(h) = rv.hash {
@@ -852,7 +1059,7 @@ pub(crate) async fn verify_request(src: &Source, rv: &Review) -> (Value, u8) {
         keys_document: &keys,
         registered: rv.registered.as_ref().unwrap_or(&none_reg),
         application: application.as_deref(),
-        last_sequence: rv.last_sequence,
+        last_sequence: rv.last_sequence_of(&r.signer),
     };
     if let Err(e) = r.verify(&rv.net, rv.now, &ctx) {
         return run.refuse("request", &e);
@@ -863,22 +1070,23 @@ pub(crate) async fn verify_request(src: &Source, rv: &Review) -> (Value, u8) {
     run.report["origin"] = json!(r.origin);
     run.report["signer"] = json!(hx(&r.signer));
     run.report["sequence"] = json!(r.sequence);
+    run.report["lastSequence"] = json!(rv.last_sequence_of(&r.signer));
     run.report["expiresUnix"] = json!(r.expires_unix);
     run.report["ask"] = match r.ask {
         Ask::Withdraw { application } => json!({"application": application.to_string()}),
         Ask::Raise(a) => json!({"quotaGib": a.quota_gib, "datasets": a.datasets}),
         Ask::KeyStolen { since_unix } => json!({"sinceUnix": since_unix}),
-        Ask::RetireKey { key, at_unix } => json!({"key": hx(&key), "atUnix": at_unix}),
+        Ask::RetireKey { key, at_unix } => json!({"retire": hx(&key), "atUnix": at_unix}),
     };
     run.ok(
         "request",
         "signed by its signer for this chain and book, not expired, and the signer may ask this"
             .into(),
     );
-    run.pass(rv.last_sequence.is_none() || (!withdraw && !rv.book_read()))
+    run.pass(rv.last_sequence_of(&r.signer).is_none() || (!withdraw && !rv.book_read()))
 }
 
-fn review(o: &Opts) -> Res<Review> {
+pub(crate) fn review(o: &Opts) -> Res<Review> {
     let hash = match o.opt("hash") {
         None => None,
         Some(h) => {
@@ -906,10 +1114,39 @@ fn review(o: &Opts) -> Res<Review> {
             None => None,
             Some(n) => Some(n.parse().map_err(|_| "--last-sequence: a whole number")?),
         },
+        sequences: None,
+        chain: None,
+        closed: match o.opt("decisions") {
+            None => Vec::new(),
+            Some(p) => crate::record::all(Path::new(p))?
+                .into_iter()
+                .filter_map(|(_, d)| {
+                    let state = d["state"].as_str()?;
+                    matches!(state, "refused" | "withdrawn" | "expired").then(|| {
+                        Some((d["application"].as_str()?.to_string(), state.to_string()))
+                    })?
+                })
+                .collect(),
+        },
     })
 }
 
-fn source(o: &Opts) -> Res<Source> {
+/// [`review`] with the book read from the chain node of `--rpc`. `Err` with
+/// a report is a chain that could not be read: exit 3, nothing decided.
+async fn review_cmd(o: &Opts, tool: &str) -> Res<Result<Review, Value>> {
+    let rv = review(o)?;
+    match chain_book(o).await {
+        Ok(chain) => Ok(Ok(rv.with_chain(chain)?)),
+        Err((true, e)) => Err(e),
+        Err((false, e)) => Ok(Err(json!({
+            "tool": tool, "ok": false, "decided": false,
+            "chainId": rv.net.chain_id, "book": hx(&rv.net.book),
+            "refused": {"check": "book", "code": "not-decided", "reason": e},
+        }))),
+    }
+}
+
+pub(crate) fn source(o: &Opts) -> Res<Source> {
     match (o.opt("dir"), o.opt("origin")) {
         (Some(d), _) => Ok(Source::Dir(PathBuf::from(d))),
         (None, Some(origin)) => Source::web(Origin::parse(origin).map_err(|e| e.to_string())?),
@@ -917,8 +1154,69 @@ fn source(o: &Opts) -> Res<Source> {
     }
 }
 
+/// The two lines of a pointer issue (ADR-0066 item 7), read from a file
+/// that holds the issue's text: `origin: <origin>` and `application keccak:
+/// 0x<64 hex>`. HTML comments and empty lines are skipped; any other line
+/// is refused, and the origin must be in its grammar. The text of an issue
+/// is anyone's: it reaches the tool as a file, never as part of a command
+/// (THREATS PUBON-15).
+pub(crate) fn pointer_lines(text: &str) -> Res<(String, String)> {
+    if text.len() > MAX_APPLICATION_BYTES {
+        return Err("the pointer is over 4 KiB".into());
+    }
+    let mut rest = text;
+    let mut plain = String::new();
+    while let Some(a) = rest.find("<!--") {
+        plain.push_str(&rest[..a]);
+        let end = rest[a..]
+            .find("-->")
+            .ok_or("the pointer has an open comment")?;
+        rest = &rest[a + end + 3..];
+    }
+    plain.push_str(rest);
+    let (mut origin, mut hash) = (None, None);
+    for l in plain.lines().map(str::trim).filter(|l| !l.is_empty()) {
+        let slot = match l.split_once(':').map(|(k, v)| (k.trim(), v.trim())) {
+            Some(("origin", v)) => (&mut origin, v),
+            Some(("application keccak", v)) => (&mut hash, v),
+            _ => return Err("the pointer holds a line that is neither `origin: ...` nor `application keccak: ...`".into()),
+        };
+        if slot.0.replace(slot.1.to_string()).is_some() {
+            return Err("the pointer names a line twice".into());
+        }
+    }
+    let origin = origin.ok_or("the pointer has no `origin:` line")?;
+    let hash = hash.ok_or("the pointer has no `application keccak:` line")?;
+    Origin::parse(&origin).map_err(|e| format!("the pointer's origin: {e}"))?;
+    let hex_ok = hash.len() == 66
+        && hash.starts_with("0x")
+        && hash[2..]
+            .bytes()
+            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c));
+    if !hex_ok {
+        return Err("the pointer's keccak is not 0x and 64 lowercase hex digits".into());
+    }
+    Ok((origin, hash))
+}
+
 /// `verify-application`: the JSON report on stdout, the exit code back.
 pub(crate) async fn verify_cmd(o: &Opts) -> Res<u8> {
+    // `--pointer FILE` stands for `--origin` and `--hash` (the CI job).
+    let with_pointer;
+    let o = match o.opt("pointer") {
+        None => o,
+        Some(p) => {
+            if o.opt("origin").is_some() || o.opt("hash").is_some() {
+                return Err(
+                    "--pointer names the origin and the hash: leave --origin and --hash out".into(),
+                );
+            }
+            let text = std::fs::read_to_string(p).map_err(|e| format!("--pointer {p}: {e}"))?;
+            let (origin, hash) = pointer_lines(&text).map_err(|e| format!("--pointer {p}: {e}"))?;
+            with_pointer = o.with(&[("origin", origin), ("hash", hash)], "pointer");
+            &with_pointer
+        }
+    };
     o.only(&[
         "dir",
         "origin",
@@ -929,8 +1227,19 @@ pub(crate) async fn verify_cmd(o: &Opts) -> Res<u8> {
         "decisions",
         "save",
         "now",
+        "rpc",
+        "from-block",
+        "logs-range",
+        "scan-cache",
+        "scan-pause-ms",
     ])?;
-    let rv = review(o)?;
+    let rv = match review_cmd(o, "onyx-publish verify-application").await? {
+        Ok(rv) => rv,
+        Err(report) => {
+            println!("{report:#}");
+            return Ok(3);
+        }
+    };
     let (report, code) = verify(&source(o)?, &rv).await;
     println!("{report:#}");
     Ok(code)
@@ -946,10 +1255,25 @@ pub(crate) async fn verify_request_cmd(o: &Opts) -> Res<u8> {
         "book",
         "registered",
         "last-sequence",
+        "decisions",
         "save",
         "now",
+        "rpc",
+        "from-block",
+        "logs-range",
+        "scan-cache",
+        "scan-pause-ms",
     ])?;
-    let rv = review(o)?;
+    let mut rv = match review_cmd(o, "onyx-publish verify-request").await? {
+        Ok(rv) => rv,
+        Err(report) => {
+            println!("{report:#}");
+            return Ok(3);
+        }
+    };
+    if let Some(p) = o.opt("decisions") {
+        rv.sequences = Some(crate::record::sequences(Path::new(p))?);
+    }
     let (report, code) = verify_request(&source(o)?, &rv).await;
     println!("{report:#}");
     Ok(code)
@@ -1002,7 +1326,122 @@ fn key_line(step: &'static str, path: &Path, make: String) -> Result<[u8; 20], L
 /// `doctor`: every step of ADR-0066 item 2 for the folder, each `ok`,
 /// `missing`, `problem` or `skipped`, with the next command. It reads
 /// files; with `live` it also reads the origin. It sends nothing.
+#[cfg(test)]
 pub(crate) async fn doctor(o: &Opts, live: Option<&Source>) -> Res<Vec<Line>> {
+    doctor_with(o, live, None).await
+}
+
+/// One wei amount as test ETH, to six places.
+fn eth(wei: u128) -> String {
+    format!(
+        "{}.{:06} test ETH",
+        wei / 10u128.pow(18),
+        wei % 10u128.pow(18) / 10u128.pow(12)
+    )
+}
+
+/// The gas line: the key's balance against the cost of one anchor at the
+/// node's gas price (about 250,000 gas, ADR-0066 item 2).
+async fn gas_line(rpc: &dyn JsonRpc, signer: &[u8; 20]) -> Line {
+    let num = |v: Value| {
+        v.as_str()
+            .and_then(|s| u128::from_str_radix(s.trim_start_matches("0x"), 16).ok())
+    };
+    let balance = rpc
+        .call("eth_getBalance", json!([hx(signer), "latest"]))
+        .await
+        .map(num);
+    let price = rpc.call("eth_gasPrice", json!([])).await.map(num);
+    let (Ok(Some(balance)), Ok(Some(price))) = (balance, price) else {
+        return line(
+            "skipped",
+            "gas",
+            "the chain node did not answer for the balance and the gas price",
+            None,
+        );
+    };
+    // Twice the node's price: the fee moves between two anchors.
+    let one = price.saturating_mul(2).saturating_mul(250_000);
+    let history = "whether the address was funded from one with other history is not read: a transfer links the two addresses for everyone, so fund it from a faucet";
+    if balance >= one {
+        line(
+            "ok",
+            "gas",
+            format!(
+                "{} holds {}, enough for about {} anchor(s) at the node's gas price; {history}",
+                hx(signer),
+                eth(balance),
+                balance / one.max(1)
+            ),
+            None,
+        )
+    } else {
+        line("ok", "gas", format!("{} holds {}, under one anchor (about {}): none is needed before approval, the reviewer's tool anchors the sample; get test ETH from a faucet before your second anchor; {history}", hx(signer), eth(balance), eth(one)), None)
+    }
+}
+
+/// The node line: `GET <node>/v1/bulk` answers, and no dataset it lists is
+/// anchored in another book than `net`'s.
+async fn node_line(node: &str, net: Option<Network>) -> Line {
+    let url = format!("{}/v1/bulk", node.trim_end_matches('/'));
+    let c = crate::client();
+    let got = crate::send(
+        &c,
+        hyper::Method::GET,
+        &url,
+        "application/json",
+        hyper::body::Bytes::new(),
+    )
+    .await;
+    let v = match got {
+        Ok((200, v, _)) if v["datasets"].is_array() => v,
+        Ok((status, _, _)) => {
+            return line(
+                "problem",
+                "node",
+                format!("{url} answered {status}, not a bulk listing"),
+                Some("name a node that takes bulk datasets (--node)".into()),
+            )
+        }
+        Err(e) => {
+            return line(
+                "problem",
+                "node",
+                format!("{url}: {e}"),
+                Some("name a node that takes bulk datasets (--node)".into()),
+            )
+        }
+    };
+    let anchors: Vec<(u64, String)> = v["datasets"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|d| {
+            let a = &d["anchor"];
+            Some((
+                a["chain_id"].as_u64()?,
+                a["book"].as_str()?.to_ascii_lowercase(),
+            ))
+        })
+        .collect();
+    match net {
+        Some(n) if anchors.iter().any(|(c, b)| *c != n.chain_id || *b != hx(&n.book)) => line(
+            "problem",
+            "node",
+            format!("{url} lists datasets anchored in another book than the application's ({} on chain {})", hx(&n.book), n.chain_id),
+            Some("apply for the book this node reads (--chain-id, --book), or name its node".into()),
+        ),
+        Some(_) if !anchors.is_empty() => line("ok", "node", format!("{url} answers, and its {} listed dataset(s) are anchored in the application's book", anchors.len()), None),
+        _ => line("ok", "node", format!("{url} answers; it lists no anchored dataset to compare its book with the application's"), None),
+    }
+}
+
+/// [`doctor`] with the book read from a chain node (`--rpc`).
+pub(crate) async fn doctor_with(
+    o: &Opts,
+    live: Option<&Source>,
+    chain: Option<&ChainBook>,
+) -> Res<Vec<Line>> {
     let dir = PathBuf::from(o.opt("dir").unwrap_or("."));
     let rel = |k: &str, d: &str| o.opt(k).map_or_else(|| dir.join(d), PathBuf::from);
     let (key_path, spare_path, site) = (
@@ -1011,7 +1450,10 @@ pub(crate) async fn doctor(o: &Opts, live: Option<&Source>) -> Res<Vec<Line>> {
         rel("site", "site"),
     );
     let now = now_of(o)?;
-    let reg = registered(o)?;
+    let reg = match chain {
+        Some(c) => Some(c.registered()?),
+        None => registered(o)?,
+    };
     let rec = records(o)?;
     let show = |p: &Path| p.display().to_string();
     let mut out = Vec::new();
@@ -1320,6 +1762,9 @@ pub(crate) async fn doctor(o: &Opts, live: Option<&Source>) -> Res<Vec<Line>> {
                 records,
                 save: None,
                 last_sequence: None,
+                sequences: None,
+                chain: None,
+                closed: Vec::new(),
             };
             let (report, code) = verify(&src, &rv).await;
             if signer.is_some_and(|s| s != a.fields.signer) {
@@ -1417,23 +1862,29 @@ pub(crate) async fn doctor(o: &Opts, live: Option<&Source>) -> Res<Vec<Line>> {
                 .ok()
                 .and_then(|b| serde_json::from_slice(&b).ok())
                 .ok_or(format!("--publishers {p}: not a JSON file"))?;
-            let state = v["publishers"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|e| Some(e["publisher"].as_str().unwrap_or("")) == id.as_deref())
-                .map(|e| {
-                    (
-                        e["state"].as_str().unwrap_or("unknown").to_string(),
-                        e["reason"].as_str().unwrap_or("").to_string(),
-                    )
-                });
+            // The list `scripts/check-publishers.py` writes: publishers by
+            // id, and applications that are not approved by their Keccak.
+            let of = |list: &str, key: &str, want: Option<String>| {
+                v[list]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .find(|e| want.is_some() && e[key].as_str() == want.as_deref())
+                    .map(|e| {
+                        (
+                            e["state"].as_str().unwrap_or("unknown").to_string(),
+                            e["reason"].as_str().unwrap_or("").to_string(),
+                        )
+                    })
+            };
+            let mine = app_bytes.as_ref().map(|b| keccak256(b).to_string());
+            let state = of("applications", "application", mine).or_else(|| of("publishers", "publisher", id.clone()));
             match state {
                 Some((s, why)) => out.push(line(
                     if s == "refused" { "problem" } else { "ok" },
                     "status",
                     format!("{id_s}: {s} {why}"),
-                    None,
+                    if s == "refused" { Some("fix the named reason and apply again with a new key (docs/ops/bulk-publish.md \"After a refusal\")".into()) } else { None },
                 )),
                 None => out.push(line(
                     "ok",
@@ -1446,15 +1897,44 @@ pub(crate) async fn doctor(o: &Opts, live: Option<&Source>) -> Res<Vec<Line>> {
         None => out.push(line(
             "skipped",
             "status",
-            "the public record was not read (it starts with slice 3 of ADR-0066)",
-            Some("onyx-publish doctor --publishers <publishers.json>".into()),
+            "the public record was not read",
+            Some("onyx-publish doctor --publishers <publishers.json>  (the status list: apps/web/static/publishers.json of the repository)".into()),
         )),
     }
-    match &reg {
-        Some(r) => out.push(line("ok", "book", format!("{} registered key(s) read from the list: {}", r.len(), if second_key { "this id and origin are registered: this is a further key and needs a cosignature" } else { "the id, the origin and the key are checked against it above" }), None)),
-        None => out.push(line("skipped", "book", "the book was not read, so the look-alike, overlap and free-key checks ran without it", Some("onyx-publish doctor --registered <list of registered keys>".into()))),
+    match (&reg, chain) {
+        (Some(r), Some(c)) => out.push(line("ok", "book", format!("{} registered key(s) read from the book at its finalized block {}: {}", r.len(), c.keys.at.0, if second_key { "this id and origin are registered: this is a further key and needs a cosignature" } else { "the id, the origin and the key are checked against it above" }), None)),
+        (Some(r), None) => out.push(line("ok", "book", format!("{} registered key(s) read from the list: {}", r.len(), if second_key { "this id and origin are registered: this is a further key and needs a cosignature" } else { "the id, the origin and the key are checked against it above" }), None)),
+        (None, _) => out.push(line("skipped", "book", "the book was not read, so the look-alike, overlap and free-key checks ran without it", Some("onyx-publish doctor --rpc <chain node> --chain-id <chain id> --book <signed book address> --from-block <the book's first block>".into()))),
     }
-    out.push(line("skipped", "gas and node", "not checked by this version: no test ETH is needed before approval (the reviewer's tool anchors the sample); from your second anchor on, one anchor is about 250,000 gas of test ETH from a faucet", None));
+    let gas_text = "no test ETH is needed before approval (the reviewer's tool anchors the sample); from your second anchor on, one anchor is about 250,000 gas of test ETH from a faucet";
+    match (chain, o.opt("node")) {
+        (None, None) => out.push(line(
+            "skipped",
+            "gas and node",
+            format!("not read (--rpc for the gas, --node for the node): {gas_text}"),
+            None,
+        )),
+        (c, n) => {
+            match (c, signer) {
+                (Some(c), Some(s)) => out.push(gas_line(c.rpc.as_ref(), &s).await),
+                _ => out.push(line(
+                    "skipped",
+                    "gas",
+                    format!("not read (it needs --rpc and the key file): {gas_text}"),
+                    None,
+                )),
+            }
+            match n {
+                Some(n) => out.push(node_line(n, net).await),
+                None => out.push(line(
+                    "skipped",
+                    "node",
+                    "not read",
+                    Some("onyx-publish doctor --node <node URL>".into()),
+                )),
+            }
+        }
+    }
 
     // 8. What to send.
     if let (Some(k), true) = (ready, live.is_some()) {
@@ -1499,9 +1979,37 @@ pub(crate) async fn doctor_cmd(o: &Opts) -> Res<u8> {
         "decisions",
         "publishers",
         "live",
+        "mirror",
+        "rpc",
+        "from-block",
+        "logs-range",
+        "scan-cache",
+        "scan-pause-ms",
+        "node",
         "now",
     ])?;
-    let web = if o.flag("live") {
+    let chain = match chain_book(o).await {
+        Ok(c) => c,
+        Err((true, e)) => return Err(e),
+        Err((false, e)) => {
+            // A chain node that does not answer is a problem of the run, not
+            // of the application: say so and stop.
+            println!("problem  book: {e}\n         next: try again later, or name another chain node (--rpc)");
+            println!("doctor: the book could not be read; nothing was sent");
+            return Ok(1);
+        }
+    };
+    if o.opt("rpc").is_some() && (o.opt("chain-id").is_none() || o.opt("book").is_none()) {
+        return Err("--rpc needs --chain-id and --book".into());
+    }
+    let web = if let Some(d) = o.opt("mirror") {
+        // A copy of what the origin serves, as a folder (a rehearsal, or a
+        // staging copy before the upload).
+        if o.flag("live") {
+            return Err("--live reads the origin, --mirror a folder copy of it: name one".into());
+        }
+        Some(Source::Dir(PathBuf::from(d)))
+    } else if o.flag("live") {
         // The origin comes from the option or the local application.
         let origin = match o.opt("origin") {
             Some(o) => Some(o.to_string()),
@@ -1526,11 +2034,11 @@ pub(crate) async fn doctor_cmd(o: &Opts) -> Res<u8> {
     } else {
         None
     };
-    let (text, good) = doctor_text(&doctor(o, web.as_ref()).await?);
+    let (text, good) = doctor_text(&doctor_with(o, web.as_ref(), chain.as_ref()).await?);
     print!("{text}");
     Ok(u8::from(!good))
 }
 
 #[cfg(test)]
 #[path = "onboard_tests.rs"]
-mod tests;
+pub(crate) mod tests;

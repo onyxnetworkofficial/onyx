@@ -129,7 +129,16 @@ sends nothing.
    no redirect). Then `onyx-publish doctor --live`
    It reads the files back from your origin, compares them with the local ones, and prints one
    line per step: `ok`, `missing` or `problem`, each with the next command (`skipped`: a check
-   this version does not run). When nothing is missing it prints the two lines for step 7.
+   you did not ask for). When nothing is missing it prints the two lines for step 7.
+   Three more lines when you name where to read:
+   `--rpc https://sepolia.base.org --chain-id 84532 --book <signed book address>`
+   reads the registered keys from the book itself (is your id, origin or key taken?) and your
+   key's test ETH (none is needed before approval); `--node <node address>` asks the node;
+   `--publishers publishers.json` reads the status list (step 8). The public chain node answers
+   200 blocks a request, so the first read of the book's whole history takes hours there; the
+   tool keeps what it read (`~/.local/state/onyx/book-scan/`, or `--scan-cache FILE`) and a later
+   run reads only the new blocks. Leave `--rpc` out if you do not want to wait: the reviewer
+   reads the book in any case.
    Your spare key counts as there when `spare.key.address` is in the folder; if you made the
    spare elsewhere, add `--spare-offline`.
 7. **Point the reviewer at your origin (2 minutes).** Open the issue named in "Before you start"
@@ -139,7 +148,11 @@ sends nothing.
    origin, from a hosted machine, so you learn nothing about the reviewer and the reviewer's
    machine never connects to you.
 8. **Wait for the decision (up to 5 days).** The reviewer answers in the issue: approved, or
-   refused with a reason code. After a refusal, fix the named reason and apply again **with a
+   refused with a reason code. The same state is in the public record, `deploy/publishers/` of
+   the repository (it shows `yes` for each checked line, no text about you), and in its status list `apps/web/static/publishers.json`: a registered
+   publisher under its id, an application that is not approved under its Keccak only (no id,
+   origin or text of yours is kept). `onyx-publish doctor --publishers publishers.json` prints
+   your line. After a refusal, fix the named reason and apply again **with a
    new key** (the refused key is blocked until its refused sample's report is 7 days old). If
    the application expired before a decision, run step 5 again with `--reapply`, the same key
    and the same `site/sample` folder, put the new file on your origin, run `doctor --live`
@@ -147,8 +160,10 @@ sends nothing.
 9. **Upload your first dataset (wait 20 to 40 minutes, then about 10 minutes).**
    `onyx-publish upload --dir site/sample --node <node address> --wait-secs 3600`
    The node takes your manifest once the sample's report is recorded in the book and Base
-   Sepolia has made it final, so the command waits and says so every 15 seconds. If the
-   reviewer's answer says the sample is not anchored yet, anchor it yourself first (it needs a
+   Sepolia has made it final, so the command waits and says so every 15 seconds. The
+   reviewer's tool posts your sample's signed report in the same run as your registration, so
+   you need no test ETH for it. If the reviewer's answer says the sample is not anchored
+   (`"relay": {"not_relayed": "stale"}` in your record), anchor it yourself first (it needs a
    little test ETH from a Base Sepolia faucet; Base's documentation lists them under "Network
    faucets"; one anchor is about 250,000 gas):
    `onyx-publish anchor --dir site/sample --rpc https://sepolia.base.org --chain-id 84532 --book <signed book address> --gas-key publisher.key`
@@ -460,8 +475,13 @@ slice 2, copies others made stay, and catalogs already signed keep the old leave
   (`"state": "paused"`) to stop new data while it can still remove a dataset.
 - Register a publisher's key only after the review in [publisher-review.md](publisher-review.md):
   `onyx-publish verify-application` on the applicant's files, then the lines only a person can
-  answer. Never open an applicant's origin from the reviewer's machine or the node. The
-  reviewer key never goes on the node.
+  answer, then one `book-reviewer approve` (the limit first, `registerKey`, the relay of the
+  sample's report, the record in `deploy/publishers/`). Never open an applicant's origin from
+  the reviewer's machine or the node. The reviewer key never goes on the node.
+- Pause and resume with `book-reviewer pause|resume --publisher <id> --limits publishers.json
+  --records deploy/publishers`, then restart the node with the file;
+  `python3 -I scripts/check-publishers.py --limits publishers.json --max-gib <ONYX_BULK_MAX_GIB>`
+  compares the node's limits file with the record.
 - To stop serving a dataset, remove its folder under `ONYX_BULK_DIR/manifests/` and restart.
 - `ONYX_BULK_DIR/catalogs/<publisher>/` holds every 32nd catalog whole (`{n}.bin`) and the others
   as diffs (`{n}.diff`); never delete one in the middle (every later diff up to the next whole one

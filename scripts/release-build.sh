@@ -39,6 +39,11 @@ cp LICENSE NOTICE "$stage/onyx-join/"
 cargo build -q --locked --release -p onyx-publish -p onyx-check
 mkdir -p "$stage/onyx-publish/bin"
 cp "$target/release/onyx-publish" "$target/release/onyx-check" "$stage/onyx-publish/bin/"
+# `-p onyx-publish` also builds `book-reviewer`, the reviewer's own tool (ADR-0066 item 8). It stays
+# out of the public bundle: it is of no use without the book's one reviewer key, and a publisher
+# must not take it for a step of theirs (review S3-R1 L8). The bundle is exactly these two programs.
+[ "$(ls "$stage/onyx-publish/bin" | sort | tr '\n' ' ')" = "onyx-check onyx-publish " ] \
+  || { echo "release-build: the publisher bundle must hold exactly onyx-publish and onyx-check" >&2; exit 1; }
 cp docs/ops/bulk-publish.md "$stage/onyx-publish/README.md"
 cp LICENSE NOTICE "$stage/onyx-publish/"
 

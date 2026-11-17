@@ -1671,6 +1671,17 @@
               ]
             },
             "description": "`id` (the default), or `newest`: the newest key first, datasets whose key is not a time last, ties in id order. With `newest`, `after` is placed by the newest key its dataset has now (400 when this node no longer holds it: start again). A dataset may get new data between two pages and move up: pages may repeat or skip entries, so dedupe by id (or read every match in one answer, without `limit`)."
+          },
+          {
+            "name": "listed",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "pattern": "^[a-z0-9._:-]+$",
+              "maxLength": 128
+            },
+            "description": "A publisher id. The answer then has `limits`: whether this node has limits per publisher and an entry for this one id. No other publisher's entry and no number is shown."
           }
         ],
         "responses": {
@@ -5413,6 +5424,29 @@
             "type": "integer",
             "minimum": 0,
             "description": "This node's clock at the answer (unix seconds): what `fresh` and `newest_age_days` count from."
+          },
+          "limits": {
+            "type": "object",
+            "description": "Only with `listed=<publisher id>`: limits per publisher on this node (ADR-0066 item 10), for that one id.",
+            "properties": {
+              "on": {
+                "type": "boolean",
+                "description": "The node has a limits file: a registered publisher without an entry is refused."
+              },
+              "listed": {
+                "type": "boolean",
+                "description": "The asked publisher has an entry."
+              },
+              "publisher": {
+                "type": "string",
+                "description": "The asked id."
+              }
+            },
+            "required": [
+              "on",
+              "listed",
+              "publisher"
+            ]
           }
         }
       },

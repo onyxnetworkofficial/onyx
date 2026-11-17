@@ -1186,16 +1186,19 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       the reviewed list of operator test keys; then `l2_agreed` (needs a published transcript per
       round, THREATS EARLY-16). v1: an optional signed claim address on submissions
 - [ ] S27 Publisher onboarding on the test network (READINESS B1; ADR-0066, PROPOSED draft 2
-      after design review PUBON-R1, 2026-11-17; slices 1 and 2 built 2026-11-17, slices 3 and 4
-      open; THREATS PUBON-1 to PUBON-18): a signed publisher application at the applicant's origin (`onyx-publish apply`,
+      after design review PUBON-R1, 2026-11-17; slices 1 to 3 built 2026-11-17, slice 4 (the
+      website and the pointer route) open; THREATS PUBON-1 to PUBON-19, S3-R1): a signed publisher application at the applicant's origin (`onyx-publish apply`,
       `verify-application`, `doctor`), a CI job that fetches and checks it, the reviewer's
       checklist before `registerKey`, a cosignature for a second key, a public record and status
       per application, summed limits per publisher on the node. Slice 1 built: `onyx_bulk::ids`
       and `onyx_bulk::application`, `onyx-publish apply`, `request`, `verify-application` and
       `doctor`, the issue template, docs/ops/publisher-review.md, the guide's first steps. Slice 2
-      built: limits per publisher on the node, `ONYX_BULK_PUBLISHERS`, not deployed yet. Next: the
-      limits file on the hosted node, then slice 3 (the record, `book-reviewer approve`, the CI
-      job, reading the book over `--rpc`)
+      built: limits per publisher on the node, `ONYX_BULK_PUBLISHERS`, not deployed yet. Slice 3
+      built: the book read from a chain node (`--rpc`), `book-reviewer` (approve with a dry run,
+      record, request, pause), the record `deploy/publishers/` with
+      `scripts/check-publishers.py` and the status list, the fetch job
+      `publisher-application.yml`, the rehearsal `scripts/publisher-onboard-anvil.sh`. Next: the
+      limits file on the hosted node, a review of slice 3, then slice 4
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);

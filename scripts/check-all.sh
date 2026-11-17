@@ -94,6 +94,11 @@ python3 -I scripts/check-pipefail-grep.py --self-test
 python3 -I scripts/check-pipefail-grep.py
 python3 -I scripts/check-workflows.py --self-test
 python3 -I scripts/check-workflows.py
+# ADR-0066 item 9 (THREATS PUBON-14): the public record of publisher decisions (deploy/publishers/):
+# every approved application's signature, what a refusal may keep, no contact text, and the status
+# list the site and `onyx-publish doctor` read. A late decision is a printed warning, never a failure.
+python3 -I scripts/check-publishers.py --self-test
+python3 -I scripts/check-publishers.py
 node --test apps/web/tests/release.test.mjs
 # The site's shared formatters print what the per-call toLocale* forms printed (W4, L5).
 node --test apps/web/tests/format.test.mjs
@@ -158,6 +163,14 @@ stage "storage-network-anvil"
 # daily run's dry run with the real tools gives the same bytes from a fresh state.
 scripts/early-record-anvil.sh
 stage "early-record-anvil"
+# ROADMAP S27 (ADR-0066 slice 3, THREATS PUBON): publisher onboarding on anvil (about 20 s once
+# built): a fresh applicant applies and `doctor` passes; the reviewer verifies with the book read
+# from the chain, a dry run sends nothing, the limit is written before registerKey, the sample's
+# report is relayed in the same run; the node serves the sample and onyx-check proves it; a refusal
+# blocks its signer; a second key needs a cosignature; a withdraw is taken once; a paused
+# publisher's tombstone is taken.
+scripts/publisher-onboard-anvil.sh
+stage "publisher-onboard-anvil"
 scripts/check-boundaries.sh
 scripts/check-docs.sh
 # Secret scan of the tracked tree, after its own planted-key self-test (THREATS T-KEY-1).

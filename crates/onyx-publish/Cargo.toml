@@ -7,9 +7,18 @@ rust-version.workspace = true
 license.workspace = true
 publish.workspace = true
 
+[lib]
+name = "onyx_publish"
+path = "src/lib.rs"
+
 [[bin]]
 name = "onyx-publish"
 path = "src/main.rs"
+
+# The reviewer's tool for publisher applications (ADR-0066 item 8).
+[[bin]]
+name = "book-reviewer"
+path = "src/bin/book-reviewer.rs"
 
 [dependencies]
 onyx-core.workspace = true

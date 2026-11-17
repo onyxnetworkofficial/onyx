@@ -7,6 +7,11 @@
 //!   --reviewer-key FILE --publisher ID --address ADDR --domain DOMAIN --provenance 0x<32 bytes>
 //!   --note TEXT [--cast PATH]`
 //!
+//! A publisher application (ADR-0066) is not registered with this example: its tool is the
+//! `book-reviewer` command of the `onyx-publish` crate (`book-reviewer approve`: every check
+//! again, the node's limit first, `registerKey`, the relay of the sample's report, the record;
+//! docs/ops/publisher-review.md). This example stays for a bare `registerKey` of a reviewed key.
+//!
 //! Before anything is sent: the chain is not a local anvil (that rehearsal is
 //! `scripts/bulk-demo.sh local`), and the book's `reviewer()` is the key's address.
 

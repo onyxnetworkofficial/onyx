@@ -1,0 +1,16 @@
+[
+  {
+    "state": "registered-before-record",
+    "date": "2026-10-30",
+    "publisher": "onchain-archive",
+    "origin": "onyx.cryptagraph.com/archive",
+    "signer": "0xedff5b3070a2ecc6fa06ea7781ec90f6318bee5c",
+    "signers_document_keccak": "0x994c2fd200ec8b67f871aea54e705cc2d4b5dff97a062dad3bfce6337d45c6ff",
+    "chain_id": 84532,
+    "book": "0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5",
+    "register": {
+      "tx": "0x624147a9274d4cd1bc429d76e8b7b922fb581122d1c7b2bd8a86d69077267232",
+      "block": 52364676
+    }
+  }
+]

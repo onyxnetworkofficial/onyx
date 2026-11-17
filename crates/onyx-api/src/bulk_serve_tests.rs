@@ -11791,3 +11791,45 @@ async fn limit_refusals_come_before_a_marked_forks_chain_read() {
     }
     let _ = std::fs::remove_dir_all(&w.dir);
 }
+
+/// Review S3-R1 M3: the reviewer's tool asks the node, before `registerKey`,
+/// whether limits per publisher are on and the publisher has its entry. The
+/// answer names the asked id only: no other entry and no number.
+#[tokio::test]
+async fn the_listing_says_whether_a_publisher_has_its_limit() {
+    let ask = |w: &World, q: &str| {
+        let v = w
+            .store
+            .list(&parse_list_query(Some(q)).expect("query"))
+            .expect("list");
+        crate::openapi_check::check("GET", "/v1/bulk", 200, &v);
+        v
+    };
+    // A node without a limits file: every registered publisher would get
+    // the node's one quota.
+    let open = world();
+    assert_eq!(
+        ask(&open, "listed=example.publisher")["limits"],
+        json!({"on": false, "listed": false, "publisher": "example.publisher"})
+    );
+    assert!(ask(&open, "limit=5")["limits"].is_null(), "only when asked");
+    let w = world_listed(&[
+        (ME, 1 << 30, 16, false),
+        ("other.publisher", 7 << 30, 9, true),
+    ]);
+    assert_eq!(
+        ask(&w, &format!("listed={ME}"))["limits"],
+        json!({"on": true, "listed": true, "publisher": ME})
+    );
+    let other = ask(&w, "listed=new.publisher");
+    assert_eq!(
+        other["limits"],
+        json!({"on": true, "listed": false, "publisher": "new.publisher"})
+    );
+    let text = other.to_string();
+    assert!(
+        !text.contains("other.publisher") && !text.contains("quota"),
+        "{text}"
+    );
+    assert!(parse_list_query(Some("listed=Not%20An%20Id")).is_err());
+}

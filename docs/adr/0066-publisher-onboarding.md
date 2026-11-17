@@ -3,8 +3,9 @@
 ## Status
 Proposed (draft 2), 2026-11-17, after design review PUBON-R1 ("build with changes": 2 High,
 8 Medium, 5 Low; every finding checked against the code, all taken, three with a change:
-section "What draft 2 changed"). Slices 1 (the application and the doctor) and 2 (limits per
-publisher on the node, item 10) are built: "Build notes" below. Slices 3 and 4 are not. Test
+section "What draft 2 changed"). Slices 1 (the application and the doctor), 2 (limits per
+publisher on the node, item 10) and 3 (the book read from a chain node, the reviewer's tool, the
+record, the fetch job, the rehearsal) are built: "Build notes" below. Slice 4 is not. Test
 network only. No contract changes. Threats: THREATS.md "PUBON".
 
 ## Context
@@ -140,7 +141,7 @@ It puts the version folder on the origin, next to the keys document.
 ```json
 {"version": 1, "chain_id": 84532, "book": "0x<the signed book>",
  "publisher": "river-levels.open", "origin": "data.example.org/river-levels",
- "signer": "0x<address>", "keys_document_keccak": "0x<32 bytes>",
+ "signer": "0x<address>", "signers_document_keccak": "0x<32 bytes>",
  "data": "Daily water levels of 40 public gauges, from the publisher's own sensors.",
  "sample": {"dataset": "river-levels.daily", "manifest_root": "0x<32 bytes>", "bytes": 412310,
             "path": "sample/"},
@@ -193,7 +194,7 @@ Run by the tool in CI (a failure is a refusal with its line):
 1. Both hashes match: the file at the origin and the issue's line. The signature recovers
    `signer`; `chain_id` and `book` are this network's; the application has not expired.
 2. The keys document names this id and this address, and its Keccak equals
-   `keys_document_keccak`. Every fetch is HTTPS, follows no redirect, connects only to a public
+   `signers_document_keccak`. Every fetch is HTTPS, follows no redirect, connects only to a public
    address and stops at a byte cap (the rules of THREATS SUB-1 and SUB-11).
 3. The id passes the grammar, the reserved words and the look-alike check; the origin passes its
    grammar, the overlap rule and the shared-host list. The book shows id, origin and signer free.
@@ -377,7 +378,7 @@ Each slice ends with a fresh adversarial review. No slice changes a contract.
    `a_paused_publisher_is_served_and_takes_no_upload`,
    `a_paused_publisher_may_still_post_a_tombstone_catalog`; in `config::tests::`:
    `grants_plus_the_reserve_over_the_total_stop_the_start`, `a_bad_publishers_file_stops_the_start`.
-3. **The record, the reviewer's tool and CI** (`deploy/publishers/` with the registered
+3. **The record, the reviewer's tool and CI** (built: "Build notes"; `deploy/publishers/` with the registered
    publishers as records, `scripts/check-publishers.py`, `book-reviewer approve`,
    `scripts/publisher-onboard-anvil.sh`, the workflow). Tests:
    `book_reviewer::refuses_to_send_when_the_application_fails`,
@@ -537,6 +538,121 @@ item 10 says, with these choices where the item was silent:
   `a_limits_file_with_unknown_fields_duplicates_or_bad_numbers_is_refused`; after review
   LIM-R1 the tests THREATS "LIM-R1" names.
 - Not live: the hosted node gets the file with its next deploy (`<export>/publishers.json`).
+
+### Slice 3 (2026-11-17): the chain read, the reviewer's tool, the record, CI, the rehearsal
+Built: `onyx_api::bulk_registry` (the book's keys from a chain node), `--rpc` on
+`verify-application`, `verify-request` and `doctor`, the command `book-reviewer` (a second
+binary of the `onyx-publish` crate, which became a library with two commands), the record
+`deploy/publishers/` with `scripts/check-publishers.py`, the status list
+`apps/web/static/publishers.json`, `.github/workflows/publisher-application.yml` with its rules in
+`scripts/check-workflows.py`, and `scripts/publisher-onboard-anvil.sh`. Where this differs from
+the text above, this section is what the code does.
+
+- **The chain read (items 3, 8).** `--rpc URL --chain-id N --book 0x… --from-block N
+  [--logs-range N]`: every `KeyRegistered` log from `--from-block` to the node's finalized block
+  (`decision_block`, the rule of every other bulk read; a node without a finalized block is not
+  read), each log checked against `keyState` and `originOfSource` at that block. The range walk
+  is the indexer's (`Spans`: a refused range is halved; a rate limit is waited out). What the
+  list shows as free is read again from `keyOfSigner`, `originOfSource` and `sourceOfOrigin`:
+  a scan that started after the book's first key ends with exit 3, never with a free name.
+  `--rpc` beside `--registered` is refused. `--from-block` is required on every chain but a
+  local one; the test network's book starts at block 52118336. **The price:** the public node
+  answers 200 blocks a request and the chain makes about five blocks a second, so the book's
+  whole history takes hours there. A reviewer needs a node that answers wide ranges; a cache of
+  the scan is not built.
+- **`doctor`** reads the book with `--rpc`, the key's balance against one anchor at the node's
+  gas price (always `ok`: no test ETH is needed before approval), a node with `--node`, the
+  status list with `--publishers`, and a folder copy of the origin with `--mirror`. Whether an
+  address was funded from one with other history is not read: a chain node does not show it.
+- **The tool's name and steps (item 8).** `book-reviewer approve --application <artifact>`, as
+  the item says. The node reads its limits file only at its start (slice 2), so "one run"
+  became two: the first writes the entry and stops with exit 6; after the node was restarted,
+  the run with `--limits-live` sends `registerKey` and the relay and writes the record.
+  `--limits-live` is the reviewer's word; no route shows a node's entries (changed after review
+  S3-R1: the note below). `--dry-run` sends
+  and writes nothing. The reviewer key pays the relay unless `--gas-key` names another.
+  The reason of `registerKey` is `publisher application <keccak>`: a run repeated after a
+  failure finds its own registration by it and goes on, and a key registered by any other
+  decision stops the tool. The older `book-reviewer` example of `onyx-level2` (a bare
+  `registerKey` through `cast`) stays for sources that are not bulk publishers.
+- **Other commands.** `book-reviewer record` (received, refused, expired; the signer and its
+  block only from the tool's own report), `request` (withdraw, raise, retire-key, key-stolen;
+  each taken request is written down with its sequence, and `key-stolen` is sent only when the
+  id has another active key at the finalized block, or with `--no-new-key`), `pause`, `resume`.
+- **The record (item 9).** A registered publisher has `deploy/publishers/<id>/decision.json`, a
+  list, oldest first, and `application.json` (`application-2.json` for a further key). **An
+  application that is not approved is filed under `application-<16 hex of its Keccak>/`, not
+  under its id**: item 9 keeps no id of a refusal, and a folder named by a refused id would
+  publish exactly the name that was refused. So the status of such an application is looked up
+  by its Keccak, which the applicant has. Field names are snake_case, as slice 1 reads them.
+  A new state, `registered-before-record`, holds the three keys the book had before the record
+  began (id, origin, key, keys document, transaction and block, read from the book): no
+  application and no answers exist for them, and the record says nothing about who runs them.
+- **The check (item 9)** is run by check-all next to the other checkers, not by check-docs. It
+  verifies the application's signature in plain Python (no dependency), writes the status list
+  with `--write`, compares a node's limits file with the record (`--limits`, `--max-gib`) and
+  the record with the book (`--rpc`, three single-block log reads on the test network).
+- **The CI job (item 7)** fetches and checks; it does not read the book (a hosted runner has no
+  chain node and no secret to reach one), so its report ends with exit 4 at best, and it does
+  not run the rehearsal on the applicant's sample. `verify-application --pointer FILE` reads
+  the issue's two lines from a file. The job has not run on the hosted repository.
+- **The rehearsal (item 8 step 6)** is `scripts/publisher-onboard-anvil.sh`, in check-all, about
+  20 s once built. It rehearses the flow with a made-up applicant, not an applicant's own
+  sample. Its steps: apply and doctor; verify with `--rpc`; a dry run; the limit, then
+  `registerKey` and the relay; the record against the checker and the book; upload, rows,
+  `onyx-check --bulk`; a refusal that blocks its key and a new key that is free; a second key
+  with and without a cosignature; a withdraw taken once; a paused publisher's tombstone.
+- Tests: the two named for slice 3 (`book_reviewer::` in `onyx-publish`), and the ones THREATS
+  PUBON-19 names.
+
+Not built in slice 3, against the list in "Slices":
+
+- **On anvil**: a stale sample through catalog 0, and a second version 1 that suspends the key.
+- **A raise, a retirement and a theft end to end on anvil**: `book-reviewer request` has unit
+  coverage only for its record and its calldata; the withdraw is rehearsed.
+- **The registrable domain** next to the shared-host verdict (THREATS APPLY-R1-M6).
+- **A limits file in the repository**: the hosted node's file is not deployed yet, and the three
+  earlier publishers' grants are not recorded, so `--limits` is run by the reviewer on the
+  node's file, not by check-all.
+
+### Slice 3 after review S3-R1 (2026-11-17)
+A fresh review of the built slice ("ready with changes": no High, 6 Medium, 9 Low; THREATS
+"S3-R1") changed the build as follows; where this differs from the note above, this is what
+the code does.
+
+- **`--limits-live` is gone.** `approve` takes `--node URL` and asks the node itself,
+  `GET /v1/bulk?listed=<id>`, which answers `limits: {on, listed, publisher}` for that one id (a
+  new field of the listing; no other entry and no number is shown). Limits off: refused before
+  anything is written. No entry on the node yet: the entry is written to the file and the run
+  stops with exit 6. The same command after the restart sends.
+- **A closed application stays closed**: a file the record holds as refused, withdrawn or
+  expired is refused by `verify-application` (`duplicate`) and by `approve`.
+- **A run is taken up again only for an active key.** A key retired or compromised since
+  stops the tool.
+- **The scan starts at the book's deploy block**: pinned for the test network's book
+  (`KNOWN_BOOKS`), proven by empty code one block earlier for any other. `--from-block` is no
+  longer needed for the test network.
+- **The scan is kept** (`--scan-cache`; by default under `ONYX_OPS_DIR` or
+  `~/.local/state/onyx`, `book-scan/<chain>-<book>.json`, mode 0600) with the block it is valid
+  to and its hash; `book-reviewer scan` fills it. The first scan of the test network's book
+  through the public node still takes hours; every later one reads only the new blocks.
+- **Requests**: a raise needs its named limit and never lowers one; a retirement and a theft
+  are sent only by the book's reviewer; another key of the id is retired only with a keys
+  document that no longer lists it (`onyx_bulk::application`).
+- **The record's answers** are `yes` for the lines 7, 8, 9, 10, 11 and 13: no free text, and
+  never line 12, which would say who runs a publisher. Item 9's "the checklist answers 7 to 13"
+  is narrowed by this.
+- **The status list** says `approved (record)` until a run with `--rpc` found the book's
+  registration.
+- **`--now`** is taken by `book-reviewer` on a local chain only.
+- **Field names a secret scanner does not take for a credential.** The application's field for
+  the keys document's Keccak is `signers_document_keccak` (the example in item 6 is renamed), a
+  request names the key to retire as `retire`, a record entry as `ended_signer`: the public
+  snapshot's gitleaks run reads a name with "key" in it and a hex value as an API key. No
+  signed byte changed (the digests are over Borsh values, without names). The checker and the
+  rehearsal run the scanner over the public files.
+- **The rehearsal** has a tenth step (a raise, a theft with another key active, a theft of the
+  last key refused, a retirement) and a node started without limits.
 
 ## What a newcomer sees on the website
 - **Add data**: two cards. "Suggest a dataset: 5 minutes, no key, nothing is published." and
