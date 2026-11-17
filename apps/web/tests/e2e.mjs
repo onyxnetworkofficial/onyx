@@ -23,6 +23,7 @@ import { ns14 } from './ns14.mjs';
 import { ns15 } from './ns15.mjs';
 import { downloads } from './downloads.mjs';
 import { download } from './download.mjs';
+import { publish } from './publish.mjs';
 import { ns16 } from './ns16.mjs';
 import { t10 } from './t10.mjs';
 import { pp1Parser } from './pp1.mjs';
@@ -135,7 +136,9 @@ const runSuites = () =>
 			// W4 speed: heavy files only where and when needed, one cached verifier, the slab in a worker.
 			() => w4(browser, base, root, expect),
 			// ROADMAP S1: the Add data page (shared intake vectors, the Treasury and FRED walk-throughs, offline download).
-			() => s1(browser, base, root, expect)
+			() => s1(browser, base, root, expect),
+			// ROADMAP S27 (ADR-0066 slice 4): the two paths on Add data, the publish page, the status box.
+			() => publish(browser, base, root, expect)
 		]),
 		lane([
 			() => product(browser, base, root, expect),
@@ -1575,7 +1578,7 @@ try {
 	// right edge, the menu reaches every page, primary controls are 44 x 44 px tap targets,
 	// no text under 12 px, and a skip link comes first.
 	const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets'], ['#/datasets', 'All datasets']];
+	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets'], ['#/datasets', 'All datasets'], ['#/publish', 'Publish data']];
 	// CL10: Download (the desktop app) is the fifth primary destination.
 	const PRIMARY = [['#/data', 'Browse data'], ['#/markets', 'Markets'], ['#/how-it-works', 'How it works'], ['#/submit', 'Add data'], ['#/download', 'Download']];
 	// Each page is measured once settled (tests/wait.mjs): drawn, no placeholder or running

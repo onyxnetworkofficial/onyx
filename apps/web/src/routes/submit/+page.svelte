@@ -7,6 +7,7 @@
 	// server or configured node) posts to the same origin's /v1/submit. A typed API key never leaves this page: it is not part
 	// of the submission object, never sent, never stored, and the page refuses a submission that contains it.
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { probeSubmitApi, submitApi } from '#lib/submit-api.svelte.ts';
 	import SubmissionReceipt from '#lib/components/SubmissionReceipt.svelte';
 	import WantedData from '#lib/components/WantedData.svelte';
@@ -73,6 +74,7 @@
 	let sent = $state.raw<{ id: string; status: string } | null>(null);
 	let downloaded = $state('');
 	let stepHead = $state<HTMLElement>();
+	let stepsEl = $state<HTMLElement>();
 
 	const keyed = $derived(a.what === 'keyed_api');
 	const ownDataRoute = $derived(a.what === 'own' && a.rights === 'own_data');
@@ -356,6 +358,11 @@
 
 	// MP1: the AI and API steps open under the page title and take the focus.
 	let agentsOpen = $state(false);
+	/** The "Suggest a dataset" card: to the questions, with the focus on the step's title. */
+	function toQuestions() {
+		stepsEl?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
+		stepHead?.focus({ preventScroll: true });
+	}
 	async function openAgents() {
 		agentsOpen = !agentsOpen;
 		if (!agentsOpen) return;
@@ -386,8 +393,26 @@
 </OnyxSlab>
 
 <div class="wrap">
+	<!-- ROADMAP S27 (ADR-0066 item 1): the two paths, named apart, before anything else. -->
+	<section class="section" data-testid="add-paths">
+		<h2>Two ways to add data</h2>
+		<div class="paths">
+			<div class="panel path" data-testid="path-suggest">
+				<h3 class="ptitle">Suggest a dataset</h3>
+				<p>You answer five questions about data you know of. Your proposal goes to a review queue; nothing is published by itself.</p>
+				<p class="pfor"><b>For</b> anyone who knows a good public source. No key, about 5 minutes.</p>
+				<p class="pact"><button type="button" onclick={toQuestions} data-testid="path-suggest-go">Start with the questions</button></p>
+			</div>
+			<div class="panel path" data-testid="path-publish">
+				<h3 class="ptitle">Publish your own data</h3>
+				<p>You become a publisher: you sign your data with your own key, and a reviewer checks your application before the first upload.</p>
+				<p class="pfor"><b>For</b> whoever holds a dataset and may share it. About 40 minutes of your time, and a review of up to 5 days.</p>
+				<p class="pact"><a class="btn ghost" href={resolve('/publish')} data-testid="path-publish-go">See the steps</a></p>
+			</div>
+		</div>
+	</section>
 	<AddWithAgents bind:open={agentsOpen} />
-	<section class="section" data-testid="submit" inert={sending} aria-busy={sending}>
+	<section class="section" data-testid="submit" inert={sending} aria-busy={sending} bind:this={stepsEl}>
 		<h2>Four steps</h2>
 		<p class="lede">
 			Answer the questions, describe the data, check it, then send it for review. Not sure where to start? Try the U.S. Treasury
@@ -644,6 +669,35 @@
 </div>
 
 <style>
+	.paths {
+		display: grid;
+		grid-template-columns: repeat(2, minmax(0, 1fr));
+		gap: var(--sp-4);
+	}
+	@media (max-width: 860px) {
+		.paths {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
+	.path {
+		align-content: start;
+		grid-template-rows: auto auto 1fr auto;
+	}
+	.ptitle {
+		font-size: var(--text-md);
+	}
+	.pfor {
+		color: var(--muted);
+	}
+	.pfor b {
+		color: var(--ink);
+	}
+	.pact {
+		align-self: end;
+	}
+	.pact .btn {
+		min-height: 44px;
+	}
 	.slabactions {
 		margin: var(--sp-5) 0 0;
 	}

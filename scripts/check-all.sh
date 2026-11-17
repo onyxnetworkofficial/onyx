@@ -103,6 +103,8 @@ node --test apps/web/tests/release.test.mjs
 # The site's shared formatters print what the per-call toLocale* forms printed (W4, L5).
 node --test apps/web/tests/format.test.mjs
 node --test apps/web/tests/datasets.test.mjs
+# ROADMAP S27 (ADR-0066 slice 4): the publish page's status list, lookup and commands.
+node --test apps/web/tests/publishers.test.mjs
 node --test apps/web/tests/glossary.test.mjs
 stage "wasm vectors, agent, contrib, workflows"
 # The service binary (docs/ops/deployment.md) builds and parses its arguments.

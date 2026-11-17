@@ -1186,8 +1186,8 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       the reviewed list of operator test keys; then `l2_agreed` (needs a published transcript per
       round, THREATS EARLY-16). v1: an optional signed claim address on submissions
 - [ ] S27 Publisher onboarding on the test network (READINESS B1; ADR-0066, PROPOSED draft 2
-      after design review PUBON-R1, 2026-11-17; slices 1 to 3 built 2026-11-17, slice 4 (the
-      website and the pointer route) open; THREATS PUBON-1 to PUBON-19, S3-R1): a signed publisher application at the applicant's origin (`onyx-publish apply`,
+      after design review PUBON-R1, 2026-11-17; slices 1 to 3 and the website of slice 4 built
+      2026-11-17, the pointer route open; THREATS PUBON-1 to PUBON-20, S3-R1, S4-R1): a signed publisher application at the applicant's origin (`onyx-publish apply`,
       `verify-application`, `doctor`), a CI job that fetches and checks it, the reviewer's
       checklist before `registerKey`, a cosignature for a second key, a public record and status
       per application, summed limits per publisher on the node. Slice 1 built: `onyx_bulk::ids`
@@ -1197,8 +1197,15 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       built: the book read from a chain node (`--rpc`), `book-reviewer` (approve with a dry run,
       record, request, pause), the record `deploy/publishers/` with
       `scripts/check-publishers.py` and the status list, the fetch job
-      `publisher-application.yml`, the rehearsal `scripts/publisher-onboard-anvil.sh`. Next: the
-      limits file on the hosted node, a review of slice 3, then slice 4
+      `publisher-application.yml`, the rehearsal `scripts/publisher-onboard-anvil.sh`. Slice 4
+      built (the website): the two paths on the Add data page, the page `#/publish` (the ten
+      steps with the guide's commands, what the reviewer checks, the default grant, what is
+      public and what is never asked) and its status box with a lookup by hash or id
+      (`apps/web/src/lib/publishers.ts`, `tests/publishers.test.mjs`, e2e `tests/publish.mjs`);
+      live after the next site deploy; no outside application has been reviewed yet. Open: the
+      limits file on the hosted node, the pointer route (an application is a public issue
+      today), the release with the onboarding commands (v0.5.0-testnet: until the site links
+      it the page offers no download; review S4-R1, fixed)
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk
       sealed on its own, checked often enough that sealing on demand costs more than keeping it);

@@ -5,7 +5,6 @@
  "publishers": [
   {
    "date": "2026-11-15",
-   "origin": "onyx.cryptagraph.com/record",
    "publisher": "early-record",
    "registered": [
     {
@@ -20,7 +19,6 @@
   },
   {
    "date": "2026-10-30",
-   "origin": "onyx.cryptagraph.com/archive",
    "publisher": "onchain-archive",
    "registered": [
     {
@@ -35,7 +33,6 @@
   },
   {
    "date": "2026-10-30",
-   "origin": "onyx.cryptagraph.com",
    "publisher": "synthetic-demo",
    "registered": [
     {

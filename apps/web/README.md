@@ -32,3 +32,12 @@ network's own code in the browser; reference values are pinned in `verify/src/li
    `cargo run -p onyx-api --features http-client --example submit-dev` (loopback, port 8788), then
    `cd apps/web && VITE_ONYX_SUBMIT_API=1 ONYX_SUBMIT_PROXY=http://127.0.0.1:8788 pnpm dev`.
    A typed API key (the keyed-source step) never leaves the page. `tests/s1.mjs` checks it all.
+   The page opens with the two paths (ADR-0066 item 1): "Suggest a dataset" (this page) and
+   "Publish your own data" (`#/publish`).
+6. Publish data (`#/publish`, ROADMAP S27, ADR-0066 slice 4): the applicant's ten steps
+   (`src/lib/publish-steps.ts`, each command held word for word against docs/ops/bulk-publish.md)
+   (the download only from the first release with the onboarding commands, `ONBOARDING_SINCE`
+   in `src/lib/release.ts`) and the status box (`src/lib/publishers.ts`), which reads the site's own static
+   `publishers.json` in its exact shape or not at all and looks an application up in the page.
+   The list is written by `python3 -I scripts/check-publishers.py --write` from
+   `deploy/publishers/`. `tests/publishers.test.mjs` and `tests/publish.mjs` check it.

@@ -4,14 +4,15 @@ For the reviewer of the signed book. A registration cannot be undone: the book b
 its origin and a key to its id for good. So every line below is answered before `registerKey`.
 Design: ADR-0066; threats: THREATS.md "PUBON"; the applicant's side: [bulk-publish.md](bulk-publish.md).
 
-**What is built (ADR-0066 slices 1 to 3):** the applicant's tools and the offline check
+**What is built (ADR-0066 slices 1 to 3 and the website of slice 4):** the applicant's tools and the offline check
 (`onyx-publish apply`, `doctor`, `verify-application`, `request`, `verify-request`), the limits per
 publisher on the node (`ONYX_BULK_PUBLISHERS`; docs/ops/run-api.md "Limits per publisher"), the
 book read from a chain node (`--rpc`), the reviewer's tool `book-reviewer`, the public record
 `deploy/publishers/` with its checker `scripts/check-publishers.py`, the fetch job
 `.github/workflows/publisher-application.yml` and the rehearsal on a local chain
-`scripts/publisher-onboard-anvil.sh`. **Not built yet:** the website pages and the pointer route
-(slice 4). The limits file is not deployed on the hosted node yet: until it is live there, no
+`scripts/publisher-onboard-anvil.sh`, and on the website the page `#/publish` (the applicant's
+steps and the status list with a lookup; live after the next site deploy). **Not built yet:** the
+pointer route (an application is still filed as a public issue). The limits file is not deployed on the hosted node yet: until it is live there, no
 outside key is registered on the hosted book (THREATS PUBON-6).
 
 **The tools.** `cargo build --release -p onyx-publish` builds both commands, `onyx-publish` and

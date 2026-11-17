@@ -16,7 +16,8 @@ Checks every folder of the record, offline:
 - An application `received` more than 5 days ago without a decision is a WARNING, never a failure:
   a clock alone must not turn the build red.
 - The status list apps/web/static/publishers.json (the website and `onyx-publish doctor --publishers`
-  read it) equals what the record gives; `--write` writes it. An approval is listed as
+  read it) equals what the record gives; `--write` writes it. A publisher from before the record
+  (`registered-before-record`) is listed without its origin. An approval is listed as
   "approved (record)" until a run with `--rpc` found its registration in the book; then "approved".
 - The public answers of an approval are `yes` for the lines 7, 8, 9, 10, 11 and 13: no free text,
   and never line 12 (who runs a publisher is not public).
@@ -478,6 +479,11 @@ def status(record: dict, confirmed: bool) -> dict:
                "origin": keys[0].get("origin") if keys else None,
                "signers": [d["signer"] for d in keys if d.get("signer") not in gone],
                "registered": [d["register"] for d in keys if is_tx(d.get("register"))]}
+        if state == "registered-before-record":
+            # Review S4-R1 M2: the website shows this list. A publisher from before the record has
+            # no application whose origin a reader could check here, so the list carries none for
+            # it; the record's own file and the book keep it.
+            del row["origin"]
         if "reason" in last:
             row["reason"] = last["reason"]
         if keys:
@@ -823,9 +829,9 @@ def self_test() -> int:
         run(os.path.join(t, "p"), st, True, None, None, None, now)
         with open(st, encoding="utf-8") as fh:
             listed = json.load(fh)
-        check("the status list names the publisher, its state, origin and key",
+        check("the status list names the publisher, its state and key, and no origin before the record",
               listed["publishers"] == [{"publisher": "tide-tables.open", "state": "registered-before-record", "date": "2026-10-30",
-                                        "origin": "tides.example.net", "signers": [before["signer"]],
+                                        "signers": [before["signer"]],
                                         "registered": [before["register"]]}] and listed["applications"] == [])
     # The secret scanner: the record as written passes; the field name the scanner once took for a
     # credential is refused (its name is built here so this file holds no such line).

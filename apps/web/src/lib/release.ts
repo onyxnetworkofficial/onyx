@@ -4,7 +4,7 @@
 // Pure (no Svelte, no DOM), so `node --test tests/release.test.mjs` imports it as is.
 
 /** The release the Add data and Download pages link. */
-export const RELEASE = 'v0.4.0-testnet';
+export const RELEASE = 'v0.5.0-testnet';
 /**
  * The first release that carries the desktop installers (fixed: never changes). v0.3.0-testnet ran
  * the workflow first, but its macOS and Windows jobs failed, so it has the command-line files only.
@@ -26,13 +26,33 @@ export function versionOf(tag: string): [number, number, number] | null {
 	return m ? [Number(m[1]), Number(m[2]), Number(m[3])] : null;
 }
 
-/** Whether `release` carries the desktop installers (it is DESKTOP_SINCE or later). */
-export function hasDesktop(release: string = RELEASE): boolean {
+/** Whether `release` is the test-network tag `since` or a later one. */
+function atLeast(release: string, since: string): boolean {
 	const a = versionOf(release);
-	const b = versionOf(DESKTOP_SINCE)!;
+	const b = versionOf(since)!;
 	if (!a) return false;
 	for (let i = 0; i < 3; i++) if (a[i] !== b[i]) return a[i] > b[i];
 	return true;
+}
+
+/** Whether `release` carries the desktop installers (it is DESKTOP_SINCE or later). */
+export function hasDesktop(release: string = RELEASE): boolean {
+	return atLeast(release, DESKTOP_SINCE);
+}
+
+/** The first release whose `onyx-check` reads a newest-first page (`--order`, `--page`, dates;
+ * READINESS A21): fixed, never changes. The API page names it. */
+export const ORDER_SINCE = 'v0.4.0-testnet';
+
+/**
+ * The first release whose `onyx-publish` has the onboarding commands (`apply`, `doctor`,
+ * `verify-application`, `request`; ADR-0066): fixed, never changes. They were built on 2026-11-17,
+ * after v0.4.0-testnet was cut, so that release's download answers `unknown command apply`.
+ */
+export const ONBOARDING_SINCE = 'v0.5.0-testnet';
+/** Whether `release`'s publisher tools have the onboarding commands the publish page names. */
+export function hasOnboarding(release: string = RELEASE): boolean {
+	return atLeast(release, ONBOARDING_SINCE);
 }
 
 export type System = 'windows' | 'macos' | 'linux' | 'other';

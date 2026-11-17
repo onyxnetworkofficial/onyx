@@ -12,8 +12,8 @@
 	import ApiReference from '#lib/components/ApiReference.svelte';
 	import spec from '../../../static/openapi.json';
 	import { operations } from '#lib/openapi.ts';
-	import { PAGE, RELEASE, REPO } from '#lib/release.ts';
-	import { checkCommands, checkRangeCommands, quickCommands } from '#lib/quickstart.ts';
+	import { ORDER_SINCE, PAGE, REPO } from '#lib/release.ts';
+	import { HOSTED_NODE, checkCommands, checkRangeCommands, quickCommands } from '#lib/quickstart.ts';
 
 	let demo = $state.raw<Demo | null>(null);
 	let pill = $state<{ state: PillState; text: string }>({ state: 'idle', text: 'Not checked' });
@@ -22,7 +22,6 @@
 	// W4: the sample shows from the small demo file; the verifier (1.8 MiB gzip) loads only
 	// when the button below asks it to check the proof.
 	onMount(() => {
-		if (location.protocol === 'https:') origin = location.origin;
 		loadDemo()
 			.then((d) => (demo = d))
 			.catch((e) => (loadError = String(e)));
@@ -50,10 +49,11 @@
 		};
 	});
 
-	// Newcomer test (A14): the three calls a first reader needs, as real commands against this
-	// site's own node (the page's origin when a node serves it, else the hosted test node). The
-	// commands are in lib/quickstart.ts: the check ones are those the released onyx-check accepts.
-	let origin = $state('https://onyx.cryptagraph.com');
+	// Newcomer test (A14): the three calls a first reader needs, as real commands against the
+	// hosted test node, wherever the page is served from (review S4-R1 L4: a mirror or a preview
+	// printed its own origin as the node). The commands are in lib/quickstart.ts: the check ones
+	// are those the released onyx-check accepts.
+	const origin = HOSTED_NODE;
 	const quick = $derived(quickCommands(origin));
 	const checkCmd = $derived(checkCommands(origin));
 	const checkRangeCmd = $derived(checkRangeCommands(origin));
@@ -139,7 +139,7 @@
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save a range and check it" data-testid="api-quick-check-range">{checkRangeCmd}</pre>
 		<p class="qnote" data-testid="api-quick-release">
-			Checking a newest-first page needs <code>onyx-check</code> from {RELEASE} or later; add <code>--page N</code> for a later page.
+			Checking a newest-first page needs <code>onyx-check</code> from {ORDER_SINCE} or later; add <code>--page N</code> for a later page.
 			An older <code>onyx-check</code> reads only the oldest-first form.
 		</p>
 	</section>

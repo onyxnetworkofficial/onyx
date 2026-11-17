@@ -4,8 +4,9 @@
 Proposed (draft 2), 2026-11-17, after design review PUBON-R1 ("build with changes": 2 High,
 8 Medium, 5 Low; every finding checked against the code, all taken, three with a change:
 section "What draft 2 changed"). Slices 1 (the application and the doctor), 2 (limits per
-publisher on the node, item 10) and 3 (the book read from a chain node, the reviewer's tool, the
-record, the fetch job, the rehearsal) are built: "Build notes" below. Slice 4 is not. Test
+publisher on the node, item 10), 3 (the book read from a chain node, the reviewer's tool, the
+record, the fetch job, the rehearsal) and the website of slice 4 are built: "Build notes" below.
+Slice 4's pointer route on the node is not built. Test
 network only. No contract changes. Threats: THREATS.md "PUBON".
 
 ## Context
@@ -181,7 +182,7 @@ The applicant never sends the application. It sends where the application is.
   the fetched bytes as a build artifact. The reviewer reads the artifact and never connects to an
   applicant's host. The job gets no secret and a read-only token; the issue's text reaches the
   tool as a file, never as part of a command (THREATS PUBON-15).
-- **Later (slice 4)**: `POST /v1/publishers/pointer` on the node takes `{"origin": "..."}` and
+- **Later (planned for slice 4, not built: its build note)**: `POST /v1/publishers/pointer` on the node takes `{"origin": "..."}` and
   nothing else: no account, no applicant bytes stored, the node fetches nothing. It keeps a
   bounded list of origins under the proposal intake's budgets (THREATS SUB-2); the same CI job
   reads the list on a schedule.
@@ -653,6 +654,111 @@ the code does.
   rehearsal run the scanner over the public files.
 - **The rehearsal** has a tenth step (a raise, a theft with another key active, a theft of the
   last key refused, a retirement) and a node started without limits.
+
+### Slice 4 (2026-11-17): the website
+Built: the two cards on the Add data page, the page `#/publish` ("Publish data" in the footer's
+page list and the command palette), and its status box. Not built: the pointer route. Where this
+differs from the text above and from "What a newcomer sees on the website", this section is what
+the site does. Nothing is live before the next site deploy, and no outside application has been
+reviewed yet (the page says so).
+
+- **Add data** opens with "Two ways to add data": "Suggest a dataset" (five questions, a review
+  queue, nothing published by itself, no key, about 5 minutes; its button moves to the first
+  question) and "Publish your own data" (your own key, a reviewer checks the application, about
+  40 minutes and a review of up to 5 days; its link opens `#/publish`).
+- **The publish page** (`apps/web/src/routes/publish`): "Before you start" (a test network, one
+  reviewer, a registration cannot be undone, no outside application reviewed yet; what it
+  takes), "Get the tools" (the publisher file of the release the site links, `src/lib/release.ts`,
+  its unpack command, and the build from the source for another system or a download from
+  before `apply`), the ten steps of item 2 in its order, each with the guide's command, "What
+  the reviewer checks" (by a program, by a person; a decision within 5 days), "What a new
+  publisher gets" (1 GiB and 16 datasets by default), "What is public, what is never asked",
+  and "Application status".
+- **One source for the commands.** `src/lib/publish-steps.ts` holds the steps;
+  `tests/publishers.test.mjs` requires every command line to stand word for word in
+  docs/ops/bulk-publish.md (the book and the node filled in), and the issue's title and two
+  lines to be the issue template's. The page names the test network's book and, on the hosted
+  site, its own origin as the node.
+- **The status box** reads the site's own static `publishers.json` once (same origin, no
+  credentials) and nothing else: a lookup runs in the page and makes no request. It lists every
+  publisher with the state exactly as the list has it (`approved (record)`,
+  `registered-before-record`, ...), one plain sentence per state that says no more than the
+  state, the date, the origin, the key addresses and each registration's block and transaction.
+  It links no block explorer (no third-party site is named or asked).
+- **The lookup** takes a publisher id (the exact id, never a prefix: a look-alike is not shown
+  as the same) or at least 8 hex digits of an application's hash, with or without `0x`. An
+  application that is not approved is found by its hash only, as the record keeps no id of it
+  (slice 3). The answer shows the state, the date, the reason code with its plain words, and
+  what to do next: after a refusal a new key and the time the refused key is blocked until,
+  after an expiry `--reapply` with the same key and sample folder.
+- **The list is read in its exact shape or not at all** (`src/lib/publishers.ts`): the fields,
+  states and reason codes of the public-build guard and of `scripts/check-publishers.py` (the
+  unit test compares the three lists), ids and origins in their grammar, addresses and hashes
+  as lowercase hex. One value out of shape refuses the whole file, and the box then says only
+  that the list could not be read and that this says nothing about any application. Every value
+  is printed as text. No field was added to the list, so the guard and the checker are
+  unchanged.
+- **The pointer route is not built** (item 7 "Later", `POST /v1/publishers/pointer`, and its
+  test `publishers::tests::a_pointer_keeps_only_an_origin_and_fetches_nothing`). An application
+  is still filed as a public issue, which shows the account that opens it. The page says both
+  in step 7: "Today an application is filed as a public issue on the source repository" and "A
+  way to apply without an account is planned, not built." Why left out: a new public write
+  route on the node needs its own budgets and review, and no outside application has used the
+  issue route yet.
+- **Differences from "What a newcomer sees"**: the status box shows no reason and transaction
+  for a publisher unless the list carries them (a reason only on the entries the checker gives
+  one); the limits are named as the default grant, not per publisher (no route shows a node's
+  entries, slice 2).
+- Tests: `apps/web/tests/publishers.test.mjs` (the list's shape, the states and reasons, the
+  lookup, the next step, the commands against the guide; run by check-all) and the e2e suite
+  `apps/web/tests/publish.mjs` at 1280 and 390 px: the four named in "Slices", and a missing,
+  broken or hostile list, the committed list word for word, no request off the site and none
+  for a lookup, the policy without inline script, no internal code in the text, no sideways
+  scroll. The publish page is also in the e2e's phone-layout and axe runs of every page.
+
+### Slice 4 after review S4-R1 (2026-11-17)
+A fresh review of the built website ("ready with changes": 1 High, 3 Medium, 5 Low; nothing on
+security; THREATS "S4-R1") changed the build as follows; where this differs from the note above,
+this is what the site does.
+
+- **The download is offered only when its tools have the commands** (H1). `apply` and `doctor`
+  were built after `v0.4.0-testnet` was cut, so `src/lib/release.ts` names the first release
+  that has them (`ONBOARDING_SINCE`, `v0.5.0-testnet`). While the linked release is older, "Get
+  the tools" links nothing and says which release brings the commands; from that release on it
+  shows the download, the unpack line and the build of the **same release tag** from the source
+  (`git clone --branch <tag>`), never an unreleased state. The unit test requires every
+  `onyx-publish` subcommand and flag of a page command to stand in the guide and the subcommand
+  in the program's own usage. The guide is the README inside the download
+  (`scripts/release-build.sh`); the page says so only where the download is offered.
+- **The spare key** (H1): `keygen` writes `<key>.address`; the page and the guide say to move
+  `spare.key` offline and leave `spare.key.address` in the folder (`doctor` counts the spare by
+  it), or to pass `--spare-offline`.
+- **A path line** after the unpack and after the build (M1): every command is a bare
+  `onyx-publish ...`.
+- **A publisher from before the record shows its id and state only** (M2), with the line
+  "Registered before this record began.": no origin, date, key or transaction. The status list
+  itself no longer carries an origin for the state `registered-before-record`:
+  `scripts/check-publishers.py` leaves it out, and the public-build guard and the page's parser
+  refuse such a row **with** an origin and any other publisher **without** one. The record's own
+  files (`deploy/publishers/<id>/decision.json`) and the book keep the origin: `--rpc` compares
+  the two. A publisher from before the record that is later paused or retired is listed under
+  that state, with its origin.
+- **No markup, no link** (M3): the status box holds no link at all, and the page's links are
+  its own constants; a unit test reads both component files for that, and the browser test
+  requires each id, state and origin to be an element's own text.
+- **What must stand once** (L1): a publisher id, an origin, a key address, a registration's
+  transaction or an application's hash that stands twice refuses the whole list.
+- **Step 8** (L2) starts with the line that saves the status list for `doctor --publishers`.
+- **The steps are the guide's** (L3), by number and title: 1 Make two keys, 2 Make your keys
+  document, 3 Prepare a small first dataset, 4 Build and sign it, 5 Write your application,
+  6 Put site/ on your origin; run the doctor, 7 Point the reviewer at your origin, 8 Wait for
+  the decision, 9 Upload your first dataset, 10 Check it like a buyer would. Picking the id and
+  the origin moved to "Before you start", as in the guide (item 2 above numbers it as step 2).
+- **The node in a command is the hosted test node** (L4), wherever the page is served from; the
+  API page's commands too. A mirror or a preview no longer prints its own address as the node.
+- **A jump list** opens the page (L5: seven sections; a hash route has no in-page anchors, so
+  each entry scrolls and moves the focus to the heading), and "Four words used below" explains
+  signed book, hash, SPDX id and test ETH.
 
 ## What a newcomer sees on the website
 - **Add data**: two cards. "Suggest a dataset: 5 minutes, no key, nothing is published." and

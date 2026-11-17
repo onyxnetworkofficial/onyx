@@ -12,6 +12,7 @@ export const NAV = [
 	{ href: resolve('/labels'), path: '/labels', label: 'Labels' },
 	{ href: resolve('/api'), path: '/api', label: 'API' },
 	{ href: resolve('/submit'), path: '/submit', label: 'Add data' },
+	{ href: resolve('/publish'), path: '/publish', label: 'Publish data' },
 	{ href: resolve('/download'), path: '/download', label: 'Download' },
 	{ href: resolve('/markets'), path: '/markets', label: 'Markets' },
 	{ href: resolve('/'), path: '/', label: 'Home' }
@@ -21,4 +22,4 @@ export const NAV = [
 // bitcoin.org's menu links its download) ends the header row.
 export const PRIMARY_NAV = ['/data', '/markets', '/how-it-works', '/submit', '/download'].map((path) => NAV.find((n) => n.path === path)!);
 
-export const FOOTER_NAV = ['/', '/submit', '/download', '/data', '/datasets', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);
+export const FOOTER_NAV = ['/', '/submit', '/publish', '/download', '/data', '/datasets', '/markets', '/how-it-works', '/run', '/reserves', '/explorer', '/labels', '/api'].map((path) => NAV.find((n) => n.path === path)!);

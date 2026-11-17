@@ -12,7 +12,8 @@ between. Later versions: about 30 minutes, mostly waiting for Base Sepolia.
 
 **Two paths.** If you only know of data Onyx should have, *suggest* it on the website's Add data
 page: five questions, no key, nothing is published. This guide is the other path: you hold data
-and will sign it. That needs a key, an application and a review, once (ADR-0066).
+and will sign it. That needs a key, an application and a review, once (ADR-0066). The website's
+Publish data page (`#/publish`) has the same ten steps in short, and the status list with a lookup.
 
 ## Before you start (once)
 
@@ -48,12 +49,18 @@ and will sign it. That needs a key, an application and a review, once (ADR-0066)
    On another network or your own node, ask its operator for the same addresses; that node must
    run with `ONYX_BULK_DIR` (docs/ops/config.md).
 4. **Get the tools**: on Linux x86-64, download `onyx-publish-linux-x86_64.tar.gz` from the latest
-   test-network release (the Add data page links it) and unpack it; the programs are in
-   `onyx-publish/bin/`. Elsewhere, build them (about 15 minutes, with a Rust toolchain):
-   `git clone https://github.com/onyxnetworkofficial/onyx && cd onyx`, then
-   `cargo build --release -p onyx-publish -p onyx-check`; they are then in `target/release/`.
-   If your download answers `unknown command apply`, it is from before the onboarding commands
-   (`apply`, `doctor`, `verify-application`, `request`): build from the source.
+   test-network release (the website's Publish data page links it) and unpack it
+   (`tar -xzf onyx-publish-linux-x86_64.tar.gz`); the programs are in `onyx-publish/bin/`. Put
+   them on the path of your terminal, since every command below is a bare `onyx-publish ...`:
+   `export PATH="$PWD/onyx-publish/bin:$PATH"`
+   Elsewhere, build the same release from the source (about 15 minutes, with a Rust toolchain;
+   the release tag, such as `v0.5.0-testnet`, is on the release's page):
+   `git clone --branch <release tag> https://github.com/onyxnetworkofficial/onyx && cd onyx`, then
+   `cargo build --release -p onyx-publish -p onyx-check`; they are then in `target/release/`:
+   `export PATH="$PWD/target/release:$PATH"`
+   The path line holds for the terminal it is typed in. The onboarding commands (`apply`,
+   `doctor`, `verify-application`, `request`) are in the tools from `v0.5.0-testnet` on: a
+   download that answers `unknown command apply` is older, and so is a build of an older tag.
 5. **Make sure the data is yours to share.** Only data you own or may share, whose terms let
    anyone redistribute it, and that names no individual person. You sign a statement saying so
    (step 4 does it for you), and the reviewer reads your first dataset.
@@ -87,7 +94,8 @@ sends nothing.
    Each prints only its address (`0x...`) and also writes it next to the key
    (`publisher.key.address`, `spare.key.address`: public, safe to keep). The key files are
    readable by you only and are never printed. Move `spare.key` (not `spare.key.address`) to a
-   USB stick or another offline place now. **If you lose your
+   USB stick or another offline place now, and leave `spare.key.address` in the folder:
+   `doctor` counts your spare by it (step 6). **If you lose your
    only key, your id is lost**: nobody can prove a new key is yours, and the origin alone is not
    enough. Never send a key file to anyone.
 2. **Make your keys document (1 minute).**
@@ -149,10 +157,13 @@ sends nothing.
    machine never connects to you.
 8. **Wait for the decision (up to 5 days).** The reviewer answers in the issue: approved, or
    refused with a reason code. The same state is in the public record, `deploy/publishers/` of
-   the repository (it shows `yes` for each checked line, no text about you), and in its status list `apps/web/static/publishers.json`: a registered
+   the repository (it shows `yes` for each checked line, no text about you), and in its status list `apps/web/static/publishers.json`, which the website's Publish data page shows with a lookup by hash or id: a registered
    publisher under its id, an application that is not approved under its Keccak only (no id,
-   origin or text of yours is kept). `onyx-publish doctor --publishers publishers.json` prints
-   your line. After a refusal, fix the named reason and apply again **with a
+   origin or text of yours is kept). To read it in your terminal, save the list and let the
+   doctor print your line:
+   `curl -s -o publishers.json https://onyx.cryptagraph.com/publishers.json`, then
+   `onyx-publish doctor --publishers publishers.json`
+   A publisher registered before the record began is listed there without its origin. After a refusal, fix the named reason and apply again **with a
    new key** (the refused key is blocked until its refused sample's report is 7 days old). If
    the application expired before a decision, run step 5 again with `--reapply`, the same key
    and the same `site/sample` folder, put the new file on your origin, run `doctor --live`

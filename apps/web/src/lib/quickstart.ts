@@ -11,6 +11,9 @@
  * (READINESS A20: `btc.mvrv` ended 2026-08-28; this one ran to 2026-11-13 when checked on
  * 2026-11-16, and holds every day of CHECK_RANGE). */
 export const EXAMPLE = { publisher: 'onchain-archive', dataset: 'wbtc.mvrv' };
+/** The hosted test node. The commands name it wherever the page is served from: a mirror or a
+ * preview of the site is not a node, so the page's own origin must never stand in for it. */
+export const HOSTED_NODE = 'https://onyx.cryptagraph.com';
 /** OnyxSignedBook on Base Sepolia (deploy/early-record/contracts.json). */
 export const BOOK = '0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5';
 /** The oldest-first check example's key range: 2026-01-01 to 2026-01-31, as the days' first seconds (UTC). */

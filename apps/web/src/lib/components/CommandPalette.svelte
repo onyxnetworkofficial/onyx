@@ -28,6 +28,7 @@
 		{ label: 'Address labels', hint: 'Page', run: () => goto(resolve('/labels')) },
 		{ label: 'Query API', hint: 'Page', run: () => goto(resolve('/api')) },
 		{ label: 'Add data', hint: 'Page', run: () => goto(resolve('/submit')) },
+		{ label: 'Publish your own data', hint: 'Page', run: () => goto(resolve('/publish')) },
 		{ label: 'Download the Onyx app', hint: 'Page', run: () => goto(resolve('/download')) },
 		{
 			label: `Run all ${checks.length} checks`,

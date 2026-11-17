@@ -394,21 +394,17 @@ fn publishers_problems(raw: &[u8]) -> Vec<String> {
         let what = format!("publisher {}", i + 1);
         if !only_fields(
             p,
-            &[
-                "publisher",
-                "state",
-                "date",
-                "origin",
-                "signers",
-                "registered",
-            ],
-            &["reason"],
+            &["publisher", "state", "date", "signers", "registered"],
+            &["origin", "reason"],
             &what,
             &mut bad,
         ) {
             continue;
         }
-        let rules: [(bool, &str); 7] = [
+        // A publisher the book held before the record began is listed
+        // without its origin (review S4-R1 M2); every other publisher with it.
+        let before = p["state"] == "registered-before-record";
+        let rules: [(bool, &str); 8] = [
             (
                 p["publisher"]
                     .as_str()
@@ -416,10 +412,15 @@ fn publishers_problems(raw: &[u8]) -> Vec<String> {
                 "publisher is not a publisher id",
             ),
             (
-                p["origin"]
-                    .as_str()
-                    .is_some_and(|o| onyx_bulk::ids::Origin::parse(o).is_ok()),
+                before
+                    || p["origin"]
+                        .as_str()
+                        .is_some_and(|o| onyx_bulk::ids::Origin::parse(o).is_ok()),
                 "origin is not in the origin grammar",
+            ),
+            (
+                !before || p.get("origin").is_none(),
+                "a publisher from before the record is listed without an origin",
             ),
             (
                 str_in(&p["state"], PUBLISHER_STATES),
@@ -2418,9 +2419,17 @@ fn the_fallback_guard_refuses_label_derived_totals() {
 /// allowlist only in its exact shape. The committed list passes; a list
 /// with one more field, contact text, a profile link, or a value outside
 /// its grammar is refused, and so is the file anywhere but at the root.
+/// Runs in a public tree too: it reads the committed list and nothing else.
 #[test]
 fn the_guard_takes_the_publishers_list_only_in_its_exact_shape() {
-    let refs = refs();
+    // No label set and no known address is needed here (the label fixtures
+    // are not in a public tree): with both lists empty the guard knows no
+    // label row and refuses every Bitcoin address, which is the stricter
+    // reading for a file that holds none.
+    let refs = Refs {
+        labels: BTreeSet::new(),
+        known: BTreeSet::new(),
+    };
     let real = std::fs::read(root().join("apps/web/static/publishers.json")).expect("the list");
     assert_eq!(problems(PUBLISHERS, &real, &refs), Vec::<String>::new());
     let good: serde_json::Value = serde_json::from_slice(&real).expect("json");
@@ -2432,6 +2441,7 @@ fn the_guard_takes_the_publishers_list_only_in_its_exact_shape() {
     let mut full = good.clone();
     full["publishers"][0]["reason"] = "rights-unclear".into();
     full["publishers"][0]["state"] = "approved (record)".into();
+    full["publishers"][0]["origin"] = "data.example.org/river-levels".into();
     full["applications"] = serde_json::json!([
         {"application": format!("0x{}", "ab".repeat(32)), "state": "refused", "date": "2026-11-17",
          "reason": "rights-unclear", "blocks_signer_until": 1_795_478_700u64},
@@ -2520,6 +2530,26 @@ fn the_guard_takes_the_publishers_list_only_in_its_exact_shape() {
         "an id that is a name",
         &|v| v["publishers"][0]["publisher"] = "Some Person".into(),
         "publisher is not a publisher id",
+    );
+    // The committed publishers are from before the record: none has an
+    // origin, and one with an origin is refused; any other state needs one.
+    assert!(good["publishers"].as_array().is_some_and(|l| l
+        .iter()
+        .all(|p| p["state"] != "registered-before-record" || p.get("origin").is_none())));
+    refused(
+        "an origin on a publisher from before the record",
+        &|v| v["publishers"][0]["state"] = "registered-before-record".into(),
+        "a publisher from before the record is listed without an origin",
+    );
+    refused(
+        "an approved publisher without an origin",
+        &|v| {
+            v["publishers"][0]
+                .as_object_mut()
+                .expect("an object")
+                .remove("origin");
+        },
+        "origin is not in the origin grammar",
     );
     refused(
         "an origin with a scheme",
