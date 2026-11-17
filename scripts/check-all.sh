@@ -6,6 +6,9 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 export PATH="$PATH:$HOME/.foundry/bin"
+# No silent end: a step that fails without a line of its own is still named here, as the last
+# line of the log (the public CI once ended in a bare `exit code 1` after a step that printed nothing).
+trap 'st=$?; echo "check-all: FAILED (exit $st) at line $LINENO: $BASH_COMMAND"' ERR
 # Each stage prints how long it took (`[time]` lines), so the slowest one is easy to find.
 t_all=$SECONDS
 t_stage=$SECONDS
@@ -71,7 +74,9 @@ stage "rust tests"
 scripts/check-tlock-wasm.sh
 # CL3 (THREATS CL3-3): the generic JSON fetcher's shared vectors on wasm32, as natively.
 scripts/check-json-wasm.sh
-# NS8 (ADR-0047): the agent toolkit's tests, then an MCP session against two demo servers.
+# NS8 (ADR-0047): the agent toolkit's tests, then an MCP session against two demo servers. First
+# its self-test: the test counts are read from TAP, and every failing path prints its step and log.
+scripts/agent-smoke.sh --self-test
 scripts/agent-smoke.sh
 # CL2: the contributor client (apps/contrib) with a fake provider and a fake intake on loopback:
 # the API key never reaches Onyx, a tool result, a log line or a stored file (THREATS CL2).

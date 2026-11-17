@@ -165,6 +165,10 @@ self_test() {
   check() { if eval "$2"; then ok "$1"; else bad "$1"; fi; }
   run() { rc=0; out=$("$self" "$@" 2>&1) || rc=$?; }
   mark="planted-$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')"
+  # A home folder with nothing in it, as on a fresh CI runner: the staging lines make their own
+  # ~/.cache (they failed there with no ~/.cache, and every case after the first with them).
+  mkdir "$t/home"
+  export HOME="$t/home"
   snapshot() { # DIR: a snapshot as backup-node.sh leaves it, as deploy-api.sh would have installed
     s=$1
     mkdir -p "$s/etc-onyx/observations" "$s/etc-onyx/track" "$s/etc-onyx/storage" "$s/cas/rows" "$s/bulk" "$s/state" "$s/server"

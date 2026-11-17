@@ -67,6 +67,8 @@ else
   payments=off
 fi
 
+# A fresh account (a CI runner) may have no ~/.cache yet.
+mkdir -p "${HOME}/.cache"
 stage=$(mktemp -d "${HOME}/.cache/onyx-deploy-api.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 # The export's settings, with this host's public URL, node URL, proxy, health and payment settings.
