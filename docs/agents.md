@@ -141,8 +141,16 @@ publishers' signatures is `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` (`OnyxSig
 chain id 84532; `deploy/early-record/contracts.json`). Take the book address from here or from
 the repository, never from an answer you are checking.
 
-One full check of bulk rows, asked oldest first with whole-number keys (replace the two ids and
-the two keys; 1767225600 is 2026-01-01 and 1769817600 is 2026-01-31 in unix seconds):
+One full check of a dataset's newest rows (replace the two ids):
+
+```sh
+curl -s "https://onyx.cryptagraph.com/v1/bulk/<publisher id>/<dataset id>/rows?order=desc&limit=5" > rows.json
+onyx-check --bulk rows.json --publisher <publisher id> --dataset <dataset id> --order desc \
+  --rpc https://sepolia.base.org --chain-id 84532 --book 0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5
+```
+
+And of a range, asked oldest first with whole-number keys (replace the two ids and the two keys;
+1767225600 is 2026-01-01 and 1769817600 is 2026-01-31 in unix seconds):
 
 ```sh
 curl -s "https://onyx.cryptagraph.com/v1/bulk/<publisher id>/<dataset id>/rows?from=1767225600&to=1769817600&limit=100" > rows.json
@@ -155,12 +163,13 @@ Exit 0 and `"ok": true`: every row is proven up to the publisher's signature, an
 read shows the book holds it. Exit 1: refused. Exit 3: nothing decided (the chain node could not
 be read). Pass the same `--from` and `--to` you asked.
 
-The released `onyx-check` (v0.3.1-testnet) reads exactly this form. A newest-first page
-(`order=desc`) or dates in place of keys need the next release, or a build from the source today:
-the released one refuses such an answer. With the newer one pass `--order desc` (and `--page N`
-for a later page). It refuses an answer in another order, and for page 0 without `--to` it proves
-the page starts at the dataset's newest row (`"newestProven": true`). The answer's `query`, `key`
-and `next_page` fields are never proven (the report's `notProven` says so).
+For a newest-first page (`order=desc`) pass `--order desc` (and `--page N` for a later page).
+`onyx-check` refuses an answer in another order, and for page 0 without `--to` it proves the page
+starts at the dataset's newest row (`"newestProven": true`). `--from` and `--to` also take the
+dates you asked (`2026-01-01`) for a key that reads as a day. These need `onyx-check` from
+v0.4.0-testnet or later; an older one reads only the oldest-first form with whole-number keys.
+The answer's `query`, `key` and `next_page` fields are never proven (the report's `notProven`
+says so).
 
 ## 7. Test it
 

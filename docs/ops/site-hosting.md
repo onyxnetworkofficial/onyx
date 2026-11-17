@@ -9,7 +9,7 @@ no label-derived totals) served as static files at **https://onyx.cryptagraph.co
 | Firewall | The Hetzner firewall and `ufw`: TCP 22, 80 and 443 in, nothing else |
 | TLS | Caddy, certificates from Let's Encrypt renewed by Caddy itself; no ACME e-mail; HTTP redirects to HTTPS |
 | Files | `/srv/onyx/releases/<UTC time>-<commit>`; `/srv/onyx/current` points at the live one; the last 5 are kept |
-| Logs | No access log (nothing about visitors is kept) |
+| Logs | No access log (nothing about visitors is kept). Which routes and datasets are used comes from counters inside the node, counts only, read from the node's files on the server, by no route (`ONYX_USAGE=on`, `scripts/usage-report.sh`; docs/spec/usage-counts.md) |
 | Updates | `unattended-upgrades` with an automatic reboot at 04:30 UTC when one is needed; `fail2ban` on SSH |
 | DNS | An A record for `onyx` at the domain's registrar |
 

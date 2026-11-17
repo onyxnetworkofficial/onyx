@@ -220,13 +220,13 @@ export function bulkCheckCommand(q) {
 	const desc = q.order === 'desc';
 	const order = desc ? ' --order desc' : '';
 	const page = desc && q.page ? ` --page ${q.page}` : '';
-	// The released onyx-check (v0.3.1-testnet) knows neither --order nor dates.
+	// --order, --page and dates are options of onyx-check since v0.4.0-testnet (READINESS A21).
 	const newer = desc || /\d{4}-\d{2}-\d{2}/.test(range);
 	return {
 		command: `onyx-check --bulk rows.json --publisher ${q.publisher} --dataset ${q.dataset}${range}${order}${page} --rpc <your Base Sepolia node> --chain-id 84532 --book <the book address you trust, from docs/agents.md, never from this answer>`,
 		needs: newer
-			? 'An onyx-check built from the source after 2026-11-16 (--order, --page and dates): the v0.3.1-testnet release refuses a newest-first page. With that release, ask again oldest first (no order) with whole-number from and to, and check that answer.'
-			: 'Any onyx-check, also the v0.3.1-testnet release.',
+			? 'onyx-check from the v0.4.0-testnet release or later (--order, --page and dates). An older one refuses a newest-first page: with it, ask again oldest first (no order) with whole-number from and to, and check that answer.'
+			: 'Any onyx-check, also one older than the v0.4.0-testnet release.',
 	};
 }
 

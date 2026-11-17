@@ -1,61 +1,52 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import ArrowRight from '@lucide/svelte/icons/arrow-right';
-	import Database from '@lucide/svelte/icons/database';
-	import Link from '@lucide/svelte/icons/link';
-	import ChartNoAxesCombined from '@lucide/svelte/icons/chart-no-axes-combined';
 	import Table from '@lucide/svelte/icons/table';
 	import Code from '@lucide/svelte/icons/code';
-	import ShieldCheck from '@lucide/svelte/icons/shield-check';
+	import Bot from '@lucide/svelte/icons/bot';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 </script>
 
 <svelte:head><title>Onyx · Data anyone can check</title></svelte:head>
 
+<!-- READINESS A19: the first screen speaks to a data user (what Onyx is, what works today), then to a
+     contributor. Static text: the dataset count is rounded by hand (9,047 on 2026-11-16). -->
 <OnyxSlab>
 	<div class="wrap welcome">
 		<div class="intro">
-			<p class="eyebrow">A network built from what you know</p>
-			<h1>Your data could be<br />someone’s next discovery.</h1>
-			<p class="lede" data-testid="home-what">Have a useful dataset, a source worth following, or a forecast to share? Add it to Onyx. Start with a description. We’ll help work out how it can be checked.</p>
+			<p class="eyebrow">Open data network · testnet</p>
+			<h1>Data anyone<br />can check.</h1>
+			<p class="lede" data-testid="home-what">Onyx is one place for data from many sources. Every answer comes with a proof you can verify yourself. Today you can browse about 9,000 datasets, get them by API, or connect an AI assistant.</p>
 			<div class="actions">
-				<a class="btn" href={resolve('/submit')} data-testid="home-primary">Add your data <ArrowRight size={18} /></a>
-				<a class="btn ghost" href={resolve('/data')} data-testid="home-secondary">Browse data <ArrowRight size={18} /></a>
+				<a class="btn" href={resolve('/datasets')} data-testid="home-primary">Browse datasets <ArrowRight size={18} /></a>
+				<a class="btn ghost" href={resolve('/submit')} data-testid="home-secondary">Add your data <ArrowRight size={18} /></a>
 			</div>
-			<p class="preview-note">Early preview. Submissions need review before they can be published. Data is paid in test USDC on Base Sepolia, not switched on yet; markets use tONYX test tokens. No real money.</p>
+			<p class="preview-note" data-testid="home-testnet">Testnet preview. Reading is free, and test tokens have no value. Some datasets are not being updated right now: each one shows its newest day.</p>
 		</div>
-		<aside class="starting-point" aria-labelledby="starting-title">
-			<p class="eyebrow">Start with what you have</p>
-			<h2 id="starting-title">Useful data comes<br />from everywhere.</h2>
+		<aside class="starting-point" aria-labelledby="starting-title" data-testid="data-users">
+			<p class="eyebrow">What you can do now</p>
+			<h2 id="starting-title">One place, one API,<br />one format.</h2>
 			<ul>
-				<li><Database size={22} /><div><h3>Your own data</h3><p>Research, measurements, or a dataset you maintain.</p></div></li>
-				<li><Link size={22} /><div><h3>A source you follow</h3><p>A public API, website, or onchain source.</p></div></li>
-				<li><ChartNoAxesCombined size={22} /><div><h3>A forecast</h3><p>A prediction that can be compared with what happens.</p></div></li>
+				<li><a href={resolve('/datasets')} data-testid="users-datasets"><Table size={22} /><span><h3>Browse about 9,000 datasets</h3><p>Search by name and read the newest rows of any of them.</p></span><ArrowRight size={18} /></a></li>
+				<li><a href={resolve('/api')} data-testid="users-api"><Code size={22} /><span><h3>Get them by API</h3><p>The same data over HTTP, from a script or a notebook. No key.</p></span><ArrowRight size={18} /></a></li>
+				<li><a href={`${resolve('/submit')}?assistant`} data-testid="users-assistant"><Bot size={22} /><span><h3>Connect an AI assistant</h3><p>One connector for ChatGPT, Claude, Cursor and others. It finds datasets, reads rows and checks answers.</p></span><ArrowRight size={18} /></a></li>
 			</ul>
-			<a href={resolve('/submit')}>Describe your data <ArrowRight size={16} /></a>
 		</aside>
 	</div>
 </OnyxSlab>
 
 <div class="wrap">
 	<section class="section next" aria-labelledby="next-title" data-testid="contribution-steps">
-		<div class="section-heading"><p class="eyebrow">What happens next</p><h2 id="next-title">From your idea to useful data.</h2><p>You don’t need to choose a verification method to get started.</p></div>
+		<div class="section-heading"><p class="eyebrow">Have data to share?</p><h2 id="next-title">Your data could be someone’s next discovery.</h2><p>A dataset you maintain, a source worth following, or a forecast: start with a description. You don’t need to choose a verification method. Nothing is published before a review.</p></div>
 		<ol>
 			<li><span class="step-number" aria-hidden="true">01</span><h3>Tell us what you have</h3><p>Describe the data, where it comes from, and whether you have permission to share it.</p></li>
 			<li><span class="step-number" aria-hidden="true">02</span><h3>Find the right checks</h3><p>Onyx suggests how the data could be checked. You’ll see what is supported and what still needs review.</p></li>
 			<li><span class="step-number" aria-hidden="true">03</span><h3>Keep track of the next step</h3><p>Send it from this site, an AI assistant or the API, and you get a receipt to follow its review.</p></li>
 		</ol>
-	</section>
-	<section class="section users" aria-labelledby="users-title" data-testid="data-users">
-		<div class="section-heading"><p class="eyebrow">For data users</p><h2 id="users-title">One place, one API, one format.</h2><p>Thousands of datasets from public sources, all in the same shape. No keys to juggle. Each row comes with a proof that a free check tool verifies against a record on chain. Reading is free on the test network today.</p></div>
-		<ul>
-			<li><a href={resolve('/datasets')} data-testid="users-datasets"><Table size={22} /><span><h3>Browse every dataset</h3><p>Search by name and read the newest rows of any dataset.</p></span><ArrowRight size={18} /></a></li>
-			<li><a href={resolve('/api')} data-testid="users-api"><Code size={22} /><span><h3>Query the API</h3><p>The same data over HTTP, from a script or a notebook.</p></span><ArrowRight size={18} /></a></li>
-			<li><a href={resolve('/how-it-works')} data-testid="users-check"><ShieldCheck size={22} /><span><h3>Check it yourself</h3><p>See how a row is proven, and run a check in your browser.</p></span><ArrowRight size={18} /></a></li>
-		</ul>
+		<p class="next-action"><a class="btn ghost" href={resolve('/submit')} data-testid="home-add">Describe your data <ArrowRight size={18} /></a></p>
 	</section>
 	<section class="learn" aria-labelledby="learn-title">
-		<div><p class="eyebrow">Curious about the checks?</p><h2 id="learn-title">See how trust is earned.</h2><p>Explore the verification methods, run the browser checks, and inspect the testnet demo.</p></div>
+		<div><p class="eyebrow">Curious about the checks?</p><h2 id="learn-title">See how trust is earned.</h2><p>See how a row is proven, run a check in your browser, and inspect the testnet demo.</p></div>
 		<a class="btn ghost" href={resolve('/how-it-works')} data-testid="home-technical">How it works <ArrowRight size={18} /></a>
 	</section>
 	<section class="market-preview" aria-labelledby="market-preview-title">
@@ -75,11 +66,16 @@
 	.starting-point { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--sp-7); }
 	.starting-point h2 { font-size: var(--text-2xl); line-height: var(--lh-tight); }
 	.starting-point ul { list-style: none; padding: 0; margin: var(--sp-6) 0; }
-	.starting-point li { display: flex; align-items: flex-start; gap: var(--sp-4); padding-block: var(--sp-4); border-top: 1px solid var(--line); }
-	.starting-point :global(li > svg) { flex-shrink: 0; margin-top: var(--sp-1); color: var(--muted); }
+	.starting-point ul { margin-bottom: 0; }
+	.starting-point li { border-top: 1px solid var(--line); }
+	.starting-point li a { display: flex; align-items: flex-start; gap: var(--sp-4); min-height: 44px; padding-block: var(--sp-4); color: inherit; text-decoration-color: transparent; }
+	.starting-point li a > span { flex: 1; }
+	/* The row's title underlines on hover and focus; its description (inline-block) does not. */
+	.starting-point li a:hover, .starting-point li a:focus-visible { text-decoration-color: currentColor; }
+	.starting-point li a p { display: inline-block; }
+	.starting-point :global(li a > svg) { flex-shrink: 0; margin-top: var(--sp-1); color: var(--muted); }
 	h3 { font-size: var(--text-lg); font-weight: 400; margin: 0 0 var(--sp-2); }
 	.starting-point p:not(.eyebrow), .next li p { font-size: var(--text-base); color: var(--muted); line-height: var(--lh-body); margin: 0; }
-	.starting-point > a { min-height: 44px; display: flex; align-items: center; justify-content: space-between; gap: var(--sp-4); border-top: 1px solid var(--line); padding-top: var(--sp-4); }
 	.section-heading { max-width: 64ch; margin-bottom: var(--sp-7); }
 	.section-heading h2, .learn h2 { font-size: var(--text-h2); line-height: var(--lh-tight); margin-bottom: var(--sp-4); }
 	.section-heading > p:last-child, .learn p:last-child { color: var(--muted); line-height: var(--lh-body); }
@@ -87,12 +83,7 @@
 	.next ol { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-7); padding: 0; margin: 0; list-style: none; }
 	.next li { border-top: 1px solid var(--line); padding-top: var(--sp-6); }
 	.step-number { display: block; font: var(--text-sm)/var(--lh-body) var(--mono); color: var(--muted); margin-bottom: var(--sp-4); }
-	.users ul { display: grid; grid-template-columns: repeat(3, 1fr); gap: var(--sp-6); padding: 0; margin: 0 0 var(--sp-9); list-style: none; }
-	.users a { display: flex; align-items: flex-start; gap: var(--sp-4); min-height: 44px; height: 100%; padding: var(--sp-6); background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); color: inherit; text-decoration: none; }
-	.users a:hover, .users a:focus-visible { border-color: var(--muted); }
-	.users a > span { flex: 1; }
-	.users :global(a > svg) { flex-shrink: 0; margin-top: var(--sp-1); color: var(--muted); }
-	.users a p { font-size: var(--text-base); color: var(--muted); line-height: var(--lh-body); margin: 0; }
+	.next-action { margin: var(--sp-7) 0 var(--sp-9); }
 	.learn, .market-preview { display: flex; align-items: center; justify-content: space-between; gap: var(--sp-7); padding-block: var(--sp-9); border-top: 1px solid var(--line); margin-bottom: var(--sp-7); }
 	.learn > div { max-width: 62ch; }
 	.learn > a { flex-shrink: 0; }
@@ -102,5 +93,5 @@
 	.market-preview p:last-child { color:var(--muted); line-height:var(--lh-body); }
 	.market-preview > a { flex-shrink:0; }
 	@media (max-width: 1000px) { .welcome { gap: var(--sp-7); grid-template-columns: 1.2fr 1fr; } .starting-point { padding: var(--sp-6); } }
-	@media (max-width: 760px) { .welcome { grid-template-columns: 1fr; padding-block: var(--sp-8); } .users ul { grid-template-columns: 1fr; gap: var(--sp-4); } .next ol { grid-template-columns: 1fr; gap: var(--sp-6); } .learn, .market-preview { align-items: flex-start; flex-direction: column; } }
+	@media (max-width: 760px) { .welcome { grid-template-columns: 1fr; padding-block: var(--sp-8); } .next ol { grid-template-columns: 1fr; gap: var(--sp-6); } .learn, .market-preview { align-items: flex-start; flex-direction: column; } }
 </style>

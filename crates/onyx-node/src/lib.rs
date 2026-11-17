@@ -21,3 +21,4 @@ pub mod observe;
 pub mod serve;
 pub mod shutdown;
 pub mod submissions;
+pub mod usage;

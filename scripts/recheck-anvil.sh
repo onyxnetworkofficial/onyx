@@ -60,7 +60,7 @@ anvil_pid=$!
 port=""
 for _ in $(seq 200); do
   kill -0 "$anvil_pid" 2>/dev/null || { cat "$work/anvil.log"; fail "anvil exited"; }
-  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)
+  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)  # pipefail-ok: anvil's log is a few lines, and the status is dropped (|| true)
   [ -n "$port" ] && break
   sleep 0.1
 done

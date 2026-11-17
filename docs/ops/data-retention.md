@@ -17,6 +17,22 @@ the grace, 30 days of chain time or more, on a node running `ONYX_BULK_ERASE=on`
 set-aside files, and never on a storage node yet. `ONYX_BULK_ERASE_HOLD` keeps a publisher or a
 dataset for a dispute. Backups an operator made are outside this rule.
 
+## Usage counts (ADR-0008 amendment 1)
+
+No access log is kept, at the proxy or in the node. A node with `ONYX_USAGE=on` keeps request counts
+per route and per held dataset, one small file per UTC day under `ONYX_STATE_DIR/usage/`, for 90
+days; older files are deleted by the node. The files hold counts only, nothing about a visitor
+([usage-counts.md](../spec/usage-counts.md)).
+
+- Today's file holds exact numbers, also for a dataset opened only once. It is kept for the day,
+  readable by the node's user only.
+- A finished day's file names no dataset under 5 opens. The node folds a day when it ends, and once
+  a day any past day it did not finish.
+- The node backup (`scripts/backup-node.sh`) keeps finished, folded day files only: it does not copy
+  today's or yesterday's file or a set-aside one, and drops any day file without the folded mark.
+  Its snapshots are kept by the backup's own schedule (days, weeks, months), which is longer than
+  the node's 90 days: a folded day file can live in a monthly snapshot after the node deleted it.
+
 ## Plan
 
 | Data | Where | Kept |

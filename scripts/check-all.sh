@@ -79,6 +79,14 @@ node --test apps/contrib/test/*.test.mjs
 # CL10 (ADR-0061, THREATS CL10): the contributor app server (token, Host and Origin gates, no key in
 # any answer) and the single-file bundle run in the line above; here the desktop workflow's rules
 # (every action pinned by SHA, only the release job writes) and the Download page's release helper.
+# THREATS OPS-DEPLOY-1: what the deploy scripts install as root ends up owned by the node's user: no
+# chown that takes its reference from the path it fixes, no root rsync keeping the sender's owner.
+python3 -I scripts/check-deploy-owner.py --self-test
+python3 -I scripts/check-deploy-owner.py
+# THREATS OPS-PIPE-1: no pipe into a reader that stops early (grep -q, head, sed q, awk exit) where
+# pipefail is on: the writer can die of SIGPIPE and a check is then skipped in some runs.
+python3 -I scripts/check-pipefail-grep.py --self-test
+python3 -I scripts/check-pipefail-grep.py
 python3 -I scripts/check-workflows.py --self-test
 python3 -I scripts/check-workflows.py
 node --test apps/web/tests/release.test.mjs
@@ -180,6 +188,10 @@ scripts/check-secrets.sh
 #   (a damaged line or a wrong header fails, a torn last line passes, nothing printed), the
 #   allow-listed local config, the node's settings passed as environment with a fixed systemd-run
 #   description, the backup folder's lock.
+# - READINESS A22 (docs/ops/deployment.md "Rebuild a lost deploy export", offline, about 1 s): a deploy
+#   export rebuilt from a fake snapshot of the node backup and checked by deploy-api.sh's own
+#   staging lines; no host line and no value printed; an existing target, a snapshot missing a
+#   part, a non-testnet node and staging lines that name ssh, rsync, sudo or systemctl refused.
 side_by_side \
   "python3 -I scripts/health-watch-tests.py" \
   "python3 -I scripts/refresh-onchain-tests.py" \
@@ -188,7 +200,9 @@ side_by_side \
   "python3 -I scripts/refresh-eth-onchain-tests.py" \
   "python3 -I scripts/early-record-daily-tests.py" \
   "scripts/backup-node.sh --self-test" \
-  "scripts/restore-drill.sh --self-test"
+  "scripts/restore-drill.sh --self-test" \
+  "scripts/export-from-backup.sh --self-test" \
+  "scripts/usage-report.sh --self-test"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.
 python3 -I scripts/recount-chain-input.py --self-test

@@ -272,7 +272,7 @@ test('MCP: bulk rows are sized for an agent: 10 rows, values and a proof summary
 	assert.match(out.proof.full, /"full": true.*GET \/v1\/bulk\/example-archive\/btc\.mvrv\/rows\?order=desc&from=2026-01-01&limit=10/);
 	// The command carries what the CALLER asked (a date, newest first), never the node's `query`.
 	assert.match(out.proof.check.command, /^onyx-check --bulk rows\.json --publisher example-archive --dataset btc\.mvrv --from 2026-01-01 --order desc --rpc /);
-	assert.match(out.proof.check.needs, /built from the source/);
+	assert.match(out.proof.check.needs, /v0\.4\.0-testnet release or later/);
 	assert.equal(out.checked, false);
 	assert.deepEqual(Object.keys(out).slice(0, 2), ['note', 'checked']);
 	assert.equal(out.proof.readAtBlock, 59691362);
@@ -327,7 +327,7 @@ test('MCP: a lying node cannot put text into the suggested check command (review
 	// Only whole numbers and dates in their exact shape, the two orders, a page number, plain ids.
 	const ok = { publisher: 'example-archive', dataset: 'btc.mvrv' };
 	assert.match(bulkCheckCommand({ ...ok, from: -5, to: '1767225600' }).command, / --from -5 --to 1767225600 --rpc /);
-	assert.match(bulkCheckCommand({ ...ok, from: '2026-01-01T00:00:00Z' }).needs, /built from the source/);
+	assert.match(bulkCheckCommand({ ...ok, from: '2026-01-01T00:00:00Z' }).needs, /v0\.4\.0-testnet release or later/);
 	assert.match(bulkCheckCommand({ ...ok, page: 3 }).needs, /Any onyx-check/);
 	assert.doesNotMatch(bulkCheckCommand({ ...ok, page: 3 }).command, /--page|--order/);
 	for (const bad of [

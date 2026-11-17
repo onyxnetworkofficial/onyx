@@ -5,7 +5,9 @@
 #
 # Usage: scripts/track-nws-sepolia.sh <export dir> [state dir]
 #   <export dir>  the hosted node's export (deployment.json; the publication goes to track/)
-#   [state dir]   default ~/.cache/onyx-nl4/track-nws (the intake state and every fetched forecast)
+#   [state dir]   default ${ONYX_OPS_DIR:-~/.local/state/onyx}/track/nws (the intake state and every
+#                 fetched forecast: never a cache folder, docs/ops/deployment.md "Folders that
+#                 must not be deleted")
 # ONYX_TRACK_NO_POST=1 only rewrites the publication (no fetch, no transaction).
 #
 # Keys (never printed): .onyx-testnet/keys/track-nws-relay.key signs the statements and
@@ -16,7 +18,14 @@ cd "$(dirname "$0")/.."
 REPO=$PWD
 [ $# -ge 1 ] || { echo "usage: $0 <export dir> [state dir]" >&2; exit 2; }
 export_dir=$1
-state=${2:-$HOME/.cache/onyx-nl4/track-nws}
+ops=${ONYX_OPS_DIR:-$HOME/.local/state/onyx}
+# The default was a cache folder until 2026-11-16; a cache may be deleted, the intake state may not.
+old_state=$HOME/.cache/onyx-nl4/track-nws
+if [ $# -lt 2 ] && [ -d "$old_state" ] && [ ! -e "$ops/track/nws" ]; then
+  echo "the default state dir moved out of the cache folder: run  mkdir -p '$ops/track' && mv '$old_state' '$ops/track/nws'  and start again (or pass '$old_state' as the state dir); nothing was moved or sent" >&2
+  exit 1
+fi
+state=${2:-$ops/track/nws}
 RPC=${ONYX_TRACK_RPC:-https://sepolia.base.org}
 FOUNDRY_BIN=${FOUNDRY_BIN:-$HOME/.foundry/bin}
 KEYS=$REPO/.onyx-testnet/keys

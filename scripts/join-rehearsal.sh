@@ -90,7 +90,7 @@ echo "OnyxRegistry at $REG on the local anvil (chain 31337)"
 # 4. The operator makes a key in the container (docs step 2) and sends only the address.
 docker run -d --name "$NAME" --network host "$IMAGE" sleep infinity >/dev/null
 outside=$(docker exec "$NAME" onyx-join/join.sh key onyx-join/observer.key | tail -1)
-echo "$outside" | grep -Eq '^0x[0-9a-f]{40}$' || { echo "join.sh key printed no address: $outside"; exit 1; }
+echo "$outside" | grep -Eq '^0x[0-9a-f]{40}$' || { echo "join.sh key printed no address: $outside"; exit 1; }  # pipefail-ok: one line, written whole before grep reads it
 [ "$(docker exec "$NAME" stat -c %a onyx-join/observer.key)" = 600 ] || { echo "the key is not 0600"; exit 1; }
 echo "outside observer $outside (key made and kept in the container)"
 castw send --unlocked --from "$FUNDER" "$outside" --value 0.01ether >/dev/null

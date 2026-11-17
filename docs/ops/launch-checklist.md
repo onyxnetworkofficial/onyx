@@ -566,9 +566,10 @@ markets deploy cover the contracts, and only a markets redeploy is due if NL14 c
 anything else changed, do the full run:
 ```sh
 scripts/demo-testnet.sh testnet --plan                 # budget and balances; sends nothing
-scripts/demo-testnet.sh testnet --dispute --yes --export-node ~/.cache/onyx-gates/node \
+OPS=${ONYX_OPS_DIR:-$HOME/.local/state/onyx}        # not a cache folder: the export must survive
+scripts/demo-testnet.sh testnet --dispute --yes --export-node "$OPS/export" \
   2>&1 | tee ~/.cache/onyx-gates/testnet.log
-scripts/markets-sepolia.sh deploy ~/.cache/onyx-gates/node   # 8 txs, 0.000351 ETH on 2026-10-27
+scripts/markets-sepolia.sh deploy "$OPS/export"        # 8 txs, 0.000351 ETH on 2026-10-27
 ```
 Before you start:
 1. **Balance.** The deployer held about 0.00126 test ETH on 2026-10-27 (read by the health watch).
@@ -604,7 +605,8 @@ chat for that release (a production deploy).
 4. **Public build** in the frozen worktree: `ONYX_PUBLIC=1 ONYX_RIGHTS=fallback
    CARGO_TARGET_DIR=~/.cache/onyx-release-target scripts/build-web.sh` must end with
    `E2E PASSED` and `website built (public, rights fallback ...)`. Not timed (tens of minutes).
-5. **Export.** The export folder (`~/.cache/onyx-ns17/node` today) holds `deployment.json`,
+5. **Export.** The export folder (`${ONYX_OPS_DIR:-~/.local/state/onyx}/export`, never a cache
+   folder: [folders that must not be deleted](deployment.md#folders-that-must-not-be-deleted)) holds `deployment.json`,
    `catalog.json`, `cas/`, `node.service.env` and `observations/` with `pins`: every store there
    is installed and served (a withdrawn series must leave it too, THREATS NL20-3).
 6. **API.** `scripts/deploy-api.sh <export> <binary>` from the frozen worktree. Expected lines:

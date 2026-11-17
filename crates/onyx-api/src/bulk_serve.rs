@@ -1684,6 +1684,18 @@ impl BulkStore {
         Ok(forks.get(publisher).cloned())
     }
 
+    /// The usage-count key of a dataset this node holds, `None` for any
+    /// other name: a name becomes a counter key only from the store's own
+    /// map, never from a request (THREATS USE-3).
+    pub fn usage_of(&self, publisher: &str, dataset: &str) -> Option<crate::usage::DatasetUse> {
+        let held = self.datasets.read().unwrap_or_else(|p| p.into_inner());
+        let ((p, d), _) = held.get_key_value(&(publisher.to_string(), dataset.to_string()))?;
+        Some(crate::usage::DatasetUse {
+            publisher: p.clone(),
+            dataset: d.clone(),
+        })
+    }
+
     /// `GET /v1/bulk/{publisher}/{dataset}`, after re-reading a catalog fork
     /// of its publisher.
     pub async fn info_checked(
@@ -4646,6 +4658,20 @@ fn path_ids(
     Ok((a, b))
 }
 
+/// A dataset route's answer, marked with the dataset it opened when this node
+/// holds it (the usage counts, [`crate::usage`]; only a 2xx answer counts):
+/// the info route and the first page of rows.
+fn used(named: Option<crate::usage::DatasetUse>, r: Result<Value, ApiError>) -> Response {
+    let mut res = match r {
+        Ok(v) => no_store(StatusCode::OK, v),
+        Err(e) => e.into_response(),
+    };
+    if let Some(d) = named {
+        res.extensions_mut().insert(d);
+    }
+    res
+}
+
 async fn list(
     State(store): State<Arc<BulkStore>>,
     client: Option<Extension<ClientKey>>,
@@ -4669,16 +4695,15 @@ async fn info(
     client: Option<Extension<ClientKey>>,
     path: Result<Path<(String, String)>, PathRejection>,
 ) -> Response {
+    let mut named = None;
     let r = async {
         limited(&store, client)?;
         let (p, d) = path_ids(path)?;
+        named = store.usage_of(&p, &d);
         store.info_checked(&p, &d).await
     }
     .await;
-    match r {
-        Ok(v) => no_store(StatusCode::OK, v),
-        Err(e) => e.into_response(),
-    }
+    used(named, r)
 }
 
 async fn rows(
@@ -4687,17 +4712,20 @@ async fn rows(
     path: Result<Path<(String, String)>, PathRejection>,
     RawQuery(q): RawQuery,
 ) -> Response {
+    let mut named = None;
     let r = async {
         limited(&store, client)?;
         let (p, d) = path_ids(path)?;
         let q = parse_rows_query(q.as_deref())?;
+        // The usage counts name a dataset for its first page only: a reader
+        // paging through the rows is one open, not one per page.
+        if q.page == 0 {
+            named = store.usage_of(&p, &d);
+        }
         store.rows(&p, &d, &q).await
     }
     .await;
-    match r {
-        Ok(v) => no_store(StatusCode::OK, v),
-        Err(e) => e.into_response(),
-    }
+    used(named, r)
 }
 
 async fn successor(
@@ -4711,10 +4739,8 @@ async fn successor(
         store.successor_answer(&p, &d).await
     }
     .await;
-    match r {
-        Ok(v) => no_store(StatusCode::OK, v),
-        Err(e) => e.into_response(),
-    }
+    // Not an open of the dataset: the usage counts name none here.
+    used(None, r)
 }
 
 async fn upload<F, Fut>(store: &BulkStore, f: F) -> Response

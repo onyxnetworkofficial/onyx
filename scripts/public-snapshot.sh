@@ -92,6 +92,7 @@ if [ "$plant" = 1 ]; then
   # Synthetic values built at run time, so this file itself holds neither.
   mkdir -p "$out/planted"
   printf 'contact: %s@%s\n' "jane.doe" "gmail.com" > "$out/planted/person.txt"
+  # pipefail-ok: 27 bytes are 36 characters: the last head reads to the end
   printf 'token = %s%s\n' "ghp_" "$(head -c 27 /dev/urandom | base64 | tr -dc 'A-Za-z0-9' | head -c 36)" > "$out/planted/key.txt"
 fi
 gl="$(command -v "${ONYX_GITLEAKS:-gitleaks}" || true)"

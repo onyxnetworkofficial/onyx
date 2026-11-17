@@ -61,8 +61,9 @@ case "$1" in
     done
     [ -s "$ann" ] || { echo "$ann: no round announcement" >&2; exit 1; }
     # The announcement names the round's metric; its source picks the program.
-    metric=$(sed -n 's/^ *"metric": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | head -1)
-    series=$(sed -n 's/^ *"series": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | head -1)
+    # (The first match by a sed that reads to the end, not by head: THREATS OPS-PIPE-1.)
+    metric=$(sed -n 's/^ *"metric": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | sed -n '1p')
+    series=$(sed -n 's/^ *"series": *"\([a-z0-9._]*\)",\{0,1\}$/\1/p' "$ann" | sed -n '1p')
     # A manifest source (contributor loop CL3, ADR-0053) is observed by level2-manifest with the
     # kit's reviewed manifest and terms table; a dated source by its own observer.
     kit=$(cd "$(dirname "$0")" && pwd)

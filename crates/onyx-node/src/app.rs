@@ -1364,6 +1364,18 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         None => track,
     };
     let extra = extra.merge(intake).merge(labels).merge(wants);
+    // READINESS A9: usage counts (off unless ONYX_USAGE=on). The counting layer below wraps
+    // every route; no route gives the counts out (the operator reads the files: `onyx-node usage`).
+    let usage = crate::usage::open(c.usage, &c.state_dir, Arc::new(now_unix));
+    if usage.is_some() {
+        eprintln!(
+            "onyx-node: usage counts on: per route and held dataset, per UTC day, in {}; nothing about a visitor is kept (docs/spec/usage-counts.md)",
+            c.state_dir.join("usage").display()
+        );
+    }
+    let usage_task = usage
+        .clone()
+        .map(|u| tokio::spawn(crate::usage::run(u, crate::usage::FLUSH_EVERY)));
     let extra = match credits {
         Some(st) => extra
             .merge(onyx_api::credits::routes(st.clone()))
@@ -1379,13 +1391,20 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         None => (extra, axum::Router::new()),
     };
     let limit_state = state.clone();
+    let counted_usage = usage.clone();
     let server = tokio::spawn(async move {
         // Header read timeout and a connection cap (AUD-1-F5).
         crate::serve::serve_with(
             listener,
             // Review L19-R1 M3: the routes merged after the guard (bulk uploads, storage
             // peer reads) get the client key and the per-client limit too.
-            onyx_api::client_limited(limit_state, router_with(state, extra).merge(bulk_uploads)),
+            crate::usage::counted(
+                counted_usage.as_ref(),
+                onyx_api::client_limited(
+                    limit_state,
+                    router_with(state, extra).merge(bulk_uploads),
+                ),
+            ),
             limits,
             &trusted,
             async {
@@ -1408,6 +1427,10 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         .with_unknown(unknown.load(std::sync::atomic::Ordering::Relaxed));
     // A reporter post cut short commits nothing and is repeated after the
     // restart (its credits in flight are on disk); journals sync every write.
+    // The usage counts of the last minute, after the last request was answered.
+    if let Some(u) = &usage {
+        crate::usage::flush(u).await;
+    }
     for t in [
         reporter_task,
         resolver_task,
@@ -1415,6 +1438,7 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         gate_task,
         prepaid_task,
         observe_task,
+        usage_task,
     ]
     .into_iter()
     .flatten()
@@ -1468,6 +1492,9 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
     if args.first().map(String::as_str) == Some("doctor") {
         return doctor::main(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("usage") {
+        return crate::usage::main(&args[1..]);
+    }
     let mut allow_mainnet = false;
     let mut check_only = false;
     let mut health = false;
@@ -1477,7 +1504,7 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
             "--check-config" => check_only = true,
             "healthcheck" => health = true,
             "-h" | "--help" => {
-                println!("usage: onyx-node [--check-config | healthcheck | doctor ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)");
+                println!("usage: onyx-node [--check-config | healthcheck | doctor ... | usage ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)");
                 return ExitCode::SUCCESS;
             }
             other => {

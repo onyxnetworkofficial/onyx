@@ -52,6 +52,7 @@ pub mod signed_serve;
 pub mod storage;
 pub mod submit;
 pub mod track_serve;
+pub mod usage;
 pub mod wants;
 pub mod x402;
 

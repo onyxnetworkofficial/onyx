@@ -323,6 +323,7 @@ case "$*" in
 *" run "*)
   if [ -n "$FAKE_REWRITE" ]; then # same inode, same size, every line `exit 7`
     n=$(stat -c %s "$FAKE_REWRITE")
+    # pipefail-ok: this fake ssh runs under /bin/sh, where no pipefail is set
     yes 'exit 7' | head -c "$n" >"$FAKE_REWRITE"
   fi
   echo "remote-check: wall 1 s on fake, exit $FAKE_RC"
@@ -455,7 +456,7 @@ SH
   [ -f "$pnpm/bin/pnpm.cjs" ] || die "no pnpm.cjs under $pnpm"
   [ -f "$fix/node/970543.raw.hex" ] || die "no fixture blocks in $fix"
   # The fixture copy holds Bitcoin block hex and block JSON only (checked before it leaves).
-  odd=$(cd "$fix" && find . -mindepth 1 \( -type f -o -type l \) ! -name '*.raw.hex' ! -name '*.v3.json.gz' | head -5)
+  odd=$(cd "$fix" && find . -mindepth 1 \( -type f -o -type l \) ! -name '*.raw.hex' ! -name '*.v3.json.gz' | sed -n '1,5p')
   [ -z "$odd" ] || die "unexpected files in $fix (only *.raw.hex and *.v3.json.gz may go): $odd"
   R=(nice -n 19 ionice -c 3 rsync -e "${SSH[*]}" -a --mkpath)
   "${R[@]}" --delete "$rust/" "$HOST:onyx-tools/rust/"
@@ -480,7 +481,7 @@ done
 broken=$(find "$B/fixtures-live" -xtype l | wc -l)
 [ "$broken" = 0 ] || { echo "setup: $broken broken fixture links"; exit 1; }
 for t in rust/bin/cargo rust/bin/rustc node/bin/node bin/pnpm foundry/bin/forge foundry/bin/anvil bin/wasm-bindgen bin/cargo-deny; do
-  printf '%-22s %s\n' "$t" "$("$T/$t" --version 2>&1 | head -1)"
+  printf '%-22s %s\n' "$t" "$("$T/$t" --version 2>&1 | head -1)"  # pipefail-ok: an argument's substitution drops the status
 done
 echo "solc: $("$T/svm/0.8.30/solc-0.8.30" --version | tail -1)"
 echo "Onyx on the host: $(du -sc -B1G "$B" "$T" | awk 'END { print $1 }') GB; / free: $(df -BG --output=avail / | sed -n 2p)"

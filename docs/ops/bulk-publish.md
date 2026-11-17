@@ -123,9 +123,21 @@ and accepts that signature.
 - **Where it ships:** in `onyx-publish-linux-x86_64.tar.gz` of the latest test-network release
   (https://github.com/onyxnetworkofficial/onyx/releases), next to `onyx-publish` in
   `onyx-publish/bin/`; or built from the source with `cargo build --release -p onyx-check`.
-- **One full check** of rows of a dataset on the hosted test node, oldest first (replace the two
-  ids and the two keys; a row's key is a whole number, unix seconds for a day or time series, so
-  1767225600 is 2026-01-01 and 1769817600 is 2026-01-31):
+- **One full check** of the newest rows of a dataset on the hosted test node (replace the two
+  ids):
+
+  ```sh
+  curl -s "https://onyx.cryptagraph.com/v1/bulk/<publisher id>/<dataset id>/rows?order=desc&limit=5" > rows.json
+  onyx-check --bulk rows.json --publisher <publisher id> --dataset <dataset id> --order desc \
+    --rpc https://sepolia.base.org --chain-id 84532 --book 0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5
+  ```
+
+  With `--order desc` it refuses an answer in another order, and for page 0 without `--to` it
+  proves the page starts at the dataset's newest row (`"newestProven": true` in the report).
+  Without that check, "newest" is the node's word. Add `--page N` for a later page.
+- **A range, oldest first** (replace the two ids and the two keys; a row's key is a whole number,
+  unix seconds for a day or time series, so 1767225600 is 2026-01-01 and 1769817600 is
+  2026-01-31):
 
   ```sh
   curl -s "https://onyx.cryptagraph.com/v1/bulk/<publisher id>/<dataset id>/rows?from=1767225600&to=1769817600&limit=100" > rows.json
@@ -134,20 +146,16 @@ and accepts that signature.
     --rpc https://sepolia.base.org --chain-id 84532 --book 0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5
   ```
 
-  This is the form the released `onyx-check` (v0.3.1-testnet) reads: an answer asked oldest first
-  with whole-number keys.
+  `--from` and `--to` also take the dates you asked (`2026-01-01`) for a key that reads as a day.
 
   It prints one JSON report and exits 0 with `"ok": true` only when every row is proven and the
   book holds the signature. Exit 1: refused (a changed row, a wrong publisher, an unknown key).
   Exit 3: nothing decided (your chain node could not be read): try again.
 - Pass the same `--from` and `--to` you asked, so a row outside what you asked is refused.
   `GET /v1/bulk?q=<words>` lists dataset ids.
-- **A newest-first page** (`rows?order=desc`) and dates in place of keys need the next release of
-  `onyx-check`, or a build from the source today; the released one refuses such an answer ("rows
-  skip"). With the newer one pass `--order desc` (and `--page N` for a later page): it refuses an
-  answer in another order, and for page 0 without `--to` it proves the page starts at the
-  dataset's newest row (`"newestProven": true` in the report). Without that check, "newest" is
-  the node's word.
+- `--order`, `--page` and dates need `onyx-check` from v0.4.0-testnet or later. An older one
+  refuses a newest-first answer ("rows skip"); it reads only the oldest-first form with
+  whole-number keys.
 - What no check proves: the answer's `query`, `key` and `next_page` fields (the report's
   `notProven` says so), and that a page other than a proven newest one starts or ends where it
   should.

@@ -49,7 +49,7 @@ anvil_pid=$!
 port=""
 for _ in $(seq 600); do
   kill -0 "$anvil_pid" 2>/dev/null || { cat "$work/anvil.log"; fail "anvil exited"; }
-  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)
+  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)  # pipefail-ok: anvil's log is a few lines, and the status is dropped (|| true)
   [ -n "$port" ] && [ -s "$work/anvil.json" ] && break
   sleep 0.1
 done
@@ -109,7 +109,7 @@ t=$(now)
   | tee "$work/build.log"
 build_secs=$(since "$t")
 "$pub_bin" sign --key "$work/publisher.key" --dir "$work/v1" | tee "$work/sign.log"
-rows=$(grep -oE 'rows=[0-9]+' "$work/build.log" | head -1 | cut -d= -f2)
+rows=$(grep -oE 'rows=[0-9]+' "$work/build.log" | head -1 | cut -d= -f2)  # pipefail-ok: the build prints a few lines
 shards=$(grep -oE ' shards=[0-9]+' "$work/build.log" | cut -d= -f2)
 shard_bytes=$(grep -oE 'bytes=[0-9]+' "$work/build.log" | cut -d= -f2)
 csv_bytes=$(stat -c %s "$work/data.csv")
@@ -123,8 +123,9 @@ anchor_secs=$(since "$t")
 anchor_gas=$(grep -oE 'gas=[0-9]+' "$work/anchor.log" | cut -d= -f2)
 grep -q '^ANCHORED tx=' "$work/anchor.log" || fail "anchor"
 # THREATS CL5-3: anchoring the same report again sends nothing.
-"$pub_bin" anchor --dir "$work/v1" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/publisher.key" \
-  | grep -q '^ANCHORED already' || fail "a second anchor of the same report was sent"
+# (Matched from a variable, not through a pipe into grep -q: THREATS OPS-PIPE-1.)
+again=$("$pub_bin" anchor --dir "$work/v1" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/publisher.key") \
+  && grep -q '^ANCHORED already' <<<"$again" || fail "a second anchor of the same report was sent"
 pass "replayed anchor: nothing sent"
 
 echo "5. onyx-node with ONYX_BULK_DIR"

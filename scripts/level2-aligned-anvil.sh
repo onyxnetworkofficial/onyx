@@ -72,7 +72,7 @@ chain=(--rpc "$RPC" --registry "$REG" --cast "$FOUNDRY_BIN/cast")
 
 la demo --work "$out" "${chain[@]}" --coordinator "$COORD" --owner "$OWNER" \
   >"$out/aligned.stdout" 2>"$out/demo.log" || { tail -30 "$out/demo.log"; exit 1; }
-grep -E "observers fetched|registered|recorded|wrote" "$out/demo.log" | head -40 || true
+grep -E "observers fetched|registered|recorded|wrote" "$out/demo.log" | head -40 || true  # pipefail-ok: printed for the reader only, the status is dropped (|| true)
 
 # THREATS CL3-8 per venue: the registry holds exactly each venue manifest's template id.
 while IFS== read -r metric template; do

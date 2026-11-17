@@ -54,6 +54,7 @@ DOCS = {
     "audit": "Dated audit and review reports",
     "ops": "Running Onyx: configuration, deployment, rehearsals, runbooks, launch checklist",
     "partners": "Partner call notes, the partner tracker (T1-T14) and design proposals",
+    "releases": "Notes of each test-network release: what is new, the downloads, how to check SHA256SUMS",
     "research": "Research notes behind a decision",
     "sectors": "How each sector (crypto, equities, macro, commodities, prediction markets) maps onto Onyx",
     "spec": "The protocol specification, one file per part",

@@ -13,7 +13,7 @@
 	import spec from '../../../static/openapi.json';
 	import { operations } from '#lib/openapi.ts';
 	import { PAGE, RELEASE, REPO } from '#lib/release.ts';
-	import { checkCommands, quickCommands } from '#lib/quickstart.ts';
+	import { checkCommands, checkRangeCommands, quickCommands } from '#lib/quickstart.ts';
 
 	let demo = $state.raw<Demo | null>(null);
 	let pill = $state<{ state: PillState; text: string }>({ state: 'idle', text: 'Not checked' });
@@ -56,6 +56,7 @@
 	let origin = $state('https://onyx.cryptagraph.com');
 	const quick = $derived(quickCommands(origin));
 	const checkCmd = $derived(checkCommands(origin));
+	const checkRangeCmd = $derived(checkRangeCommands(origin));
 
 	let tab = $state<'request' | 'response'>('response');
 	// PP6: the paid data routes, from the OpenAPI file (the Reference below lists every route).
@@ -120,8 +121,9 @@
 		<h3 class="qcheck">Check an answer yourself</h3>
 		<p class="qnote">
 			<code>onyx-check</code> proves every row of a saved answer against the publisher's signature and the record on Base Sepolia, read
-			through a chain node you choose. It prints a report and exits 0 only when everything holds. The example saves January 2026,
-			oldest first, and checks it.
+			through a chain node you choose. It prints a report and exits 0 only when everything holds. The example saves the newest
+			rows, as in command 3, and checks them: with <code>--order desc</code> the report's <code>"newestProven": true</code> says the
+			page starts at the dataset's newest row.
 		</p>
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save an answer and check it" data-testid="api-quick-check">{checkCmd}</pre>
@@ -130,10 +132,15 @@
 			Linux holds it), or build it from the <a href={REPO} target="_blank" rel="noopener">source code</a> with
 			<code class="cmd">cargo build --release -p onyx-check</code>.
 		</p>
+		<p class="qnote" data-testid="api-quick-range-note">
+			A range, oldest first (January 2026 here): pass the same <code>--from</code> and <code>--to</code> you asked, so a row outside
+			them is refused.
+		</p>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save a range and check it" data-testid="api-quick-check-range">{checkRangeCmd}</pre>
 		<p class="qnote" data-testid="api-quick-release">
-			The released <code>onyx-check</code> ({RELEASE}) checks an answer read oldest first with whole-number keys, as above. Checking
-			a newest-first page (<code>order=desc</code>) needs the next release, or a build from the source today: add
-			<code>--order desc</code>, and it also proves the page starts at the newest row.
+			Checking a newest-first page needs <code>onyx-check</code> from {RELEASE} or later; add <code>--page N</code> for a later page.
+			An older <code>onyx-check</code> reads only the oldest-first form.
 		</p>
 	</section>
 	<section class="section grid">

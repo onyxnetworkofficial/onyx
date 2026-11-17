@@ -15,8 +15,10 @@
 #                 registry); the round's results store is written to
 #                 <export dir>/observations/<source>.json (appended, never replaced) and its
 #                 template pin to <export dir>/observations/pins (scripts/deploy-api.sh ships both)
-#   [state dir]   the round book, spool and observer state (default ~/.cache/onyx-b6/<source>);
-#                 a run that stops unfinished is finished by running again with the same dir
+#   [state dir]   the round book, spool and observer state (default
+#                 ${ONYX_OPS_DIR:-~/.local/state/onyx}/level2/<source>: never a cache folder, a
+#                 run that stops unfinished is finished by running again with the same dir;
+#                 docs/ops/deployment.md "Folders that must not be deleted")
 #
 # Who signs (keys are read by the programs, never printed or put on a command line):
 # - coordinator: the deployer key from .env (BASE_SEPOLIA_PRIVATE_KEY), passed to the
@@ -35,7 +37,8 @@
 # rule allows), ONYX_L2_SERIES (north-star loop NL17: another series of the source, e.g.
 # `usw00094728.tmax` for ncei or `la300.m2_5` for usgs; its store is
 # <export dir>/observations/<source>-<series>.json and its state dir defaults to
-# ~/.cache/onyx-b6/<source>-<series>).
+# .../level2/<source>-<series>), ONYX_OPS_DIR (the operator's working folders,
+# ~/.local/state/onyx).
 set -euo pipefail
 cd "$(dirname "$0")/.."
 REPO=$PWD
@@ -59,7 +62,14 @@ esac
 [ -z "${series//[a-z0-9._]/}" ] || { echo "ONYX_L2_SERIES: lowercase letters, digits, dots and underscores only" >&2; exit 2; }
 name=$src${series:+-$series}
 [ -z "$manifest" ] || name=$(basename "$(dirname "$manifest")")
-state=${3:-$HOME/.cache/onyx-b6/$name}
+ops=${ONYX_OPS_DIR:-$HOME/.local/state/onyx}
+# The default was a cache folder until 2026-11-16; a cache may be deleted, a round book may not.
+old_state=$HOME/.cache/onyx-b6/$name
+if [ $# -lt 3 ] && [ -d "$old_state" ] && [ ! -e "$ops/level2/$name" ]; then
+  echo "the default state dir moved out of the cache folder: run  mkdir -p '$ops/level2' && mv '$old_state' '$ops/level2/$name'  and start again (or pass '$old_state' as the state dir); nothing was moved or sent" >&2
+  exit 1
+fi
+state=${3:-$ops/level2/$name}
 FOUNDRY_BIN=${FOUNDRY_BIN:-$HOME/.foundry/bin}
 RPC=${ONYX_L2_RPC:-https://sepolia.base.org}
 LEAD=${ONYX_L2_LEAD:-150}

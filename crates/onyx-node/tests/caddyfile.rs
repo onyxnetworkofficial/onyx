@@ -21,6 +21,11 @@ const API_BULK: &str = include_str!("../../onyx-api/src/bulk_serve.rs");
 /// Credits and the relay (CL6, ADR-0056), merged into the router by the node.
 const API_CREDITS: &str = include_str!("../../onyx-api/src/credits.rs");
 
+/// The node's side of the usage counts (READINESS A9) and where it builds its router.
+const NODE_USAGE: &str = include_str!("../src/usage.rs");
+const NODE_APP: &str = include_str!("../src/app.rs");
+const API_USAGE: &str = include_str!("../../onyx-api/src/usage.rs");
+
 /// The config without comments, one trimmed line each.
 fn lines() -> Vec<&'static str> {
     CADDYFILE
@@ -417,4 +422,99 @@ fn scale_1_only_bulk_answers_are_compressed_in_the_api() {
             "bulk answers send no ETag ({etag} in bulk_serve.rs): compressing them would break 304s"
         );
     }
+}
+
+/// THREATS USE-5, review USE-R1 M2: no route gives the usage counts out.
+/// The node and the API crate name no `/v1/usage` path and the counting
+/// code mounts no route at all; it is in no router, not in the spec, and no
+/// path pattern of either shipped Caddyfile covers it (both files end
+/// `/v1/` with a 404), so one added later is not proxied either.
+#[test]
+fn no_usage_route_exists_and_none_could_be_proxied() {
+    for (name, src) in [
+        ("onyx-node usage.rs", NODE_USAGE),
+        ("onyx-node app.rs", NODE_APP),
+        ("onyx-api usage.rs", API_USAGE),
+        ("onyx-api lib.rs", API_LIB),
+        ("onyx-api bulk_serve.rs", API_BULK),
+    ] {
+        // A doc comment may say the route does not exist; code may not name it.
+        for line in src.lines().map(str::trim) {
+            if line.starts_with("//") {
+                continue;
+            }
+            assert!(!line.contains("/v1/usage"), "{name} names the path: {line}");
+        }
+    }
+    for (name, src) in [
+        ("onyx-node usage.rs", NODE_USAGE),
+        ("onyx-api usage.rs", API_USAGE),
+    ] {
+        assert!(!src.contains(".route("), "{name} mounts a route");
+        assert!(
+            !src.contains("ConnectInfo"),
+            "{name} reads the peer address"
+        );
+        assert!(
+            !src.contains("HeaderMap") && !src.contains(".headers()"),
+            "{name} reads headers"
+        );
+    }
+    assert!(
+        api_routes().iter().all(|r| !r.contains("usage")),
+        "no usage route in the public router"
+    );
+    let spec = include_str!("../../../docs/api/openapi.json");
+    assert!(
+        !spec.contains("/v1/usage"),
+        "not a public route: not in the spec"
+    );
+    for (name, file) in [
+        ("Caddyfile", CADDYFILE),
+        ("onyx-web.Caddyfile", WEB_CADDYFILE),
+    ] {
+        let mut patterns = 0;
+        for line in file
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").trim())
+        {
+            let mut words = line.split_whitespace();
+            // `path a b c`, `@name path a b c` and `handle /x/* {` name what is matched.
+            let pats: Vec<&str> = match words.next() {
+                Some("path") => words.collect(),
+                Some(w) if w.starts_with('@') && words.next() == Some("path") => words.collect(),
+                Some("handle" | "handle_path" | "route" | "reverse_proxy" | "rewrite" | "uri") => {
+                    words.filter(|w| w.starts_with('/')).collect()
+                }
+                _ => continue,
+            };
+            for p in pats {
+                patterns += 1;
+                // The one catch-all under /v1/ answers 404 itself.
+                if p == "/v1/*" {
+                    continue;
+                }
+                let covers = match p.strip_suffix('*') {
+                    Some(prefix) => "/v1/usage".starts_with(prefix),
+                    None => p == "/v1/usage",
+                };
+                assert!(!covers, "{name}: {p} would proxy /v1/usage");
+            }
+        }
+        assert!(patterns >= 3, "{name}: found only {patterns} path patterns");
+    }
+    // The site's file: anything else under /v1 is a 404 from the proxy.
+    let web: Vec<&str> = WEB_CADDYFILE.lines().map(str::trim).collect();
+    let at = web
+        .iter()
+        .position(|l| *l == "handle /v1/* {")
+        .expect("the /v1 catch-all");
+    assert_eq!(web[at + 1], "respond \"not found\" 404");
+    assert_eq!(
+        WEB_CADDYFILE.matches("handle /v1/* {").count(),
+        1,
+        "one catch-all"
+    );
+    // The API's own file proxies nothing outside its three matchers.
+    assert!(lines().contains(&"respond \"not found\" 404"));
 }

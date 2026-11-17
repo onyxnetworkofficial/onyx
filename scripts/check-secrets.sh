@@ -311,7 +311,10 @@ if [ "${1:-}" = --self-test ]; then
     echo "DEPLOYER_KEY=0x$fake" >untracked.txt
     printf '%s\0' docs.md untracked.txt >list
     if paths_scan list >/dev/null; then echo "self-test: --paths-from missed an untracked key"; exit 1; fi
-    if paths_scan list | grep -q "$fake"; then echo "self-test: --paths-from printed the value"; exit 1; fi
+    # Matched from a variable (THREATS OPS-PIPE-1). As a pipe this check never ran: the scan exits 1
+    # here (it found the key), and under pipefail the pipe then failed whatever grep found.
+    out=$(paths_scan list || true)
+    if grep -q "$fake" <<<"$out"; then echo "self-test: --paths-from printed the value"; exit 1; fi
     printf '%s\0' docs.md .env >list
     if paths_scan list >/dev/null; then echo "self-test: --paths-from passed a .env"; exit 1; fi
     ln -s untracked.txt link.txt

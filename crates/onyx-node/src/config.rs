@@ -119,6 +119,11 @@ pub struct NodeConfig {
     pub trusted_proxies: Vec<Cidr>,
     /// `ONYX_ALLOW_TEST_LABELS=1`: serve shards pinned to a `test.*` label set.
     pub allow_test_labels: bool,
+    /// `ONYX_USAGE=on|off` (default `off`): count requests per route and
+    /// per held dataset, per UTC day, in `<state dir>/usage/`. Nothing about
+    /// a visitor is counted or kept, and no route gives the counts out: the
+    /// operator reads them with `onyx-node usage` (docs/spec/usage-counts.md).
+    pub usage: bool,
     /// `ONYX_RIGHTS=cleared|fallback` (default `cleared`; ROADMAP L14,
     /// THREATS L8-5): `fallback` serves no label-derived shard (entity flows,
     /// balances, reserves; 403 `label_rights_withheld`).
@@ -422,6 +427,11 @@ impl NodeConfig {
             .filter(|s| !s.is_empty())
             .map(|s| s.parse::<Cidr>().map_err(|e| e.0))
             .collect::<Result<Vec<_>, _>>()?;
+        let usage = match get("ONYX_USAGE").as_deref().map(str::trim) {
+            None | Some("off") => false,
+            Some("on") => true,
+            Some(other) => return Err(format!("ONYX_USAGE must be on or off, not {other:?}")),
+        };
         let allow_test_labels = match get("ONYX_ALLOW_TEST_LABELS").as_deref() {
             None | Some("") | Some("0") => false,
             Some("1") => true,
@@ -686,6 +696,7 @@ impl NodeConfig {
             facilitator_url,
             trusted_proxies,
             allow_test_labels,
+            usage,
             rights,
             allow_mainnet,
             reporter_every,

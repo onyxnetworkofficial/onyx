@@ -191,11 +191,13 @@ reads the commits once the commit phase is final (about 20 minutes on Base Sepol
 reveal on chain, records the value (`recordObservation`) and appends the round to
 `<export dir>/observations/<source>.json`, with the template pin in `observations/pins`
 (`scripts/deploy-api.sh` ships both). A run that stops is finished by running it again: the book,
-spool and window stay in `~/.cache/onyx-b6/<source>`.
+spool and window stay in the state dir, by default `<ops>/level2/<source>`, where `<ops>` is
+`$ONYX_OPS_DIR` or `~/.local/state/onyx` (never a cache folder:
+[folders that must not be deleted](deployment.md#folders-that-must-not-be-deleted)).
 
 More series of the same adapters (north-star loop NL17, ROADMAP S13): `ONYX_L2_SERIES` picks one,
 and its store is `observations/<source>-<series>.json` with its state in
-`~/.cache/onyx-b6/<source>-<series>`:
+`<ops>/level2/<source>-<series>`:
 ```sh
 ONYX_L2_SERIES=usw00003017.prcp scripts/level2-sepolia.sh ncei <export dir>   # Denver precipitation
 ONYX_L2_SERIES=usw00094728.tmax scripts/level2-sepolia.sh ncei <export dir>   # Central Park high

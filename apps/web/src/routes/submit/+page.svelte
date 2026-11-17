@@ -364,6 +364,10 @@
 		h?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 		h?.focus({ preventScroll: true });
 	}
+	// READINESS A19: the home page's "Connect an AI assistant" link (#/submit?assistant) opens the steps.
+	onMount(() => {
+		if (/[?&]assistant\b/.test(location.hash)) void openAgents();
+	});
 </script>
 
 <svelte:head><title>Add data · Onyx</title></svelte:head>

@@ -87,6 +87,7 @@ if [ "$mode" = anvil ]; then
     http://127.0.0.1:* | http://localhost:*) ;;
     *) echo "anvil mode runs only on a loopback RPC" >&2; exit 2 ;;
   esac
+  # pipefail-ok: the client version is one line; a failed pipe refuses, it never passes
   castw rpc web3_clientVersion | lower | grep -q anvil \
     || { echo "the node at $rpc is not an anvil" >&2; exit 1; }
   key=$(python3 -I -c 'import json,sys; print(json.load(open(sys.argv[1]))["private_keys"][0])' "$anvil_config")
@@ -162,7 +163,7 @@ forge_run() {
 
 echo "1. dry run (simulation; nothing sent)"
 if ! forge_run >"$work/dry.log" 2>&1; then
-  grep -E 'Error|revert|ReviewerIsDeployer|NoReviewer|WrongChain|ChainMismatch' "$work/dry.log" | head -5 | scrub >&2
+  grep -E 'Error|revert|ReviewerIsDeployer|NoReviewer|WrongChain|ChainMismatch' "$work/dry.log" | sed -n '1,5p' | scrub >&2
   echo "dry run refused: nothing sent" >&2
   exit 1
 fi

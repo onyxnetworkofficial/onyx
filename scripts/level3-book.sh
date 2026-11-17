@@ -69,7 +69,7 @@ anvil_pid=$!
 port=""
 for _ in $(seq 600); do
   kill -0 "$anvil_pid" 2>/dev/null || { cat "$work/anvil.log"; fail "anvil exited"; }
-  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)
+  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)  # pipefail-ok: anvil's log is a few lines, and the status is dropped (|| true)
   [ -n "$port" ] && [ -s "$work/anvil.json" ] && break
   sleep 0.1
 done
@@ -122,6 +122,7 @@ grep -qE "refused \(THREATS C10-1\); nothing sent|dry run refused" "$work/refuse
 cmp -s "$manifest" "$work/manifest.before" || fail "the refused deploy changed the manifest"
 [ "$(castw nonce "$deployer")" = "$nonce_before" ] \
   || fail "the refused deploy sent a transaction"
+# pipefail-ok: an argument's substitution drops the status; the log is a few lines
 pass "refused before sending ($(grep -oE 'settlement.s coordinator|ReviewerIsDeployer' "$work/refused.log" | head -1)); manifest and deployer nonce unchanged"
 
 # Review C10-R2-3: --plan (the runbook's first step) simulates and sends nothing.

@@ -55,7 +55,7 @@ anvil_pid=$!
 port=""
 for _ in $(seq 600); do
   kill -0 "$anvil_pid" 2>/dev/null || { cat "$work/anvil.log"; fail "anvil exited"; }
-  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)
+  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)  # pipefail-ok: anvil's log is a few lines, and the status is dropped (|| true)
   [ -n "$port" ] && [ -s "$work/anvil.json" ] && break
   sleep 0.1
 done
@@ -109,7 +109,7 @@ castw send --unlocked --from "$deployer" "$signer" --value 1ether >/dev/null
 "$pub_bin" anchor --dir "$work/v1" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/publisher.key" >"$work/anchor.log"
 grep -q '^ANCHORED tx=' "$work/anchor.log" || fail "anchor"
 shards=$(grep -oE ' shards=[0-9]+' "$work/build.log" | cut -d= -f2)
-rows=$(grep -oE 'rows=[0-9]+' "$work/build.log" | head -1 | cut -d= -f2)
+rows=$(grep -oE 'rows=[0-9]+' "$work/build.log" | head -1 | cut -d= -f2)  # pipefail-ok: the build prints a few lines
 # Nodes read the book at their finalized block (anvil: 64 behind the head).
 castw rpc anvil_mine 70 >/dev/null
 pass "$rows rows in $shards shards, anchored"

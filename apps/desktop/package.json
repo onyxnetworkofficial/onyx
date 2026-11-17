@@ -1,7 +1,7 @@
 {
   "name": "onyx-desktop",
   "private": true,
-  "version": "0.3.0",
+  "version": "0.4.0",
   "description": "Build tool for the Onyx desktop app (CL10, ADR-0061): the Tauri command line, pinned with its lock file. Used by .github/workflows/desktop.yml; nothing here ships.",
   "license": "Apache-2.0",
   "scripts": {

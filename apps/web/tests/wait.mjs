@@ -33,13 +33,14 @@ export async function settled(pg, { timeout = 240000, quiet = 500 } = {}) {
 }
 
 /** The route in the address bar has drawn (the footer marks it current and its h1 is there); with
- * `idle`, also no loading placeholder and no running check is left. */
+ * `idle`, also no loading placeholder and no running check is left. A query after the route
+ * (`#/submit?assistant`) is not part of the route. */
 export async function routeDrawn(pg, { timeout = 120000, idle = false } = {}) {
 	await pg
 		.waitForFunction(
 			(idle) => {
 				const a = document.querySelector('[data-testid="footer-nav"] a[aria-current="page"]');
-				const here = (location.hash || '#/').replace(/^#$/, '#/');
+				const here = (location.hash || '#/').replace(/^#$/, '#/').replace(/\?.*$/, '');
 				return !!a && (a.hash || '#/') === here && !!document.querySelector('main h1') && !(idle && document.querySelector('.sk, .pill.run'));
 			},
 			idle,

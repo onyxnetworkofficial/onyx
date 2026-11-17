@@ -41,12 +41,16 @@ export async function pp6(browser, base, expect) {
 		await pg.goto(base + '#/api');
 		const ref = pg.getByTestId('api-reference');
 		await ref.waitFor();
-		// Review NEWC-R1 H1: the page's check commands are ones the released onyx-check accepts
-		// (an oldest-first answer, whole-number bounds); only the read example asks newest first.
+		// Review NEWC-R1 H1, READINESS A21: the page's check commands are ones the released onyx-check
+		// accepts: a newest-first page with --order desc (v0.4.0-testnet), and one oldest-first range
+		// with whole-number bounds.
 		const chk = await pg.getByTestId('api-quick-check').innerText();
-		expect(chk.includes('onyx-check --bulk rows.json') && !/order=|--order/.test(chk) && !/\d{4}-\d{2}-\d{2}/.test(chk), 'PP6: the check commands ask oldest first with whole-number bounds (no order=desc, no date)');
+		expect(chk.includes('onyx-check --bulk rows.json') && /order=desc&limit=\d+"/.test(chk) && chk.includes(' --order desc ') && !/\d{4}-\d{2}-\d{2}/.test(chk), 'PP6: the first check commands ask newest first and check with --order desc (no date)');
+		const rng = await pg.getByTestId('api-quick-check-range').innerText();
+		expect(rng.includes('onyx-check --bulk rows.json') && !/order=|--order/.test(rng) && !/\d{4}-\d{2}-\d{2}/.test(rng), 'PP6: the range check commands ask oldest first with whole-number bounds (no order, no date)');
 		const reads = await pg.getByTestId('api-quick-cmd').allInnerTexts();
-		expect(reads.length === 3 && (await pg.getByTestId('api-quick-release').innerText()).includes('next release'), `PP6 ${width}: three read commands, and the page says a newest-first check needs the next release`);
+		const rel = await pg.getByTestId('api-quick-release').innerText();
+		expect(reads.length === 3 && rel.includes('v0.4.0-testnet or later') && !rel.includes('next release'), `PP6 ${width}: three read commands, and the page names the release a newest-first check needs`);
 		const ops = await pg.getByTestId('api-op').evaluateAll((els) => els.map((e) => e.querySelector('summary').innerText.replace(/\s+/g, ' ').trim()));
 		const missing = want.filter((w) => !ops.some((t) => t.startsWith(w + ' ')));
 		expect(ops.length === want.length && missing.length === 0, `PP6 ${width}: the Reference lists all ${want.length} operations, method and path (${ops.length} shown; missing ${missing.join(', ') || 'none'})`);

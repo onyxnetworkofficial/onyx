@@ -1001,3 +1001,19 @@ fn serve_write_1_a_low_open_file_limit_is_warned_and_the_units_raise_it() {
         assert!(fd_limit_warning(Some(n), 16 * 1_024).is_none(), "{n}");
     }
 }
+
+/// READINESS A9: usage counts are off unless `ONYX_USAGE=on`.
+#[test]
+fn usage_counts_are_off_by_default() {
+    let mut m = base();
+    assert!(!load(&m).expect("config").usage);
+    m.insert("ONYX_USAGE", "off");
+    assert!(!load(&m).expect("config").usage);
+    m.insert("ONYX_USAGE", "on");
+    assert!(load(&m).expect("config").usage);
+    for bad in ["1", "true", "ON", ""] {
+        m.insert("ONYX_USAGE", bad);
+        let e = load(&m).expect_err(bad);
+        assert!(e.contains("ONYX_USAGE must be on or off"), "{e}");
+    }
+}

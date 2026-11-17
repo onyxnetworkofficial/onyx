@@ -1,4 +1,5 @@
-// Product U1: contributor entry, progressive technical detail and no surprise data loading.
+// Product U1 (READINESS A19): the home page speaks to a data user first, then to a contributor;
+// progressive technical detail and no surprise data loading.
 import { readFile } from 'node:fs/promises';
 import { createRequire } from 'node:module';
 import { settled, WAIT_CAP } from './wait.mjs';
@@ -25,12 +26,30 @@ export async function product(browser, base, root, expect) {
 		await pg.goto(base);
 		await settled(pg);
 		await pg.waitForLoadState('networkidle');
-		const cta = pg.getByTestId('home-primary');
-		expect((await cta.innerText()).trim() === 'Add your data' && (await cta.getAttribute('href')) === '#/submit', `U1 ${width}: primary action invites the visitor to add their data`);
-		expect((await pg.getByTestId('home-secondary').getAttribute('href')) === '#/data', `U1 ${width}: browsing is the secondary action`);
-		expect((await pg.locator('.console, .tally, .stats').count()) === 0 && (await pg.getByTestId('contribution-steps').locator('li').count()) === 3, `U1 ${width}: home explains three contribution steps without the technical console`);
+		// READINESS A19: the first screen says what Onyx is and what a data user can do today; adding
+		// data is the second call to action. It claims a testnet only.
+		const cta = pg.getByTestId('home-secondary');
+		const browse = pg.getByTestId('home-primary');
+		const what = (await pg.getByTestId('home-what').innerText()).replace(/\s+/g, ' ').trim();
+		expect((await pg.title()) === 'Onyx · Data anyone can check' && (await pg.locator('h1').innerText()).replace(/\s+/g, ' ').trim() === 'Data anyone can check.', `U1 ${width}: the headline and the tab title say what Onyx is`);
+		expect(/Every answer comes with a proof you can verify yourself\./.test(what) && /browse about 9,000 datasets, get them by API, or connect an AI assistant/.test(what), `U1 ${width}: the first paragraph says what a data user gets and can do now ("${what}")`);
+		expect((await browse.innerText()).trim() === 'Browse datasets' && (await browse.getAttribute('href')) === '#/datasets' && !/ghost/.test(await browse.getAttribute('class')), `U1 ${width}: the primary action opens the datasets`);
+		expect((await cta.innerText()).trim() === 'Add your data' && (await cta.getAttribute('href')) === '#/submit' && /ghost/.test(await cta.getAttribute('class')), `U1 ${width}: adding data is the second action`);
+		const testnet = pg.getByTestId('home-testnet');
+		const testnetText = await testnet.innerText();
+		expect(/^Testnet preview\./.test(testnetText) && /test tokens have no value/.test(testnetText) && /not being updated/.test(testnetText), `U1 ${width}: the hero says testnet, tokens without value and stale datasets ("${testnetText}")`);
+		const fold = await pg.evaluate(() => {
+			const bottom = (id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().bottom;
+			const top = (id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().top;
+			return { what: bottom('home-what'), actions: bottom('home-secondary'), note: bottom('home-testnet'), users: top('data-users'), steps: top('contribution-steps'), h: innerHeight };
+		});
+		expect(fold.what <= fold.h && fold.actions <= fold.h && fold.note <= fold.h, `U1 ${width}: what Onyx is, both actions and the testnet note are on the first screen (${JSON.stringify(fold)})`);
+		expect(fold.users < fold.steps, `U1 ${width}: what a data user can do comes before the contributor steps`);
+		expect((await pg.locator('.console, .tally, .stats').count()) === 0 && (await pg.getByTestId('contribution-steps').locator('li').count()) === 3 && (await pg.getByTestId('home-add').getAttribute('href')) === '#/submit', `U1 ${width}: home explains three contribution steps without the technical console`);
 		const users = await pg.getByTestId('data-users').getByRole('link').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
-		expect(JSON.stringify(users) === JSON.stringify(['#/datasets', '#/api', '#/how-it-works']), `U1 ${width}: home has a data-users section linking datasets, API and checks (${users.join(', ')})`);
+		expect(JSON.stringify(users) === JSON.stringify(['#/datasets', '#/api', '#/submit?assistant']), `U1 ${width}: home lists what works today: datasets, API and the AI assistant (${users.join(', ')})`);
+		const wide = await pg.evaluate(() => [...document.querySelectorAll('main code, main pre')].filter((e) => e.textContent.length > 24).length);
+		expect(wide === 0, `U1 ${width}: home has no long code span`);
 		const unwanted = requests.filter((r) => r.method !== 'GET' || /\/data\/|\.wasm$|verifier\.worker|\/v1\//.test(r.path));
 		expect(unwanted.length === 0, `U1 ${width}: home makes no submissions and fetches no datasets, verifier or API (${JSON.stringify(unwanted)})`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth === innerWidth), `U1 ${width}: home fits the viewport`);
@@ -72,8 +91,16 @@ export async function product(browser, base, root, expect) {
 			expect(hoverIssues.length === 0, `U1 ${width}: active Add data navigation remains accessible on hover (${hoverIssues.join(', ')})`);
 		}
 		await go(pg, pg.locator('header a.mark'), HOME);
-		await go(pg, pg.getByTestId('home-secondary'), ['#/data']);
-		expect(new URL(pg.url()).hash === '#/data', `U1 ${width}: browse opens the existing data page`);
+		// READINESS A19: "Connect an AI assistant" opens the setup steps, focused, and sends nothing.
+		const beforeAssistant = requests.length;
+		await go(pg, pg.getByTestId('users-assistant'), ['#/submit?assistant']);
+		await pg.getByTestId('add-with-agents').waitFor();
+		await pg.waitForFunction(() => document.activeElement?.id === 'agents-title', null, { timeout: WAIT_CAP }).catch(() => {});
+		const sentAssistant = requests.slice(beforeAssistant).filter((r) => r.method !== 'GET');
+		expect((await pg.locator('h1').innerText()).trim() === 'Add data' && (await pg.getByTestId('open-agents').getAttribute('aria-expanded')) === 'true' && (await pg.evaluate(() => document.activeElement?.id)) === 'agents-title' && (await pg.getByTestId('agents-ai').innerText()).includes('/mcp') && sentAssistant.length === 0, `U1 ${width}: the AI assistant link opens the connector steps with the focus on their title`);
+		await go(pg, pg.locator('header a.mark'), HOME);
+		await go(pg, pg.getByTestId('home-primary'), ['#/datasets']);
+		expect(new URL(pg.url()).hash === '#/datasets' && (await pg.locator('h1').count()) === 1, `U1 ${width}: browse opens the datasets page`);
 		await go(pg, pg.locator('header a.mark'), HOME);
 		await go(pg, pg.getByTestId('home-technical'), ['#/how-it-works']);
 		expect((await pg.locator('h1').innerText()).trim() === 'How Onyx checks data' && (await pg.locator('.console').count()) === 1, `U1 ${width}: How it works contains the actual verification console`);

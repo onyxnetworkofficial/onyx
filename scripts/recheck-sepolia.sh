@@ -19,7 +19,7 @@
 #      sends `withdraw` for every key of RECHECK_BETTOR_KEYS owed something, then `payTreasury()`.
 # Every step reads the chain first and sends nothing for what is done. A run that stopped is
 # finished by running it again with the same state dir. One run at a time per value holds a lock
-# (flock, outside the state dir, in RECHECK_LOCK_DIR, default ~/.cache/onyx-b6/locks); each run
+# (flock, outside the state dir, in RECHECK_LOCK_DIR, default <ops>/recheck/locks); each run
 # logs to its own state/logs/<UTC time>/ (state/logs/latest names the last).
 # `run --yes` takes about 35 minutes: run it where a closed terminal does not stop it, e.g.
 # `systemd-run --user --scope -p MemoryMax=12G scripts/recheck-sepolia.sh ...` inside tmux.
@@ -35,7 +35,9 @@
 # observations/<source>.json is the original round's results store (only read; its round must
 # be the one the registry recorded); the recheck's store is observations/<source>.recheck.json
 # and its pin goes to observations/pins (scripts/deploy-api.sh ships both). The state dir
-# defaults to ~/.cache/onyx-b6/<source>.recheck-<DATE>.
+# defaults to <ops>/recheck/state/<source>-<DATE>, where <ops> is ONYX_OPS_DIR (default
+# ~/.local/state/onyx): never a cache folder, the drawn pool and the windows used live there
+# (docs/ops/deployment.md "Folders that must not be deleted").
 #
 # Who signs (keys are read by the programs, never printed or put on a command line):
 # - the coordinator: BASE_SEPOLIA_PRIVATE_KEY from ONYX_ENV_FILE (the deployer), read here and
@@ -56,7 +58,8 @@
 # RECHECK_POOL_KEYS (validator-0 .. validator-15), RECHECK_BETTOR_KEYS (miner-0 miner-1 customer
 # validator-0 .. validator-8), RECHECK_SENDER_KEY (miner-0), RECHECK_MARGIN_BLOCKS (the plan's
 # default), RECHECK_BLOCK_MS (the block time for time estimates; default measured over the last
-# 432,000 blocks), RECHECK_FORK_CHAIN_ID (845320), RECHECK_LOCK_DIR (~/.cache/onyx-b6/locks),
+# 432,000 blocks), RECHECK_FORK_CHAIN_ID (845320), RECHECK_LOCK_DIR (<ops>/recheck/locks),
+# ONYX_OPS_DIR (~/.local/state/onyx), ONYX_RECHECK_STATE (the state dir, as --state),
 # FOUNDRY_BIN (~/.foundry/bin), CARGO_TARGET_DIR.
 set -euo pipefail
 # The coordinator's key reaches it only through this script's own read of ONYX_ENV_FILE.
@@ -85,7 +88,14 @@ while [ $# -gt 0 ]; do
 done
 [[ $date =~ ^[0-9]{4}-[0-9]{2}-[0-9]{2}$ ]] || { echo "DATE: YYYY-MM-DD" >&2; exit 2; }
 name=$(basename "$(dirname "$manifest")")
-state=${state:-${ONYX_RECHECK_STATE:-$HOME/.cache/onyx-b6/$name.recheck-$date}}
+ops=${ONYX_OPS_DIR:-$HOME/.local/state/onyx}
+# The default was a cache folder until 2026-11-16; a cache may be deleted, a drawn pool may not.
+old_state=$HOME/.cache/onyx-b6/$name.recheck-$date
+if [ -z "$state" ] && [ -z "${ONYX_RECHECK_STATE:-}" ] && [ -d "$old_state" ] && [ ! -e "$ops/recheck/state/$name-$date" ]; then
+  echo "the default state dir moved out of the cache folder: run  mkdir -p '$ops/recheck/state' && mv '$old_state' '$ops/recheck/state/$name-$date'  and start again (or pass --state '$old_state'); nothing was moved or sent" >&2
+  exit 1
+fi
+state=${state:-${ONYX_RECHECK_STATE:-$ops/recheck/state/$name-$date}}
 FOUNDRY_BIN=${FOUNDRY_BIN:-$HOME/.foundry/bin}
 CAST=$FOUNDRY_BIN/cast
 RPC=${ONYX_L2_RPC:-https://sepolia.base.org}
@@ -433,7 +443,7 @@ fi
 if [ -n "$yes" ]; then
   mkdir -p "$state"
   chmod 700 "$state"
-  lock_dir=${RECHECK_LOCK_DIR:-$HOME/.cache/onyx-b6/locks}
+  lock_dir=${RECHECK_LOCK_DIR:-$ops/recheck/locks}
   mkdir -p -m 700 "$lock_dir"
   lock=$lock_dir/$cid-$C-$name-$date.lock
   exec 9>>"$lock"

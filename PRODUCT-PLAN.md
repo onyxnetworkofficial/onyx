@@ -11,7 +11,9 @@ protocol in a frontend framework.
 **A person arrives with useful data, describes or supplies it, understands the next step, and can
 follow its review and verification. A buyer finds data and sees what supports it before using it.**
 
-The homepage asks people to add their own data. Browse data is the secondary journey. Technical
+The homepage says first what a data user gets (data anyone can check, and what works today: the
+datasets, the API, the AI assistant); adding your own data is the second journey (docs/READINESS.md
+A19, 2026-11-16; before that the page asked for contributions first). Technical
 proofs, validator demonstrations, chain transactions and protocol vocabulary belong under How it
 works and its specialist pages. A contributor does not have to understand a proof level to start.
 
@@ -42,7 +44,7 @@ navigation aids, not speaker-attributed quotations. Neither recording nor transc
 
 | Destination | Purpose | What appears here |
 |---|---|---|
-| Home `/` | Invite a contribution | Add your data, examples of kinds of data, three next steps, Browse data |
+| Home `/` | Say what a data user gets, then invite a contribution | What Onyx is, Browse datasets, the API, the AI assistant; then Add your data and three next steps |
 | Add data `/submit` | Contribute at the user's pace | Source type, description, rights, optional structured content, review, receipt |
 | Browse data `/data` | Find useful data | Dataset purpose, source, freshness, supported uses; evidence behind details |
 | How it works `/how-it-works` | Explain and demonstrate verification | Proof methods, browser checks, live-run evidence, specialist links |

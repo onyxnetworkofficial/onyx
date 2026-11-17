@@ -225,7 +225,7 @@ every market). The manual steps below stay as the reference.
    2026-11-21 12:00 UTC); `run --yes` takes about 35 minutes, so run it where a closed terminal
    does not stop it: inside tmux, as `systemd-run --user --scope -p MemoryMax=12G
    scripts/recheck-sepolia.sh run $M 2026-10-28 "$E" --yes`. One run at a time per value holds a
-   lock outside the state dir (`flock` in `RECHECK_LOCK_DIR`, default `~/.cache/onyx-b6/locks`;
+   lock outside the state dir (`flock` in `RECHECK_LOCK_DIR`, default `<ops>/recheck/locks`;
    a refused run names the holder and its live coordinator and observer PIDs); each run logs to
    `<state>/logs/<UTC time>/` (`<state>/logs/latest` is the last).
    What it does:
@@ -258,7 +258,8 @@ every market). The manual steps below stay as the reference.
      before any market, so the runner never registers (no `--owner`). Its results store is
      `$E/observations/<source>.recheck.json` and its pin goes to `$E/observations/pins` whenever
      the store exists (`scripts/deploy-api.sh` ships both). A run that stops is finished by
-     running it again: the state dir (`~/.cache/onyx-b6/<source>.recheck-<date>`, `--state DIR`)
+     running it again: the state dir (`<ops>/recheck/state/<source>-<date>`, `--state DIR`; `<ops>` is
+     `$ONYX_OPS_DIR` or `~/.local/state/onyx`, never a cache folder)
      keeps the book, the drawn pool and the windows used, and a plan pool that differs from the
      drawn one is refused. `run` refuses unless `OnyxCorrections.registry()` is the export's
      registry (CL7-27). The RPC (`ONYX_L2_RPC`, default `https://sepolia.base.org`) must be

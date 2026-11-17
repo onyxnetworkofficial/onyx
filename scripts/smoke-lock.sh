@@ -43,7 +43,7 @@ smoke_lock_default_path() {
 # The holder's label, first line, at most 300 bytes, printable characters only (the file may have
 # been written by anyone who can write it; no terminal escapes reach the output).
 smoke_lock_holder() {
-  head -c 300 "$1" 2>/dev/null | head -1 | LC_ALL=C tr -cd '[:print:]'
+  head -c 300 "$1" 2>/dev/null | head -1 | LC_ALL=C tr -cd '[:print:]'  # pipefail-ok: 300 bytes at most
 }
 
 smoke_lock() {

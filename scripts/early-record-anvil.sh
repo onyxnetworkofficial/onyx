@@ -70,7 +70,7 @@ anvil_pid=$!
 port=""
 for _ in $(seq 200); do
   kill -0 "$anvil_pid" 2>/dev/null || { cat "$work/anvil.log"; fail "anvil exited"; }
-  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)
+  port=$(grep -oE 'Listening on 127\.0\.0\.1:[0-9]+' "$work/anvil.log" | head -n1 | sed 's/.*://' || true)  # pipefail-ok: anvil's log is a few lines, and the status is dropped (|| true)
   [ -n "$port" ] && break
   sleep 0.1
 done
@@ -152,15 +152,16 @@ for i in 1 2 3 4 5; do printf '%d,%d\n' "$((1700000000 + i))" "$((i * 7))" >>"$w
 printf '{"columns": [{"name": "t", "kind": "int"}, {"name": "v", "kind": "int"}], "key": "t"}\n' >"$work/xd/schema.json"
 "$pub" keys-doc --key "$work/x.key" --publisher synthetic.outside --out "$work/xd/keys.json" \
   2>"$work/doc.log" >/dev/null
-provenance=$(grep -oE '0x[0-9a-f]{64}' "$work/doc.log" | head -n1)
+provenance=$(grep -oE '0x[0-9a-f]{64}' "$work/doc.log" | head -n1)  # pipefail-ok: keys-doc logs a few lines
 sendk reviewer "$book" 'registerKey(string,address,string,bytes32,string)' synthetic.outside "$X" \
   outside.example "$provenance" "early-record anvil: keys document reviewed"
 "$pub" build --schema "$work/xd/schema.json" --input "$work/xd/data.csv" --dataset synthetic.early-outside \
   --publisher synthetic.outside --license CC0-1.0 --out "$work/xv1" --created "$(c block latest --field timestamp)" \
   >/dev/null
 digest=$("$pub" sign --key "$work/x.key" --dir "$work/xv1" | grep -oE 'digest=0x[0-9a-f]{64}' | cut -d= -f2)
-"$pub" anchor --dir "$work/xv1" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/x.key" \
-  | grep -q '^ANCHORED tx=' || fail "X's anchor"
+# The answers below are matched from a variable, never through a pipe into grep -q (THREATS OPS-PIPE-1).
+got=$("$pub" anchor --dir "$work/xv1" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/x.key") \
+  && grep -q '^ANCHORED tx=' <<<"$got" || fail "X's anchor"
 pass "X's report $digest anchored"
 for who in x y payer; do sendk minter "$token" 'mint(address,uint256)' "${A[$who]}" 100000000000000000000; done
 # The correction market (registry rounds as scripts/corrections-anvil.sh records them).
@@ -256,13 +257,13 @@ for e in "$start" $((start + 1)); do
     else answer "$e" "$d" "$slot"; proofs=$((proofs + 1)); fi
   done
 done
-"$st" settle "${S[@]}" --key "$work/x.key" --epoch "$start" | grep -q '^SETTLED 2$' || fail "X settles epoch $start"
+got=$("$st" settle "${S[@]}" --key "$work/x.key" --epoch "$start") && grep -q '^SETTLED 2$' <<<"$got" || fail "X settles epoch $start"
 pass "epochs $start and $((start + 1)): $proofs proofs passed, 1 forged row failed; Y's 2 misses of epoch $start settled by X"
 
 echo "3. day 2 (2026-11-14): more misses settled, the market settles No"
 c rpc evm_setNextBlockTimestamp $((D1 + 86400 + 3600)) >/dev/null
 mine_to $((start + 2))
-"$st" settle "${S[@]}" --key "$work/x.key" --epoch $((start + 1)) | grep -q '^SETTLED 2$' \
+got=$("$st" settle "${S[@]}" --key "$work/x.key" --epoch $((start + 1))) && grep -q '^SETTLED 2$' <<<"$got" \
   || fail "X settles epoch $((start + 1))"
 round "$rmetric" "$rround" 101
 sendk opener "$corrections" 'resolve(uint256,bytes32,int128)' 1 "$rround" 101
@@ -368,10 +369,10 @@ bulk() { # folder, dataset, created, [--prev folder]
   "$pub" build --schema "$dir/schema.json" --input "$dir/data.csv" --dataset "$ds" --publisher early-record \
     --license CC0-1.0 --out "$dir" --created "$at" "$@"
 }
-bulk "$v/$day1" testnet.early-contributors $((D1 + 86400)) | grep -q '^BUILT version=1 ' || fail "bulk version 1"
-bulk "$v/$day1/exclusions" testnet.early-contributors.exclusions $((D1 + 86400)) | grep -q '^BUILT version=1 ' \
+got=$(bulk "$v/$day1" testnet.early-contributors $((D1 + 86400))) && grep -q '^BUILT version=1 ' <<<"$got" || fail "bulk version 1"
+got=$(bulk "$v/$day1/exclusions" testnet.early-contributors.exclusions $((D1 + 86400))) && grep -q '^BUILT version=1 ' <<<"$got" \
   || fail "exclusions version 1"
-bulk "$v/$day2" testnet.early-contributors $((D1 + 2 * 86400)) --prev "$v/$day1" | grep -q '^BUILT version=2 ' \
+got=$(bulk "$v/$day2" testnet.early-contributors $((D1 + 2 * 86400)) --prev "$v/$day1") && grep -q '^BUILT version=2 ' <<<"$got" \
   || fail "bulk version 2 (the successor check)"
 # The second node: this anvil by another name (one chain here; on the test network, another provider).
 RPC2=http://localhost:$port

@@ -11,7 +11,7 @@ One line per decision. Full text in docs/adr/. A decision changes only through a
 | [0005](docs/adr/0005-contracts-foundry-base.md) | Solidity + Foundry, Base Sepolia only, no proxies | Accepted |
 | [0006](docs/adr/0006-x402.md) | x402 via Rust `x402-axum`, TS sidecar fallback behind a trait | Proposed (spike M7) |
 | [0007](docs/adr/0007-storage.md) | Content-addressed file store for blobs; append-only journals for ledgers (Postgres planned, never used, removed in amendment 1) | Accepted |
-| [0008](docs/adr/0008-observability.md) | tracing JSON logs, Prometheus metrics | Accepted |
+| [0008](docs/adr/0008-observability.md) | tracing JSON logs, Prometheus metrics; amendment 1: no access log, usage counts inside the node that keep nothing about visitors, read from its files and by no route | Accepted (amendment 1 built, READINESS A9) |
 | [0009](docs/adr/0009-integer-math.md) | Integers and fixed point only; ppm probabilities | Accepted |
 | [0010](docs/adr/0010-crate-boundaries.md) | Core never imports sector adapters; CI-checked | Accepted |
 | [0011](docs/adr/0011-commitment-binding.md) | Commitment binding, shard spec, commit and challenge formulas; shared Rust/Solidity vectors | Accepted |

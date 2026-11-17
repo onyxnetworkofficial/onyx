@@ -393,7 +393,7 @@ PY
   tiers2() { # tiers.json naming every shard in hot/ and warm/
     python3 -I -c 'import json, os, sys; b = sys.argv[1]; json.dump({f: "bulk:" + t for t in ("hot", "warm") for f in os.listdir(os.path.join(b, t, "bulk"))}, open(os.path.join(b, "tiers.json"), "w"))' "$b2/bulk"
   }
-  drop2() { local f; for f in $(ls "$h2" | sort | head -n "$1"); do mv "$h2/$f" "$t/stash2/"; done; tiers2; }
+  drop2() { local f; for f in $(ls "$h2" | sort | head -n "$1"); do mv "$h2/$f" "$t/stash2/"; done; tiers2; }  # pipefail-ok: a for list drops the status, and head's output is whole either way
   slow() { # name [extra args...]
     out=$(ONYX_BACKUP_LOCK_WAIT=0 ONYX_BACKUP_HOST=invalid.invalid ONYX_BACKUP_LOCAL_ROOT=$s2 ONYX_BACKUP_NOW=$1 \
       "$self" --dest "$d2" --keep 3 "${@:2}" 2>&1) && rc=0 || rc=$?
@@ -410,7 +410,7 @@ PY
   slow 2026-03-05T030000Z --allow-shrink
   slow 2026-03-06T030000Z
   check "after a copy taken with --allow-shrink, the snapshots before it are not compared (BAK-R2-M1)" '[ "$rc" = 0 ] && [ -d "$d2/2026-03-06T030000Z" ]'
-  for i in $(ls "$h2" | sort | head -n 10); do rm -f "$h2/$i"; done
+  for i in $(ls "$h2" | sort | head -n 10); do rm -f "$h2/$i"; done  # pipefail-ok: a for list drops the status, and head's output is whole either way
   for i in $(seq 101 115); do printf 'shard %03d\n' "$i" >"$h2/$(printf '%064x' "$i")"; done
   tiers2
   slow 2026-03-07T030000Z
@@ -458,6 +458,32 @@ PY
   mv "$t/catalog-saved" "$s3/etc/onyx/catalog.json" && mv "$t/observations-saved" "$s3/etc/onyx/observations"
   m2 2026-05-02T030004Z
   check "the whole server again is taken (BAK-R2-M2)" '[ "$rc" = 0 ] && [ "$(list_names "$d3")" = 2026-05-02T030004Z ]'
+  # READINESS A9, review USE-R1 M1: of the usage counts only finished, folded day files are kept.
+  mkdir "$b3/state/usage"
+  for i in 2026-02-01 2026-04-20 2026-05-01; do echo "{\"version\":1,\"day\":\"$i\",\"small_folded\":true}" >"$b3/state/usage/$i.json"; done
+  for i in 2026-04-21 2026-05-02; do echo "{\"version\":1,\"day\":\"$i\",\"datasets\":{\"pub/quiet\":1},\"small_folded\":false}" >"$b3/state/usage/$i.json"; done
+  echo '{"datasets":{"pub/quiet":2}}' >"$b3/state/usage/2026-04-20.json.corrupt"
+  echo x >"$b3/state/usage/notes"
+  m2 2026-05-02T030005Z
+  check "a snapshot keeps folded usage day files only: not today's, yesterday's, an unfolded or a set-aside one (USE-R1 M1)" \
+    '[ "$rc" = 0 ] && [ "$(ls "$d3/2026-05-02T030005Z/state/usage" | paste -sd" ")" = "2026-02-01.json 2026-04-20.json notes" ] && ! grep -rqF "pub/quiet" "$d3/2026-05-02T030005Z" && [[ $out == *"1 usage day file(s) of days not finished were left out"* ]]'
+  # The node deletes a day file 90 days after its day: no loss, by age only (review USE-R1 L6).
+  rm "$b3/state/usage/2026-02-01.json"
+  m2 2026-05-03T030000Z
+  check "a usage day file the node aged out is no loss, and yesterday's file arrives a day later (READINESS A9)" \
+    '[ "$rc" = 0 ] && [ "$(list_names "$d3")" = 2026-05-03T030000Z ] && [ "$(ls "$d3/2026-05-03T030000Z/state/usage" | paste -sd" ")" = "2026-04-20.json 2026-05-01.json notes" ]'
+  mv "$b3/state/usage/2026-04-20.json" "$t/usage-day-saved"
+  m2 2026-05-03T030001Z
+  check "a younger usage day file gone is refused (USE-R1 L6)" '[ "$rc" = 4 ] && [[ $out == *"state: 1 file of 2026-05-03T030000Z gone (usage/2026-04-20.json)"* ]]'
+  mv "$t/usage-day-saved" "$b3/state/usage/2026-04-20.json"
+  mv "$b3/state/usage" "$t/usage-saved"
+  m2 2026-05-03T030002Z
+  check "the whole usage folder gone is refused (USE-R1 L6)" '[ "$rc" = 4 ] && [[ $out == *"state: 3 files of 2026-05-03T030000Z gone (usage/2026-04-20.json, usage/2026-05-01.json, usage/notes)"* ]]'
+  mv "$t/usage-saved" "$b3/state/usage"
+  rm "$b3/state/usage/notes"
+  m2 2026-05-03T030003Z
+  check "another file gone from state/usage is still refused" '[ "$rc" = 4 ] && [[ $out == *"state: 1 file of 2026-05-03T030000Z gone (usage/notes)"* ]]'
+  echo x >"$b3/state/usage/notes"
 
   # BAK-R1-L1: a clock behind the newest snapshot would sort the new one oldest and prune it.
   before=$(list_names "$d")
@@ -638,12 +664,16 @@ fi
 # RuntimeMaxSec. Each scope is onyx-restore-drill-<port>-<drill pid>.scope; one whose drill process
 # is gone is stopped (review BAK-R2-L1). A drill still running keeps its node and its shared lock.
 stop_stale_drills() {
-  local sc=${systemctl_cmd:-systemctl} u p n=0
+  local sc=${systemctl_cmd:-systemctl} u p cmd n=0
   [ -n "$systemctl_cmd" ] || [ -z "$local_root" ] || return 0
   while read -r u; do
     [[ $u =~ ^onyx-restore-drill-[0-9]+-([0-9]+)\.scope$ ]] || continue
     p=${BASH_REMATCH[1]}
-    if [ -r "/proc/$p/cmdline" ] && tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null | grep -q restore-drill; then
+    # Read into a variable, not through a pipe into grep -q (THREATS OPS-PIPE-1): with a line break
+    # in a long argument the pipe was cut short, read as "no drill", and a running drill's node was stopped.
+    cmd=""
+    if [ -r "/proc/$p/cmdline" ]; then cmd=$(tr '\0' ' ' <"/proc/$p/cmdline" 2>/dev/null) || cmd=""; fi
+    if [[ $cmd == *restore-drill* ]]; then
       continue
     fi
     "$sc" --user stop "$u" >/dev/null 2>&1 || true
@@ -776,7 +806,40 @@ if [ "$quiet" != true ]; then
   echo "backup-node: the bulk store was still changing after $max_passes passes (an upload in progress); nothing was pruned, the partial copy stays in $part for the next run" >&2
   exit 1
 fi
-pull state /var/lib/onyx/state
+# The usage counts (state/usage/<day>.json, READINESS A9; review USE-R1 M1): only a finished day's
+# file is kept, the one the node wrote with its small counts folded ("small_folded": true). The
+# file of a day that is not over holds exact small counts and is a cut in the middle of a day, and
+# a snapshot outlives the node's own 90 days. So today's and yesterday's file are not copied at all
+# (by name: a day is folded within a minute of its end, yesterday covers the midnight edge), nor a
+# set-aside *.corrupt; and any day file that arrived without the mark (a node that was down since)
+# is deleted from the copy before it can become a snapshot.
+usage_skip=$(python3 -I -c '
+import datetime, sys
+d = datetime.date.fromisoformat(sys.argv[1][:10])
+print(d.isoformat(), (d - datetime.timedelta(days=1)).isoformat())' "$name") || { echo "backup-node: the snapshot name $name does not start with a date" >&2; exit 1; }
+pull state /var/lib/onyx/state --exclude="/usage/${usage_skip% *}.json" --exclude="/usage/${usage_skip#* }.json" \
+  --exclude='/usage/*.corrupt' --exclude='/usage/*.tmp'
+python3 -I - "$part/state/usage" <<'PY' || exit 1
+import json, os, re, sys
+root = sys.argv[1]
+dropped = 0
+for n in sorted(os.listdir(root)) if os.path.isdir(root) else []:
+    p = os.path.join(root, n)
+    if not re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}\.json(\.corrupt|\.tmp)?", n) or not os.path.isfile(p):
+        continue
+    folded = False
+    if n.endswith(".json"):
+        try:
+            with open(p, encoding="utf-8") as f:
+                folded = json.load(f).get("small_folded") is True
+        except (OSError, ValueError, AttributeError):
+            folded = False
+    if not folded:
+        os.unlink(p)
+        dropped += 1
+if dropped:
+    print(f"backup-node: note: {dropped} usage day file(s) of days not finished were left out of the copy", file=sys.stderr)
+PY
 pull cas /var/lib/onyx/cas
 pull etc-onyx /etc/onyx --exclude='*.key'
 # The binary and its unit (and drop-ins); nothing else of either folder.
@@ -870,9 +933,20 @@ for p in ("bulk", "cas"):
             lost.append(f"{p}: {gone} of the {len(had)} files of {s} are gone (more than 10%; new files do not count)")
 # state/ and etc-onyx/ (review BAK-R2-M2): every file of the previous snapshot is still there (the
 # journals, the salt, the config), and no state file was emptied. Names only, never content.
+# Not a loss: a day file of the usage counts (state/usage/<day>.json, READINESS A9) that the node
+# itself deleted, which it does 90 days after its day. Only by age (review USE-R1 L6): a younger
+# day file gone, or the whole folder, is a loss like any other.
+import datetime
+def aged_out(n):
+    m = re.fullmatch(r"usage/([0-9]{4}-[0-9]{2}-[0-9]{2})\.json", n)
+    try:
+        return bool(m) and (datetime.date.fromisoformat(name[:10]) - datetime.date.fromisoformat(m.group(1))).days >= 90
+    except ValueError:
+        return False
 if prev:
     for p in ("state", "etc-onyx"):
-        gone = sorted(names(os.path.join(dest, prev, p), p) - names(os.path.join(part, p), p))
+        gone = sorted(n for n in names(os.path.join(dest, prev, p), p) - names(os.path.join(part, p), p)
+                      if not (p == "state" and aged_out(n)))
         if gone:
             lost.append(f"{p}: {len(gone)} file{'' if len(gone) == 1 else 's'} of {prev} gone ("
                         + ", ".join(gone[:5]) + (", ..." if len(gone) > 5 else "") + ")")

@@ -35,6 +35,7 @@ test('hasDesktop: DESKTOP_SINCE and later releases carry the installers; earlier
 	assert.equal(R.hasDesktop('v0.3.0-testnet'), false, 'its desktop run failed: no installers');
 	assert.equal(R.hasDesktop('v0.3.1-testnet'), true);
 	assert.equal(R.hasDesktop('v0.3.2-testnet'), true);
+	assert.equal(R.hasDesktop('v0.4.0-testnet'), true);
 	assert.equal(R.hasDesktop('v0.10.0-testnet'), true);
 	assert.equal(R.hasDesktop('v1.0.0-testnet'), true);
 	for (const bad of ['v0.3.0', '0.3.0-testnet', 'v0.3.0-mainnet', '', 'latest']) assert.equal(R.hasDesktop(bad), false, bad);
@@ -47,6 +48,8 @@ test('files: every link is a file of the release on the project repository; stab
 	assert.equal(R.PAGE, `https://github.com/onyxnetworkofficial/onyx/releases/tag/${R.RELEASE}`);
 	assert.equal(R.baseFor('v0.3.0-testnet'), 'https://github.com/onyxnetworkofficial/onyx/releases/download/v0.3.0-testnet/');
 	assert.match(R.RELEASE, /^v\d+\.\d+\.\d+-testnet$/);
+	// READINESS A21: the release whose onyx-check reads a newest-first page (quickstart.ts).
+	assert.equal(R.RELEASE, 'v0.4.0-testnet');
 	assert.match(R.DESKTOP_SINCE, /^v\d+\.\d+\.\d+-testnet$/);
 	const primary = Object.fromEntries(R.DESKTOP.map((d) => [d.id, d.files[0].file]));
 	assert.deepEqual(primary, { windows: 'onyx-desktop-windows-x64-setup.exe', macos: 'onyx-desktop-macos-universal.dmg', linux: 'onyx-desktop-linux-x86_64.AppImage' });

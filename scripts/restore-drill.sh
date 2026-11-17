@@ -927,6 +927,7 @@ for p, d in picked:
     print(f"{p}\t{d}\t{'2' if d == wide else ''}")
 PY
 n_samples=$(wc -l <"$scratch/samples.txt")
+# pipefail-ok: samples.txt is a dozen short lines at most
 if cut -f3 "$scratch/samples.txt" | grep -qx 2; then pass "a widened format-2 dataset found in the snapshot"; else fail "no format-2 dataset found in the snapshot's manifests"; fi
 if [ "$(cut -f1 "$scratch/samples.txt" | sort -u | wc -l)" = 2 ] && [ "$n_samples" -ge 5 ]; then
   pass "$n_samples sampled datasets over both publishers"

@@ -44,6 +44,7 @@
 | [`north-star-loop.md`](north-star-loop.md) | The north star work loop (NL0-NL5): items, results, log |
 | [`ops/`](ops/) | Running Onyx: configuration, deployment, rehearsals, runbooks, launch checklist |
 | [`pre-public-loop.md`](pre-public-loop.md) | The pre-public work loop (PP1-PP7): items, results, log |
+| [`releases/`](releases/) | Notes of each test-network release: what is new, the downloads, how to check SHA256SUMS |
 | [`research/`](research/) | Research notes behind a decision |
 | [`sectors/`](sectors/) | How each sector (crypto, equities, macro, commodities, prediction markets) maps onto Onyx |
 | [`spec/`](spec/) | The protocol specification, one file per part |

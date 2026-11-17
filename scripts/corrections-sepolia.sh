@@ -310,11 +310,13 @@ print(d["roundId"], d["windowEnd"], int.from_bytes(a[1:], "little", signed=True)
   unset key opener_key
   printf '%s\n' "$out"
   # The market's id as forge logged it (the one it opened, or the value's existing one).
+  # pipefail-ok: forge logs the market a few times at most, far under one buffer
   m=$(grep -oE 'corrections: market [0-9]+' <<<"$out" | head -n1 | awk '{print $3}')
   [ -n "$m" ] || { echo "forge logged no market id" >&2; exit 1; }
   [ "$yes" = --yes ] || grep -q 'exists; nothing sent' <<<"$out" || { echo "PLAN ONLY: nothing sent"; exit 0; }
   fact=$(cast_ call "$registry" 'factKey(bytes32,bytes32,uint64)(bytes32)' "$(id original_metric_key)" "$(id subject_key)" "$window_end")
   # A market opened here is the opener's (forge logged its address); an existing one, the value's.
+  # pipefail-ok: one or two short lines, and the status is dropped (|| true)
   opener=$(grep -oE 'corrections: 0x[0-9a-fA-F]{40} holds' <<<"$out" | head -n1 | awk '{print $2}' || true)
   # The RPC may lag the send: read the market until it is the value's (a few tries).
   for try in 1 2 3 4 5 6 7 8 9 10; do

@@ -34,6 +34,7 @@ start() {
   pids+=("$!")
   echo "$!" >>"$work/pids"
   for _ in $(seq 1 600); do
+    # pipefail-ok: the log is the few lines a server prints at start
     if url="$(grep -oE 'http://127\.0\.0\.1:[0-9]+' "$log" | head -n 1)" && [ -n "$url" ]; then
       echo "$url"
       return 0

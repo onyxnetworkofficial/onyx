@@ -232,6 +232,35 @@ wrong, every client shares the proxy's bucket, so check it after an install: two
 get separate 429s. The intake, payment, export and credits routes keep their own, lower limits
 on top.
 
+## Usage counts (`ONYX_USAGE`, READINESS A9)
+
+The node writes no access log. With `ONYX_USAGE=on` it counts requests instead: per UTC day, per
+route template and status class, and opens per dataset it holds (the dataset's info, or the first
+page of its rows). It keeps counts only, nothing about who asked: the schema, the bounds and the
+reasons are [usage-counts.md](../spec/usage-counts.md). Off by default; off means nothing is counted
+or written.
+
+- Files: `ONYX_STATE_DIR/usage/<YYYY-MM-DD>.json` (0600 in a 0700 folder), written at most once a
+  minute and at shutdown, kept 90 days. A corrupt file is set aside as `<day>.json.corrupt` with one
+  log line; the node keeps running.
+- No route gives the counts out; `/v1/usage` is a 404 on every listener
+  (`cargo test -p onyx-node --test caddyfile --test usage_route`). Read the files on the server:
+
+  ```sh
+  sudo onyx-node usage --days 7 --state-dir /var/lib/onyx/state   # JSON
+  scripts/usage-report.sh 7        # the same over ssh, as two ranked tables
+  ```
+
+  The reader asks the running node nothing and writes nothing, so the node's last minute may be
+  missing. In Docker, run it inside the container.
+- A dataset with fewer than 5 opens on a day is not named. With three or more such datasets their
+  opens are in `datasets_other`; with one or two they are left out of it too.
+- The node backup keeps finished, folded day files only: not today's or yesterday's file.
+- Calls by local services (the agent connector, the health watch) are counted like any other; the
+  health watch alone is about 1,440 `GET /v1/health` a day at one check a minute.
+- The counts are numbers of requests, not of people, and anyone can add requests: they are never a
+  basis for rewards or rankings.
+
 ## Checks
 - `cargo test -p onyx-api` (router, mock data).
 - `cargo test -p onyx-source-btc --test api` (real fixture round, golden root, x402, settlement

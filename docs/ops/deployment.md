@@ -595,6 +595,73 @@ complete, a clean stop, `wants.salt` read and unchanged, the snapshot unchanged)
 left out named in a NOTE line. The drill before it, 2026-11-16 16:57 UTC on `2026-11-16T164840Z`,
 passed 21 checks. See the [launch checklist](launch-checklist.md) LC-9.
 
+## Folders that must not be deleted
+
+A cache folder (`~/.cache`) is safe to delete by definition, so nothing a chain run or a deploy
+needs to finish defaults there (since 2026-11-16). The operator's working folders live under
+`<ops>`: `$ONYX_OPS_DIR`, or `~/.local/state/onyx` when it is unset (the XDG state folder). Keep
+`<ops>` out of every cleanup and in the machine's own backup.
+
+| Folder | What | Written by | If it is lost |
+|---|---|---|---|
+| `<ops>/export/` | The API node's deploy export: `deployment.json`, `catalog.json`, `cas/`, `node.service.env`, `observations/` with `pins`, `track/` | `scripts/demo-testnet.sh --export-node`, then the level-2, recheck and track scripts | No deploy and no new round until it is rebuilt (below) |
+| `<ops>/level2/<source>` | A level-2 round's book, spool and window (`<source>-<series>` for another series) | `scripts/level2-sepolia.sh` | An unfinished round cannot be finished |
+| `<ops>/recheck/state/<source>-<date>` | A recheck's book, its drawn pool and the windows used | `scripts/recheck-sepolia.sh` | An unfinished recheck cannot be continued; each new round uses one of the value's three draws |
+| `<ops>/recheck/locks` | One lock per value: one recheck run at a time | `scripts/recheck-sepolia.sh` | Nothing while no run is going; never delete it during a run |
+| `<ops>/track/nws` | The track-record intake state and every fetched forecast | `scripts/track-nws-sepolia.sh` | Statements already made cannot be shown from their source files |
+
+Also outside any cache: the node backups (`~/onyx-backups/node`, [Backups](#backups)) and the
+keys (`.env`, `.onyx-testnet/`). Still in `~/.cache`, and safe to delete while no script runs: cargo
+target folders, the scripts' temporary folders (`onyx-*.XXXXXX`), downloads and gate logs.
+
+The export folder is an argument of every script that reads it, never a default: the path above
+is the one the docs use. A script whose state dir default moved stops with one line naming the
+`mv` to run when it finds the old folder (`~/.cache/onyx-b6/...`, `~/.cache/onyx-nl4/track-nws`)
+and no new one; it moves nothing itself.
+
+### Rebuild a lost deploy export
+
+`scripts/deploy-api.sh` installs the export on the server, and the daily backup copies it back
+from there, so a snapshot holds every part of it:
+
+| In the export | In the snapshot |
+|---|---|
+| `deployment.json`, `catalog.json` | `etc-onyx/` (the server's `/etc/onyx`) |
+| `cas/` | `cas/` |
+| `observations/*.json` | `etc-onyx/observations/` |
+| `observations/pins` | the `ONYX_OBSERVATION_TEMPLATES` line of `etc-onyx/node.env`, one pin per line |
+| `track/publication.borsh` | `etc-onyx/track/` |
+| `node.service.env` | `etc-onyx/node.env` without the lines `deploy-api.sh` writes for the host |
+
+The host lines are `ONYX_LISTEN`, `ONYX_PUBLIC_URL`, `ONYX_RPC_URL`, `ONYX_TRUSTED_PROXIES`,
+`ONYX_INDEX_HEALTH`, `ONYX_PAYMENTS`, `ONYX_SUBMISSIONS`, every `ONYX_BULK_*`, `ONYX_OBSERVATIONS`,
+`ONYX_OBSERVATION_TEMPLATES` and `ONYX_TRACK_PUBLICATIONS`: `deploy-api.sh` drops them from the
+export's file and writes its own at every deploy. One command does it and checks the result:
+
+```sh
+scripts/export-from-backup.sh ~/onyx-backups/node/<time> "${ONYX_OPS_DIR:-$HOME/.local/state/onyx}/export"
+```
+
+It only reads the snapshot, refuses an existing target, and writes the folder only after a check
+by staging: `deploy-api.sh`'s own local lines (its checks of the export and the files it stages;
+nothing that reaches a server, refused if they name `ssh`, `scp`, `rsync`, `sudo`, `systemctl` or
+`curl`) run on the new export, and every setting the export carries, every level-2 store and the
+publication must come out as the snapshot has them. It prints setting names and counts, never a
+value. Limits:
+
+- **Payment mode.** The export keeps the server's `ONYX_PAYMENTS`. A server deployed with payments
+  off says `off`, so the export's own mode is gone; it matters only for a deploy with
+  `ONYX_API_PAYMENTS=1`, and the script says so.
+- **Not in a backup:** files other scripts keep in the export and never send to the server
+  (`markets.json`, `insurance.json`: the addresses are in the deployed-addresses table below and on
+  chain), and every key (the offline copy).
+- **Age.** A snapshot is as old as its backup run: a round recorded after it is on chain but not in
+  its `observations/` store.
+- The snapshot's `server/onyx-node` is the build that was live; `deploy-api.sh` takes it as its
+  binary argument only if it holds no home folder path (it checks).
+
+Self-test (in check-all, offline, a fake snapshot): `scripts/export-from-backup.sh --self-test`.
+
 ## Upgrade and rollback
 
 1. Drain receipts first: wait for `receiptsPending == 0` in `/v1/health` (or accept that the
