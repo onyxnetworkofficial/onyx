@@ -33,6 +33,23 @@ days; older files are deleted by the node. The files hold counts only, nothing a
   Its snapshots are kept by the backup's own schedule (days, weeks, months), which is longer than
   the node's 90 days: a folded day file can live in a monthly snapshot after the node deleted it.
 
+## Publisher pointers (ADR-0066 item 7)
+
+A node with `ONYX_PUBLISHER_POINTERS` keeps each pointer in its pointer journal, owner-only in the
+node's private state directory ([publisher-review.md](publisher-review.md)).
+
+- What a pointer holds: the origin, the Keccak of the application file, a random receipt id and
+  the receipt time. Nothing else is taken (an unknown field is refused), the journal keeps no
+  client address, and no log line names a pointer.
+- How long: a pointer waits 6 days, is kept 6 more days so its receipt can answer `expired`, and
+  is then removed from the journal: the node does that every hour, also when no pointer
+  arrives, and writes the file anew after each removal, so the origin and the hash are gone
+  from its bytes (not only marked as removed). A drop (the reviewer's mark that a pointer's hash is not the file's) holds the
+  receipt id and a time, in a second journal beside it, and leaves with the next drop written
+  after its pointer was removed. The node backup copies
+  the journal as it is; a snapshot can hold an entry longer than the node does.
+- The origin is public by design: the application itself is a public file there.
+
 ## Proposals (ADR-0039)
 
 A node with `ONYX_SUBMISSIONS` keeps every recorded proposal in its intake journal, and the

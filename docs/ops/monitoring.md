@@ -33,6 +33,8 @@ Alerts:
 | Determinism mismatch | Two honest reruns of the same recipe + input give different bytes; page immediately, see [incident-response.md](incident-response.md) |
 | Payment failures | x402 settlement errors above a threshold |
 | Proposal journal near its cap | The node logs a line tagged `onyx-intake-cap-alert` from 80% of the 10,000 recorded cap (at start, then once per further percent). Read with `journalctl -u onyx-node`; not wired to the health watch yet ([proposal-review.md](proposal-review.md)) |
+| Pointer journal near its cap | The node logs a line tagged `onyx-pointer-cap-alert` from 80% of the 1,000 entries (at start, then once per further percent). Counts only. Entries leave by themselves 12 days after they came; read with `journalctl -u onyx-node` ([publisher-review.md](publisher-review.md)) |
+| Pointer drops unreadable | The node logs `onyx-pointer-drops-alert` and keeps the drops it read last ([publisher-review.md](publisher-review.md) "Pointers sent to the node") |
 | Reviewer's decisions unreadable | The node logs `onyx-intake-decisions-alert` and keeps showing the last good decisions ([proposal-review.md](proposal-review.md)) |
 
 ## Open questions

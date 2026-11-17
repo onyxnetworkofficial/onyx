@@ -87,7 +87,7 @@ https://{$ONYX_CADDY_DOMAIN} {
 	# Read routes: base, track, signed facts and submission receipt status.
 	@api {
 		method GET HEAD
-		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants /v1/bulk /v1/bulk/* /v1/credits/*
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/publishers/pointer/* /v1/wants /v1/bulk /v1/bulk/* /v1/credits/*
 	}
 	handle @api {
 		# These GET/HEAD routes need no request body (a
@@ -113,10 +113,11 @@ https://{$ONYX_CADDY_DOMAIN} {
 	}
 	# Intake is disabled in the node unless ONYX_SUBMISSIONS is configured. `/v1/relay` (CL6,
 	# ADR-0056) is mounted only with ONYX_RELAY_KEY_FILE; the node refuses a relay body over
-	# 8 KiB and answers within its 12 s request deadline.
+	# 8 KiB and answers within its 12 s request deadline. `/v1/publishers/pointer` (ADR-0066
+	# item 7) is mounted only with ONYX_PUBLISHER_POINTERS; the node refuses a pointer over 1 KiB.
 	@submit {
 		method POST
-		path /v1/submit /v1/submit/check /v1/wants /v1/relay
+		path /v1/submit /v1/submit/check /v1/wants /v1/relay /v1/publishers/pointer
 	}
 	handle @submit {
 		request_body {

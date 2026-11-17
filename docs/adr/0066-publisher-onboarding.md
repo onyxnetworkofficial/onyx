@@ -5,8 +5,8 @@ Proposed (draft 2), 2026-11-17, after design review PUBON-R1 ("build with change
 8 Medium, 5 Low; every finding checked against the code, all taken, three with a change:
 section "What draft 2 changed"). Slices 1 (the application and the doctor), 2 (limits per
 publisher on the node, item 10), 3 (the book read from a chain node, the reviewer's tool, the
-record, the fetch job, the rehearsal) and the website of slice 4 are built: "Build notes" below.
-Slice 4's pointer route on the node is not built. Test
+record, the fetch job, the rehearsal) and slice 4 (the website and the pointer route) are built:
+"Build notes" below. The pointer route is off on a node unless its operator turns it on. Test
 network only. No contract changes. Threats: THREATS.md "PUBON".
 
 ## Context
@@ -182,10 +182,11 @@ The applicant never sends the application. It sends where the application is.
   the fetched bytes as a build artifact. The reviewer reads the artifact and never connects to an
   applicant's host. The job gets no secret and a read-only token; the issue's text reaches the
   tool as a file, never as part of a command (THREATS PUBON-15).
-- **Later (planned for slice 4, not built: its build note)**: `POST /v1/publishers/pointer` on the node takes `{"origin": "..."}` and
-  nothing else: no account, no applicant bytes stored, the node fetches nothing. It keeps a
-  bounded list of origins under the proposal intake's budgets (THREATS SUB-2); the same CI job
-  reads the list on a schedule.
+- **Without an account (slice 4, built: "Slice 4: the pointer route")**: `POST /v1/publishers/pointer`
+  on the node takes `{"origin": "...", "application": "0x<the file's Keccak>"}` and nothing
+  else: no account, no applicant bytes stored, the node fetches nothing. It keeps a bounded
+  list under its own budgets (the proposal intake's limiter, THREATS SUB-2). No job reads the
+  list: the reviewer reads it and runs the fetch on a throwaway machine.
 
 ### 8. The reviewer's steps and checklist
 The reviewer decides within 5 days. The application lives 6 and a report 7.
@@ -698,7 +699,8 @@ reviewed yet (the page says so).
   that the list could not be read and that this says nothing about any application. Every value
   is printed as text. No field was added to the list, so the guard and the checker are
   unchanged.
-- **The pointer route is not built** (item 7 "Later", `POST /v1/publishers/pointer`, and its
+- **The pointer route was not built with the website** (built later the same day: "Slice 4:
+  the pointer route" below; this entry is the state before it) (item 7 "Later", `POST /v1/publishers/pointer`, and its
   test `publishers::tests::a_pointer_keeps_only_an_origin_and_fetches_nothing`). An application
   is still filed as a public issue, which shows the account that opens it. The page says both
   in step 7: "Today an application is filed as a public issue on the source repository" and "A
@@ -759,6 +761,114 @@ this is what the site does.
 - **A jump list** opens the page (L5: seven sections; a hash route has no in-page anchors, so
   each entry scrolls and moves the focus to the heading), and "Four words used below" explains
   signed book, hash, SPDX id and test ETH.
+
+### Slice 4: the pointer route (2026-11-17)
+Built: item 7's way without an account. `onyx_api::publishers` (the route, the journal, the
+budgets), `onyx-node pointers` and `scripts/publisher-pointers.sh` (the reviewer's read), the
+form in step 7 of `#/publish`, the guide's and the reviewer's text. Not live: the route is off
+unless `ONYX_PUBLISHER_POINTERS` names its journal (`ONYX_API_POINTERS=1` for
+`scripts/deploy-api.sh`). No fresh review has read it yet (THREATS PUBON-PTR-10). Where this
+differs from item 7 and from the notes above, this section is what the code does.
+
+- **The body is two values**, `{"origin", "application"}`: item 7 named the origin alone. The
+  hash is what makes a pointer mean one file: the tool's first check compares it with the file
+  at the origin, and without it no refusal may block a signer (review APPLY-R1 H1). Both names
+  pass the secret scanner (no "key" beside a hex value).
+- **What the node checks, and what it leaves.** Offline, from what the binary holds: the
+  body's shape (at most 1 KiB, exactly the two text fields, neither twice), the origin's one
+  grammar (`onyx_bulk::ids::Origin`) and one spelling, the compiled list of shared hosts, the
+  hash's shape. Left to the reviewer's tool, because it needs the book or the origin: the
+  overlap with a registered origin, whether id, origin and key are free, and the file itself.
+  The node reads no book for this route and never contacts an origin: the module names no
+  transport at all (the named test `publishers::tests::a_pointer_keeps_only_an_origin_and_fetches_nothing`).
+- **The journal**: `publisher-pointers.journal` in the state directory, the journal library
+  (checksummed lines, an exclusive lock, never opened through a link), one entry per pointer:
+  `{kind, version, id, origin, application, receivedUnix}`. No client address. Every entry is
+  checked whole again on replay; a line the node would not have written refuses the journal.
+- **The receipt** is `ptr_` and 16 random bytes: not derived from the origin and the hash,
+  which are public. The same origin and hash again answers 200 with the same receipt and
+  writes nothing (201 for a new one). So whoever knows an origin and its file's hash can ask
+  for that pointer's receipt; it shows a state and a time, nothing else.
+- **Limits**: per client 3 a minute and 5 a day (a repeat counts), for the node 6 a minute and
+  50 a day, the proposal intake's limiter (`submit::Budgets`, taken out of the intake's store
+  for this) with this route's own counts; 3 waiting hashes per origin; 1,000 entries, a log
+  line tagged `onyx-pointer-cap-alert` from 80%.
+- **Expiry**: a pointer waits 6 days, the application's life (item 6). For 6 more days its
+  receipt answers `expired`; then the entry is removed from the journal, at the next pointer
+  or the next start.
+- **The status is `received` or `expired`, nothing more.** Item 9's states are the record's.
+  The node cannot read the repository, and a second journal of reviewer marks beside the
+  record would be a second source for one fact. So every answer carries
+  `"decision": "see_status_list"`, and the page says the decision is in its status box, by
+  the application's hash. The price: an applicant without an account sees nothing between
+  "received" and the reviewer's first record line (`book-reviewer record --state received`).
+- **Codes**: 400 `bad_pointer`, `bad_origin`, `bad_application_hash`; 409
+  `pointer_origin_busy`; 413 `body_too_large`; 422 `origin_shared_host`; 429 `rate_limited`,
+  `daily_quota`; 503 `pointer_full`, `pointer_busy`, `pointer_unavailable`; 404 on a node
+  without the route.
+- **The reviewer's read**: `onyx-node pointers list [--all]` and `show <receipt>` read the
+  journal beside the running node (no lock, nothing written) under the proposal tool's rule:
+  root becomes the journal's owner before anything is opened, or refuses. `show` prints the
+  two lines `verify-application --pointer` reads, so a listed pointer is that command's input
+  as it is. `scripts/publisher-pointers.sh` (`list`, `show`, `save`) runs it over ssh and
+  prints or saves an answer only when every line has its fixed shape.
+- **No job reads the list** (item 7 said "the same CI job reads the list on a schedule"): no
+  public route shows the list, on purpose, and a job with the right to read the node would
+  hold a secret. The reviewer saves a pointer and runs the fetch on a throwaway machine.
+- **The form** (step 7, first way; the issue is the second): two fields, checked in the page
+  by the same grammar, one POST to the site's own origin on a press of the button, no
+  credentials, no redirect. It shows the receipt id and where the status is. Every other
+  outcome is one of the page's own sentences; no text of an answer is shown. A 404, 403 or
+  405 says that this site's node takes no pointers and names the issue.
+- **A pointer is for an application.** A later request (item 12) still comes as a signed file
+  and a two-line issue.
+- Tests: THREATS "PUBON-PTR" names them (the route and the journal in
+  `onyx_api::publishers::tests`, the proxy rules and "off unless merged" in the API's router
+  tests, `onyx-node` `pointers::tests` and `tests/pointers_cli.rs`, the script's self-test in
+  check-all, `apps/web/tests/publishers.test.mjs`, the e2e `tests/publish.mjs`).
+
+### The pointer route after review PTR-R1 (2026-11-17)
+A fresh review of the built route ("ready with changes": 2 Medium, 4 Low; THREATS "PTR-R1")
+changed the build as follows; where this differs from the note above, this is what the code does.
+
+- **Never from another site's page (M1).** The POST is taken only as
+  `content-type: application/json` (415 `json_required`) and never when the browser marks it
+  cross-site or its `Origin` is not the host it was sent to (403 `cross_site_refused`), both
+  before any budget is counted. The proposal routes `/v1/submit` and `/v1/submit/check` got
+  the same two rules; `/v1/wants` and `/v1/relay` the cross-site refusal only (they need an
+  account's signature); the bulk uploads are unchanged (binary, anchored, no per-client
+  budget).
+- **The reviewer frees a place (M2).** `onyx-node pointers drop <receipt>` marks a waiting
+  pointer whose hash is not the file's: a line in `publisher-pointers.drops.journal` beside
+  the pointer journal, which the node reads again when it changes. The status gains a third
+  value, `dropped`, with the reason `application_hash_mismatch`. It is the one mark a reviewer
+  writes on the node, and it is not a decision on an application: such a pointer names no
+  application.
+- **Three places per host (L1)**, not per spelling of the origin.
+- **An hourly removal (L2)** in the node; the tool shows no entry past its kept time.
+- **The scripts filter the server's stderr (L3)**: `publisher-pointers.sh`,
+  `proposal-review.sh`, `usage-report.sh`.
+- **The node's budgets before the client's day (L4)**: all or none, with a refund when the
+  node's minute refuses.
+
+### The pointer route after re-review PTR-R2 (2026-11-17)
+The re-review of the PTR-R1 fixes ("ready with changes": 1 Medium, 4 Low, 1 note; THREATS
+"PTR-R2") changed the build as follows.
+
+- **The development proxy passes the page's host on** (M1): Vite's string shorthand rewrote
+  `Host` to the upstream's, so the new same-site rule refused every browser POST in `pnpm dev`
+  and in the live rehearsal of the proposal page. `apps/web/vite.config.ts` sets
+  `changeOrigin: false` for the proposal and the pointer routes.
+- **A removed pointer is gone from the file** (L1): the journal is written anew after every
+  removal (and after an undrop), not only once 1,024 removals have piled up.
+- **The host comparison** (L2) ignores case, a trailing dot and the scheme's default port; the
+  proxy must pass `Host` on (run-api.md "Behind a reverse proxy"; a test holds both Caddy
+  configs to it). `X-Forwarded-Host` stays unread.
+- **`pointers undrop`** (L3) takes a mistaken drop back.
+- **The three ssh scripts filter stdout too** (L4), cut stderr while it is captured and remove
+  their capture files on exit and on a signal.
+- **The status lookup** (note) runs on a blocking thread, since it may read the drops journal.
+- A refund of the day's budget gives back only what the same client took.
 
 ## What a newcomer sees on the website
 - **Add data**: two cards. "Suggest a dataset: 5 minutes, no key, nothing is published." and

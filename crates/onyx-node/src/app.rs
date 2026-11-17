@@ -1236,6 +1236,10 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
     // Open before binding the listener; damaged/locked intake must fail startup.
     let intake = crate::submissions::routes(c.submissions.as_deref())
         .map_err(|e| format!("ONYX_SUBMISSIONS: {e}"))?;
+    // ADR-0066 item 7: publisher pointers, off unless ONYX_PUBLISHER_POINTERS names their
+    // journal; a damaged or locked one fails startup like the intake's.
+    let pointers = crate::pointers::routes(c.publisher_pointers.as_deref())
+        .map_err(|e| format!("ONYX_PUBLISHER_POINTERS: {e}"))?;
     // ROADMAP D30 (PP3): salted label rows; a bad or non-test set fails startup.
     let labels = salted_label_routes(&c.salted_labels)?;
     // North-star loop NL9: the bounty board. Wants are taken only from open prepaid deposits
@@ -1383,7 +1387,11 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         Some(store) => track.merge(onyx_api::signed_serve::routes(store)),
         None => track,
     };
-    let extra = extra.merge(intake).merge(labels).merge(wants);
+    let extra = extra
+        .merge(intake)
+        .merge(pointers)
+        .merge(labels)
+        .merge(wants);
     // READINESS A9: usage counts (off unless ONYX_USAGE=on). The counting layer below wraps
     // every route; no route gives the counts out (the operator reads the files: `onyx-node usage`).
     let usage = crate::usage::open(c.usage, &c.state_dir, Arc::new(now_unix));
@@ -1518,6 +1526,9 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
     if args.first().map(String::as_str) == Some("proposals") {
         return crate::proposals::main(&args[1..]);
     }
+    if args.first().map(String::as_str) == Some("pointers") {
+        return crate::pointers::main(&args[1..]);
+    }
     let mut allow_mainnet = false;
     let mut check_only = false;
     let mut health = false;
@@ -1527,7 +1538,7 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
             "--check-config" => check_only = true,
             "healthcheck" => health = true,
             "-h" | "--help" => {
-                println!("usage: onyx-node [--check-config | healthcheck | doctor ... | usage ... | proposals ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)\nproposal review: onyx-node proposals --help (docs/ops/proposal-review.md)");
+                println!("usage: onyx-node [--check-config | healthcheck | doctor ... | usage ... | proposals ... | pointers ...] [--allow-mainnet]\nconfiguration: ONYX_* environment variables (docs/ops/config.md)\nhardware preflight: onyx-node doctor --help (docs/ops/hardware.md)\nproposal review: onyx-node proposals --help (docs/ops/proposal-review.md)\npublisher pointers: onyx-node pointers --help (docs/ops/publisher-review.md)");
                 return ExitCode::SUCCESS;
             }
             other => {

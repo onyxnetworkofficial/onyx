@@ -12,6 +12,8 @@ const API_LIB: &str = include_str!("../../onyx-api/src/lib.rs");
 /// The level-5 track routes (ROADMAP C6), merged into the router by the node.
 const API_SIGNED: &str = include_str!("../../onyx-api/src/signed_serve.rs");
 const API_SUBMIT: &str = include_str!("../../onyx-api/src/submit.rs");
+/// Publisher pointers (ADR-0066 item 7), merged into the router by the node.
+const API_POINTERS: &str = include_str!("../../onyx-api/src/publishers.rs");
 const API_TRACK: &str = include_str!("../../onyx-api/src/track_serve.rs");
 const API_LABELS: &str = include_str!("../../onyx-api/src/labels_serve.rs");
 /// The bounty board (north-star loop NL9), merged into the router by the node.
@@ -90,6 +92,8 @@ fn api_routes() -> Vec<&'static str> {
     // North-star loop NL9: the bounty board (GET, and POST in the @submit group).
     routes.extend(routes_of(API_WANTS, "pub fn routes("));
     routes.push("/v1/submit/{id}");
+    // ADR-0066 item 7: the pointer's receipt in @api (its POST is in the @submit group, below).
+    routes.push("/v1/publishers/pointer/{id}");
     // CL5: bulk datasets (reads in @api; the two uploads in @bulk_upload).
     routes.extend(routes_of(API_BULK, "pub fn routes("));
     routes.extend(routes_of(API_BULK, "pub fn upload_routes("));
@@ -175,6 +179,34 @@ fn the_clients_forwarded_for_is_never_believed() {
     }
 }
 
+/// THREATS PTR-R2-L2: the node refuses a browser's POST whose `Origin` is not the `Host` it
+/// receives (`onyx_api`'s same-site rule on the public write routes), so the proxy must pass
+/// the browser's `Host` on unchanged. Caddy does by default; neither shipped config may set
+/// it (`header_up Host ...`), or the site's own forms would be refused.
+#[test]
+fn no_caddyfile_rewrites_the_host_header() {
+    for (name, text) in [
+        ("Caddyfile", CADDYFILE),
+        ("onyx-web.Caddyfile", WEB_CADDYFILE),
+    ] {
+        for l in text
+            .lines()
+            .map(|l| l.split('#').next().unwrap_or("").trim())
+        {
+            let words: Vec<String> = l.split_whitespace().map(str::to_ascii_lowercase).collect();
+            let sets_host = words.first().is_some_and(|w| w == "header_up")
+                && words
+                    .get(1)
+                    .is_some_and(|w| matches!(w.trim_start_matches(['+', '-', '?', '>']), "host"));
+            assert!(!sets_host, "{name}: {l}");
+        }
+        assert!(text.contains("reverse_proxy"), "{name} proxies to the node");
+    }
+    // The rule this guards is the one the node applies.
+    let lib = include_str!("../../onyx-api/src/lib.rs");
+    assert!(lib.contains("pub(crate) fn same_site_only(") && lib.contains("header::HOST"));
+}
+
 #[test]
 fn limits_fit_the_server() {
     let api = ApiConfig::default();
@@ -241,8 +273,24 @@ fn submission_methods_body_caps_and_all_extra_routes_match_the_node() {
     assert_eq!(block_args("@submit", "method"), ["POST"]);
     assert_eq!(
         block_args("@submit", "path"),
-        ["/v1/submit", "/v1/submit/check", "/v1/wants", "/v1/relay"]
+        [
+            "/v1/submit",
+            "/v1/submit/check",
+            "/v1/wants",
+            "/v1/relay",
+            "/v1/publishers/pointer"
+        ]
     );
+    // ADR-0066 item 7: the pointer's POST rides in the same bounded group; the node refuses
+    // more than 1 KiB. Its receipt is a GET in @api. The node mounts both only with its setting.
+    assert_eq!(
+        routes_of(API_POINTERS, "pub fn routes("),
+        ["/v1/publishers/pointer", "/v1/publishers/pointer/{id}"]
+    );
+    assert!(API_POINTERS.contains(".route(\"/v1/publishers/pointer\", post(send))"));
+    assert!(API_POINTERS.contains(".route(\"/v1/publishers/pointer/{id}\", get(status))"));
+    const { assert!(onyx_api::publishers::MAX_BODY < onyx_api::submit::MAX_BODY) };
+    assert!(args("path").contains(&"/v1/publishers/pointer/*"));
     // CL6: the relay's POST rides in the same bounded group; the node refuses more than 8 KiB.
     assert_eq!(
         routes_of(API_CREDITS, "pub fn relay_routes("),
@@ -272,7 +320,9 @@ fn submission_methods_body_caps_and_all_extra_routes_match_the_node() {
     );
     let app = include_str!("../src/app.rs");
     assert!(app.contains("crate::submissions::routes(c.submissions.as_deref())"));
-    assert!(app.contains("extra.merge(intake)"));
+    assert!(app.contains(".merge(intake)"));
+    assert!(app.contains("crate::pointers::routes(c.publisher_pointers.as_deref())"));
+    assert!(app.contains(".merge(pointers)"));
     assert!(app.contains("onyx_api::credits::relay_routes(st)"));
     assert!(app.contains("router_with(state, extra)"));
 }

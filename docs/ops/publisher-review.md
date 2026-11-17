@@ -11,8 +11,9 @@ book read from a chain node (`--rpc`), the reviewer's tool `book-reviewer`, the 
 `deploy/publishers/` with its checker `scripts/check-publishers.py`, the fetch job
 `.github/workflows/publisher-application.yml` and the rehearsal on a local chain
 `scripts/publisher-onboard-anvil.sh`, and on the website the page `#/publish` (the applicant's
-steps and the status list with a lookup; live after the next site deploy). **Not built yet:** the
-pointer route (an application is still filed as a public issue). The limits file is not deployed on the hosted node yet: until it is live there, no
+steps and the status list with a lookup; live after the next site deploy), and the pointer route
+(`POST /v1/publishers/pointer`: an application filed without an account; "Pointers sent to the
+node" below; live after the next node deploy with `ONYX_API_POINTERS=1`). The limits file is not deployed on the hosted node yet: until it is live there, no
 outside key is registered on the hosted book (THREATS PUBON-6).
 
 **The tools.** `cargo build --release -p onyx-publish` builds both commands, `onyx-publish` and
@@ -24,6 +25,10 @@ a local chain (31337) only.
 **Time:** decide within 5 days. An application lives 6 days and a signed report 7.
 
 ## 1. Get the files without touching the applicant's host
+
+An application arrives in one of two ways: as a public issue (below), or as a pointer sent to
+the node without an account ("Pointers sent to the node", after this section). Either way you
+hold the same two values, and everything from "Download the artifact" on is the same.
 
 The applicant opens one issue titled `Publisher application: <publisher id>` with two lines:
 its origin and the Keccak of its application file. Never open the origin from your own machine
@@ -90,6 +95,105 @@ onyx-publish verify-application --dir artifact/ --origin <origin> --hash <applic
 - The report names the application's signer, id and origin only once the signature is that
   signer's. A file with a wrong signature is nobody's: the report repeats nothing of it.
 
+## Pointers sent to the node
+
+An applicant without an account sends the two values to the node: the form in step 7 of the
+website's Publish data page, or one `curl` (bulk-publish.md step 7). The node takes them only
+when its operator turned the route on (`ONYX_PUBLISHER_POINTERS`, docs/ops/config.md;
+`ONYX_API_POINTERS=1` for `scripts/deploy-api.sh`); otherwise it answers 404 and the applicant
+uses the issue.
+
+**What the node does, and does not.** It checks the two strings offline and stores them with a
+random receipt id and the receipt time. It checks: the body's shape (exactly `origin` and
+`application`, each once, at most 1 KiB), the origin's grammar (a lowercase host and at most
+four path parts; no scheme, port, address or `xn--` label), the list of shared hosts compiled
+into the binary, and the hash's shape. It does **not** check anything that needs the book or
+the origin: whether the origin overlaps a registered one, whether the id, the origin and the
+key are free, whether a file is there, whether the hash is that file's. Those are the tool's
+checks in section 2, as for an issue. **The node never contacts the origin** and keeps no
+client address; no log line names a pointer.
+
+**Its limits** (THREATS PUBON-PTR-3, PUBON-PTR-4): 3 pointers a minute and 5 a day per client
+(an IPv6 /48 counts as one client), 6 a minute and 50 a day for the whole node, at most 3
+waiting pointers with different hashes per host (whatever the path), 1,000 entries in the
+journal. The same origin and hash again is the same receipt and writes nothing. A pointer
+waits 6 days (an application's life), is kept 6 more days as `expired`, and is then removed:
+the node does that every hour. The POST is taken only as `content-type: application/json` and
+never from a page of another site (THREATS PTR-R1-M1). From 800 entries the
+node logs `onyx-pointer-cap-alert` (`journalctl -u onyx-node | grep onyx-pointer-cap-alert`).
+
+**What the applicant sees.** A receipt (`ptr_` and 32 hex digits) and, at
+`GET /v1/publishers/pointer/<receipt>`, `received`, `expired`, or `dropped` once you dropped
+it (below). The node knows no decision:
+the answer always says `"decision": "see_status_list"`. The decision reaches the applicant
+through the record alone (section 4): `apps/web/static/publishers.json`, looked up on the site
+by the application's hash. So write the application down as `received` soon after you saved its
+pointer: that line is the only sign the applicant gets that someone looked.
+
+**Read the list.** From your own machine, over ssh (the node keeps running; the tool takes no
+lock and writes nothing):
+
+```sh
+scripts/publisher-pointers.sh list            # the waiting pointers, oldest first
+scripts/publisher-pointers.sh list --all      # also the expired ones the node still keeps
+scripts/publisher-pointers.sh save <receipt id> pointer.txt
+scripts/publisher-pointers.sh drop <receipt id>   # only after the tool said: not this file's hash
+scripts/publisher-pointers.sh undrop <receipt id> # take a drop back that was a mistake
+```
+
+`list` prints one line per pointer: the receipt id, the time it has left, the origin and the
+hash (`--all`: also the expired and the dropped ones; an entry older than 12 days is never
+shown, and the node writes its journal anew after each removal, so nothing of a removed
+pointer stays in the file). What the server writes, on either channel, is shown without
+control characters. `save` writes the two lines of a pointer file, the same two lines an issue holds. On the
+server itself: `onyx-node pointers list` and `onyx-node pointers show <receipt id>`, as the
+user that owns the state directory. The tool never works as root there (the rule of the
+proposal tool, docs/ops/proposal-review.md "Who may decide"): started as root it becomes the
+journal's owner before it opens anything, and it refuses a journal that is a link or belongs to
+root. The script checks every line of the server's answer against the list's fixed shapes
+before it prints or saves it.
+
+**Fetch, on a throwaway machine.** Reading the list contacts nobody. The fetch is the next
+step and runs where the issue's fetch runs, never on the server and never on your own machine
+(THREATS PUBON-12, PUBON-14): copy `pointer.txt` to a throwaway hosted machine with the tools
+and run the job's command there,
+`onyx-publish verify-application --pointer pointer.txt --decisions deploy/publishers --save out/artifact`.
+The fetch job of the repository starts only from an issue; no job reads the node's list (no
+public route shows it, on purpose). Then go on with "Download the artifact" above: `--origin`
+and `--hash` are the pointer's two values.
+
+**Many pointers for one origin.** Anyone can point at any origin, also at someone else's, with
+any hash. Only the hash of the file that is at the origin passes the tool's first check; every
+other pointer for that origin fails it (`the file hashes to ..., the pointer names ...`) and
+gets no record (section 4: the file is nobody's). A wrong pointer costs one fetch and blocks
+nobody's key.
+
+**Drop a pointer whose hash is not the file's.** A host holds three waiting pointers. Someone
+who fills them with wrong hashes keeps the real pointer out, and can do it again when they
+expire (one address is enough: THREATS PTR-R1-M2). So when the tool's report refuses a listed
+pointer with `the file hashes to ..., the pointer names ...`, drop it:
+`scripts/publisher-pointers.sh drop <receipt id>` (on the server: `onyx-node pointers drop
+<receipt id>`, same rule about root). It writes one line to
+`publisher-pointers.drops.journal` beside the pointer journal, never to the pointer journal;
+the node reads it at the next request. The place is free at once, the receipt says `dropped`
+(the file at the origin is not the one the pointer names), and the same wrong pointer sent
+again takes no place. Drop for that one reason only: it is not a refusal of an application
+(a refusal is a record, section 4), and a pointer whose fetch failed (exit 3) is not dropped.
+**A drop made by mistake is taken back** with `scripts/publisher-pointers.sh undrop <receipt
+id>` (a wrong id typed, or a file the applicant was still uploading when the tool fetched):
+the receipt answers by its age again and a waiting pointer holds its place again. Until you
+take it back, the applicant's own origin and hash answer `dropped` and cannot be sent anew.
+Until you have looked, the applicant is told by the form that the places are taken
+(`pointer_origin_busy`) and that the issue works at once. If the node logs
+`onyx-pointer-drops-alert`, it could not read the drops journal and keeps the drops it read
+last: look at the file's owner and mode.
+
+**What is not there.** A pointer is for an application. A later request (section 5) still
+comes as a signed file and a two-line issue. The node shows no list, takes no decision and
+holds no mark for "handled" (a drop marks a wrong hash, nothing else): compare the hashes in the list with the folders of
+`deploy/publishers/` (`application-<the hash's first 16 digits>`, or the approved
+publisher's `application.json`).
+
 ## 2. What the tool checked (a failure is a refusal with its line)
 
 | # | Check | Refusal code |
@@ -123,7 +227,8 @@ decision.
   --hash <application keccak> --state received` with the chain options above and
   `--records deploy/publishers`. It writes `deploy/publishers/application-<16 hex>/decision.json`,
   named by the application's Keccak: no id, no origin and no text of the applicant.
-- **Refuse**: answer in the issue with the reason code (`name-not-neutral`, `name-taken`,
+- **Refuse**: answer in the issue (an application that came as a pointer has none: the record
+  is its answer) with the reason code (`name-not-neutral`, `name-taken`,
   `origin-unreachable`, `origin-overlap`, `sample-failed`, `rights-unclear`, `personal-data`,
   `not-hostable`, `duplicate`, `no-capacity`, `no-cosignature`), then
   `book-reviewer record ... --state refused [--reason <code>]`. When the tool itself refused the

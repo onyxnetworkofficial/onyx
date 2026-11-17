@@ -2,13 +2,15 @@
 	// ROADMAP S27, READINESS B1 (ADR-0066 slice 4): how to become a publisher on the test network.
 	// The applicant's ten steps with the guide's exact commands (#lib/publish-steps.ts, held against
 	// docs/ops/bulk-publish.md by tests/publishers.test.mjs), what the reviewer checks, what a new
-	// publisher gets, what becomes public and what is never asked, and the status list. The page
-	// sends nothing: its one request is the static status list of this site.
+	// publisher gets, what becomes public and what is never asked, and the status list. The page's
+	// one request by itself is the static status list of this site; step 7's form posts the origin
+	// and the application's hash to this site's own node, only when the visitor presses its button.
 	import { resolve } from '$app/paths';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
+	import PublisherPointer from '#lib/components/PublisherPointer.svelte';
 	import PublisherStatus from '#lib/components/PublisherStatus.svelte';
 	import { ONBOARDING_SINCE, RELEASE, REPO, hasOnboarding } from '#lib/release.ts';
-	import { EXAMPLE_ID, EXAMPLE_ORIGIN, ISSUES, TOOLS_FILE, TOOLS_URL, UNPACK, WORDS, buildFromSource, steps } from '#lib/publish-steps.ts';
+	import { EXAMPLE_ID, EXAMPLE_ORIGIN, ISSUES, ISSUE_TITLE, TOOLS_FILE, TOOLS_URL, UNPACK, WORDS, buildFromSource, steps } from '#lib/publish-steps.ts';
 	import { DECIDE_DAYS } from '#lib/publishers.ts';
 
 	// The commands name the hosted test node wherever the page is served from (a mirror or a
@@ -140,6 +142,11 @@
 					<h3 class="stitle"><span class="sn" aria-hidden="true">{i + 1}</span><span data-testid="publish-step-title">{s.title}</span></h3>
 					<p class="smeta"><span class="nw">{s.time}</span> · <span class="nw">{s.leaves}</span></p>
 					<p>{s.what}</p>
+					{#if i === 6}
+						<PublisherPointer />
+						<h4 class="way" data-testid="publish-issue-way">Second way: a public issue on the source repository</h4>
+						<p>Title it "{ISSUE_TITLE}" and put exactly these two lines in it.</p>
+					{/if}
 					{#each s.commands as c, j (c)}
 						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 						<pre class="code cmd" tabindex="0" role="region" aria-label={`Step ${i + 1}${s.commands.length > 1 ? `, command ${j + 1}` : i === 2 ? ', an example schema' : i === 6 ? ', the two lines' : ', command'}`} data-testid="publish-cmd">{c}</pre>
@@ -215,14 +222,14 @@
 					<li>The one sentence about your data, and your first dataset.</li>
 					<li>The decision: its state and date, a yes for each line the reviewer checked, your limits and the two transactions.</li>
 					<li>Of an application that is not approved: only its hash, the state, the date and a reason code. After a refusal also the refused key's address and the time until it is blocked.</li>
-					<li>The issue shows the account that opens it, and a domain's registration record can name its owner. Check yours before you apply.</li>
+					<li>The form in step 7 needs no account. An issue shows the account that opens it, and a domain's registration record can name its owner. Check yours before you apply.</li>
 				</ul>
 			</div>
 			<div class="panel" data-testid="publish-never">
 				<span class="ititle">Never asked</span>
 				<ul class="plain">
 					<li>No name: not yours, not a company's.</li>
-					<li>No contact detail of any kind, in the application or in the issue.</li>
+					<li>No contact detail of any kind, in the application, in the form or in the issue.</li>
 					<li>No key file. Your keys never leave your computer.</li>
 					<li>No wallet with funds, and no payment.</li>
 				</ul>
@@ -313,6 +320,11 @@
 	.smeta {
 		color: var(--muted);
 		font-size: var(--text-sm);
+	}
+	.way {
+		margin: 0;
+		font-size: var(--text-base);
+		font-weight: 600;
 	}
 	.swarn {
 		margin: 0;

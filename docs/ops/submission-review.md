@@ -33,7 +33,8 @@ For a same-origin local frontend against the node:
 VITE_ONYX_SUBMIT_API=1 ONYX_SUBMIT_PROXY=http://127.0.0.1:8080 pnpm --dir apps/web dev --host 127.0.0.1
 ```
 
-The Vite proxy is development-only. A deployed connected build needs the static frontend and
+The Vite proxy is development-only. It passes the page's own `Host` on (`changeOrigin: false`):
+the node refuses a browser's POST whose `Origin` is not the `Host` it sees. A deployed connected build needs the static frontend and
 `/v1/submit` at the same origin; the U5 bundle supplies the deployment handoff. Without the build
 flag the page remains an honest offline JSON download. No keys belong in either build variable.
 

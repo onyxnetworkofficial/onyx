@@ -18,6 +18,7 @@ pub mod healthcheck;
 pub mod manifest;
 pub mod observations;
 pub mod observe;
+pub mod pointers;
 pub mod proposals;
 pub mod serve;
 pub mod shutdown;

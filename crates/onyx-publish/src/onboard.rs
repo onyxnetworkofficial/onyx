@@ -1938,7 +1938,7 @@ pub(crate) async fn doctor_with(
 
     // 8. What to send.
     if let (Some(k), true) = (ready, live.is_some()) {
-        out.push(line("ok", "pointer", format!("ready: open one issue titled \"Publisher application: {id_s}\" with two lines: {origin_s} and {k}"), None));
+        out.push(line("ok", "pointer", format!("ready: send these two values, origin {origin_s} and application keccak {k}: to the node without an account (the form on the website's Publish data page, or POST /v1/publishers/pointer), or as one issue titled \"Publisher application: {id_s}\" with them as its two lines"), None));
     }
     Ok(out)
 }

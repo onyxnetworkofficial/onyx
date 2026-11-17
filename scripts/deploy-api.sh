@@ -56,6 +56,12 @@
 #                      counts per route and held dataset in /var/lib/onyx/state/usage, nothing about
 #                      visitors, no route to read them: scripts/usage-report.sh reads the files; default 0. Like every
 #                      setting here it is written anew by each deploy: pass it each time to keep it on
+#   ONYX_API_POINTERS  1 turns the publisher pointers on (ADR-0066 item 7, READINESS B5):
+#                      ONYX_PUBLISHER_POINTERS=/var/lib/onyx/state/publisher-pointers.journal, so
+#                      POST /v1/publishers/pointer takes an origin and an application's hash (the node
+#                      contacts no origin and keeps no client address; docs/ops/publisher-review.md
+#                      "Pointers sent to the node"); default 0, and the route then answers 404. Written
+#                      anew by each deploy: pass it each time to keep it on
 #   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (32 connections per address on 443),
 #                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
@@ -86,7 +92,7 @@ mkdir -p "${HOME}/.cache"
 stage=$(mktemp -d "${HOME}/.cache/onyx-deploy-api.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
 # The export's settings, with this host's public URL, node URL, proxy, health and payment settings.
-grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=|ONYX_USAGE=|ONYX_BULK_[A-Z_]*=)' \
+grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=|ONYX_USAGE=|ONYX_PUBLISHER_POINTERS=|ONYX_BULK_[A-Z_]*=)' \
   "$export_dir/node.service.env" > "$stage/node.env"
 cat >> "$stage/node.env" <<EOF
 ONYX_LISTEN=127.0.0.1:8080
@@ -102,6 +108,8 @@ conn_cap=${ONYX_API_CONN_CAP:-1}
 [ "$intake" = 0 ] || echo "ONYX_SUBMISSIONS=/var/lib/onyx/state/submissions.journal" >>"$stage/node.env"
 # Usage counts (READINESS A9): opt-in, never taken from the export's own settings.
 if [ "${ONYX_API_USAGE:-0}" = 1 ]; then echo ONYX_USAGE=on >>"$stage/node.env"; fi
+# Publisher pointers (ADR-0066 item 7): opt-in, never taken from the export's own settings.
+if [ "${ONYX_API_POINTERS:-0}" = 1 ]; then echo ONYX_PUBLISHER_POINTERS=/var/lib/onyx/state/publisher-pointers.journal >>"$stage/node.env"; fi
 # Publishers' large datasets (contributor loop CL5, ADR-0059, docs/ops/bulk-publish.md): on when the
 # export's manifest pins a signed book (the node takes only manifests anchored there), off with
 # ONYX_API_BULK=0. The limits fit the host's disk (38 GB, about 27 GB free on 2026-11-14): 24 GiB for every

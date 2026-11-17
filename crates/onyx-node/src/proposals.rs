@@ -198,7 +198,7 @@ pub fn run_as(euid: u32, owner_uid: u32, owner_gid: u32, names: u64, dir_uid: u3
 /// Make this process one that others of its user cannot attach to or read (review B2-R2
 /// L3): the node's user, which the tool runs as, could otherwise trace it and write through it
 /// to the reviewer's terminal. Before anything of a proposal is read.
-fn seal() -> Result<(), String> {
+pub(crate) fn seal() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
         use rustix::process::{set_dumpable_behavior, DumpableBehavior};
@@ -211,7 +211,8 @@ fn seal() -> Result<(), String> {
 /// The journal's path as the tool will use it, after giving up root when it was started as
 /// root. Root first goes into the journal's directory (the service's private directory cannot
 /// be entered by name by anyone else) and then works on `./<name>` as the journal's owner.
-fn enter(journal: &Path) -> Result<PathBuf, String> {
+/// `missing` says, for a journal that is not there, which setting makes the node write it.
+pub(crate) fn enter(journal: &Path, missing: &str) -> Result<PathBuf, String> {
     use std::os::unix::fs::MetadataExt;
     if rustix::process::geteuid().as_raw() != 0 {
         return Ok(journal.to_path_buf());
@@ -225,12 +226,8 @@ fn enter(journal: &Path) -> Result<PathBuf, String> {
     };
     std::env::set_current_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     let here = Path::new(".").join(name);
-    let meta = std::fs::symlink_metadata(&here).map_err(|e| {
-        format!(
-            "{}: {e} (no intake journal here: the node writes it when ONYX_SUBMISSIONS is set)",
-            journal.display()
-        )
-    })?;
+    let meta = std::fs::symlink_metadata(&here)
+        .map_err(|e| format!("{}: {e} ({missing})", journal.display()))?;
     if !meta.file_type().is_file() {
         return Err(format!(
             "{} is a link or not a regular file: refused, nothing was opened",
@@ -310,7 +307,12 @@ pub fn main(args: &[String]) -> ExitCode {
             return ExitCode::from(2);
         }
     };
-    let journal = match seal().and_then(|()| enter(&journal)) {
+    let journal = match seal().and_then(|()| {
+        enter(
+            &journal,
+            "no intake journal here: the node writes it when ONYX_SUBMISSIONS is set",
+        )
+    }) {
         Ok(j) => j,
         Err(e) => {
             eprintln!("onyx-node proposals: {e}");

@@ -45,7 +45,7 @@ use crate::x402::BoxFuture;
 use crate::{rate_scopes, ApiError, ClientKey};
 use axum::body::Body;
 use axum::extract::{Path, State};
-use axum::http::{header, HeaderValue, StatusCode};
+use axum::http::{header, HeaderMap, HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{Extension, Json, Router};
@@ -190,9 +190,8 @@ pub struct SubmitStore {
     /// The feed ledger beside the journal, read once at open ([`feed`]).
     feed: feed::FeedLedger,
     workers: Arc<tokio::sync::Semaphore>,
-    budgets: Caches,
-    /// Daily counts per scope key (S1-R1-2), reset at each UTC day.
-    daily: Mutex<Daily>,
+    /// The per-minute and per-day budgets ([`Budgets`]).
+    budgets: Budgets,
     fetcher: Option<Arc<dyn PageFetch>>,
     allow: Vec<String>,
     limits: SubmitLimits,
@@ -245,8 +244,7 @@ impl SubmitStore {
             cap_alert: Arc::new(|line| eprintln!("onyx-node: {line}")),
             feed,
             workers: Arc::new(tokio::sync::Semaphore::new(MAX_LEDGER_WORKERS)),
-            budgets: Caches::new(1, 1),
-            daily: Mutex::new(Daily::default()),
+            budgets: Budgets::new(),
             fetcher,
             allow: CLEARED_HOSTS.iter().map(|h| (*h).to_string()).collect(),
             limits,
@@ -315,17 +313,42 @@ impl SubmitStore {
             .map(|l| l.recorded())
             .unwrap_or(self.limits.max_recorded)
     }
+}
+
+/// The budgets of a public write route that needs no account: per client per minute and per
+/// UTC day, and for the whole server (S1-R1-2). Kept in memory only; a restart empties them.
+/// The proposal intake and the publisher pointers ([`crate::publishers`]) each hold their own,
+/// so neither route spends the other's budget.
+pub(crate) struct Budgets {
+    minute: Caches,
+    /// Daily counts per scope key (S1-R1-2), reset at each UTC day.
+    daily: Mutex<Daily>,
+}
+
+impl Budgets {
+    pub(crate) fn new() -> Budgets {
+        Budgets {
+            minute: Caches::new(1, 1),
+            daily: Mutex::new(Daily::default()),
+        }
+    }
 
     /// One attempt from the client's per-minute bucket. Unlike the paid
     /// routes, an IPv6 /56 and /48 get the same budget as one client, not a
     /// multiple of it (S1-R1-2): a /48 rotating its /64s cannot outrun the
     /// global budget.
-    fn take(&self, scope: &str, client: &str, per_minute: u32, what: &str) -> Result<(), ApiError> {
+    pub(crate) fn take(
+        &self,
+        scope: &str,
+        client: &str,
+        per_minute: u32,
+        what: &str,
+    ) -> Result<(), ApiError> {
         let scopes: Vec<(String, u32)> = rate_scopes(client, per_minute)
             .into_iter()
             .map(|(k, _)| (format!("{scope}:{k}"), per_minute))
             .collect();
-        if self.budgets.take_attempts(&scopes) {
+        if self.minute.take_attempts(&scopes) {
             return Ok(());
         }
         Err(limited(per_minute, what))
@@ -334,7 +357,7 @@ impl SubmitStore {
     /// One unit from each (key, quota) for today, all or none (S1-R1-2):
     /// the client's scopes (its address, and for IPv6 its /56 and /48, each
     /// with the client's own quota) and optionally the server's.
-    fn take_day(
+    pub(crate) fn take_day(
         &self,
         scope: &str,
         client: &str,
@@ -383,9 +406,45 @@ impl SubmitStore {
         Ok(())
     }
 
-    fn take_global(&self, scope: &str, per_minute: u32, what: &str) -> Result<(), ApiError> {
+    /// Give back the unit [`Budgets::take_day`] took with the same arguments, today (review
+    /// PTR-R1 L4): for a request that passed the day's budgets and was then refused by another
+    /// budget, so that it costs nobody a unit of the day. Nothing is given back unless every
+    /// key of the client holds a unit today (review PTR-R2): a refund after a take that was
+    /// itself refused, or for a client that took nothing, must not hand out a unit of the
+    /// server's day.
+    pub(crate) fn refund_day(&self, scope: &str, client: &str, global: bool) {
+        let mut keys: Vec<String> = rate_scopes(client, 1)
+            .into_iter()
+            .map(|(k, _)| format!("{scope}:{k}"))
+            .collect();
+        if global {
+            keys.push(format!("{scope}:all"));
+        }
+        let Ok(mut d) = self.daily.lock() else {
+            return;
+        };
+        if d.day != now_secs() / 86_400
+            || keys
+                .iter()
+                .any(|k| d.counts.get(k).copied().unwrap_or(0) == 0)
+        {
+            return;
+        }
+        for k in keys {
+            if let Some(n) = d.counts.get_mut(&k) {
+                *n = n.saturating_sub(1);
+            }
+        }
+    }
+
+    pub(crate) fn take_global(
+        &self,
+        scope: &str,
+        per_minute: u32,
+        what: &str,
+    ) -> Result<(), ApiError> {
         if self
-            .budgets
+            .minute
             .take_attempts(&[(format!("{scope}:all"), per_minute)])
         {
             return Ok(());
@@ -425,13 +484,13 @@ async fn body_of(body: Body) -> Result<Submission, ApiError> {
         .map_err(|e| ApiError::new(StatusCode::BAD_REQUEST, e.code(), e.to_string()))
 }
 
-fn no_store(mut r: Response) -> Response {
+pub(crate) fn no_store(mut r: Response) -> Response {
     r.headers_mut()
         .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
     r
 }
 
-fn client_of(client: Option<Extension<ClientKey>>) -> String {
+pub(crate) fn client_of(client: Option<Extension<ClientKey>>) -> String {
     client.map_or_else(|| "local".to_string(), |Extension(c)| c.0)
 }
 
@@ -442,21 +501,26 @@ fn hash_hex(s: &Submission) -> String {
 async fn check(
     State(store): State<Arc<SubmitStore>>,
     client: Option<Extension<ClientKey>>,
+    headers: HeaderMap,
     body: Body,
 ) -> Response {
+    // Review PTR-R1 M1: never from a page of another site, before any budget is counted.
+    if let Err(e) = crate::json_from_this_site(&headers) {
+        return e.into_response();
+    }
     check_inner(&store, &client_of(client), body)
         .await
         .map_or_else(IntoResponse::into_response, no_store)
 }
 
 async fn check_inner(store: &SubmitStore, client: &str, body: Body) -> Result<Response, ApiError> {
-    store.take(
+    store.budgets.take(
         "submit-check",
         client,
         store.limits.check_per_minute,
         "checks from this address",
     )?;
-    store.take_day(
+    store.budgets.take_day(
         "submit-check-day",
         client,
         store.limits.check_per_day,
@@ -485,7 +549,7 @@ async fn check_inner(store: &SubmitStore, client: &str, body: Body) -> Result<Re
                 });
             }
             Some(f) => {
-                store.take_global(
+                store.budgets.take_global(
                     "submit-fetch",
                     store.limits.global_fetch_per_minute,
                     "pulls on this server",
@@ -507,8 +571,13 @@ async fn check_inner(store: &SubmitStore, client: &str, body: Body) -> Result<Re
 async fn submit(
     State(store): State<Arc<SubmitStore>>,
     client: Option<Extension<ClientKey>>,
+    headers: HeaderMap,
     body: Body,
 ) -> Response {
+    // Review PTR-R1 M1: never from a page of another site, before any budget is counted.
+    if let Err(e) = crate::json_from_this_site(&headers) {
+        return e.into_response();
+    }
     submit_inner(store, &client_of(client), body)
         .await
         .map_or_else(IntoResponse::into_response, no_store)
@@ -528,7 +597,7 @@ async fn submit_inner(
     client: &str,
     body: Body,
 ) -> Result<Response, ApiError> {
-    store.take(
+    store.budgets.take(
         "submit",
         client,
         store.limits.submit_per_minute,
@@ -557,12 +626,12 @@ async fn submit_inner(
         if ledger.recorded() >= st.limits.max_recorded {
             return Err(review_api_error(ReviewError::Full));
         }
-        st.take_global(
+        st.budgets.take_global(
             "submit-all",
             st.limits.global_submit_per_minute,
             "submissions on this server",
         )?;
-        st.take_day(
+        st.budgets.take_day(
             "submit-day",
             &client,
             st.limits.submit_per_day,
@@ -592,7 +661,7 @@ async fn status(
 ) -> Response {
     let client = client_of(client);
     let r = (|| {
-        store.take(
+        store.budgets.take(
             "submit-status",
             &client,
             store.limits.status_per_minute,

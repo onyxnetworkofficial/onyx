@@ -1747,6 +1747,10 @@ async fn relay(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
+    // Review PTR-R1 M1: never from a page of another site, before the client's budget.
+    if let Err(e) = crate::same_site_only(&headers) {
+        return e.into_response();
+    }
     if let Err(e) = st.limited(client) {
         return e.into_response();
     }

@@ -180,6 +180,18 @@ The proxy must append the real peer to `X-Forwarded-For` (Caddy does by default 
 client's own value: `deploy/caddy/Caddyfile`, deployment.md "TLS in front"; nginx:
 `proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for`). Default: empty, header ignored.
 
+**The proxy must also pass the browser's `Host` on unchanged** (THREATS PTR-R1-M1, PTR-R2-L2).
+The public POST routes (`/v1/submit`, `/v1/submit/check`, `/v1/publishers/pointer`, `/v1/wants`,
+`/v1/relay`) refuse a browser's request whose `Origin` is not the `Host` the node receives (403
+`cross_site_refused`), so that no page of another site can make a visitor's browser send one. The
+two are compared without case, without a trailing dot and without the scheme's default port
+(`:443`, `:80`). Caddy passes `Host` on by default and the shipped configs set no `header_up
+Host`; nginx does not: `proxy_pass` alone sends the upstream's address, so add
+`proxy_set_header Host $host;`. A proxy that replaces the host gets the site's own forms refused
+(tools are not affected: they send no `Origin`). `X-Forwarded-Host` is not read: anyone can send
+it. A development proxy is the same: Vite's string shorthand rewrites `Host`, so
+`apps/web/vite.config.ts` sets `changeOrigin: false`.
+
 A response holds its in-flight permit until its body is written, in 64 KiB frames, at most
 `send_timeout`; after that the permit is released and the next frame fails, which closes the
 connection. The server's write stall timeout (`ONYX_WRITE_STALL_SECS`, default 30 s; THREATS

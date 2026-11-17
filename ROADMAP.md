@@ -1204,7 +1204,7 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       round, THREATS EARLY-16). v1: an optional signed claim address on submissions
 - [ ] S27 Publisher onboarding on the test network (READINESS B1; ADR-0066, PROPOSED draft 2
       after design review PUBON-R1, 2026-11-17; slices 1 to 3 and the website of slice 4 built
-      2026-11-17, the pointer route open; THREATS PUBON-1 to PUBON-20, S3-R1, S4-R1): a signed publisher application at the applicant's origin (`onyx-publish apply`,
+      2026-11-17, the pointer route built the same day and off until turned on; THREATS PUBON-1 to PUBON-20, S3-R1, S4-R1, PUBON-PTR-1 to PUBON-PTR-10): a signed publisher application at the applicant's origin (`onyx-publish apply`,
       `verify-application`, `doctor`), a CI job that fetches and checks it, the reviewer's
       checklist before `registerKey`, a cosignature for a second key, a public record and status
       per application, summed limits per publisher on the node. Slice 1 built: `onyx_bulk::ids`
@@ -1219,9 +1219,13 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       steps with the guide's commands, what the reviewer checks, the default grant, what is
       public and what is never asked) and its status box with a lookup by hash or id
       (`apps/web/src/lib/publishers.ts`, `tests/publishers.test.mjs`, e2e `tests/publish.mjs`);
-      live after the next site deploy; no outside application has been reviewed yet. Open: the
-      limits file on the hosted node, the pointer route (an application is a public issue
-      today), the release with the onboarding commands (v0.5.0-testnet: until the site links
+      live after the next site deploy; no outside application has been reviewed yet. The
+      pointer route built (READINESS B5): `POST /v1/publishers/pointer` takes an origin and an
+      application's hash with no account, fetches nothing, keeps no client address
+      (`onyx_api::publishers`, `onyx-node pointers`, `scripts/publisher-pointers.sh`, the form
+      in step 7); off unless `ONYX_PUBLISHER_POINTERS` is set. Open: a fresh review of the
+      pointer route before it is turned on (PUBON-PTR-10), the PUBON rows still PARTIAL, the
+      limits file on the hosted node, the release with the onboarding commands (v0.5.0-testnet: until the site links
       it the page offers no download; review S4-R1, fixed)
 - [ ] S21 Replica proofs, looked at again (ADR-0062; THREATS STORAGE-2): after aggregated proofs
       (S17) raise the rows each node proves per epoch, check a cost-bound seal first (each chunk

@@ -182,7 +182,16 @@ fn parse_hex<const N: usize>(v: &Value) -> Option<[u8; N]> {
     hex::decode(s).ok()?.try_into().ok()
 }
 
-async fn post_want(State(store): State<Arc<WantsStore>>, body: Body) -> Response {
+async fn post_want(
+    State(store): State<Arc<WantsStore>>,
+    headers: axum::http::HeaderMap,
+    body: Body,
+) -> Response {
+    // Review PTR-R1 M1: a want is signed, so a page of another site cannot make one; it is
+    // still refused before the body is read.
+    if let Err(e) = crate::same_site_only(&headers) {
+        return e.into_response();
+    }
     let Ok(bytes) = axum::body::to_bytes(body, MAX_WANTS_BODY).await else {
         return bad(
             StatusCode::PAYLOAD_TOO_LARGE,
@@ -398,6 +407,32 @@ mod tests {
         let d = std::env::temp_dir().join(format!("onyx-wants-{name}-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&d);
         d
+    }
+
+    /// Review PTR-R1 M1 (THREATS PTR-R1-M1): a want is not taken from a page of another site.
+    #[tokio::test]
+    async fn a_cross_site_want_is_refused() {
+        let dir = tmp("cross-site");
+        let app = routes(store(&dir, Arc::new(AtomicU64::new(T)), true));
+        for (k, v) in [
+            ("sec-fetch-site", "cross-site"),
+            ("origin", "https://evil.example"),
+        ] {
+            let req = Request::builder()
+                .method("POST")
+                .uri("/v1/wants")
+                .header("content-type", "text/plain")
+                .header(k, v)
+                .body(Body::from("{}"))
+                .expect("test");
+            let r = app.clone().oneshot(req).await.expect("test");
+            assert_eq!(r.status(), StatusCode::FORBIDDEN, "{k}");
+            let bytes = r.into_body().collect().await.expect("test").to_bytes();
+            let v: Value = serde_json::from_slice(&bytes).expect("test");
+            assert_eq!(v["error"]["code"], "cross_site_refused");
+        }
+        // The board itself is still read from anywhere.
+        assert_eq!(call(&app, "GET", None).await.0, StatusCode::OK);
     }
 
     #[tokio::test]

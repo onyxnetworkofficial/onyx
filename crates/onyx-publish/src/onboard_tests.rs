@@ -362,7 +362,14 @@ fn doctor_names_each_missing_step_and_sends_nothing() {
         &std::fs::read(f.p("site/.well-known/onyx-publisher-application.json")).expect("app"),
     );
     assert!(
-        text.contains(&format!("two lines: {ORIGIN} and {keccak}")),
+        text.contains(&format!(
+            "send these two values, origin {ORIGIN} and application keccak {keccak}"
+        )),
+        "{text}"
+    );
+    // Both ways are named: the node without an account, and the issue.
+    assert!(
+        text.contains("POST /v1/publishers/pointer") && text.contains("Publisher application: "),
         "{text}"
     );
     // It only read: five GETs, nothing else.
@@ -1676,6 +1683,23 @@ fn a_pointer_is_two_lines_read_from_a_file() {
         let e = pointer_lines(&bad).expect_err(why);
         assert!(e.contains(why), "{why}: {e}");
     }
+    // A pointer sent to a node (ADR-0066 item 7) is listed by `onyx-node pointers show` as
+    // exactly these two lines, so the listed pointer is this command's input as it is.
+    let listed = onyx_api::publishers::Pointer {
+        id: format!("ptr_{}", "0a".repeat(16)),
+        origin: ORIGIN.to_string(),
+        application: hash.clone(),
+        received_unix: T0,
+    };
+    assert_eq!(
+        pointer_lines(&listed.text()),
+        Ok((ORIGIN.to_string(), hash.clone()))
+    );
+    assert_eq!(
+        onyx_api::publishers::check(ORIGIN, &hash),
+        Ok(ORIGIN.to_string()),
+        "what the node takes is what the tool reads"
+    );
     // The command takes the file in place of --origin and --hash.
     let f = Folder::complete("s3-pointer");
     let app = std::fs::read(f.p("site/.well-known/onyx-publisher-application.json")).expect("app");

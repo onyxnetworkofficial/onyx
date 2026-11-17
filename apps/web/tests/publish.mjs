@@ -4,13 +4,18 @@
 //   "the publish page shows every step with its command"
 //   "a status lookup shows the state and the reason"
 //   "a refused application shows how to apply again"
+// With the pointer form (READINESS B5, ADR-0066 item 7) also:
+//   "the pointer form sends two values to this site and shows the receipt"
+//   "a node without the route is said plainly, with the issue as the way"
+//   "a hostile answer is never shown"
 // After review S4-R1 also:
 //   "the jump list opens the page and the words are explained"
 //   "a publisher from before the record shows its id and state only"
 //   "every value of the list is text, never markup or a link"
 // and around them: the committed status list is shown word for word, a missing or broken list is a
 // plain message (never a guess), a hostile list is refused whole and runs nothing, the page asks
-// only this site (its one data request is the static publishers.json), the policy refuses nothing
+// only this site (its one data request by itself is the static publishers.json; the form's POST goes
+// to this site's own /v1/publishers/pointer and only on a press of its button), the policy refuses nothing
 // and allows no inline script, no visitor text carries an internal code, and on a phone nothing
 // scrolls sideways or stands past the right edge. Called by tests/e2e.mjs; also runs alone against
 // a build: node tests/publish.mjs [build dir].
@@ -20,6 +25,7 @@ import { join } from 'node:path';
 const P = await import(new URL('../src/lib/publishers.ts', import.meta.url).href);
 const S = await import(new URL('../src/lib/publish-steps.ts', import.meta.url).href);
 const R = await import(new URL('../src/lib/release.ts', import.meta.url).href);
+const PTR = await import(new URL('../src/lib/publisher-pointer.ts', import.meta.url).href);
 
 // A made-up list (no real id, origin or key): one publisher per kind of state, one application
 // per state that is not an approval.
@@ -75,6 +81,33 @@ export async function publish(browser, base, root, expect) {
 		await ctx.exposeFunction('__xss', () => errors.push('a hostile status list ran script'));
 		await ctx.addInitScript(() => document.addEventListener('securitypolicyviolation', (e) => console.error(`PUBLISH-CSP ${e.violatedDirective} ${e.blockedURI}`)));
 		ctx.on('request', (r) => asked.push(r.url()));
+		// The pointer route of this site's own origin: answered here as a node would (or would not).
+		const posts = [];
+		let node = 'none';
+		const RECEIPT = { id: 'ptr_' + '3f9a1c5e'.repeat(4), status: 'received', expiresUnix: 1795392000, decision: 'see_status_list' };
+		const XSS = '<img src=x onerror=__xss()><script>__xss()</script>';
+		await ctx.route('**/v1/publishers/pointer', (route) => {
+			const rq = route.request();
+			posts.push({ method: rq.method(), url: rq.url(), body: rq.postData(), type: rq.headers()['content-type'], cookie: rq.headers()['cookie'] ?? null });
+			const json = (status, body) => route.fulfill({ status, contentType: 'application/json', headers: { 'cache-control': 'no-store' }, body: JSON.stringify(body) });
+			if (node === 'none') return route.continue();
+			if (node === 'created') return json(201, RECEIPT);
+			if (node === 'again') return json(200, RECEIPT);
+			if (node === 'expired') return json(200, { ...RECEIPT, status: 'expired', reason: 'pointer_lifetime_over' });
+			if (node === 'dropped') return json(200, { ...RECEIPT, status: 'dropped', reason: 'application_hash_mismatch' });
+			if (node === 'busy') return json(409, { error: { code: 'pointer_origin_busy', message: XSS } });
+			if (node === 'cross') return json(403, { error: { code: 'cross_site_refused', message: XSS } });
+			if (node === 'off') return json(404, { error: { code: 'not_found', message: 'no such route' } });
+			if (node === 'forbidden') return route.fulfill({ status: 403, contentType: 'text/html', body: `<!doctype html><title>403</title>${XSS}` });
+			if (node === 'shared') return json(422, { error: { code: 'origin_shared_host', message: XSS } });
+			if (node === 'quota') return json(429, { error: { code: 'daily_quota', message: XSS } });
+			if (node === 'hostile-receipt') return json(201, { ...RECEIPT, id: XSS });
+			if (node === 'hostile-extra') return json(201, { ...RECEIPT, note: XSS });
+			if (node === 'hostile-error') return json(500, { error: { code: XSS, message: XSS } });
+			if (node === 'hostile-html') return route.fulfill({ status: 200, contentType: 'text/html', body: `<!doctype html>${XSS}` });
+			if (node === 'redirect') return route.fulfill({ status: 307, headers: { location: 'https://elsewhere.example/v1/publishers/pointer' }, body: '' });
+			return route.abort('connectionrefused');
+		});
 		await ctx.route('**/publishers.json', (route) => {
 			if (serve === 'real') return route.continue();
 			if (serve === 'missing') return route.fulfill({ status: 404, body: 'not found' });
@@ -189,9 +222,17 @@ export async function publish(browser, base, root, expect) {
 			expect(await says('publish-grant', ['1 GiB', '16 datasets']), `${at}: what a new publisher gets: 1 GiB and 16 datasets by default`);
 			expect(await says('publish-public', ['publisher id', 'origin', "key's address", 'only its hash']) && (await says('publish-never', ['No name', 'No contact detail', 'No key file'])), `${at}: what is public (the record) and what is never asked (no name, no contact, no key)`);
 			const step7 = flat(await pg.getByTestId('publish-step').nth(6).innerText());
+			const ways = await pg.getByTestId('publish-step').nth(6).evaluate((li) => {
+				const top = (sel) => li.querySelector(sel)?.getBoundingClientRect().top ?? -1;
+				return { form: top('[data-testid="pointer-form"]'), issue: top('[data-testid="publish-issue-way"]'), lines: top('[data-testid="publish-cmd"]'), link: top('[data-testid="publish-issues"]'), forms: document.querySelectorAll('[data-testid="pointer-form"]').length };
+			});
 			expect(
-				step7.includes('Today an application is filed as a public issue on the source repository') && step7.includes('planned, not built') && (await pg.getByTestId('publish-issues').getAttribute('href')) === S.ISSUES,
-				`${at}: the page says an application is filed as a public issue today and that a way without an account is not built`
+				step7.includes('First way: send the two values here, without an account') && step7.includes('Second way: a public issue on the source repository') && step7.includes(`Title it "${S.ISSUE_TITLE}"`) && ways.forms === 1 && ways.form > 0 && ways.form < ways.issue && ways.issue < ways.lines && ways.lines < ways.link && (await pg.getByTestId('publish-issues').getAttribute('href')) === S.ISSUES,
+				`${at}: step 7 offers the pointer form first and the public issue second, with the issue's title and two lines`
+			);
+			expect(
+				step7.includes('The form needs no account, and the node keeps no address of yours') && step7.includes('does not contact your origin') && step7.includes('The issue is public and shows the account that opens it') && !/planned, not built|Today an application is filed/.test(step7),
+				`${at}: step 7 says what each way shows of the applicant, and no longer that the way without an account is not built`
 			);
 			expect(!INTERNAL.test(text), `${at}: no internal code in the page's text${INTERNAL.test(text) ? ': ' + INTERNAL.exec(text)[0] : ''}`);
 			expect(!/[^\s@]+@[^\s@]+\.[a-z]{2,}/i.test(text), `${at}: no mail address anywhere on the page`);
@@ -326,6 +367,118 @@ export async function publish(browser, base, root, expect) {
 			await pg.close();
 		}
 
+		// The pointer form (step 7): two values to this site's own node, the receipt, and every
+		// other answer in the page's own words.
+		{
+			serve = 'planted';
+			const pg = await open('#/publish', 'publish-steps');
+			await statusDrawn(pg);
+			const form = pg.getByTestId('pointer-form');
+			const sent = () => posts.length;
+			const press = async (kind) => {
+				const n = sent();
+				await pg.getByTestId('pointer-send').click();
+				if (kind) await pg.waitForFunction((k) => document.querySelector('[data-testid="pointer-outcome"]')?.dataset.kind === k && !document.querySelector('[data-testid="pointer-send"]')?.disabled, kind, { timeout: 30000 }).catch(() => {});
+				return {
+					posted: sent() - n,
+					kind: await pg.getByTestId('pointer-outcome').getAttribute('data-kind'),
+					text: flat(await pg.getByTestId('pointer-outcome').innerText()),
+					kids: await pg.getByTestId('pointer-outcome').evaluate((e) => e.querySelectorAll('a, [href], [src], img, iframe, script, b').length)
+				};
+			};
+			const fill = async (origin, hash) => {
+				await pg.getByTestId('pointer-origin').fill(origin);
+				await pg.getByTestId('pointer-hash').fill(hash);
+			};
+			// Nothing was asked of a node before a press, and a value out of shape is not sent at all.
+			expect(sent() === 0 && (await pg.getByTestId('pointer-outcome').getAttribute('data-kind')) === 'none', `${at}: the pointer form asks nothing of the node before its button is pressed`);
+			await fill('https://Data.example.org/', 'not a hash');
+			const unsent = await press(null);
+			const problems = [flat(await pg.getByTestId('pointer-origin-problem').innerText()), flat(await pg.getByTestId('pointer-hash-problem').innerText())];
+			expect(
+				unsent.posted === 0 && problems[0] === PTR.originProblem('https://Data.example.org/') && problems[1] === PTR.hashProblem('not a hash') && (await pg.getByTestId('pointer-origin').getAttribute('aria-invalid')) === 'true',
+				`${at}: an origin with https:// and a hash out of shape are named under their fields and nothing is sent`
+			);
+			// "the pointer form sends two values to this site and shows the receipt"
+			node = 'created';
+			await fill(` ${S.EXAMPLE_ORIGIN} `, H.received);
+			const made = await press('receipt');
+			const last = posts[posts.length - 1];
+			expect(
+				made.posted === 1 && last.method === 'POST' && last.url === origin + '/' + PTR.POINTER_PATH && last.body === JSON.stringify({ origin: S.EXAMPLE_ORIGIN, application: H.received }) && last.type === 'application/json' && last.cookie === null,
+				`${at}: the pointer form sends two values to this site and shows the receipt: one POST to ${PTR.POINTER_PATH} of this origin, exactly {origin, application}, no cookie`
+			);
+			const receipt = await pg.getByTestId('pointer-receipt').evaluate((e) => ({ text: e.textContent, kids: e.childElementCount }));
+			expect(
+				made.kind === 'receipt' && receipt.text === RECEIPT.id && receipt.kids === 0 && made.text.includes('Your receipt:') && made.text.includes(PTR.receiptWords(PTR.parsePointerReceipt(RECEIPT))) && made.text.includes(`waits until ${PTR.utcMinute(RECEIPT.expiresUnix)}`),
+				`${at}: the receipt id is shown as text (${receipt.text}), with the time the pointer waits until`
+			);
+			const where = flat(await pg.getByTestId('pointer-where').innerText());
+			expect(
+				where.includes('Application status') && where.includes('first digits of your application’s hash') && where.includes('The decision itself is not there') && where.includes('/v1/publishers/pointer/') && made.kids === 0,
+				`${at}: the receipt says where the status is (the status box, by the application's hash) and that the node knows no decision; no link is built`
+			);
+			if (width === 390) {
+				const E = await edges(pg);
+				const fields = await form.locator('input, button').evaluateAll((es) => es.map((e) => e.getBoundingClientRect()).map((r) => [Math.round(r.height), Math.round(r.right)]));
+				expect(E.side === 0 && E.past.length === 0 && E.inner.length === 0 && fields.every((f) => f[0] >= 44 && f[1] <= width - 16), `${at}: on a phone the form and its receipt fit: no sideways scroll, fields and button at least 44 px high (${JSON.stringify(fields)})${E.past.length ? ': ' + E.past.join('; ') : ''}`);
+			}
+			node = 'again';
+			const again = await press('receipt');
+			expect(again.posted === 1 && again.text.includes('The node already had this pointer') && again.text.includes(RECEIPT.id), `${at}: the same two values again show the same receipt, said as already held`);
+			node = 'expired';
+			const old = await press('receipt');
+			expect(old.text.includes('no longer waits') && !old.text.includes('Received.'), `${at}: an expired pointer is said as expired, with what to do`);
+			// "a node without the route is said plainly, with the issue as the way"
+			for (const off of ['off', 'forbidden', 'none']) {
+				node = off;
+				const out = await press('off');
+				expect(
+					out.posted === 1 && out.kind === 'off' && out.text === PTR.OFF_WORDS && out.kids === 0 && (await pg.getByTestId('pointer-receipt').count()) === 0,
+					`${at}: a node without the route is said plainly, with the issue as the way (${off === 'none' ? 'this static copy of the site, which has no node' : off === 'off' ? 'the node answers 404' : 'a proxy answers 403 with a page'})`
+				);
+			}
+			expect((await pg.getByTestId('publish-issues').isVisible()) && (await pg.getByTestId('publish-issue-way').isVisible()), `${at}: the issue path stands right under the form`);
+			// A refusal by its code: the page's own words, never the node's text.
+			node = 'dropped';
+			const gone = await press('receipt');
+			expect(gone.text.includes('Dropped: the review found that the file at this origin does not have this hash') && !gone.text.includes('Received.'), `${at}: a pointer the reviewer dropped says so, with why and what to do`);
+			node = 'busy';
+			const busy = await press('refused');
+			expect(
+				busy.text === PTR.REFUSALS.pointer_origin_busy && busy.text.includes('You do not have to wait: file your application as a public issue') && (await pg.getByTestId('publish-issue-way').isVisible()),
+				`${at}: a host whose three places are taken is said plainly, with the issue as the way that works at once`
+			);
+			for (const [mode, code] of [['shared', 'origin_shared_host'], ['quota', 'daily_quota'], ['cross', 'cross_site_refused']]) {
+				node = mode;
+				const out = await press('refused');
+				expect(out.kind === 'refused' && out.text === PTR.REFUSALS[code] && out.kids === 0, `${at}: a refusal (${code}) is shown in the page's own words`);
+			}
+			// "a hostile answer is never shown"
+			for (const [mode, want, words] of [
+				['hostile-receipt', 'failed', PTR.BAD_ANSWER_WORDS],
+				['hostile-extra', 'failed', PTR.BAD_ANSWER_WORDS],
+				['hostile-html', 'failed', PTR.BAD_ANSWER_WORDS],
+				['hostile-error', 'failed', PTR.otherWords(500)],
+				['redirect', 'failed', PTR.UNREACHED_WORDS],
+				['down', 'failed', PTR.UNREACHED_WORDS]
+			]) {
+				node = mode;
+				const out = await press(want);
+				const dom = await pg.evaluate(() => ({ img: document.querySelectorAll('main img, main script, main iframe').length, html: document.querySelector('[data-testid="pointer"]').innerHTML }));
+				expect(
+					out.kind === want && out.text === words && out.kids === 0 && dom.img === 0 && !/onerror|__xss|<img|<script/.test(dom.html) && (await pg.getByTestId('pointer-receipt').count()) === 0,
+					`${at}: a hostile answer is never shown (${mode}): the page's own words, no receipt, no markup`
+				);
+			}
+			const typed = [await pg.getByTestId('pointer-origin').inputValue(), await pg.getByTestId('pointer-hash').inputValue()];
+			expect(typed[0] === ` ${S.EXAMPLE_ORIGIN} ` && typed[1] === H.received, `${at}: what was typed stays in the form after a failure, to send again`);
+			const stored = await pg.evaluate(() => ({ local: localStorage.length, session: sessionStorage.length, cookie: document.cookie }));
+			expect(stored.local === 0 && stored.session === 0 && stored.cookie === '', `${at}: the form keeps nothing in the browser (no storage, no cookie)`);
+			node = 'none';
+			await pg.close();
+		}
+
 		// A missing, broken or hostile list: a plain message, no state, no lookup, nothing run.
 		for (const kind of ['missing', 'html', 'broken', 'hostile']) {
 			serve = kind;
@@ -343,10 +496,14 @@ export async function publish(browser, base, root, expect) {
 
 		// The page asks only this site, and of its data only the static status list.
 		const away = [...new Set(asked.filter((u) => !u.startsWith(origin + '/') && !u.startsWith('data:') && !u.startsWith('blob:')))];
-		const node = asked.filter((u) => new URL(u).pathname.startsWith('/v1/'));
+		const toNode = asked.filter((u) => new URL(u).pathname.startsWith('/v1/'));
 		const lists = asked.filter((u) => u.endsWith('/publishers.json'));
-		expect(away.length === 0 && node.length === 0, `${at}: no request leaves this site, and none goes to a node${away.length ? ': ' + away.slice(0, 3).join(' ') : ''}`);
-		expect(lists.length === 7 && lists.every((u) => u === origin + '/publishers.json'), `${at}: each visit of the publish page reads the static publishers.json once (${lists.length} in 7 visits)`);
+		expect(away.length === 0, `${at}: no request leaves this site${away.length ? ': ' + away.slice(0, 3).join(' ') : ''}`);
+		expect(
+			toNode.length === posts.length && posts.length === 17 && toNode.every((u) => u === origin + '/' + PTR.POINTER_PATH) && posts.every((p) => p.method === 'POST'),
+			`${at}: the only requests to a node are the form's own POSTs to this site's ${PTR.POINTER_PATH}, one per press (${posts.length}); no visit asks a node by itself`
+		);
+		expect(lists.length === 8 && lists.every((u) => u === origin + '/publishers.json'), `${at}: each visit of the publish page reads the static publishers.json once (${lists.length} in 8 visits)`);
 		expect(errors.length === 0, `${at}: no page error, no policy refusal, no script from a status list${errors.length ? ': ' + errors.join('; ') : ''}`);
 		await ctx.close();
 	}

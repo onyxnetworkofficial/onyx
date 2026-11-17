@@ -62,7 +62,7 @@ build() {
   chmod 700 "$tmp"
   cp "$etc/deployment.json" "$etc/catalog.json" "$tmp/"
   cp -r "$snap/cas" "$tmp/cas"
-  (umask 077 && { grep -vE "$pat" "$etc/node.env" | grep -v '^ONYX_SUBMISSIONS=' || true; } >"$tmp/node.service.env")
+  (umask 077 && { grep -vE "$pat" "$etc/node.env" | grep -v -e '^ONYX_SUBMISSIONS=' -e '^ONYX_PUBLISHER_POINTERS=' || true; } >"$tmp/node.service.env")
   # Kept from the server, so the export has a mode at all.
   (umask 077 && { grep '^ONYX_PAYMENTS=' "$etc/node.env" || true; } >>"$tmp/node.service.env")
   for f in "$etc"/observations/*.json; do
@@ -158,6 +158,7 @@ TAIL
   (cd "$repo" && env -u ONYX_SITE_HOST EXPORT_DIR="$exp" ONYX_API_MCP=0 ONYX_API_CONN_CAP=0 \
     ONYX_API_PAYMENTS="$(grep -qx 'ONYX_PAYMENTS=off' "$e" && echo 0 || echo 1)" \
     ONYX_API_INTAKE="$(grep -q '^ONYX_SUBMISSIONS=' "$e" && echo 1 || echo 0)" \
+    ONYX_API_POINTERS="$(grep -q '^ONYX_PUBLISHER_POINTERS=' "$e" && echo 1 || echo 0)" \
     ONYX_API_BULK="$(grep -q '^ONYX_BULK_DIR=' "$e" && echo 1 || echo 0)" \
     ONYX_API_BULK_FORMAT2="$(grep -qx 'ONYX_BULK_FORMAT2=on' "$e" && echo 1 || echo 0)" \
     bash "$work/stage.sh" "$exp" "$work/onyx-node" "$snap") || rc=$?

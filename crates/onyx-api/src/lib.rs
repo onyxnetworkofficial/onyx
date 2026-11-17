@@ -44,6 +44,7 @@ mod payment;
 pub mod prepaid;
 pub mod prepaid_chain;
 pub mod prepaid_gate;
+pub mod publishers;
 pub mod receipts;
 pub mod reporter;
 pub mod roots;
@@ -888,6 +889,95 @@ impl From<ApiError> for Box<Response> {
 
 /// Handler result: both arms are finished responses (the early one boxed).
 type Reply = Result<Response, Box<Response>>;
+
+/// Refuse a request that a page of another site made a browser send (review PTR-R1 M1). A
+/// browser says so itself: `Sec-Fetch-Site: cross-site`, and on a POST an `Origin` header,
+/// which must then name the host the request was sent to. A tool sends neither. For the public
+/// write routes: without this, any web page could fire them from each of its visitors'
+/// browsers and spend the per-client budgets from the visitors' addresses. Call it before any
+/// budget is counted.
+///
+/// The comparison is with the `Host` header as the node receives it (review PTR-R2 L2), so a
+/// proxy in front must pass the browser's `Host` on unchanged, as the shipped Caddy configs
+/// do; `X-Forwarded-Host` is not read (anyone can send it). The two sides are compared
+/// without case, without a trailing dot and without the scheme's default port (`:443` for
+/// https, `:80` for http), so a proxy that only appends that port is still the same host.
+/// `Origin: null` (a sandboxed frame) names no host and is refused.
+pub(crate) fn same_site_only(headers: &HeaderMap) -> Result<(), ApiError> {
+    let text = |name: HeaderName| headers.get(name).map(|v| v.to_str().unwrap_or(""));
+    let refuse = || {
+        ApiError::new(
+            StatusCode::FORBIDDEN,
+            "cross_site_refused",
+            "this route is not taken from a page of another site",
+        )
+    };
+    if text(HeaderName::from_static("sec-fetch-site"))
+        .is_some_and(|v| v.trim().eq_ignore_ascii_case("cross-site"))
+    {
+        return Err(refuse());
+    }
+    if let Some(origin) = text(header::ORIGIN) {
+        let same = origin
+            .split_once("://")
+            .zip(text(header::HOST))
+            .is_some_and(|((scheme, authority), host)| {
+                let (a, h) = (plain_host(authority, scheme), plain_host(host, scheme));
+                !a.is_empty() && a == h
+            });
+        if !same {
+            return Err(refuse());
+        }
+    }
+    Ok(())
+}
+
+/// `authority` (a host with an optional port) in one spelling: lowercase, no trailing dot on
+/// the name, and no port when it is `scheme`'s default. Anything with a user part, a path or
+/// a space comes back empty (never equal to a host).
+fn plain_host(authority: &str, scheme: &str) -> String {
+    let a = authority.trim().to_ascii_lowercase();
+    if a.is_empty() || a.contains(['@', '/', ' ', '?', '#']) {
+        return String::new();
+    }
+    // An IPv6 literal keeps its brackets; its port, if any, follows the closing one.
+    let (name, port) = match a.rfind(':') {
+        Some(i) if !a[i..].contains(']') => (&a[..i], Some(&a[i + 1..])),
+        _ => (a.as_str(), None),
+    };
+    let name = name.strip_suffix('.').unwrap_or(name);
+    let default = match scheme.to_ascii_lowercase().as_str() {
+        "https" => "443",
+        "http" => "80",
+        _ => "",
+    };
+    match port {
+        Some(p) if p != default => format!("{name}:{p}"),
+        _ => name.to_string(),
+    }
+}
+
+/// [`same_site_only`], and the body must be declared as JSON (review PTR-R1 M1). A browser
+/// sends `content-type: application/json` to another site only after a preflight, which this
+/// server never grants (it sends no CORS header), so the three types a page may send without
+/// one (form, multipart, text/plain) are refused here. Call it before any budget is counted.
+pub(crate) fn json_from_this_site(headers: &HeaderMap) -> Result<(), ApiError> {
+    same_site_only(headers)?;
+    let json = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(';').next())
+        .is_some_and(|t| t.trim().eq_ignore_ascii_case("application/json"));
+    if json {
+        Ok(())
+    } else {
+        Err(ApiError::new(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "json_required",
+            "send the body with content-type: application/json",
+        ))
+    }
+}
 
 fn bad_request(message: impl Into<String>) -> ApiError {
     ApiError::new(StatusCode::BAD_REQUEST, "bad_request", message)

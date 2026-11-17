@@ -4618,6 +4618,125 @@ async fn method_errors_name_the_routes_own_methods() {
     }
 }
 
+/// ADR-0066 item 7 (THREATS PUBON-PTR-6): the pointer routes exist only when the node merges
+/// them. Without them the path is the API's plain 404, for a POST as for a GET.
+#[tokio::test]
+async fn the_pointer_route_is_off_unless_it_is_merged() {
+    let f = fixture(false, None);
+    let receipt = format!("/v1/publishers/pointer/ptr_{}", "0".repeat(32));
+    for (method, uri) in [
+        (Method::POST, "/v1/publishers/pointer"),
+        (Method::GET, receipt.as_str()),
+    ] {
+        let (s, _, b) = send(&f, method, uri, &[], None).await;
+        assert_eq!((s, code(&b)), (StatusCode::NOT_FOUND, Some("not_found")));
+    }
+}
+
+/// THREATS PUBON-PTR-6: the pointer route's budgets count the client the guard names: a
+/// forwarded address is believed only from a trusted proxy, so a spoofed header from anyone
+/// else buys no fresh budget, and behind the proxy each client has its own. A wrong method
+/// names the route's own.
+#[tokio::test]
+async fn the_pointer_route_counts_clients_by_the_proxy_rules() {
+    let f = build(Setup {
+        config: ApiConfig {
+            trusted_proxies: vec!["10.0.0.0/8".parse().expect("cidr")],
+            ..ApiConfig::default()
+        },
+        ..Setup::default()
+    });
+    let dir = crate::journal::test_dir("pointer-proxy");
+    let limits = crate::publishers::PointerLimits {
+        post_per_minute: 2,
+        ..crate::publishers::PointerLimits::default()
+    };
+    let store = Arc::new(
+        crate::publishers::PointerStore::open(dir.join("publisher-pointers.journal"), limits)
+            .expect("pointers"),
+    );
+    let app = router_with(f.state.clone(), crate::publishers::routes(store));
+    let post = |n: u8, xff: &'static str, peer: &'static str| {
+        let app = app.clone();
+        async move {
+            let body = json!({"origin": format!("d{n}.example.org"),
+                "application": format!("0x{}", hex::encode([n; 32]))});
+            let mut req = Request::builder()
+                .method(Method::POST)
+                .uri("/v1/publishers/pointer")
+                .header("content-type", "application/json")
+                .header("x-forwarded-for", xff)
+                .body(Body::from(body.to_string()))
+                .expect("request");
+            let peer: IpAddr = peer.parse().expect("ip");
+            req.extensions_mut()
+                .insert(ConnectInfo(SocketAddr::from((peer, 4000))));
+            let resp = app.oneshot(req).await.expect("response");
+            let status = resp.status();
+            let bytes = resp.into_body().collect().await.expect("body").to_bytes();
+            let v: Value = serde_json::from_slice(&bytes).expect("json");
+            crate::openapi_check::check("POST", "/v1/publishers/pointer", status.as_u16(), &v);
+            (status, v)
+        }
+    };
+    // A direct peer that is no proxy: its header is ignored, its own address is counted.
+    assert_eq!(
+        post(1, "198.51.100.1", "203.0.113.7").await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post(2, "198.51.100.2", "203.0.113.7").await.0,
+        StatusCode::CREATED
+    );
+    let (s, b) = post(3, "198.51.100.3", "203.0.113.7").await;
+    assert_eq!(
+        (s, code(&b)),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited")),
+        "a spoofed header buys nothing"
+    );
+    // Behind the trusted proxy the right-most untrusted hop is the client.
+    assert_eq!(
+        post(4, "6.6.6.6, 198.51.100.4", "10.0.0.2").await.0,
+        StatusCode::CREATED
+    );
+    assert_eq!(
+        post(5, "7.7.7.7, 198.51.100.4", "10.0.0.2").await.0,
+        StatusCode::CREATED
+    );
+    let (s, b) = post(6, "8.8.8.8, 198.51.100.4", "10.0.0.2").await;
+    assert_eq!(
+        (s, code(&b)),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    assert_eq!(
+        post(6, "198.51.100.5", "10.0.0.2").await.0,
+        StatusCode::CREATED
+    );
+    // No address reached the journal.
+    let file = std::fs::read_to_string(dir.join("publisher-pointers.journal")).expect("journal");
+    for a in ["203.0.113", "198.51.100", "10.0.0.2", "6.6.6.6"] {
+        assert!(!file.contains(a), "{a} is in the journal");
+    }
+    let receipt = format!("/v1/publishers/pointer/ptr_{}", "0".repeat(32));
+    for (method, uri, allow) in [
+        (Method::GET, "/v1/publishers/pointer", "POST"),
+        (Method::POST, receipt.as_str(), "GET,HEAD"),
+    ] {
+        let req = Request::builder()
+            .method(method)
+            .uri(uri)
+            .body(Body::empty())
+            .expect("request");
+        let resp = app.clone().oneshot(req).await.expect("response");
+        assert_eq!(resp.status(), StatusCode::METHOD_NOT_ALLOWED, "{uri}");
+        let got = resp.headers()[header::ALLOW]
+            .to_str()
+            .expect("allow")
+            .replace(' ', "");
+        assert_eq!(got, allow, "{uri}");
+    }
+}
+
 /// PP6: the node serves its own OpenAPI description, the same bytes as docs/api/openapi.json,
 /// with an ETag that revalidates to 304.
 #[tokio::test]

@@ -41,10 +41,13 @@ Publish data page (`#/publish`) has the same ten steps in short, and the status 
    - Signed book address: `0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5` (the `OnyxSignedBook`
      contract on Base Sepolia, chain id 84532; listed in `deploy/early-record/contracts.json` and
      docs/ops/deployment.md).
-   - The reviewer is reached in one way: an issue on the public repository,
+   - The reviewer is reached in two ways, and one is enough (step 7 says what is sent). Without
+     an account: a pointer sent to the node, by the form on the website's Publish data page or
+     with one command. The node keeps your origin and your application's hash and nothing else.
+     With an account: an issue on the public repository,
      https://github.com/onyxnetworkofficial/onyx/issues, titled
-     `Publisher application: <publisher id>` (step 7 says what goes in it). The issue is public
-     and shows the account that opens it.
+     `Publisher application: <publisher id>`. The issue is public and shows the account that
+     opens it.
 
    On another network or your own node, ask its operator for the same addresses; that node must
    run with `ONYX_BULK_DIR` (docs/ops/config.md).
@@ -149,14 +152,31 @@ sends nothing.
    reads the book in any case.
    Your spare key counts as there when `spare.key.address` is in the folder; if you made the
    spare elsewhere, add `--spare-offline`.
-7. **Point the reviewer at your origin (2 minutes).** Open the issue named in "Before you start"
-   step 3 (the repository offers the template "Publisher application") with exactly two lines:
-   your origin and the Keccak of your application file. Never a key file and no personal
-   details. You never send the application itself: the reviewer's check fetches it from your
-   origin, from a hosted machine, so you learn nothing about the reviewer and the reviewer's
-   machine never connects to you.
-8. **Wait for the decision (up to 5 days).** The reviewer answers in the issue: approved, or
-   refused with a reason code. The same state is in the public record, `deploy/publishers/` of
+7. **Point the reviewer at your origin (2 minutes).** Send two values: your origin and the
+   Keccak of your application file, as `doctor --live` printed them. Never a key file and no
+   personal details. You never send the application itself: the reviewer's check fetches it
+   from your origin, from a hosted machine, so you learn nothing about the reviewer and the
+   reviewer's machine never connects to you. Two ways, and one is enough:
+   - **Without an account: a pointer to the node.** Fill in the form in step 7 of the website's
+     Publish data page, or send the same two values yourself:
+     `curl -s <node address>/v1/publishers/pointer -H 'content-type: application/json' -d '{"origin": "<origin>", "application": "<0x and 64 hex digits>"}'`
+     The answer is a receipt, `{"id": "ptr_...", "status": "received", ...}`. The node keeps the
+     two values, the receipt and the time for 6 days (12 days in all, the last 6 shown as
+     `expired`), never your address, and it does not contact your origin. Send it as JSON, as
+     the command does (another content type is refused). Sending the same two values again
+     gives the same receipt. A host holds three waiting pointers; anyone can point at any
+     origin, so if the answer is `pointer_origin_busy` the places are taken, perhaps not by
+     you: the reviewer frees a place whose hash is not your file's, and the issue below works
+     at once. A receipt that says `dropped` means the file at the origin did not have that
+     hash: run `doctor --live` again and send the hash it prints. `curl -s <node address>/v1/publishers/pointer/<receipt id>`
+     says whether the node still holds the pointer; the decision is not there, it is in the
+     status list (step 8). An answer `404` means that node does not take pointers (the route is
+     an option of its operator): use the issue.
+   - **With an account: a public issue.** Open the issue named in "Before you start" step 3
+     (the repository offers the template "Publisher application") with exactly two lines: your
+     origin and the Keccak of your application file. It shows the account that opens it.
+8. **Wait for the decision (up to 5 days).** The decision is approved, or refused with a reason
+   code; an application filed as an issue is also answered there. The state is in the public record, `deploy/publishers/` of
    the repository (it shows `yes` for each checked line, no text about you), and in its status list `apps/web/static/publishers.json`, which the website's Publish data page shows with a lookup by hash or id: a registered
    publisher under its id, an application that is not approved under its Keccak only (no id,
    origin or text of yours is kept). To read it in your terminal, save the list and let the
@@ -167,7 +187,7 @@ sends nothing.
    new key** (the refused key is blocked until its refused sample's report is 7 days old). If
    the application expired before a decision, run step 5 again with `--reapply`, the same key
    and the same `site/sample` folder, put the new file on your origin, run `doctor --live`
-   (it says "a re-apply after an expiry") and open a new issue with the new Keccak.
+   (it says "a re-apply after an expiry") and send step 7 again with the new Keccak.
 9. **Upload your first dataset (wait 20 to 40 minutes, then about 10 minutes).**
    `onyx-publish upload --dir site/sample --node <node address> --wait-secs 3600`
    The node takes your manifest once the sample's report is recorded in the book and Base

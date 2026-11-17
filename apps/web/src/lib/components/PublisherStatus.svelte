@@ -47,8 +47,8 @@
 		<div class="row"><Pill state={pill.state} text={pill.text} live /></div>
 		{#if failed}
 			<p data-testid="status-failed">
-				The status list could not be read, so no state is shown here. This says nothing about any application. The decision is also in
-				the application's issue.
+				The status list could not be read, so no state is shown here. This says nothing about any application. An application filed
+				as an issue is also answered in that issue.
 			</p>
 		{:else if list}
 			<form class="find" onsubmit={find} data-testid="status-form">

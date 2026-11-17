@@ -79,7 +79,7 @@ onyx.cryptagraph.com {
 	# onyx-node reads no body on these routes.
 	@api {
 		method GET HEAD
-		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/wants /v1/bulk /v1/bulk/*
+		path /v1/health /v1/openapi.json /v1/proofs/* /v1/metrics/* /v1/export/* /v1/settlement/* /v1/served/* /v1/observations/* /v1/estimates/* /v1/tickets/* /v1/track /v1/track/* /v1/signed/* /v1/labels/* /v1/submit/* /v1/publishers/pointer/* /v1/wants /v1/bulk /v1/bulk/*
 	}
 	# Bulk answers send no ETag (every one is no-store), so compressing them breaks no 304 (THREATS
 	# NS17-8, SCALE-1): a 100-row answer goes from 197 KB to 26 KB, the dataset list from 2.6 MB to
@@ -100,16 +100,19 @@ onyx.cryptagraph.com {
 	# Proposals (ROADMAP S5, ADR-0039): onyx-node takes them only when ONYX_SUBMISSIONS is set,
 	# with its own per-client and global limits and a journal an operator reviews; nothing a
 	# proposal says is served until a reviewer clears it. A body over 64 KiB is cut off.
+	# Publisher pointers (ADR-0066 item 7) ride in the same group: onyx-node takes them only when
+	# ONYX_PUBLISHER_POINTERS is set (else it answers 404), refuses a body over 1 KiB itself and
+	# contacts no origin.
 	@submit {
 		method POST
-		path /v1/submit /v1/submit/check /v1/wants
+		path /v1/submit /v1/submit/check /v1/wants /v1/publishers/pointer
 	}
 	# NL15 review: a declared body over the cap is refused here with 413. Cut off mid-stream by
 	# max_size it reached the client as a 502. The pattern matches a Content-Length over 65,536 (a
 	# body sent without one is still cut off by max_size).
 	@submit_big {
 		method POST
-		path /v1/submit /v1/submit/check /v1/wants
+		path /v1/submit /v1/submit/check /v1/wants /v1/publishers/pointer
 		header_regexp Content-Length ^(?:[1-9][0-9]{5,}|6553[7-9]|655[4-9][0-9]|65[6-9][0-9]{2}|6[6-9][0-9]{3}|[7-9][0-9]{4})$
 	}
 	handle @submit_big {

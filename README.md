@@ -108,6 +108,8 @@ The node serves these routes (OpenAPI 3.1: [docs/api/openapi.json](docs/api/open
 | `GET` | `/v1/bulk/catalogs/{publisher}/{n}` | A held catalog by publisher and number | free |
 | `GET` | `/v1/bulk/catalogs/{publisher}/leaf/{dataset}` | A dataset's leaf in the publisher's newest held catalog, with its proof (storage nodes learn of a removal) | free |
 | `GET` | `/v1/bulk/{publisher}/{dataset}/successor` | Where a removed bulk dataset went, with every proof | free |
+| `POST` | `/v1/publishers/pointer` | Point the reviewer at a publisher application | free |
+| `GET` | `/v1/publishers/pointer/{id}` | A pointer receipt's state | free |
 <!-- /generated:routes -->
 
 ## Quickstart

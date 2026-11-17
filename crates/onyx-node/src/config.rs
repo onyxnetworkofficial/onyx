@@ -96,6 +96,9 @@ pub struct NodeConfig {
     pub track_publications: Option<PathBuf>,
     /// Opt-in durable intake journal (ADR-0039); unset means no submission routes.
     pub submissions: Option<PathBuf>,
+    /// `ONYX_PUBLISHER_POINTERS`: opt-in journal of publisher pointers (ADR-0066 item 7);
+    /// unset means no pointer routes.
+    pub publisher_pointers: Option<PathBuf>,
     /// `ONYX_SALTED_LABELS`: comma-separated salted label set files served by
     /// `/v1/labels/{set}/{address}` (ROADMAP D30); only `test.*` sets load. Unset: no route.
     pub salted_labels: Vec<PathBuf>,
@@ -676,6 +679,10 @@ impl NodeConfig {
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),
             submissions: get("ONYX_SUBMISSIONS")
+                .map(|p| p.trim().to_string())
+                .filter(|p| !p.is_empty())
+                .map(PathBuf::from),
+            publisher_pointers: get("ONYX_PUBLISHER_POINTERS")
                 .map(|p| p.trim().to_string())
                 .filter(|p| !p.is_empty())
                 .map(PathBuf::from),

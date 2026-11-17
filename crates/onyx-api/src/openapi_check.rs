@@ -152,6 +152,10 @@ fn pattern_ok(p: &str, s: &str) -> bool {
         "^sub_[0-9a-f]{32}$" => s
             .strip_prefix("sub_")
             .is_some_and(|h| h.len() == 32 && hex(h)),
+        // A publisher pointer's receipt (ADR-0066 item 7).
+        "^ptr_[0-9a-f]{32}$" => s
+            .strip_prefix("ptr_")
+            .is_some_and(|h| h.len() == 32 && hex(h)),
         "^\\d{4}-\\d{2}-\\d{2}$" => {
             s.len() == 10
                 && s.bytes().enumerate().all(|(i, b)| {

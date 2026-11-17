@@ -215,6 +215,10 @@ scripts/check-secrets.sh
 # - READINESS B2 (docs/ops/proposal-review.md, offline, under 1 s): the proposal reviewer's script
 #   against a fake ssh, sudo and onyx-node: the command line it sends, every wrong argument refused
 #   before anything is sent, each exit code with its line.
+# - READINESS B5 (docs/ops/publisher-review.md "Pointers sent to the node", offline, about 1 s): the
+#   pointer reader's script against a fake ssh, sudo and onyx-node: the command line it sends, the
+#   root step's refusals, every wrong argument refused before anything is sent, and an answer that
+#   is not a pointer list or a pointer's two lines neither shown nor saved.
 side_by_side \
   "python3 -I scripts/health-watch-tests.py" \
   "python3 -I scripts/refresh-onchain-tests.py" \
@@ -227,7 +231,8 @@ side_by_side \
   "scripts/export-from-backup.sh --self-test" \
   "scripts/deploy-node-gate.sh --self-test" \
   "scripts/usage-report.sh --self-test" \
-  "scripts/proposal-review.sh --self-test"
+  "scripts/proposal-review.sh --self-test" \
+  "scripts/publisher-pointers.sh --self-test"
 # THREATS P3A-R1-5: an independent Python recount of the shipped block input (all 22 fields of
 # block 970,835 from its ChainSource) equals its committed leaf; planted changes are caught.
 python3 -I scripts/recount-chain-input.py --self-test

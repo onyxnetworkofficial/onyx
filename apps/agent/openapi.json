@@ -52,6 +52,10 @@
     {
       "name": "Credits",
       "description": "One spendable balance per account (contributor loop CL6, ADR-0056): the account's OnyxPrepaidV2 balance, credited by deposits, earned shares, refunds and payouts, spent with prepaid vouchers on answers and relayed actions. Amounts are decimal strings in the asset's smallest unit beside an `asset` object; no field names the asset. Test network only."
+    },
+    {
+      "name": "Publishers",
+      "description": "Apply to publish without an account (ADR-0066 item 7): a pointer names where an application file is and its hash. The node stores the two strings and fetches nothing. Off unless the node's operator turns it on."
     }
   ],
   "paths": {
@@ -1026,10 +1030,16 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
           "405": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
             "$ref": "#/components/responses/Error"
           },
           "422": {
@@ -1084,10 +1094,16 @@
           "400": {
             "$ref": "#/components/responses/Error"
           },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
           "405": {
             "$ref": "#/components/responses/Error"
           },
           "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
             "$ref": "#/components/responses/Error"
           },
           "429": {
@@ -2687,6 +2703,138 @@
             "$ref": "#/components/responses/Error"
           },
           "500": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/publishers/pointer": {
+      "post": {
+        "operationId": "sendPublisherPointer",
+        "summary": "Point the reviewer at a publisher application",
+        "description": "Takes where an application is (`origin`) and the Keccak-256 of the application file (`application`), nothing else, as `content-type: application/json` and never from a page of another site. The node checks the two strings offline (the origin's grammar and the list of shared hosts) and never contacts the origin; the reviewer's tool pulls the file later. The same origin and hash again is answered 200 with the same receipt and writes nothing. A host holds at most 3 waiting pointers. A pointer waits 6 days. A node without this route answers 404.",
+        "tags": [
+          "Publishers"
+        ],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublisherPointer"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "The receipt of a pointer the node already holds",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointerReceipt"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "The receipt of a new pointer",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointerReceipt"
+                }
+              }
+            }
+          },
+          "400": {
+            "$ref": "#/components/responses/Error"
+          },
+          "403": {
+            "$ref": "#/components/responses/Error"
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "409": {
+            "$ref": "#/components/responses/Error"
+          },
+          "413": {
+            "$ref": "#/components/responses/Error"
+          },
+          "415": {
+            "$ref": "#/components/responses/Error"
+          },
+          "422": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
+            "$ref": "#/components/responses/Error"
+          },
+          "503": {
+            "$ref": "#/components/responses/Error"
+          },
+          "504": {
+            "$ref": "#/components/responses/Error"
+          }
+        }
+      }
+    },
+    "/v1/publishers/pointer/{id}": {
+      "get": {
+        "operationId": "getPublisherPointer",
+        "summary": "A pointer receipt's state",
+        "description": "`received` while the pointer waits; `dropped` (with `reason`) once the reviewer's tool found that the file at the origin is not the one the pointer names; `expired` (with `reason`) for 6 more days after its 6 days; then 404. The node knows no decision: `decision` always says to read the public status list (the site's publishers.json), looked up by the application's hash. `no-store`.",
+        "tags": [
+          "Publishers"
+        ],
+        "parameters": [
+          {
+            "$ref": "#/components/parameters/pointerReceipt"
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The state",
+            "headers": {
+              "Cache-Control": {
+                "$ref": "#/components/headers/Cache-Control"
+              }
+            },
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PointerReceipt"
+                }
+              }
+            }
+          },
+          "404": {
+            "$ref": "#/components/responses/Error"
+          },
+          "405": {
+            "$ref": "#/components/responses/Error"
+          },
+          "429": {
             "$ref": "#/components/responses/Error"
           },
           "503": {
@@ -6128,6 +6276,70 @@
           "end",
           "links"
         ]
+      },
+      "PublisherPointer": {
+        "type": "object",
+        "properties": {
+          "origin": {
+            "type": "string",
+            "maxLength": 253,
+            "description": "Where the application is: a lowercase host, or a host and up to four path parts (`data.example.org/river-levels`). No scheme, port or trailing slash."
+          },
+          "application": {
+            "type": "string",
+            "pattern": "^0x[0-9a-f]{64}$",
+            "description": "Keccak-256 of the application file's bytes."
+          }
+        },
+        "required": [
+          "application",
+          "origin"
+        ],
+        "additionalProperties": false
+      },
+      "PointerReceipt": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "pattern": "^ptr_[0-9a-f]{32}$"
+          },
+          "status": {
+            "type": "string",
+            "enum": [
+              "received",
+              "expired",
+              "dropped"
+            ]
+          },
+          "reason": {
+            "type": "string",
+            "enum": [
+              "pointer_lifetime_over",
+              "application_hash_mismatch"
+            ],
+            "description": "With `expired`: `pointer_lifetime_over`. With `dropped`: `application_hash_mismatch` (the reviewer's tool found that the file at the origin does not hash to this pointer's hash)."
+          },
+          "expiresUnix": {
+            "type": "integer",
+            "minimum": 0,
+            "description": "When the pointer stops waiting: 6 days after the node took it."
+          },
+          "decision": {
+            "type": "string",
+            "enum": [
+              "see_status_list"
+            ],
+            "description": "Where the decision is: the public status list, by the application's hash. The node itself knows none."
+          }
+        },
+        "required": [
+          "decision",
+          "expiresUnix",
+          "id",
+          "status"
+        ],
+        "additionalProperties": false
       }
     },
     "parameters": {
@@ -6489,6 +6701,15 @@
           "maximum": 200
         },
         "description": "At most this many lines (default and cap 200)."
+      },
+      "pointerReceipt": {
+        "name": "id",
+        "in": "path",
+        "required": true,
+        "schema": {
+          "type": "string",
+          "pattern": "^ptr_[0-9a-f]{32}$"
+        }
       }
     },
     "headers": {
@@ -6627,7 +6848,7 @@
     },
     "body_too_large": {
       "status": 413,
-      "description": "A submission is at most 64 KiB."
+      "description": "A submission is at most 64 KiB, a publisher pointer 1 KiB."
     },
     "bounty_too_specific": {
       "status": 400,
@@ -6807,7 +7028,7 @@
     },
     "daily_quota": {
       "status": 429,
-      "description": "The daily submission or check quota is used up."
+      "description": "The daily submission, check or pointer quota is used up."
     },
     "empty_field": {
       "status": 400,
@@ -6959,7 +7180,7 @@
     },
     "not_found": {
       "status": 404,
-      "description": "No such route or receipt."
+      "description": "No such route, receipt or pointer."
     },
     "not_keyed": {
       "status": 400,
@@ -7200,6 +7421,46 @@
     "wants_closed": {
       "status": 503,
       "description": "This node has no prepaid contract, so it takes no wants (the board is still shown)."
+    },
+    "bad_pointer": {
+      "status": 400,
+      "description": "`/v1/publishers/pointer`: not a JSON object with exactly the text fields `origin` and `application`, each once."
+    },
+    "bad_origin": {
+      "status": 400,
+      "description": "`/v1/publishers/pointer`: the origin is not a lowercase host with at most four path parts (no scheme, port, address or punycode label)."
+    },
+    "bad_application_hash": {
+      "status": 400,
+      "description": "`/v1/publishers/pointer`: `application` is not 0x and 64 lowercase hex digits."
+    },
+    "origin_shared_host": {
+      "status": 422,
+      "description": "`/v1/publishers/pointer`: the origin is on a shared host, where someone else could take the name later."
+    },
+    "pointer_origin_busy": {
+      "status": 409,
+      "description": "`/v1/publishers/pointer`: the origin's host already has 3 pointers waiting with other hashes."
+    },
+    "pointer_full": {
+      "status": 503,
+      "description": "The pointer journal holds its maximum number of entries."
+    },
+    "pointer_busy": {
+      "status": 503,
+      "description": "Pointer storage has 8 writes in flight."
+    },
+    "pointer_unavailable": {
+      "status": 503,
+      "description": "The pointer journal cannot be used."
+    },
+    "cross_site_refused": {
+      "status": 403,
+      "description": "The public POST routes (`/v1/submit`, `/v1/submit/check`, `/v1/publishers/pointer`, `/v1/wants`, `/v1/relay`): the browser marked the request as coming from a page of another site (`Sec-Fetch-Site: cross-site`), or its `Origin` is not the host it was sent to."
+    },
+    "json_required": {
+      "status": 415,
+      "description": "`/v1/submit`, `/v1/submit/check`, `/v1/publishers/pointer`: the body must be sent with `content-type: application/json`."
     }
   }
 }

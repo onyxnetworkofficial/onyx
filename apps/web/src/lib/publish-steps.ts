@@ -27,7 +27,8 @@ export const buildFromSource = (release: string = RELEASE) => [
 	'export PATH="$PWD/target/release:$PATH"'
 ];
 
-/** Where an application is filed today: a public issue on the source repository. */
+/** The second way to file an application: a public issue on the source repository. The first is
+ * the page's form, which sends the same two values to the site's node (publisher-pointer.ts). */
 export const ISSUES = `${REPO}/issues`;
 export const ISSUE_TITLE = 'Publisher application: <publisher id>';
 /** The issue's two lines (.github/ISSUE_TEMPLATE/publisher-application.md). */
@@ -112,15 +113,15 @@ export function steps(node: string = HOSTED_NODE): Step[] {
 			title: 'Point the reviewer at your origin',
 			time: '2 minutes',
 			leaves: 'Becomes public',
-			what: `Today an application is filed as a public issue on the source repository, titled "${ISSUE_TITLE}". It holds exactly two lines: your origin and the hash of your application file. You never send the application itself; the review fetches it from your origin.`,
+			what: 'Send two values: your origin and the hash of your application file, as the doctor printed them. You never send the application itself; the review fetches it from your origin. There are two ways, and one is enough.',
 			commands: [ISSUE_LINES.join('\n')],
-			warn: 'The issue is public and shows the account that opens it. A way to apply without an account is planned, not built.'
+			warn: 'The form needs no account, and the node keeps no address of yours. The issue is public and shows the account that opens it. Your origin is public either way.'
 		},
 		{
 			title: 'Wait for the decision',
 			time: 'up to 5 days',
 			leaves: 'Nothing is sent',
-			what: 'The reviewer answers in the issue: approved, or refused with a reason. The same state is in the status list at the foot of this page. To read it in your terminal, save the list and let the doctor print your line.',
+			what: 'The decision is approved, or refused with a reason. It is written to the status list at the foot of this page, where you look it up by your application’s hash; an application filed as an issue is also answered there. To read the list in your terminal, save it and let the doctor print your line.',
 			commands: [`curl -s -o publishers.json ${STATUS_URL}\nonyx-publish doctor --publishers publishers.json`]
 		},
 		{

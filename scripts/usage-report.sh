@@ -74,6 +74,8 @@ number() { # VALUE MIN MAX NAME
 self_test() {
   local t ok=0 bad=0 out
   t=$(mktemp -d "${TMPDIR:-/tmp}/onyx-usage-report.XXXXXX")
+  # A private temp folder: the self-tests of the sibling scripts run at the same time and use the same file names.
+  mkdir "$t/tmp"; export TMPDIR="$t/tmp"
   trap 'rm -rf "$t"' RETURN
   check() { if eval "$2"; then ok=$((ok + 1)); else bad=$((bad + 1)); echo "FAIL: $1" >&2; fi; }
   cat >"$t/a.json" <<'JSON'
@@ -109,6 +111,26 @@ JSON
     [ "$rc" = 2 ] && [[ $out == *"host name or ssh alias"* ]] && refused=$((refused + 1))
   done
   check "a host that starts like an option or is not a plain name is refused before ssh (B2-R1 L3)" '[ "$refused" = 5 ]'
+  # Review PTR-R1 L3: the server's stderr reaches the terminal only as printable text.
+  mkdir -p "$t/bin"
+  printf '#!/usr/bin/env bash\nprintf "evil \\033[2J\\007 text \\302\\233 end\\n" >&2\ncat "%s"\nexit "$(cat "%s")"\n' "$t/a.json" "$t/exit" >"$t/bin/ssh"
+  chmod +x "$t/bin/ssh"
+  echo 0 >"$t/exit"
+  local rc=0
+  out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
+  check "the server's stderr is shown as printable text only, and the report still prints (PTR-R1 L3)" '[ "$rc" = 0 ] && [[ $out == *"evil ?[2J? text ?? end"* ]] && [[ $out != *$'"'"'\e'"'"'* ]] && [[ $out != *$'"'"'\a'"'"'* ]] && [[ $out == *"Requests: 149"* ]]'
+  # THREATS PTR-R2-L4: a name in the server's answer with a C1 control or a DEL does not reach the
+  # terminal, a flood on stderr is cut while it is captured, and no capture file stays.
+  printf '{"version":1,"from":"a","to":"b","small_count":5,"unreadable_days":[],"totals":{"routes":{"GET /c1\\u009b[2J\\u007f/x":{"2xx":1,"3xx":0,"4xx":0,"5xx":0}},"datasets":{},"datasets_other":0},"days":[]}' >"$t/c1.json"
+  printf '#!/usr/bin/env bash\nhead -c 300000 /dev/zero | tr "\\\\0" x >&2\ncat "%s"\n' "$t/c1.json" >"$t/bin/ssh"
+  rc=0; out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
+  check "a C1 control or a DEL in a name of the report does not reach the terminal (PTR-R2-L4)" '[ "$rc" = 0 ] && [[ $out == *"GET /c1"* ]] && [[ $out != *$'"'"'\302\233'"'"'* ]] && [[ $out != *$'"'"'\177'"'"'* ]]'
+  check "a flood on stderr is cut at 4 KiB while it is captured (PTR-R2-L4)" '[ "$(grep -o x <<<"${out%%Usage*}" | wc -l)" = 4096 ]'
+  check "no capture file is left behind (PTR-R2-L4)" '[ "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "onyx-capture.*" -newer "$t/exit" 2>/dev/null | wc -l)" = 0 ]'
+  printf '#!/usr/bin/env bash\nprintf "evil \\\\033[2J\\\\007 text \\\\302\\\\233 end\\\\n" >&2\ncat "%s"\nexit "$(cat "%s")"\n' "$t/a.json" "$t/exit" >"$t/bin/ssh"
+  echo 1 >"$t/exit"; rc=0
+  out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
+  check "a failed read shows the filtered stderr and its own line (PTR-R1 L3)" '[ "$rc" = 1 ] && [[ $out == *"evil ?[2J? text"*"reading the counts on fake-host failed"* ]] && [[ $out != *$'"'"'\e'"'"'* ]]'
   echo "usage-report self-test: $ok passed, $bad failed"
   [ "$bad" = 0 ]
 }
@@ -132,14 +154,44 @@ state=${ONYX_USAGE_STATE:-/var/lib/onyx/state}
 for v in "$bin" "$state"; do
   [[ $v =~ ^/[A-Za-z0-9._/-]+$ ]] || { echo "usage-report: ONYX_USAGE_BIN and ONYX_USAGE_STATE are plain absolute paths, not '$v'" >&2; exit 2; }
 done
-tmp=$(mktemp "${TMPDIR:-/tmp}/onyx-usage-report.XXXXXX")
-trap 'rm -f "$tmp"' EXIT
+# THREATS PTR-R1-L3, PTR-R2-L4: nothing the server (or ssh) wrote reaches the terminal as it is. A
+# server that was taken over must not reach the reviewer's terminal with control characters, on
+# either channel. stdout: the C0 control characters except tab and line end, DEL and the UTF-8 form
+# of the C1 controls become "?" (other text, also non-ASCII, stays). stderr: printable ASCII, tabs
+# and line ends only. Both are captured in private files first: stderr is cut to 4 KiB and stdout
+# to 4 MiB while they are captured (the rest is read and dropped, so the sender is never stopped by
+# a closed pipe), and the files are removed on exit, also on INT and TERM.
+clean() { LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' | LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
+clean_err() { LC_ALL=C tr -c '\n\t -~' '?'; }
+keep() { head -c "$1"; cat >/dev/null; } # BYTES: the first BYTES of stdin, the rest read and dropped
+captured=()
+forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}"; }
+trap forget EXIT
+trap 'forget; exit 130' INT
+trap 'forget; exit 143' TERM
+capture() { # NAME: a new private file named in the variable NAME, removed when the script ends
+  local f
+  f=$(mktemp "${TMPDIR:-/tmp}/onyx-capture.XXXXXX")
+  captured+=("$f")
+  printf -v "$1" %s "$f"
+}
+capture tmp; capture err
 read_counts=("$bin" usage --days "$((10#$days))" --state-dir "$state")
+rc=0
 if [ "$host" = local ]; then
-  "${read_counts[@]}" >"$tmp" || { echo "usage-report: $bin usage failed (see above)" >&2; exit 1; }
+  "${read_counts[@]}" > >(keep 4194304 >"$tmp") 2> >(keep 4096 >"$err") || rc=$?
+  wait # the two readers above
+  clean_err <"$err" >&2
+  [ "$rc" = 0 ] || { echo "usage-report: $bin usage failed (see above)" >&2; exit 1; }
 else
   # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-  ssh -o BatchMode=yes -- "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" >"$tmp" \
-    || { echo "usage-report: reading the counts on $host failed (see above; it needs sudo -n for $bin)" >&2; exit 1; }
+  ssh -o BatchMode=yes -- "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" > >(keep 4194304 >"$tmp") 2> >(keep 4096 >"$err") || rc=$?
+  wait # the two readers above
+  clean_err <"$err" >&2
+  [ "$rc" = 0 ] || { echo "usage-report: reading the counts on $host failed (see above; it needs sudo -n for $bin)" >&2; exit 1; }
 fi
-print_report "$tmp" "$((10#$top))"
+# The report is this script's own print of the server's numbers and names; it goes through the
+# same filter as any other text of the server (the names in it are the server's).
+capture report
+print_report "$tmp" "$((10#$top))" >"$report"
+clean <"$report"

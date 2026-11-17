@@ -1383,3 +1383,84 @@ async fn a_fed_receipt_shows_the_observers_evidence_and_nothing_private() {
     std::fs::write(ledger_path(&journal), "{\"x\":1}").expect("write");
     assert!(SubmitStore::open(&journal, None, SubmitLimits::default()).is_err());
 }
+
+/// Review PTR-R1 M1 (THREATS PTR-R1-M1): the proposal routes are not taken from a page of
+/// another site, nor as a body a browser may send anywhere without a preflight; a refusal is
+/// counted against no budget and nothing is recorded. A tool that sends JSON is taken.
+#[tokio::test]
+async fn a_cross_site_or_non_json_proposal_is_refused_and_costs_no_budget() {
+    let dir = test_dir("submit-cross-site");
+    let limits = SubmitLimits {
+        submit_per_minute: 1,
+        check_per_minute: 1,
+        ..SubmitLimits::default()
+    };
+    let store = store_at(&dir, None, limits);
+    let app = routes(store.clone());
+    let send = |uri: &'static str, headers: Vec<(&'static str, &'static str)>| {
+        let app = app.clone();
+        async move {
+            let mut req = Request::builder().method("POST").uri(uri);
+            for (k, v) in headers {
+                req = req.header(k, v);
+            }
+            let mut req = req.body(Body::from(bytes(&example()))).expect("request");
+            req.extensions_mut()
+                .insert(ClientKey("192.0.2.77".to_string()));
+            let resp = app.oneshot(req).await.expect("response");
+            let status = resp.status();
+            let body = resp.into_body().collect().await.expect("body").to_bytes();
+            let v: Value = serde_json::from_slice(&body).expect("json");
+            crate::openapi_check::check("POST", uri, status.as_u16(), &v);
+            (status, v)
+        }
+    };
+    let json = ("content-type", "application/json");
+    for uri in ["/v1/submit", "/v1/submit/check"] {
+        for headers in [
+            vec![
+                ("content-type", "text/plain;charset=UTF-8"),
+                ("origin", "https://evil.example"),
+                ("sec-fetch-site", "cross-site"),
+            ],
+            vec![json, ("sec-fetch-site", "cross-site")],
+            vec![
+                json,
+                ("origin", "https://evil.example"),
+                ("host", "node.example.org"),
+            ],
+        ] {
+            let (s, v) = send(uri, headers.clone()).await;
+            assert_eq!(
+                (s, code(&v)),
+                (StatusCode::FORBIDDEN, Some("cross_site_refused")),
+                "{uri} {headers:?}"
+            );
+        }
+        for headers in [
+            vec![],
+            vec![("content-type", "text/plain")],
+            vec![("content-type", "application/x-www-form-urlencoded")],
+        ] {
+            let (s, v) = send(uri, headers.clone()).await;
+            assert_eq!(
+                (s, code(&v)),
+                (StatusCode::UNSUPPORTED_MEDIA_TYPE, Some("json_required")),
+                "{uri} {headers:?}"
+            );
+        }
+    }
+    assert_eq!(store.recorded(), 0);
+    // The one request a minute of this client is still there for each route.
+    let own = vec![
+        json,
+        ("origin", "https://node.example.org"),
+        ("host", "node.example.org"),
+        ("sec-fetch-site", "same-origin"),
+    ];
+    let (s, v) = send("/v1/submit/check", own).await;
+    assert_eq!(s, StatusCode::OK, "{v}");
+    let (s, v) = send("/v1/submit", vec![json]).await;
+    assert_eq!(s, StatusCode::CREATED, "{v}");
+    assert_eq!(store.recorded(), 1);
+}

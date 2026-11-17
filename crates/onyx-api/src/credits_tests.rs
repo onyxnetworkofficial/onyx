@@ -994,3 +994,37 @@ async fn an_unsigned_voucher_learns_nothing_about_the_total() {
     assert!(v.get("last").is_none() && v.get("price").is_none(), "{v}");
     assert!(!v.to_string().contains("1000"), "{v}");
 }
+
+/// Review PTR-R1 M1 (THREATS PTR-R1-M1): the relay is not taken from a page of another site:
+/// refused before the client's budget, the hold and the send. A tool's request is not affected.
+#[tokio::test]
+async fn a_cross_site_relay_is_refused_before_anything_is_held() {
+    let fx = fixture_with(10_000, Mode::Mine, RelayPolicy::default());
+    let me = addr(&OBSERVER);
+    for extra in [
+        vec![("sec-fetch-site", "cross-site".to_string())],
+        vec![("origin", "https://evil.example".to_string())],
+        vec![
+            ("origin", "https://evil.example".to_string()),
+            ("host", "node.example.org".to_string()),
+        ],
+    ] {
+        let mut headers = vec![voucher(&OBSERVER, 1000)];
+        headers.extend(extra.clone());
+        let (s, v) = call(
+            &fx,
+            Method::POST,
+            "/v1/relay",
+            &headers,
+            Some(commit_body(&OBSERVER, me, Hash32([1; 32]))),
+        )
+        .await;
+        assert_eq!(
+            (s, v["error"]["code"].as_str()),
+            (StatusCode::FORBIDDEN, Some("cross_site_refused")),
+            "{extra:?}"
+        );
+    }
+    assert_eq!(fx.sender.sends.load(Ordering::SeqCst), 0);
+    assert_eq!(relay_commit(&fx, 1000, 1).await.0, StatusCode::OK);
+}

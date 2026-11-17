@@ -9,6 +9,7 @@ import { readFile } from 'node:fs/promises';
 import { APPLICATION_STATES, BEFORE_RECORD, DECIDE_DAYS, MIN_PREFIX, PUBLISHER_STATES, REASONS, lookup, nextStep, parseStatus, parseStatusText, utcMinute } from '../src/lib/publishers.ts';
 import { BOOK, CHAIN_ID, EXAMPLE_ID, EXAMPLE_ORIGIN, HOSTED_NODE, ISSUE_LINES, ISSUE_TITLE, ISSUES, SCHEMA_EXAMPLE, STATUS_URL, TOOLS_FILE, TOOLS_URL, UNPACK, WORDS, buildFromSource, steps, subcommands } from '../src/lib/publish-steps.ts';
 import { BASE, ONBOARDING_SINCE, RELEASE, REPO, hasOnboarding } from '../src/lib/release.ts';
+import * as PTR from '../src/lib/publisher-pointer.ts';
 
 const repo = (p) => new URL(`../../../${p}`, import.meta.url);
 const committed = await readFile(repo('apps/web/static/publishers.json'), 'utf8');
@@ -201,16 +202,31 @@ test('the ten steps are those of the guide, by number, title and command', async
 	// The id and the origin are picked before the steps, as in the guide, with made-up examples.
 	assert.ok(guide.includes(EXAMPLE_ID) && guide.includes(EXAMPLE_ORIGIN));
 	assert.ok(guide.indexOf('Pick a neutral publisher id') < guide.indexOf('## Step by step'));
-	// Step 7 is the issue's title and two lines.
+	// Step 7 offers two ways, as the guide does: the pointer form first (no account), the public
+	// issue second. The step's one block is the issue's two lines; its title is the template's.
 	const template = await readFile(repo('.github/ISSUE_TEMPLATE/publisher-application.md'), 'utf8');
+	const page7 = await readFile(repo('apps/web/src/routes/publish/+page.svelte'), 'utf8');
 	assert.deepEqual(S[6].commands, [ISSUE_LINES.join('\n')]);
 	assert.equal(ISSUE_LINES.length, 2);
 	for (const l of ISSUE_LINES) assert.ok(template.includes(l), l);
-	assert.ok(template.includes(`title: "${ISSUE_TITLE}"`) && S[6].what.includes(ISSUE_TITLE));
-	assert.match(S[6].what, /Today an application is filed as a public issue on the source repository/);
-	assert.match(S[6].warn, /without an account is planned, not built/);
+	assert.ok(template.includes(`title: "${ISSUE_TITLE}"`) && page7.includes('Title it "{ISSUE_TITLE}"'));
+	assert.match(S[6].what, /Send two values: your origin and the hash of your application file/);
+	assert.match(S[6].what, /two ways, and one is enough/);
+	assert.match(S[6].warn, /The form needs no account, and the node keeps no address of yours/);
+	assert.match(S[6].warn, /The issue is public and shows the account that opens it/);
+	assert.doesNotMatch(S[6].what + S[6].warn, /planned, not built|Today an application is filed/);
+	// The form stands before the issue in the page, and only in step 7.
+	assert.ok(page7.indexOf('<PublisherPointer />') > 0 && page7.indexOf('<PublisherPointer />') < page7.indexOf('Second way: a public issue on the source repository'));
+	assert.equal(page7.split('<PublisherPointer />').length, 2);
 	assert.equal(ISSUES, `${REPO}/issues`);
 	assert.ok(guide.includes(ISSUES));
+	// The guide's step 7 names the same route with the same two fields, and says both ways.
+	const step7 = guide.slice(guide.indexOf('7. **Point the reviewer at your origin'), guide.indexOf('8. **Wait for the decision'));
+	assert.ok(step7.includes(`curl -s <node address>/${PTR.POINTER_PATH} -H 'content-type: application/json' -d '{"origin": "<origin>", "application": "<0x and 64 hex digits>"}'`));
+	assert.deepEqual(Object.keys(JSON.parse(PTR.pointerBody('a.example.org', '0x' + '00'.repeat(32)))), ['origin', 'application']);
+	assert.ok(step7.indexOf('Without an account: a pointer to the node') < step7.indexOf('With an account: a public issue'));
+	assert.ok(step7.includes(`for ${PTR.POINTER_DAYS} days (${PTR.RECEIPT_DAYS} days in all`) && step7.includes('never your address') && step7.includes('does not contact your origin'));
+	assert.ok(step7.includes('`404` means that node does not take pointers'));
 	// Review S4-R1 L2: step 8 says where the status list comes from before the doctor reads it.
 	assert.equal(STATUS_URL, `${HOSTED_NODE}/publishers.json`);
 	assert.deepEqual(S[7].commands, [`curl -s -o publishers.json ${STATUS_URL}\nonyx-publish doctor --publishers publishers.json`]);
@@ -286,7 +302,122 @@ test('the page and the status box build no markup and no link from the list', as
 	// The status box holds no link and no source at all: an origin, an id or a hash is never one.
 	assert.doesNotMatch(box, /<a[\s>]|href|src=|window\.open|location\./);
 	// The page's links are its own constants, never a value of the list.
+	// The pointer form (step 7) builds none either, and shows no text of an answer: an outcome's
+	// words are this site's own, a receipt's values passed their patterns.
+	const form = await readFile(repo('apps/web/src/lib/components/PublisherPointer.svelte'), 'utf8');
+	for (const bad of ['{@html', 'innerHTML', 'outerHTML', 'insertAdjacentHTML', 'document.write', 'srcdoc', 'DOMParser', 'eval(', 'new Function']) assert.ok(!form.includes(bad), `the pointer form has no ${bad}`);
+	assert.doesNotMatch(form, /\son[a-z]+="/, 'the pointer form has no inline handler');
+	assert.doesNotMatch(form, /<a[\s>]|href|src=|window\.open|location\.|\.message\b|error\?\.|localStorage|sessionStorage|document\.cookie/);
+	// One request, to this site's own origin, with no credentials, following no redirect.
+	assert.equal(form.split('fetch(').length, 2);
+	assert.ok(form.includes('fetch(new URL(POINTER_PATH, document.baseURI), {') && form.includes("credentials: 'omit'") && form.includes("redirect: 'error'"));
+	assert.equal(PTR.POINTER_PATH, 'v1/publishers/pointer');
 	const hrefs = [...page.matchAll(/href=\{([^}]+)\}|href="([^"]+)"/g)].map((m) => m[1] ?? m[2]);
 	assert.deepEqual([...new Set(hrefs)].sort(), ['GUIDE', 'ISSUES', 'TOOLS_URL', "resolve('/submit')"]);
 	assert.doesNotMatch(page, /publishers\.ts'.*\b(parseStatus|lookup)\b/);
+});
+
+test('the pointer form checks the two values as the node does', async () => {
+	const H = '0x' + 'ab'.repeat(32);
+	for (const ok of ['data.example.org', 'data.example.org/river-levels', 'a.b', 'data.example.org/a/b/c/d', 'x-1.example.org/a_b-c', '9.example.org']) assert.equal(PTR.originProblem(ok), null, ok);
+	for (const bad of ['', 'https://data.example.org', 'data.example.org/', 'data.example.org:8443', 'data.example.org/a?b=c', 'Data.example.org', 'localhost', '192.0.2.7', '192.0.2.7/data', '[2001:db8::1]', 'xn--e1afmkfd.example.org', 'data.example.org/a/b/c/d/e', 'data.example.org/../etc', 'data.example.org/a b', 'someone@example.org', 'mailto:someone@example.org', 'data.example.org/<script>', '-a.example.org', 'a..example.org', 'x'.repeat(254)])
+		assert.equal(typeof PTR.originProblem(bad), 'string', bad);
+	assert.equal(PTR.hashProblem(H), null);
+	for (const bad of ['', H.toUpperCase(), H.slice(2), H + '00', H.slice(0, 64), '0x' + 'zz'.repeat(32)]) assert.equal(typeof PTR.hashProblem(bad), 'string', bad);
+	// The same cases the node's own test refuses and takes (crates/onyx-api/src/publishers_tests.rs):
+	// every origin that test lists as bad is bad here too.
+	const rust = await readFile(repo('crates/onyx-api/src/publishers_tests.rs'), 'utf8');
+	const block = rust.slice(rust.indexOf('    for origin in [\n        "",'), rust.indexOf('    ] {\n        let (s, v) = post(&r, "198.51.100.1", origin, &good).await;'));
+	const listed = [...block.matchAll(/^        "((?:[^"\\]|\\.)*)",$/gm)].map((m) => JSON.parse(`"${m[1]}"`));
+	assert.ok(listed.length >= 20, `the node's refused origins were read (${listed.length})`);
+	for (const o of listed) assert.equal(typeof PTR.originProblem(o), 'string', `the node refuses ${JSON.stringify(o)}, so does the form`);
+});
+
+test('a receipt is read in its exact shape or not at all, and every outcome has the page\'s own words', () => {
+	const id = 'ptr_' + '0a'.repeat(16);
+	const good = { id, status: 'received', expiresUnix: 1795392000, decision: 'see_status_list' };
+	assert.deepEqual(PTR.parsePointerReceipt(good), { id, status: 'received', expiresUnix: 1795392000, reason: null });
+	assert.deepEqual(PTR.parsePointerReceipt({ ...good, status: 'expired', reason: 'pointer_lifetime_over' }), { id, status: 'expired', expiresUnix: 1795392000, reason: 'pointer_lifetime_over' });
+	for (const bad of [
+		null, [], 'x', 7,
+		{ ...good, id: 'sub_' + '0a'.repeat(16) },
+		{ ...good, id: '<img src=x onerror=__xss()>' },
+		{ ...good, id: id.toUpperCase() },
+		{ ...good, status: 'approved' },
+		{ ...good, status: '<b>received</b>' },
+		{ ...good, reason: 'pointer_lifetime_over' },
+		{ ...good, status: 'expired' },
+		{ ...good, status: 'expired', reason: '<script>' },
+		{ ...good, status: 'dropped' },
+		{ ...good, status: 'dropped', reason: 'pointer_lifetime_over' },
+		{ ...good, status: 'expired', reason: 'application_hash_mismatch' },
+		{ ...good, expiresUnix: '1795392000' },
+		{ ...good, expiresUnix: 1.5 },
+		{ ...good, expiresUnix: -1 },
+		{ ...good, decision: 'approved' },
+		{ ...good, note: 'hello' },
+		{ id, status: 'received', expiresUnix: 1 }
+	])
+		assert.equal(PTR.parsePointerReceipt(bad), null, JSON.stringify(bad));
+	assert.equal(PTR.utcMinute(1795392000), '2026-11-23 00:00 UTC');
+	assert.match(PTR.receiptWords(PTR.parsePointerReceipt(good)), /^Received\. .* waits until 2026-11-23 00:00 UTC\.$/);
+	assert.match(PTR.receiptWords({ id, status: 'expired', expiresUnix: 1, reason: 'pointer_lifetime_over' }), /no longer waits/);
+	// Review PTR-R1 M2: a pointer the reviewer dropped says why, and what to do.
+	const dropped = PTR.parsePointerReceipt({ ...good, status: 'dropped', reason: 'application_hash_mismatch' });
+	assert.deepEqual(dropped, { id, status: 'dropped', expiresUnix: 1795392000, reason: 'application_hash_mismatch' });
+	assert.match(PTR.receiptWords(dropped), /^Dropped: .*does not have this hash.*run the doctor again/);
+	assert.match(PTR.REFUSALS.pointer_origin_busy, /host already has three pointers.*may not be yours.*reviewer drops.*You do not have to wait: file your application as a public issue/);
+
+	// Outcomes: a new pointer, a repeat, the route off, a refusal by its code, anything else.
+	assert.deepEqual(PTR.pointerOutcome(201, good), { kind: 'receipt', receipt: PTR.parsePointerReceipt(good), again: false });
+	assert.equal(PTR.pointerOutcome(200, good).again, true);
+	assert.deepEqual(PTR.pointerOutcome(201, { ...good, id: '<b>' }), { kind: 'failed', words: PTR.BAD_ANSWER_WORDS });
+	assert.deepEqual(PTR.pointerOutcome(201, null), { kind: 'failed', words: PTR.BAD_ANSWER_WORDS });
+	for (const off of [404, 403, 405]) {
+		// Whatever body comes with it (the node's JSON, a proxy's page, a hostile text).
+		for (const body of [null, { error: { code: 'not_found', message: '<img src=x onerror=__xss()>' } }, { error: { code: 'rate_limited' } }]) assert.deepEqual(PTR.pointerOutcome(off, body), { kind: 'off', words: PTR.OFF_WORDS });
+	}
+	assert.match(PTR.OFF_WORDS, /does not take pointers/);
+	assert.match(PTR.OFF_WORDS, /public issue instead \(the second way below\)/);
+	const hostile = '<img src=x onerror=__xss()>';
+	for (const [code, words] of Object.entries(PTR.REFUSALS)) {
+		const out = PTR.pointerOutcome(code === 'rate_limited' ? 429 : code === 'cross_site_refused' ? 403 : 400, { error: { code, message: hostile } });
+		assert.deepEqual(out, { kind: 'refused', words });
+		assert.ok(!out.words.includes('<') && !/ADR|THREATS|PUBON|READINESS|ROADMAP/.test(words), code);
+	}
+	// The node's own codes for this route each have words here.
+	// A 403 is "the route is off" (a proxy's page) unless it is the node's own cross-site refusal.
+	assert.equal(PTR.pointerOutcome(403, { error: { code: 'cross_site_refused' } }).kind, 'refused');
+	assert.equal(PTR.pointerOutcome(404, { error: { code: 'cross_site_refused' } }).kind, 'off');
+	for (const code of ['cross_site_refused', 'json_required', 'bad_pointer', 'bad_origin', 'bad_application_hash', 'origin_shared_host', 'pointer_origin_busy', 'body_too_large', 'rate_limited', 'daily_quota', 'pointer_full', 'pointer_busy', 'pointer_unavailable']) assert.ok(Object.hasOwn(PTR.REFUSALS, code), code);
+	// A code this page does not know, or a body that is not the node's: the status alone, never the text.
+	for (const body of [{ error: { code: hostile, message: hostile } }, { error: { code: 'internal', message: hostile } }, { error: hostile }, hostile, null, { error: { code: 'constructor' } }, { error: { code: 'toString' } }]) {
+		const out = PTR.pointerOutcome(500, body);
+		assert.deepEqual(out, { kind: 'failed', words: PTR.otherWords(500) });
+		assert.ok(!out.words.includes('<'));
+	}
+	assert.match(PTR.otherWords(502), /HTTP 502/);
+	assert.match(PTR.otherWords(502), /Sending the same two values again is safe/);
+	assert.match(PTR.UNREACHED_WORDS, /could not be reached/);
+});
+
+test('the pointer form\'s codes and limits are the node\'s', async () => {
+	// The codes the form has words for are in the API description under the pointer route's
+	// statuses, and the days are the node's constants.
+	const spec = JSON.parse(await readFile(repo('docs/api/openapi.json'), 'utf8'));
+	const codes = spec['x-onyx-error-codes'];
+	for (const code of Object.keys(PTR.REFUSALS)) assert.ok(Object.hasOwn(codes, code), `${code} is an error code of the API`);
+	const post = spec.paths['/' + PTR.POINTER_PATH].post;
+	assert.deepEqual(Object.keys(post.responses).sort(), ['200', '201', '400', '403', '404', '405', '409', '413', '415', '422', '429', '503', '504']);
+	const receipt = spec.components.schemas.PointerReceipt;
+	assert.deepEqual(receipt.properties.status.enum, ['received', 'expired', 'dropped']);
+	assert.deepEqual(receipt.properties.reason.enum, ['pointer_lifetime_over', 'application_hash_mismatch']);
+	assert.deepEqual(receipt.properties.decision.enum, ['see_status_list']);
+	assert.deepEqual(Object.keys(spec.components.schemas.PublisherPointer.properties).sort(), ['application', 'origin']);
+	const node = await readFile(repo('crates/onyx-api/src/publishers.rs'), 'utf8');
+	assert.ok(node.includes('pub const KEPT_EXPIRED_SECS: u64 = 6 * 86_400;') && node.includes('pub const LIFETIME_SECS: u64 = onyx_bulk::application::LIFETIME_SECS;'));
+	const app = await readFile(repo('crates/onyx-bulk/src/application.rs'), 'utf8');
+	assert.ok(app.includes('pub const LIFETIME_SECS: u64 = 6 * 86_400;'));
+	assert.equal(PTR.POINTER_DAYS, 6);
+	assert.equal(PTR.RECEIPT_DAYS, 12);
 });

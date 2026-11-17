@@ -100,8 +100,29 @@ exec setpriv --reuid="$u" --regid="$g" --clear-groups --no-new-privs -- "$bin" p
 SH
 )
 
+# THREATS PTR-R1-L3, PTR-R2-L4: nothing the server (or ssh) wrote reaches the terminal as it is. A
+# server that was taken over must not reach the reviewer's terminal with control characters, on
+# either channel. stdout: the C0 control characters except tab and line end, DEL and the UTF-8 form
+# of the C1 controls become "?" (other text, also non-ASCII, stays). stderr: printable ASCII, tabs
+# and line ends only. Both are captured in private files first: stderr is cut to 4 KiB and stdout
+# to 4 MiB while they are captured (the rest is read and dropped, so the sender is never stopped by
+# a closed pipe), and the files are removed on exit, also on INT and TERM.
+clean() { LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' | LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
+clean_err() { LC_ALL=C tr -c '\n\t -~' '?'; }
+keep() { head -c "$1"; cat >/dev/null; } # BYTES: the first BYTES of stdin, the rest read and dropped
+captured=()
+forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}"; }
+trap forget EXIT
+trap 'forget; exit 130' INT
+trap 'forget; exit 143' TERM
+capture() { # NAME: a new private file named in the variable NAME, removed when the script ends
+  local f
+  f=$(mktemp "${TMPDIR:-/tmp}/onyx-capture.XXXXXX")
+  captured+=("$f")
+  printf -v "$1" %s "$f"
+}
 run() { # VERB ARGS...: run the tool where the node is; the tool's exit code, with a line on failure
-  local host bin journal v rc=0
+  local host bin journal v rc=0 err out
   host=${ONYX_REVIEW_HOST:-${ONYX_SITE_HOST:-onyx-web}}
   bin=${ONYX_REVIEW_BIN:-/usr/local/bin/onyx-node}
   journal=${ONYX_REVIEW_JOURNAL:-/var/lib/onyx/state/submissions.journal}
@@ -111,12 +132,16 @@ run() { # VERB ARGS...: run the tool where the node is; the tool's exit code, wi
   # THREATS REVQ-R1-L3: a name that starts with a letter or a digit, so it can never be read as an option.
   [[ $host =~ ^[A-Za-z0-9][A-Za-z0-9._-]*$ ]] || fail "ONYX_REVIEW_HOST is a host name or ssh alias, not '$host'" 2
   check_args "$@"
+  capture err; capture out
   if [ "$host" = local ]; then
-    "$bin" proposals "$@" --journal "$journal" || rc=$?
+    "$bin" proposals "$@" --journal "$journal" > >(keep 4194304 >"$out") 2> >(keep 4096 >"$err") || rc=$?
   else
     # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" || rc=$?
+    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" > >(keep 4194304 >"$out") 2> >(keep 4096 >"$err") || rc=$?
   fi
+  wait # the two readers above
+  clean_err <"$err" >&2
+  clean <"$out"
   case "$rc" in
     0) return 0 ;;
     3) echo "proposal-review: the decision was refused and nothing was written (see above)" >&2 ;;
@@ -129,6 +154,8 @@ run() { # VERB ARGS...: run the tool where the node is; the tool's exit code, wi
 self_test() {
   local t ok=0 bad=0 out rc id
   t=$(mktemp -d "${TMPDIR:-/tmp}/onyx-proposal-review.XXXXXX")
+  # A private temp folder: the self-tests of the sibling scripts run at the same time and use the same file names.
+  mkdir "$t/tmp"; export TMPDIR="$t/tmp"
   trap 'rm -rf "$t"' RETURN
   check() { if eval "$2"; then ok=$((ok + 1)); else bad=$((bad + 1)); echo "FAIL: $1" >&2; fi; }
   id=sub_0123456789abcdef0123456789abcdef
@@ -170,6 +197,9 @@ FAKE
 #!/usr/bin/env bash
 printf '%s\n' "\$@" >"$t/node.args"
 echo "fake tool ran: \$2"
+[ -f "$t/hostile" ] && printf 'evil \033[2J\007 text \302\233 end\n' >&2
+[ -f "$t/hostile-out" ] && printf 'out \033]0;title\007 \302\233 back\rspace \177 caf\303\251 tab\there\n'
+[ -f "$t/flood" ] && { head -c 300000 /dev/zero | tr '\0' 'x' >&2; }
 exit "\$(cat "$t/exit")"
 FAKE
   chmod +x "$t/bin/ssh" "$t/bin/sudo" "$t/bin/setpriv" "$t/onyx-node"
@@ -278,6 +308,42 @@ BAD
     if [ "$rc" = 2 ] && [[ $out == *"host name or ssh alias"* ]] && [ ! -e "$t/ssh.args" ]; then refused_hosts=$((refused_hosts + 1)); else echo "  host not refused: '$h'" >&2; fi
   done
   check "a host that is not a plain name, or starts like an option, is refused before ssh (B2-R1 L3)" '[ "$refused_hosts" = 7 ]'
+  # Review PTR-R1 L3: the server's stderr reaches the reviewer's terminal only as printable text.
+  : >"$t/hostile"; echo 0 >"$t/exit"; go list
+  check "the server's stderr is shown as printable text only (PTR-R1 L3)" '[ "$rc" = 0 ] && [[ $out == *"evil ?[2J? text ?? end"* ]] && [[ $out != *$'"'"'\e'"'"'* ]] && [[ $out != *$'"'"'\a'"'"'* ]] && [[ $out == *"fake tool ran: list"* ]]'
+  echo 3 >"$t/exit"; go drop "$id" --reason spam
+  check "also with a refusal, before the script's own line (PTR-R1 L3)" '[ "$rc" = 3 ] && [[ $out == *"evil ?[2J? text"*"the decision was refused"* ]] && [[ $out != *$'"'"'\e'"'"'* ]]'
+  host=local; echo 0 >"$t/exit"; go list
+  check "and when the tool runs on this machine (PTR-R1 L3)" '[ "$rc" = 0 ] && [[ $out == *"evil ?[2J? text"* ]] && [[ $out != *$'"'"'\e'"'"'* ]]'
+  host=fake-host; rm -f "$t/hostile"
+  # THREATS PTR-R2-L4: the server's stdout is filtered too (show prints a proposal's text): no C0
+  # control but tab and line end, no DEL, no C1; other text stays; the exit code is the tool's.
+  : >"$t/hostile-out"; go show "$id"
+  check "the server's stdout reaches the terminal without control characters; other text stays (PTR-R2-L4)" '[ "$rc" = 0 ] && [[ $out == *"out ?]0;title? ? back?space ? café tab	here"* ]] && [[ $out != *$'"'"'\e'"'"'* ]] && [[ $out != *$'"'"'\a'"'"'* ]] && [[ $out != *$'"'"'\r'"'"'* ]] && [[ $out != *$'"'"'\177'"'"'* ]] && [[ $out != *$'"'"'\302\233'"'"'* ]]'
+  echo 3 >"$t/exit"; go drop "$id" --reason spam
+  check "the tool's exit code is kept when its stdout is filtered (PTR-R2-L4)" '[ "$rc" = 3 ] && [[ $out == *"out ?]0;title?"*"the decision was refused"* ]]'
+  host=local; echo 0 >"$t/exit"; go show "$id"
+  check "and when the tool runs on this machine (PTR-R2-L4)" '[ "$rc" = 0 ] && [[ $out == *"out ?]0;title?"* ]] && [[ $out != *$'"'"'\e'"'"'* ]]'
+  host=fake-host; rm -f "$t/hostile-out"
+  : >"$t/flood"; go list; rm -f "$t/flood"
+  check "a flood on stderr is cut at 4 KiB while it is captured, and the tool still ends (PTR-R2-L4)" '[ "$rc" = 0 ] && [ "$(grep -o x <<<"$out" | wc -l)" = 4096 ] && [[ $out == *"fake tool ran: list"* ]]'
+  local left
+  left=$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "onyx-capture.*" -newer "$t/exit" 2>/dev/null | wc -l)
+  check "no capture file is left behind (PTR-R2-L4)" '[ "$left" = 0 ]'
+  # INT while the tool runs: the capture files are removed.
+  cat >"$t/slow-node" <<SLOW
+#!/usr/bin/env bash
+echo started >"$t/slow.started"
+sleep 3
+SLOW
+  chmod +x "$t/slow-node"
+  ONYX_REVIEW_HOST=local ONYX_REVIEW_BIN="$t/slow-node" ONYX_REVIEW_JOURNAL="$J" TMPDIR="$t" bash "$0" list >/dev/null 2>&1 &
+  local slow=$! n=0
+  # Wait for the tool to have started (a condition with a cap far above any run, never a guess).
+  while [ ! -e "$t/slow.started" ] && [ "$n" -lt 600 ]; do n=$((n + 1)); sleep 0.05; done
+  local during; during=$(find "$t" -maxdepth 1 -name "onyx-capture.*" | wc -l)
+  rc=0; kill -TERM "$slow" 2>/dev/null || true; wait "$slow" 2>/dev/null || rc=$?
+  check "TERM while the tool runs removes the capture files, exit 143 (PTR-R2-L4)" '[ "$during" = 2 ] && [ "$rc" = 143 ] && [ "$(find "$t" -maxdepth 1 -name "onyx-capture.*" | wc -l)" = 0 ]'
   rc=0; out=$(bash "$0" 2>&1) || rc=$?
   check "no command prints the usage, exit 2" '[ "$rc" = 2 ] && [[ $out == *"Usage: scripts/proposal-review.sh list"* ]]'
   echo "proposal-review self-test: $ok passed, $bad failed"

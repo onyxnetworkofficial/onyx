@@ -66,6 +66,11 @@ export default defineConfig({
 	worker: { format: 'es' },
 	// ROADMAP S1: in `pnpm dev` only, ONYX_SUBMIT_PROXY=http://127.0.0.1:8788 forwards /v1/submit to the
 	// local submit-dev server (crates/onyx-api/examples/submit-dev.rs), so a VITE_ONYX_SUBMIT_API=1 page
-	// posts same-origin. Builds never proxy anything.
-	server: SUBMIT_PROXY ? { proxy: { '/v1/submit': SUBMIT_PROXY } } : {}
+	// posts same-origin. Builds never proxy anything. `changeOrigin: false` (review PTR-R2 M1): the
+	// string shorthand rewrites `Host` to the upstream's, and the node refuses a browser's POST whose
+	// `Origin` is not the `Host` it sees (cross_site_refused), so the page's own host is passed on.
+	// The pointer route goes the same way when the upstream is a node that has it.
+	server: SUBMIT_PROXY
+		? { proxy: Object.fromEntries(['/v1/submit', '/v1/publishers/pointer'].map((path) => [path, { target: SUBMIT_PROXY, changeOrigin: false }])) }
+		: {}
 });
