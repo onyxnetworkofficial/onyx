@@ -43,6 +43,49 @@ export function parseFreshness(v: unknown): Freshness {
 	return out;
 }
 
+/** A card with no section on this page whose values the hosted test node serves (CL1, CL3):
+ * its value is read from the node when the visitor asks. */
+export const readsFromNode = (d: Dataset): boolean => !d.section && !d.page && !!d.api && d.apiWhere === 'hosted test node';
+
+const SUBJECT = /^[a-z0-9][a-z0-9._-]{0,80}:[0-9]{4}-[0-9]{2}-[0-9]{2}$/;
+
+/** Each metric's settled round on the hosted node (metric -> subject, "name:2026-10-27"), from the
+ * shipped level history (level2/ladders-base-sepolia.json); an entry out of shape is dropped. */
+export function nodeSubjects(v: unknown): Record<string, string> {
+	const out: Record<string, string> = {};
+	const values = v && typeof v === 'object' ? (v as { values?: unknown }).values : null;
+	if (!Array.isArray(values)) return out;
+	for (const e of values) {
+		const r = e as { metric?: unknown; subject?: unknown };
+		if (typeof r?.metric === 'string' && typeof r.subject === 'string' && SUBJECT.test(r.subject)) out[r.metric] = r.subject;
+	}
+	return out;
+}
+
+/** The node's free GET for one settled round: the card's API route and the round's subject. */
+export const observationUrl = (api: string, subject: string): string => `${api}?subject=${subject}`;
+
+const DECIMAL = /^-?[0-9]{1,30}(\.[0-9]{1,12})?$/;
+
+/** The value and level of an observation answer, only when it is the asked metric and subject and
+ * the value is a plain decimal; else null. Shown as the node's word: nothing here checks the round. */
+export function observation(v: unknown, metric: string, subject: string): { value: string; level: number } | null {
+	if (!v || typeof v !== 'object') return null;
+	const o = v as Record<string, unknown>;
+	if (o.metric !== metric || o.subjectText !== subject) return null;
+	if (typeof o.value !== 'string' || !DECIMAL.test(o.value)) return null;
+	const level = o.proofLevel;
+	if (typeof level !== 'number' || !Number.isInteger(level) || level < 1 || level > 5) return null;
+	return { value: o.value, level };
+}
+
+/** A plain decimal with its whole part grouped ("1052530" -> "1,052,530", "40.1" stays). */
+export function groupDecimal(v: string): string {
+	const m = /^(-?)([0-9]+)(\.[0-9]+)?$/.exec(v);
+	if (!m) return v;
+	return `${m[1]}${m[2].replace(/\B(?=([0-9]{3})+$)/g, ',')}${m[3] ?? ''}`;
+}
+
 export const LEVEL_NAME: Record<number, string> = { 1: 'Recomputed', 2: 'Re-observed', 3: 'Source-proven', 4: 'Claim', 5: 'Track record' };
 
 export const DATASETS: Dataset[] = [

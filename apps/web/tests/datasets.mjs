@@ -1,8 +1,8 @@
 // e2e "datasets" (ROADMAP S22): the #/datasets page against a fake node (page.route): the first
 // page lists the node's datasets, "Show more" follows `next`, a search sends `q` and shows only the
 // matches, an item out of shape is never printed, a dataset opens to its newest rows (a 64-column
-// sample stays inside its scroll box on a phone) and the two check commands, and a busy node (429)
-// says so. Called by tests/e2e.mjs; also runs alone against a build: node tests/datasets.mjs [build dir].
+// sample stays inside its scroll box on a phone) and the two check commands, a link to a dataset
+// that moved opens its live successor (the node's 410, R-BULK-17), and a busy node (429) says so. Called by tests/e2e.mjs; also runs alone against a build: node tests/datasets.mjs [build dir].
 const BOOK = '0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5';
 const DAY = 86400;
 const ds = (name, extra = {}) => ({
@@ -32,6 +32,11 @@ const FRESHNESS = {
 const ALL = ['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n, FRESHNESS[n] ?? {}));
 // Review FRESH-R1 M1: a dataset whose newest key is dated in the future (found by its own name).
 const AHEAD = ds('sol.ahead', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 });
+// R-BULK-17: what the fake node's 410 says of each removed dataset: eth.old moved to eth.gamma
+// (live), eth.parked's successor was removed too, eth.astray's is called live but is not in the
+// list, eth.waiting's links are not settled yet, eth.ended has none (null).
+const succ = (final, status) => ({ dataset: final, final, generation: 1, hops: 1, proof: '/v1/bulk/onchain-archive/x/successor', row: '1', status });
+const SUCCESSOR = { 'eth.old': succ('eth.gamma', 'live'), 'eth.parked': succ('eth.nowhere', 'removed'), 'eth.astray': succ('eth.unlisted', 'live'), 'eth.waiting': { status: 'pending' }, 'eth.ended': null };
 const WIDE = ['day', 'series', 'i', 'j', ...Array.from({ length: 60 }, (_, i) => `v${String(i).padStart(2, '0')}`)];
 
 function rowsAnswer(name) {
@@ -222,6 +227,13 @@ export async function datasets(browser, base, expect) {
 				return route.fulfill({ json: { datasets: hit, total: hit.length, next: null } });
 			});
 			await p.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => route.fulfill({ json: rowsAnswer(new URL(route.request().url()).pathname.split('/')[4]) }));
+			// R-BULK-17: the node's answer about one dataset. A removed one is 410 with its successor.
+			await p.route('**/v1/bulk/onchain-archive/*', (route) => {
+				const name = new URL(route.request().url()).pathname.split('/')[4];
+				const s = SUCCESSOR[name];
+				if (s === undefined) return route.fulfill({ status: 404, json: { error: { code: 'bulk_unknown_dataset' } } });
+				return route.fulfill({ status: 410, json: { catalog: 15, error: { code: 'bulk_dataset_removed', message: 'the publisher removed this dataset in its catalog 15' }, ...(s ? { successor: s } : {}) } });
+			});
 			return p;
 		};
 		const pg2 = await fresh();
@@ -243,6 +255,39 @@ export async function datasets(browser, base, expect) {
 		await pg3.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
 		expect((await pg3.getByTestId('datasets-missing').count()) === 1 && (await pg3.getByTestId('datasets-detail').count()) === 0, `${at}: a link to a dataset the node does not hold says so`);
 		await pg3.close();
+		// R-BULK-17: a link to a dataset that moved says where it went and opens that one.
+		const pg4 = await fresh();
+		await pg4.goto(base + '#/datasets?d=onchain-archive%2Feth.old');
+		await pg4.getByTestId('datasets-sample').waitFor({ timeout: 30000 }).catch(() => {});
+		const M = {
+			note: (await pg4.getByTestId('datasets-moved').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(),
+			missing: await pg4.getByTestId('datasets-missing').count(),
+			open: await pg4.getByTestId('datasets-detail').count(),
+			id: (await pg4.getByTestId('datasets-id').allInnerTexts()).join(','),
+			hash: await pg4.evaluate(() => location.hash),
+			inside: await pg4.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1)
+		};
+		expect(M.note.startsWith('This dataset moved to onchain-archive/eth.gamma.') && M.note.includes('onchain-archive/eth.old') && M.missing === 0 && M.open === 1 && M.id === 'eth.gamma' && M.hash === '#/datasets?q=eth.gamma&d=onchain-archive%2Feth.gamma' && M.inside, `${at}: a link to a moved dataset says where it moved and opens the successor (${JSON.stringify(M)})`);
+		// A new search is a new question: the note goes.
+		await pg4.getByTestId('datasets-q').fill('btc');
+		await pg4.waitForFunction(() => !document.querySelector('[data-testid="datasets-moved"]'), null, { timeout: 15000 }).catch(() => {});
+		expect((await pg4.getByTestId('datasets-moved').count()) === 0, `${at}: the moved note goes with the next search`);
+		await pg4.close();
+		// A successor that is not live, or one the node's list does not hold, is said and never opened.
+		for (const [name, want] of [['eth.parked', /named onchain-archive\/eth\.nowhere in its place\. This node does not serve that dataset now, so nothing is opened\./], ['eth.astray', /named onchain-archive\/eth\.unlisted in its place\. This node does not serve that dataset now/], ['eth.waiting', /The publisher removed onchain-archive\/eth\.waiting\. No dataset that this node serves is named in its place\./]]) {
+			const p = await fresh();
+			await p.goto(base + `#/datasets?d=onchain-archive%2F${name}`);
+			await p.getByTestId('datasets-moved').waitFor({ timeout: 30000 }).catch(() => {});
+			const N = { note: (await p.getByTestId('datasets-moved').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(), open: await p.getByTestId('datasets-detail').count(), missing: await p.getByTestId('datasets-missing').count(), asked: await p.getByTestId('datasets-moved').getAttribute('data-live').catch(() => null) };
+			expect(want.test(N.note) && !/moved to/.test(N.note) && N.open === 0 && N.missing === 0 && N.asked === 'false', `${at}: ${name}: a successor that is not served is said plainly, nothing opened (${JSON.stringify(N)})`);
+			await p.close();
+		}
+		// A removed dataset with no successor keeps the old sentence.
+		const pg5 = await fresh();
+		await pg5.goto(base + '#/datasets?d=onchain-archive%2Feth.ended');
+		await pg5.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
+		expect((await pg5.getByTestId('datasets-missing').count()) === 1 && (await pg5.getByTestId('datasets-moved').count()) === 0, `${at}: a removed dataset without a successor says the node holds no such dataset`);
+		await pg5.close();
 		busy = true;
 		await pg.getByTestId('datasets-q').fill('btc');
 		await pg.waitForFunction(() => /Busy/.test(document.querySelector('[data-testid="datasets"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});

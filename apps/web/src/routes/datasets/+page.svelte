@@ -10,7 +10,7 @@
 	import DatasetChart from '#lib/components/DatasetChart.svelte';
 	import { group } from '#lib/format.ts';
 	import { datasetTitle, meanings, split } from '#lib/glossary.ts';
-	import { MAX_SEARCH, STALE_DAYS, staleSince, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, listUrl, page as readPage, sample as readSample, size, type Dataset, type Sample } from '#lib/datasets.ts';
+	import { MAX_SEARCH, STALE_DAYS, staleSince, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, infoUrl, listUrl, moved as readMoved, page as readPage, sample as readSample, size, type Dataset, type Moved, type Sample } from '#lib/datasets.ts';
 
 	let query = $state('');
 	// READINESS A20: only the datasets with data from the last STALE_DAYS days (the node's `fresh`).
@@ -31,6 +31,9 @@
 	let origin = $state('');
 	// A dataset link whose dataset this node does not hold (the search shows the closest names).
 	let missing = $state<string | null>(null);
+	// R-BULK-17: what the node's 410 says about a linked dataset its publisher removed: the id it
+	// moved to (opened when live) or a successor that is not live (said, nothing opened).
+	let gone = $state<{ from: string } & Moved | null>(null);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 
@@ -91,6 +94,7 @@
 		timer = setTimeout(() => {
 			open = null;
 			missing = null;
+			gone = null;
 			remember();
 			load(cleanSearch(query), null);
 		}, 350);
@@ -103,6 +107,7 @@
 		clearTimeout(timer);
 		open = null;
 		missing = null;
+		gone = null;
 		remember();
 		load(cleanSearch(query), null);
 	}
@@ -128,15 +133,36 @@
 		}
 	}
 
+	// A linked dataset that is not in the list: the node's own answer about it says whether its
+	// publisher removed it and which dataset it named in its place.
+	async function successor(pair: string): Promise<Moved | null> {
+		try {
+			const r = await fetch(infoUrl(pair), { headers: { accept: 'application/json' } });
+			return r.status === 410 && (r.headers.get('content-type') ?? '').includes('json') ? readMoved(r.status, await r.json(), pair) : null;
+		} catch {
+			return null;
+		}
+	}
+
 	onMount(() => {
 		origin = location.origin;
 		const link = fromLink(location.hash);
 		// A dataset link searches for its name and opens it.
 		query = link.q || (link.d ? cleanSearch(link.d.split('/')[1]) : '');
-		load(cleanSearch(query), null).then(() => {
+		load(cleanSearch(query), null).then(async () => {
 			const d = link.d ? items.find((x) => idOf(x) === link.d) : undefined;
-			if (d) toggle(d);
-			else if (link.d && !none) missing = link.d;
+			if (d) return void toggle(d);
+			if (!link.d || none) return;
+			const m = await successor(link.d);
+			if (!m) return void (missing = link.d);
+			gone = { from: link.d, ...m };
+			if (!m.live || !m.to) return;
+			// The dataset moved: search for the id it moved to and open that one.
+			query = cleanSearch(m.to.split('/')[1]);
+			await load(cleanSearch(query), null);
+			const to = items.find((x) => idOf(x) === m.to);
+			if (to) await toggle(to);
+			else gone = { from: link.d, to: m.to, live: false };
 		});
 		return () => clearTimeout(timer);
 	});
@@ -173,6 +199,17 @@
 
 		{#if filterOff}
 			<p class="muted" role="status" data-testid="datasets-filter-off">The {STALE_DAYS}-day filter is not available on this node right now. All datasets are listed.</p>
+		{/if}
+		{#if gone}
+			<p class="muted" role="status" data-testid="datasets-moved" data-live={gone.live}>
+				{#if gone.live && gone.to}
+					This dataset moved to <span class="mono">{gone.to}</span>. It is open below. The old name <span class="mono">{gone.from}</span> was removed by its publisher.
+				{:else if gone.to}
+					The publisher removed <span class="mono">{gone.from}</span> and named <span class="mono">{gone.to}</span> in its place. This node does not serve that dataset now, so nothing is opened.
+				{:else}
+					The publisher removed <span class="mono">{gone.from}</span>. No dataset that this node serves is named in its place.
+				{/if}
+			</p>
 		{/if}
 		{#if missing}
 			<p class="muted" data-testid="datasets-missing">This node holds no dataset <span class="mono">{missing}</span>. {total ? 'The closest names are below.' : ''}</p>

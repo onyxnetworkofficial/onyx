@@ -11,6 +11,7 @@
 	// the page only ever reads (NL6-23).
 	import { onMount } from 'svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
+	import { marketStatus, refundDue } from '#lib/markets.ts';
 	import { verifier, type CorrectionSide, type LiveCorrection, type LiveMarket, type LiveProduct, type MarketsLive } from '#lib/verifier.ts';
 
 	const FILE = 'markets/base-sepolia.json';
@@ -125,11 +126,8 @@
 	const pct = (ppm: string) => `${Math.round(Number(ppm) / 10000)}%`;
 	const when = (t: number) => `${new Date(t * 1000).toISOString().slice(0, 16).replace('T', ' ')} UTC`;
 	const short = (a: string) => `${a.slice(0, 6)}…${a.slice(-4)}`;
-	function status(m: LiveMarket): string {
-		if (m.state === 'resolved') return 'Settled';
-		if (m.state === 'void') return 'Void, every bet refunded';
-		return m.trading ? 'Trading open' : 'Trading closed, waiting for the observed value';
-	}
+	// The badge and the refund note read the reader's clock at the read (#lib/markets.ts).
+	const status = (m: LiveMarket) => marketStatus(m, readAt);
 	const liveOf = (id: number) => live?.markets.find((m) => m.id === id) ?? null;
 	const guardedOf = (id: number) => live?.insurance?.markets?.find((m) => m.id === id) ?? null;
 	const productOf = (id: number) => live?.insurance?.products.find((p) => p.id === id) ?? null;
@@ -216,6 +214,12 @@
 				<div><dt>Observed value</dt><dd class="mono" data-testid={`live-value-${tid}`}>{m.value ? `${exact(m.value, meta.unit)} (level ${m.level})` : 'Not on chain yet'}</dd></div>
 				<div><dt>Refund if no value by</dt><dd class="mono">{when(m.resolveBy ?? 0)}</dd></div>
 			</dl>
+			{#if refundDue(m, readAt)}
+				<p class="fine" data-testid={`live-refund-${tid}`}>
+					No observed value was on chain by the refund date. Anyone can now call <span class="mono">resolve</span> on the futures contract: it voids this market, and each
+					bettor then withdraws the whole bet. Nothing is refunded before that call. A value recorded before it settles the market instead.
+				</p>
+			{/if}
 		{:else}
 			<div class="pending" aria-hidden="true"><i></i><i></i><i></i></div>
 		{/if}

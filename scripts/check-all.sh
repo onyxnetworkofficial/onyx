@@ -103,6 +103,10 @@ node --test apps/web/tests/release.test.mjs
 # The site's shared formatters print what the per-call toLocale* forms printed (W4, L5).
 node --test apps/web/tests/format.test.mjs
 node --test apps/web/tests/datasets.test.mjs
+# Browse data: a card's value from the hosted node is shown only in shape. Markets: a futures
+# market's badge on a fixed clock (past its refund date with no value it does not say "waiting").
+node --test apps/web/tests/catalog.test.mjs
+node --test apps/web/tests/markets.test.mjs
 # ROADMAP S27 (ADR-0066 slice 4): the publish page's status list, lookup and commands.
 node --test apps/web/tests/publishers.test.mjs
 node --test apps/web/tests/glossary.test.mjs

@@ -220,6 +220,30 @@ export function toLink(q: string, d: string | null = null): string {
 	return `#/datasets${s ? '?' + s : ''}`;
 }
 
+/** The node's own answer about one dataset (`GET /v1/bulk/{publisher}/{dataset}`): 200 while it
+ * is held, 410 `bulk_dataset_removed` once its publisher removed it. */
+export const infoUrl = (pair: string): string => `/v1/bulk/${pair}`;
+
+/** Where a removed dataset went: the last id of its successor chain and whether that id is live. */
+export type Moved = { to: string | null; live: boolean };
+
+/** A removed dataset's successor, from the node's 410 (R-BULK-17): `to` is the chain's last id
+ * under the same publisher, `live` only when the node says the chain ends live at another id.
+ * Null for any other answer and for a removed dataset without a `successor` (nothing to say).
+ * This is the node's word, not a proof: the proofs are at `…/successor` (`onyx-check --successor`). */
+export function moved(status: number, v: unknown, pair: string): Moved | null {
+	if (status !== 410 || !v || typeof v !== 'object') return null;
+	const o = v as { error?: { code?: unknown }; successor?: unknown };
+	if (o.error?.code !== 'bulk_dataset_removed' || !o.successor || typeof o.successor !== 'object') return null;
+	const s = o.successor as Record<string, unknown>;
+	const [publisher, dataset] = pair.split('/');
+	const final = typeof s.final === 'string' && ID.test(s.final) && s.final !== dataset ? `${publisher}/${s.final}` : null;
+	return { to: final, live: s.status === 'live' && final !== null };
+}
+
+/** The node's whole dataset count (`total` of an unfiltered list of one), or null. */
+export const countUrl = (): string => listUrl('', null, 1);
+
 /** Days a chart covers at most (one row a day: about 90 rows, under the node's 100 a page). */
 export const CHART_DAYS = 90;
 

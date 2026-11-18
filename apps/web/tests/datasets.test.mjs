@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { anyGroups, anyValue } from '../src/lib/glossary.ts';
-import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints, staleSince, STALE_DAYS } from '../src/lib/datasets.ts';
+import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints, staleSince, STALE_DAYS, moved, infoUrl, countUrl } from '../src/lib/datasets.ts';
 
 const good = {
 	publisher: 'onchain-archive',
@@ -221,4 +221,41 @@ test('the list URL asks the node for fresh datasets only when told to (A20)', ()
 	assert.equal(u.searchParams.get('fresh'), '30d');
 	assert.equal(u.searchParams.get('after'), 'onchain-archive/btc.a');
 	assert.equal(listUrl('', null, 50, true), '/v1/bulk?fresh=30d&limit=50');
+});
+
+// R-BULK-17: the node's 410 for a removed dataset names its successor (the body the hosted node
+// gives for a moved dataset, copied in shape).
+const removed = (successor) => ({ catalog: 15, erase: { due: 1797598136, phase: 'waiting' }, error: { code: 'bulk_dataset_removed', message: 'the publisher removed this dataset in its catalog 15' }, ...(successor === undefined ? {} : { successor }) });
+const link = (extra = {}) => ({ dataset: 'trx.staking-flows-v2', final: 'trx.staking-flows-v2', generation: 1, hops: 1, proof: '/v1/bulk/onchain-archive/trx.staking-flows/successor', row: '1', status: 'live', ...extra });
+const OLD = 'onchain-archive/trx.staking-flows';
+
+test('a removed dataset with a live successor moved there, under the same publisher', () => {
+	assert.equal(infoUrl(OLD), '/v1/bulk/onchain-archive/trx.staking-flows');
+	assert.deepEqual(moved(410, removed(link()), OLD), { to: 'onchain-archive/trx.staking-flows-v2', live: true });
+	// Two links: the chain's last id is the one opened, not the first.
+	assert.deepEqual(moved(410, removed(link({ final: 'trx.staking-flows-v3', hops: 2 })), OLD), { to: 'onchain-archive/trx.staking-flows-v3', live: true });
+});
+
+test('a successor that is not live is named and never opened', () => {
+	for (const status of ['removed', 'retracted', 'not_listed', 'no_links', 'cycle', 'too_long', 'pending', undefined, 7])
+		assert.deepEqual(moved(410, removed(link({ status })), OLD), { to: 'onchain-archive/trx.staking-flows-v2', live: false }, String(status));
+	// No id to name: a pending answer, an id out of shape, or a chain that ends where it began.
+	for (const s of [{ status: 'pending' }, link({ final: '<img>' }), link({ final: 'a/b' }), link({ final: null }), link({ final: 'trx.staking-flows' })])
+		assert.deepEqual(moved(410, removed(s), OLD), { to: null, live: false }, JSON.stringify(s));
+});
+
+test('only the node\'s 410 with a successor counts as moved', () => {
+	assert.equal(moved(410, removed(), OLD), null);
+	assert.equal(moved(410, removed(null), OLD), null);
+	assert.equal(moved(410, removed('trx.staking-flows-v2'), OLD), null);
+	assert.equal(moved(404, removed(link()), OLD), null);
+	assert.equal(moved(200, removed(link()), OLD), null);
+	assert.equal(moved(410, { error: { code: 'bulk_unknown_dataset' }, successor: link() }, OLD), null);
+	assert.equal(moved(410, null, OLD), null);
+	assert.equal(moved(410, 'gone', OLD), null);
+});
+
+test('the count is asked as an unfiltered list of one', () => {
+	assert.equal(countUrl(), '/v1/bulk?limit=1');
+	assert.equal(page({ datasets: [good], total: 9054, next: null }).total, 9054);
 });

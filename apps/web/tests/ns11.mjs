@@ -180,7 +180,10 @@ export async function ns11(browser, base, root, expect) {
 		expect(!stored.includes('sepolia.base.org'), `${NOT_STORED} (${width})`);
 		expect((await pg.getByTestId('live-total-1').innerText()) === '125 tONYX' && (await pg.getByTestId('live-value-1').innerText()) === 'Not on chain yet', `NS11 ${width}: pool 125 tONYX, no value yet`);
 		const state = await pg.getByTestId('live-state-1').innerText();
-		expect(/^Trading (open|closed, waiting for the observed value)$/.test(state), `NS11 ${width}: the state comes from the chain and the reader's clock (${state})`);
+		// Past the market's refund date with no value the badge no longer says "waiting", and the card
+		// says what the contract then allows (tests/markets.test.mjs holds the rule on a fixed clock).
+		const refund = await pg.getByTestId('live-refund-1').count();
+		expect(/^(Trading (open|closed, waiting for the observed value)|No value by the refund date)$/.test(state) && (refund === 1) === (state === 'No value by the refund date'), `NS11 ${width}: the state comes from the chain and the reader's clock (${state})`);
 		expect(off.every((u) => u.startsWith('https://sepolia.base.org')), `NS11 ${width}: the reads go only to the reader's RPC`);
 		const g = await pg.getByTestId('live-market-g1').innerText();
 		expect(/market 2/i.test(g) && g.includes('2026-11-02'), `NL23 ${width}: the guarded market shows as market 2 with its record date`);
