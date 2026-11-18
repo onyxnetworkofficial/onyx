@@ -689,14 +689,26 @@ impl Facilitator for Concurrent {
 /// last request every one ends within the settle budget.
 ///
 /// E10: the clock is paused (time moves only when every task waits on a
-/// timer), so the 80 ms settle fits its timeout. On the real clock a loaded
-/// machine timed every settle out (2 of 10 suite runs at load ~40 on
-/// 2026-10-16 had no payment settled). The paused clock still moves while a
-/// journal write runs on a blocking thread (`spawn_blocking` is not a task the
-/// clock waits for), a millisecond at a time through the payers' and the
-/// sampler's timers: under a full check-all on 2026-11-08 one settle of 48
-/// timed out that way. The timeouts are far above the 80 ms settle for that:
-/// the test is about slots, never about timeouts.
+/// timer, and never while a `spawn_blocking` job runs), so the 80 ms settle
+/// fits its timeout. On the real clock a loaded machine timed every settle
+/// out (2 of 10 suite runs at load ~40 on 2026-10-16 had no payment settled).
+///
+/// The per-client request limit is off here (`reads_per_minute: 0`), like the
+/// payment-attempt and payer limits: a payer retries a `503` from one address
+/// as often as it takes, and how often is a matter of scheduling. A payer
+/// that takes a slot usually keeps it for its six payments. On a starved
+/// core a payer sometimes loses its slot, and the one that retries every
+/// millisecond then waits behind the others for over a second. Past 1,200
+/// requests from its address the limit (a bucket on the real clock) answered
+/// `429 rate_limited`, which is neither `200` nor a retried `503`: 47 of 48
+/// settled, in CI on 2026-11-17 and in 2 of 385 runs on a starved core. No
+/// timeout was involved: the 47 of 48 of 2026-11-08 was blamed on one with no
+/// status printed, but the paused clock does not move during a
+/// `spawn_blocking` job (measured on tokio 1.53). The timeouts stay far
+/// above the 80 ms settle all the same. The whole run takes about 2 s on the
+/// paused clock, so no payer comes near its 10,000 tries (10 s for the
+/// fastest). A failure prints every payment's last status, error code and
+/// number of tries.
 ///
 /// E10 review: a payer told `503` retries 10 ms later (it used to spend all
 /// six nonces at once, so only two payers ever contended and a settle that
@@ -721,6 +733,8 @@ async fn settles_never_queue_for_a_facilitator_slot() {
             max_facilitator_calls: slots,
             payment_attempts_per_minute: 1_000_000,
             unsettled_per_hour: 1_000_000,
+            // Retries are not what this test limits (see above).
+            reads_per_minute: 0,
             ..ApiConfig::default()
         },
         ..Setup::default()
@@ -728,6 +742,7 @@ async fn settles_never_queue_for_a_facilitator_slot() {
     let uri = format!("/v1/proofs/1/{}/1", f.shard);
     let (_, h, _) = get(&f, &uri, &[]).await;
     let max_live = Arc::new(AtomicU64::new(0));
+    let started = tokio::time::Instant::now();
     let sampler = {
         let (f, max_live) = (f.clone(), max_live.clone());
         tokio::spawn(async move {
@@ -753,8 +768,13 @@ async fn settles_never_queue_for_a_facilitator_slot() {
                 let sig = [(x402::PAYMENT_SIGNATURE, pay(&h, &p, i as u8 * 6 + nonce))];
                 let ip: IpAddr = format!("10.9.{i}.{nonce}").parse().expect("ip");
                 let mut s = StatusCode::SERVICE_UNAVAILABLE;
+                let mut why = String::new();
+                let mut tries = 0u32;
                 for _ in 0..10_000 {
-                    s = send(&f, Method::GET, &uri, &sig, Some(ip)).await.0;
+                    let (status, _, b) = send(&f, Method::GET, &uri, &sig, Some(ip)).await;
+                    s = status;
+                    why = code(&b).unwrap_or("").to_string();
+                    tries += 1;
                     max_live.fetch_max(f.state.settle_tasks.live() as u64, Ordering::SeqCst);
                     if s != StatusCode::SERVICE_UNAVAILABLE {
                         break;
@@ -763,22 +783,38 @@ async fn settles_never_queue_for_a_facilitator_slot() {
                     // payer is always about to ask for a slot.
                     tokio::time::sleep(Duration::from_millis(1 + i as u64)).await;
                 }
-                statuses.push(s);
+                statuses.push((s, why, tries));
             }
             statuses
         }));
     }
-    let mut ok = 0;
+    let mut all = Vec::new();
     for h in hs {
-        ok += h
-            .await
-            .expect("task")
-            .iter()
-            .filter(|s| **s == StatusCode::OK)
-            .count();
+        all.push(h.await.expect("task"));
     }
     sampler.abort();
-    assert_eq!(ok, 8 * 6, "every payment settled once it had a slot");
+    let ok = all
+        .iter()
+        .flatten()
+        .filter(|(s, _, _)| *s == StatusCode::OK)
+        .count();
+    // Every payer's payments as "status code(tries)": a failure names the
+    // answer that was neither 200 nor a retried 503, and how long it waited.
+    let shown: Vec<Vec<String>> = all
+        .iter()
+        .map(|p| {
+            p.iter()
+                .map(|(s, why, tries)| format!("{} {why}({tries})", s.as_u16()))
+                .collect()
+        })
+        .collect();
+    assert_eq!(
+        ok,
+        8 * 6,
+        "every payment settled once it had a slot; per payer, status code(tries): {shown:?}; \
+         {:?} on the paused clock",
+        started.elapsed()
+    );
     assert!(
         fac.max_running.load(Ordering::SeqCst) <= slots as u64,
         "settling at once: {}",
