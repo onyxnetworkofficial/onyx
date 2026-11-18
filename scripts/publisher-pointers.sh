@@ -121,11 +121,26 @@ ok_drop() { # the answer to a drop on stdin: the receipt and "dropped", then one
 # and line ends only. Both are captured in private files first: stderr is cut to 4 KiB and stdout
 # to 4 MiB while they are captured (the rest is read and dropped, so the sender is never stopped by
 # a closed pipe), and the files are removed on exit, also on INT and TERM.
-clean() { LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' | LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
+# THREATS PTR-R3-L3: stdout is first read as UTF-8 and every byte sequence that is not valid UTF-8 is
+# left out (iconv -c): a lone 0x9B, which a terminal in an 8-bit mode reads as a control, or an
+# overlong form of one. Then the UTF-8 C1 controls, the direction controls (U+200E, U+200F, U+202A
+# to U+202E, U+2066 to U+2069: they reorder what a line shows) and the line and paragraph
+# separators (U+2028, U+2029) become "?", and last the C0 controls and DEL.
+clean() {
+  command -v iconv >/dev/null 2>&1 || { echo "${0##*/}: no iconv on this machine: the server's output cannot be checked and is not shown" >&2; cat >/dev/null; return 1; }
+  { iconv -c -f UTF-8 -t UTF-8 || true; } \
+    | LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' -e 's/\xe2\x80[\x8e\x8f\xa8-\xae]/?/g' -e 's/\xe2\x81[\xa6-\xa9]/?/g' \
+    | LC_ALL=C tr '\000-\010\013-\037\177' '?'
+}
 clean_err() { LC_ALL=C tr -c '\n\t -~' '?'; }
-keep() { head -c "$1"; cat >/dev/null; } # BYTES: the first BYTES of stdin, the rest read and dropped
+# BYTES FILE: the first BYTES of stdin into FILE, the rest read and dropped; FILE.cut then says so.
+keep() {
+  head -c "$1" >"$2"
+  [ "$(wc -c)" = 0 ] || : >"$2.cut"
+}
+was_cut() { [ -e "$1.cut" ]; }
 captured=()
-forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}"; }
+forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}" "${captured[@]/%/.cut}"; }
 trap forget EXIT
 trap 'forget; exit 130' INT
 trap 'forget; exit 143' TERM
@@ -148,15 +163,22 @@ run() { # VERB ARGS...: the tool's stdout in $out (checked), its exit code back 
   check_args "$@"
   capture err; capture raw
   if [ "$host" = local ]; then
-    "$bin" pointers "$@" --journal "$journal" > >(keep 4194304 >"$raw") 2> >(keep 4096 >"$err") || rc=$?
+    "$bin" pointers "$@" --journal "$journal" 2> >(keep 4096 "$err") | keep 4194304 "$raw" || rc=${PIPESTATUS[0]}
   else
     # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" > >(keep 4194304 >"$raw") 2> >(keep 4096 >"$err") || rc=$?
+    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" 2> >(keep 4096 "$err") | keep 4194304 "$raw" || rc=${PIPESTATUS[0]}
   fi
-  wait # the two readers above
+  wait # the reader of stderr above (stdout's is the pipe, which has ended)
   clean_err <"$err" >&2
+  ! was_cut "$err" || echo "publisher-pointers: the server's error output above was cut at 4096 bytes" >&2
   # Filtered before anything else looks at it: what is checked, shown and saved is the same text.
+  # THREATS PTR-R3-N1: an answer over the cap was cut: say that; a cut answer is never checked or saved.
+  ! was_cut "$raw" || { echo "publisher-pointers: the answer of $host was cut at 4194304 bytes: not shown, nothing saved" >&2; return 1; }
+  # THREATS PTR-R3-L3: an answer the filter had to change is not this tool's answer: refused whole,
+  # so a pointer or a list is never "repaired" into something that passes.
+  local note=''
   out=$(clean <"$raw")
+  clean <"$raw" | cmp -s - "$raw" || { note=' (it holds control characters or bytes that are not UTF-8 text)'; out=''; }
   case "$rc" in
     0) ;;
     3) if [ "$1" = undrop ]; then echo "publisher-pointers: no drop of this id is held: nothing was written (list --all shows the dropped ones)" >&2
@@ -167,9 +189,9 @@ run() { # VERB ARGS...: the tool's stdout in $out (checked), its exit code back 
     *) echo "publisher-pointers: $1 failed on $host with exit $rc (see above; it needs sudo -n for sh, setpriv, and a node with ONYX_PUBLISHER_POINTERS)" >&2; return 1 ;;
   esac
   case "$1" in
-    list) ok_list <<<"$out" || { echo "publisher-pointers: the answer of $host is not a pointer list: not shown" >&2; return 1; } ;;
-    show) ok_pointer <<<"$out" || { echo "publisher-pointers: the answer of $host is not a pointer: not shown, nothing saved" >&2; return 1; } ;;
-    drop|undrop) ok_drop <<<"$out" || { echo "publisher-pointers: the answer of $host to the $1 is not in its shape: not shown (list --all says whether the pointer is dropped)" >&2; return 1; } ;;
+    list) ok_list <<<"$out" || { echo "publisher-pointers: the answer of $host is not a pointer list: not shown$note" >&2; return 1; } ;;
+    show) ok_pointer <<<"$out" || { echo "publisher-pointers: the answer of $host is not a pointer: not shown, nothing saved$note" >&2; return 1; } ;;
+    drop|undrop) ok_drop <<<"$out" || { echo "publisher-pointers: the answer of $host to the $1 is not in its shape: not shown$note (list --all says whether the pointer is dropped)" >&2; return 1; } ;;
   esac
 }
 
@@ -219,6 +241,7 @@ printf '%s\n' "\$@" >"$t/node.args"
 cat "$t/answer"
 [ -f "$t/hostile" ] && printf 'evil \033[2J\007 text \302\233 end\n' >&2
 [ -f "$t/flood" ] && { head -c 300000 /dev/zero | tr '\0' 'x' >&2; }
+[ -f "$t/flood-out" ] && { head -c 5000000 /dev/zero | tr '\0' 'y'; }
 exit "\$(cat "$t/exit")"
 FAKE
   chmod +x "$t/bin/ssh" "$t/bin/sudo" "$t/bin/setpriv" "$t/onyx-node"
@@ -274,6 +297,26 @@ application keccak: $h"
   check "a carriage return in a pointer is not shown and nothing is saved (PTR-R2-L4)" '[ "$rc" = 1 ] && [[ $out == *"is not a pointer: not shown"* ]] && [[ $out != *$'"'"'\r'"'"'* ]] && [ ! -e "$t/p3.txt" ]'
   printf '%s\n\033]0;evil\007\302\233\n' "$LIST" >"$t/answer"; go list
   check "a list with an escape sequence, a bell or a C1 byte is not shown, and none reaches the terminal (PTR-R2-L4)" '[ "$rc" = 1 ] && [[ $out == *"is not a pointer list: not shown"* ]] && [[ $out != *$'"'"'\e'"'"'* ]] && [[ $out != *$'"'"'\a'"'"'* ]] && [[ $out != *$'"'"'\302\233'"'"'* ]] && [[ $out != *evil* ]]'
+  # THREATS PTR-R3-L3: direction controls, separators and bytes that are not UTF-8 never pass.
+  local n3=0 r3=0 a3
+  while IFS= read -r a3; do
+    n3=$((n3 + 1))
+    printf "origin: data.example.org$a3\napplication keccak: %s\n" "$h" >"$t/answer"; rm -f "$t/p4.txt"; go save "$id" "$t/p4.txt"
+    if [ "$rc" = 1 ] && [ ! -e "$t/p4.txt" ] && [[ $out != *$'\342\200'* ]] && [[ $out != *$'\233'* ]] && [[ $out != *$'\300'* ]]; then r3=$((r3 + 1)); else echo "  passed: $a3" >&2; fi
+  done <<'BAD'
+/a\342\200\256b
+\342\201\246
+\342\200\250
+\342\200\217
+/a\233[2J
+/a\300\233
+BAD
+  check "a pointer with a direction control, a separator or a byte that is not UTF-8 is not shown or saved ($r3 of $n3; PTR-R3-L3)" '[ "$r3" = "$n3" ] && [ "$n3" = 6 ]'
+  # THREATS PTR-R3-N1: a channel that was cut says so.
+  : >"$t/flood-out"; go list; rm -f "$t/flood-out"
+  check "an answer over its cap is said to be cut and is not shown (PTR-R3-N1)" '[ "$rc" = 1 ] && [[ $out == *"was cut at 4194304 bytes: not shown"* ]] && [[ $out != *yyyy* ]]'
+  printf '%s\n' "$LIST" >"$t/answer"; : >"$t/flood"; go list
+  check "stderr over its cap says that it was cut (PTR-R3-N1)" '[[ $out == *"the server'"'"'s error output above was cut at 4096 bytes"* ]]'
   printf '%s\n' "$LIST" >"$t/answer"; : >"$t/flood"; go list; rm -f "$t/flood"
   check "a flood on stderr is cut at 4 KiB while it is captured, and the list still prints (PTR-R2-L4)" '[ "$rc" = 0 ] && [ "$(grep -o x <<<"${out%%2 pointer*}" | wc -l)" = 4096 ] && [[ $out == *"$id  4 d 23 h left"* ]]'
   check "no capture file is left behind (PTR-R2-L4)" '[ "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "onyx-capture.*" -newer "$t/exit" 2>/dev/null | wc -l)" = 0 ]'

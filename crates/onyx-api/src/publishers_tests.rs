@@ -1712,7 +1712,7 @@ async fn a_mistaken_drop_is_taken_back() {
     let id = v["id"].as_str().expect("id").to_string();
     // No drop yet: nothing to take back, and no file is made for the question.
     assert_eq!(
-        undrop_pointer(&path, &id).expect("none"),
+        undrop_pointer(&path, 1_000, &id, r.now.load(Ordering::SeqCst)).expect("none"),
         Undropped::NotDropped
     );
     assert!(!drops_path(&path).exists());
@@ -1728,9 +1728,12 @@ async fn a_mistaken_drop_is_taken_back() {
         assert_eq!(s, StatusCode::CREATED);
     }
     let before = std::fs::read(&path).expect("bytes");
-    assert_eq!(undrop_pointer(&path, &id).expect("undrop"), Undropped::Now);
     assert_eq!(
-        undrop_pointer(&path, &id).expect("again"),
+        undrop_pointer(&path, 1_000, &id, r.now.load(Ordering::SeqCst)).expect("undrop"),
+        Undropped::Now
+    );
+    assert_eq!(
+        undrop_pointer(&path, 1_000, &id, r.now.load(Ordering::SeqCst)).expect("again"),
         Undropped::NotDropped
     );
     assert_eq!(
@@ -1766,12 +1769,15 @@ async fn a_mistaken_drop_is_taken_back() {
     );
     r.now.store(T0 + 7 * DAY, Ordering::SeqCst);
     assert_eq!(status_of(&r, &id).await.1["status"], "dropped");
-    assert_eq!(undrop_pointer(&path, &id).expect("undrop"), Undropped::Now);
+    assert_eq!(
+        undrop_pointer(&path, 1_000, &id, r.now.load(Ordering::SeqCst)).expect("undrop"),
+        Undropped::Now
+    );
     assert_eq!(status_of(&r, &id).await.1["status"], "expired");
     // A drops journal that cannot be read is an error, never "not dropped".
     std::fs::write(drops_path(&path), "not a journal\nat all\n").expect("write");
     assert!(matches!(
-        undrop_pointer(&path, &id),
+        undrop_pointer(&path, 1_000, &id, r.now.load(Ordering::SeqCst)),
         Err(DropError::Storage(_))
     ));
 }
@@ -1814,4 +1820,243 @@ fn a_refund_gives_back_only_what_was_taken() {
             .is_ok(),
         "the /48's unit came back"
     );
+}
+
+// ---- review PTR-R3 ----
+
+/// Review PTR-R3 L1 (THREATS PTR-R3-L1): a journal that still holds a removed entry is
+/// written anew at the start, also when nothing is left to expire: after a crash or a failed
+/// rewrite between the `del` line and the rewrite, and for a journal from before the rewrite
+/// existed. The drops journal is treated the same by the tool that writes it.
+#[tokio::test]
+async fn a_start_rewrites_a_journal_that_still_holds_a_removed_entry() {
+    let dir = test_dir("r3-reopen");
+    let path = journal(&dir);
+    let entry = |n: u8, origin: &str| {
+        Pointer {
+            id: format!("ptr_{}", hex::encode([n; 16])),
+            origin: origin.to_string(),
+            application: hash(n),
+            received_unix: T0,
+        }
+        .entry()
+    };
+    // As a crash leaves it: two entries, one removed by a `del` line, no rewrite.
+    {
+        let (mut j, _) = Journal::open(&path, JOURNAL_KIND, &BINDING).expect("journal");
+        let ids = j
+            .apply(
+                &[],
+                &[
+                    entry(1, "removed.example.org"),
+                    entry(2, "kept.example.org"),
+                ],
+            )
+            .expect("add");
+        j.apply(&ids[..1], &[]).expect("del");
+        assert_eq!(j.dead(), 1);
+    }
+    let before = std::fs::read_to_string(&path).expect("journal");
+    assert!(before.contains("removed.example.org") && before.contains("\"del\""));
+    // A start at a time when nothing is expired.
+    let r = rig_at(dir.clone(), wide(), Arc::new(AtomicU64::new(T0 + 60)));
+    assert_eq!(r.store.recorded(), 1);
+    let after = std::fs::read_to_string(&path).expect("journal");
+    assert!(
+        !after.contains("removed.example.org")
+            && !after.contains(&hash(1)[2..])
+            && !after.contains("\"del\""),
+        "the removed entry is gone from the file after a start: {after}"
+    );
+    assert!(after.contains("kept.example.org"));
+    // A journal without a removed entry is not rewritten by a start (the same file).
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        let inode = std::fs::metadata(&path).expect("meta").ino();
+        let (d, now) = (r.dir.clone(), r.now.clone());
+        drop(r);
+        let r = rig_at(d, wide(), now);
+        assert_eq!(std::fs::metadata(&path).expect("meta").ino(), inode);
+        drop(r);
+    }
+    // The drops journal: a drop taken out by a `del` line that was never rewritten leaves
+    // with the tool's next write, and also when the tool finds nothing to take back.
+    let r = rig_at(dir, wide(), Arc::new(AtomicU64::new(T0 + 60)));
+    let kept = format!("ptr_{}", hex::encode([2u8; 16]));
+    let old = format!("ptr_{}", hex::encode([7u8; 16]));
+    let drops = drops_path(&path);
+    let plant = || {
+        let _ = std::fs::remove_file(&drops);
+        let (mut j, _) = Journal::open(&drops, DROPS_KIND, &BINDING).expect("drops");
+        let v = json!({"kind": "drop", "version": 1, "id": old, "reason": DROPPED_REASON, "droppedUnix": T0});
+        let ids = j.apply(&[], &[v]).expect("add");
+        j.apply(&ids, &[]).expect("del");
+    };
+    plant();
+    assert!(std::fs::read_to_string(&drops)
+        .expect("drops")
+        .contains(&old));
+    assert_eq!(
+        undrop_pointer(&path, 1_000, &kept, T0 + 60).expect("nothing to take back"),
+        Undropped::NotDropped
+    );
+    assert!(!std::fs::read_to_string(&drops)
+        .expect("drops")
+        .contains(&old));
+    plant();
+    assert_eq!(
+        drop_pointer(&path, 1_000, &kept, T0 + 60).expect("drop"),
+        Dropped::Now
+    );
+    let file = std::fs::read_to_string(&drops).expect("drops");
+    assert!(!file.contains(&old) && file.contains(&kept), "{file}");
+    assert_eq!(status_of(&r, &kept).await.1["status"], "dropped");
+}
+
+/// Review PTR-R3 L2 (THREATS PTR-R3-L2): status reads and pointers do not share one pool. A
+/// burst of status reads that fills the readers answers 503 to further status reads only; a
+/// pointer is still taken. Writes that fill the workers do not stop a status read.
+#[tokio::test]
+async fn status_reads_never_take_a_place_from_a_pointer() {
+    let r = rig("r3-pools", wide());
+    let (_, v) = post(&r, "198.51.100.1", ORIGIN, &hash(1)).await;
+    let id = v["id"].as_str().expect("id").to_string();
+    // Every reader is busy.
+    let readers: Vec<_> = (0..MAX_READERS)
+        .map(|_| r.store.read_permit().expect("reader"))
+        .collect();
+    let (s, h, v) = call(
+        &r.app,
+        "GET",
+        &format!("/v1/publishers/pointer/{id}"),
+        "198.51.100.9",
+        Vec::new(),
+    )
+    .await;
+    assert_eq!(
+        (s, code(&v)),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("pointer_busy"))
+    );
+    assert!(h.contains_key("retry-after"));
+    let (s, v) = post(&r, "198.51.100.1", "other.example.org", &hash(2)).await;
+    assert_eq!(
+        s,
+        StatusCode::CREATED,
+        "a pointer is taken while the readers are full: {v}"
+    );
+    drop(readers);
+    // Every writer is busy: a pointer is refused, a status read is answered.
+    let writers: Vec<_> = (0..MAX_WORKERS)
+        .map(|_| r.store.permit().expect("writer"))
+        .collect();
+    let (s, v) = post(&r, "198.51.100.1", "third.example.org", &hash(3)).await;
+    assert_eq!(
+        (s, code(&v)),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("pointer_busy"))
+    );
+    let (s, v) = status_of(&r, &id).await;
+    assert_eq!(
+        (s, v["status"].as_str()),
+        (StatusCode::OK, Some("received"))
+    );
+    drop(writers);
+    assert_eq!(r.store.recorded(), 2);
+}
+
+/// Review PTR-R3 N3 (THREATS PTR-R3-N3): an undrop never puts a host over its three places.
+/// When the place a drop freed was taken since, the undrop is refused and nothing is
+/// written; once the reviewer has dropped one of the others it goes through.
+#[tokio::test]
+async fn an_undrop_is_refused_while_its_host_is_full_again() {
+    let r = rig("r3-undrop-full", wide());
+    let path = journal(&r.dir);
+    let (_, v) = post(&r, "198.51.100.1", ORIGIN, &hash(9)).await;
+    let id = v["id"].as_str().expect("id").to_string();
+    assert_eq!(
+        drop_pointer(&path, 1_000, &id, T0).expect("drop"),
+        Dropped::Now
+    );
+    let mut others = Vec::new();
+    for (n, origin) in [
+        (1, ORIGIN),
+        (2, "data.example.org"),
+        (3, "data.example.org/other"),
+    ] {
+        let (s, v) = post(&r, "203.0.113.5", origin, &hash(n)).await;
+        assert_eq!(s, StatusCode::CREATED);
+        others.push(v["id"].as_str().expect("id").to_string());
+    }
+    let drops = std::fs::read(drops_path(&path)).expect("drops");
+    let e = undrop_pointer(&path, 1_000, &id, T0).expect_err("the host is full");
+    assert!(matches!(e, DropError::HostFull), "{e}");
+    assert!(
+        e.to_string().contains("already holds 3 waiting pointers"),
+        "{e}"
+    );
+    assert_eq!(
+        std::fs::read(drops_path(&path)).expect("drops"),
+        drops,
+        "nothing written"
+    );
+    assert_eq!(status_of(&r, &id).await.1["status"], "dropped");
+    // A dropped one of the others does not count: then the undrop is taken.
+    assert_eq!(
+        drop_pointer(&path, 1_000, &others[0], T0).expect("drop"),
+        Dropped::Now
+    );
+    assert_eq!(
+        undrop_pointer(&path, 1_000, &id, T0).expect("undrop"),
+        Undropped::Now
+    );
+    assert_eq!(status_of(&r, &id).await.1["status"], "received");
+    let (s, v) = post(&r, "203.0.113.5", ORIGIN, &hash(4)).await;
+    assert_eq!(
+        code(&v),
+        Some("pointer_origin_busy"),
+        "three wait again, not four: {s}"
+    );
+    // A pointer on another host, and one that has expired, are taken back whatever the host holds.
+    r.now.store(T0 + 7 * DAY, Ordering::SeqCst);
+    assert_eq!(
+        undrop_pointer(&path, 1_000, &others[0], T0 + 7 * DAY).expect("expired"),
+        Undropped::Now
+    );
+}
+
+/// Review PTR-R3 N4 (THREATS PTR-R3-N4): the scheme of the `Origin` is not compared. The node
+/// does not know which scheme its site is served under; a page on the http side of an https
+/// site is marked cross-site by the browser itself, and that mark is refused.
+#[tokio::test]
+async fn the_scheme_is_not_compared_and_the_browsers_own_mark_is() {
+    let r = rig("r3-scheme", wide());
+    let json = ("content-type", "application/json");
+    let host = ("host", "node.example.org");
+    let (s, v) = raw(
+        &r,
+        "192.0.2.3",
+        &[json, ("origin", "http://node.example.org"), host],
+        body("a.example.org", &hash(1)),
+    )
+    .await;
+    assert_eq!(s, StatusCode::CREATED, "accepted as documented: {v}");
+    // What a browser sends from http://node.example.org to the https site: schemelessly
+    // same-site is not same-site; it says cross-site, and that is refused.
+    let (s, v) = raw(
+        &r,
+        "192.0.2.3",
+        &[
+            json,
+            ("origin", "http://node.example.org"),
+            host,
+            ("sec-fetch-site", "cross-site"),
+        ],
+        body("b.example.org", &hash(2)),
+    )
+    .await;
+    assert_eq!(
+        (s, code(&v)),
+        (StatusCode::FORBIDDEN, Some("cross_site_refused"))
+    );
+    assert_eq!(r.store.recorded(), 1);
 }

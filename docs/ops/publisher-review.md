@@ -181,7 +181,9 @@ again takes no place. Drop for that one reason only: it is not a refusal of an a
 (a refusal is a record, section 4), and a pointer whose fetch failed (exit 3) is not dropped.
 **A drop made by mistake is taken back** with `scripts/publisher-pointers.sh undrop <receipt
 id>` (a wrong id typed, or a file the applicant was still uploading when the tool fetched):
-the receipt answers by its age again and a waiting pointer holds its place again. Until you
+the receipt answers by its age again and a waiting pointer holds its place again. If the
+host's three places were taken after the drop, the undrop is refused and says so: drop one of
+those whose hash is not the file's, then undrop again (a host never holds more than three). Until you
 take it back, the applicant's own origin and hash answer `dropped` and cannot be sent anew.
 Until you have looked, the applicant is told by the form that the places are taken
 (`pointer_origin_busy`) and that the issue works at once. If the node logs

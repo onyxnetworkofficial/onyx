@@ -127,6 +127,16 @@ JSON
   check "a C1 control or a DEL in a name of the report does not reach the terminal (PTR-R2-L4)" '[ "$rc" = 0 ] && [[ $out == *"GET /c1"* ]] && [[ $out != *$'"'"'\302\233'"'"'* ]] && [[ $out != *$'"'"'\177'"'"'* ]]'
   check "a flood on stderr is cut at 4 KiB while it is captured (PTR-R2-L4)" '[ "$(grep -o x <<<"${out%%Usage*}" | wc -l)" = 4096 ]'
   check "no capture file is left behind (PTR-R2-L4)" '[ "$(find "${TMPDIR:-/tmp}" -maxdepth 1 -name "onyx-capture.*" -newer "$t/exit" 2>/dev/null | wc -l)" = 0 ]'
+  check "stderr over its cap says that it was cut (PTR-R3-N1)" '[[ $out == *"the server'"'"'s error output above was cut at 4096 bytes"* ]]'
+  # THREATS PTR-R3-L3: a direction control or a separator in a name of the report becomes ?.
+  printf '{"version":1,"from":"a","to":"b","small_count":5,"unreadable_days":[],"totals":{"routes":{"GET /bidi\\u202etxt\\u2066x\\u2028y\\u200f/z":{"2xx":1,"3xx":0,"4xx":0,"5xx":0}},"datasets":{},"datasets_other":0},"days":[]}' >"$t/bidi.json"
+  printf '#!/usr/bin/env bash\ncat "%s"\n' "$t/bidi.json" >"$t/bin/ssh"
+  rc=0; out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
+  check "a direction control or a separator in a name of the report does not reach the terminal (PTR-R3-L3)" '[ "$rc" = 0 ] && [[ $out == *"GET /bidi"* ]] && [[ $out != *$'"'"'\342\200'"'"'* ]] && [[ $out != *$'"'"'\342\201'"'"'* ]]'
+  # THREATS PTR-R3-N1: an answer over the cap is said to be cut, not "not a report".
+  printf '#!/usr/bin/env bash\nhead -c 5000000 /dev/zero | tr "\\\\0" y\n' >"$t/bin/ssh"
+  rc=0; out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
+  check "an answer over its cap is said to be cut, and no report is shown (PTR-R3-N1)" '[ "$rc" = 1 ] && [[ $out == *"the answer was cut at 4194304 bytes"* ]] && [[ $out != *"not a report"* ]] && [[ $out != *yyyy* ]]'
   printf '#!/usr/bin/env bash\nprintf "evil \\\\033[2J\\\\007 text \\\\302\\\\233 end\\\\n" >&2\ncat "%s"\nexit "$(cat "%s")"\n' "$t/a.json" "$t/exit" >"$t/bin/ssh"
   echo 1 >"$t/exit"; rc=0
   out=$(PATH="$t/bin:$PATH" ONYX_USAGE_HOST=fake-host bash "$0" 7 2>&1) || rc=$?
@@ -161,11 +171,26 @@ done
 # and line ends only. Both are captured in private files first: stderr is cut to 4 KiB and stdout
 # to 4 MiB while they are captured (the rest is read and dropped, so the sender is never stopped by
 # a closed pipe), and the files are removed on exit, also on INT and TERM.
-clean() { LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' | LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
+# THREATS PTR-R3-L3: stdout is first read as UTF-8 and every byte sequence that is not valid UTF-8 is
+# left out (iconv -c): a lone 0x9B, which a terminal in an 8-bit mode reads as a control, or an
+# overlong form of one. Then the UTF-8 C1 controls, the direction controls (U+200E, U+200F, U+202A
+# to U+202E, U+2066 to U+2069: they reorder what a line shows) and the line and paragraph
+# separators (U+2028, U+2029) become "?", and last the C0 controls and DEL.
+clean() {
+  command -v iconv >/dev/null 2>&1 || { echo "${0##*/}: no iconv on this machine: the server's output cannot be checked and is not shown" >&2; cat >/dev/null; return 1; }
+  { iconv -c -f UTF-8 -t UTF-8 || true; } \
+    | LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' -e 's/\xe2\x80[\x8e\x8f\xa8-\xae]/?/g' -e 's/\xe2\x81[\xa6-\xa9]/?/g' \
+    | LC_ALL=C tr '\000-\010\013-\037\177' '?'
+}
 clean_err() { LC_ALL=C tr -c '\n\t -~' '?'; }
-keep() { head -c "$1"; cat >/dev/null; } # BYTES: the first BYTES of stdin, the rest read and dropped
+# BYTES FILE: the first BYTES of stdin into FILE, the rest read and dropped; FILE.cut then says so.
+keep() {
+  head -c "$1" >"$2"
+  [ "$(wc -c)" = 0 ] || : >"$2.cut"
+}
+was_cut() { [ -e "$1.cut" ]; }
 captured=()
-forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}"; }
+forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}" "${captured[@]/%/.cut}"; }
 trap forget EXIT
 trap 'forget; exit 130' INT
 trap 'forget; exit 143' TERM
@@ -179,19 +204,23 @@ capture tmp; capture err
 read_counts=("$bin" usage --days "$((10#$days))" --state-dir "$state")
 rc=0
 if [ "$host" = local ]; then
-  "${read_counts[@]}" > >(keep 4194304 >"$tmp") 2> >(keep 4096 >"$err") || rc=$?
-  wait # the two readers above
+  "${read_counts[@]}" 2> >(keep 4096 "$err") | keep 4194304 "$tmp" || rc=${PIPESTATUS[0]}
+  wait # the reader of stderr above (stdout's is the pipe, which has ended)
   clean_err <"$err" >&2
+  ! was_cut "$err" || echo "usage-report: the server's error output above was cut at 4096 bytes" >&2
   [ "$rc" = 0 ] || { echo "usage-report: $bin usage failed (see above)" >&2; exit 1; }
 else
   # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-  ssh -o BatchMode=yes -- "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" > >(keep 4194304 >"$tmp") 2> >(keep 4096 >"$err") || rc=$?
-  wait # the two readers above
+  ssh -o BatchMode=yes -- "$host" "sudo -n $(printf '%q ' "${read_counts[@]}")" 2> >(keep 4096 "$err") | keep 4194304 "$tmp" || rc=${PIPESTATUS[0]}
+  wait # the reader of stderr above (stdout's is the pipe, which has ended)
   clean_err <"$err" >&2
+  ! was_cut "$err" || echo "usage-report: the server's error output above was cut at 4096 bytes" >&2
   [ "$rc" = 0 ] || { echo "usage-report: reading the counts on $host failed (see above; it needs sudo -n for $bin)" >&2; exit 1; }
 fi
 # The report is this script's own print of the server's numbers and names; it goes through the
 # same filter as any other text of the server (the names in it are the server's).
+# THREATS PTR-R3-N1: an answer over the cap was cut: say that, not "not a report".
+! was_cut "$tmp" || { echo "usage-report: the answer was cut at 4194304 bytes: too large to be a usage report, none is shown" >&2; exit 1; }
 capture report
 print_report "$tmp" "$((10#$top))" >"$report"
 clean <"$report"

@@ -870,6 +870,23 @@ The re-review of the PTR-R1 fixes ("ready with changes": 1 Medium, 4 Low, 1 note
 - **The status lookup** (note) runs on a blocking thread, since it may read the drops journal.
 - A refund of the day's budget gives back only what the same client took.
 
+### The pointer route after review PTR-R3 (2026-11-17)
+The third review ("the route off: ready; turning it on: ready with changes"; 3 Low, 4 notes;
+THREATS "PTR-R3") changed the build as follows.
+
+- **A start rewrites a journal that still holds a removed entry** (L1), so a crash between a
+  removal's two steps, or a journal from an earlier build, does not keep an origin on disk.
+- **Status reads have their own places** (L2): 16, apart from the 8 of the writes.
+- **The scripts' filter** (L3) leaves out bytes that are not UTF-8 and replaces direction
+  controls and line separators; `publisher-pointers.sh` refuses an answer the filter had to
+  change. **A cut channel says so** (N1).
+- **An undrop is refused while its host is full again** (N3): chosen over documenting a
+  fourth place, because the count of three is the one promise the applicant is given.
+  A pointer that arrives between the tool's check and the node's count can still make it
+  four; that is accepted and written down.
+- **The scheme of an `Origin` is not compared** (N4), accepted: the node does not know its
+  site's scheme; the browser's own `Sec-Fetch-Site` and HSTS cover the http side.
+
 ## What a newcomer sees on the website
 - **Add data**: two cards. "Suggest a dataset: 5 minutes, no key, nothing is published." and
   "Publish your own data: about 40 minutes of your time, and a review of up to 5 days."

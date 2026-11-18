@@ -7448,7 +7448,7 @@
     },
     "pointer_busy": {
       "status": 503,
-      "description": "Pointer storage has 8 writes in flight."
+      "description": "Pointer storage has 8 writes in flight (POST), or 16 status reads (GET); the two do not share a pool."
     },
     "pointer_unavailable": {
       "status": 503,

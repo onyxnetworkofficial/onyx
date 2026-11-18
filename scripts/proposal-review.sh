@@ -107,11 +107,26 @@ SH
 # and line ends only. Both are captured in private files first: stderr is cut to 4 KiB and stdout
 # to 4 MiB while they are captured (the rest is read and dropped, so the sender is never stopped by
 # a closed pipe), and the files are removed on exit, also on INT and TERM.
-clean() { LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' | LC_ALL=C tr '\000-\010\013-\037\177' '?'; }
+# THREATS PTR-R3-L3: stdout is first read as UTF-8 and every byte sequence that is not valid UTF-8 is
+# left out (iconv -c): a lone 0x9B, which a terminal in an 8-bit mode reads as a control, or an
+# overlong form of one. Then the UTF-8 C1 controls, the direction controls (U+200E, U+200F, U+202A
+# to U+202E, U+2066 to U+2069: they reorder what a line shows) and the line and paragraph
+# separators (U+2028, U+2029) become "?", and last the C0 controls and DEL.
+clean() {
+  command -v iconv >/dev/null 2>&1 || { echo "${0##*/}: no iconv on this machine: the server's output cannot be checked and is not shown" >&2; cat >/dev/null; return 1; }
+  { iconv -c -f UTF-8 -t UTF-8 || true; } \
+    | LC_ALL=C sed -e 's/\xc2[\x80-\x9f]/?/g' -e 's/\xe2\x80[\x8e\x8f\xa8-\xae]/?/g' -e 's/\xe2\x81[\xa6-\xa9]/?/g' \
+    | LC_ALL=C tr '\000-\010\013-\037\177' '?'
+}
 clean_err() { LC_ALL=C tr -c '\n\t -~' '?'; }
-keep() { head -c "$1"; cat >/dev/null; } # BYTES: the first BYTES of stdin, the rest read and dropped
+# BYTES FILE: the first BYTES of stdin into FILE, the rest read and dropped; FILE.cut then says so.
+keep() {
+  head -c "$1" >"$2"
+  [ "$(wc -c)" = 0 ] || : >"$2.cut"
+}
+was_cut() { [ -e "$1.cut" ]; }
 captured=()
-forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}"; }
+forget() { [ ${#captured[@]} = 0 ] || rm -f "${captured[@]}" "${captured[@]/%/.cut}"; }
 trap forget EXIT
 trap 'forget; exit 130' INT
 trap 'forget; exit 143' TERM
@@ -134,14 +149,16 @@ run() { # VERB ARGS...: run the tool where the node is; the tool's exit code, wi
   check_args "$@"
   capture err; capture out
   if [ "$host" = local ]; then
-    "$bin" proposals "$@" --journal "$journal" > >(keep 4194304 >"$out") 2> >(keep 4096 >"$err") || rc=$?
+    "$bin" proposals "$@" --journal "$journal" 2> >(keep 4096 "$err") | keep 4194304 "$out" || rc=${PIPESTATUS[0]}
   else
     # shellcheck disable=SC2029  # the command is built here on purpose; every part is checked above
-    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" > >(keep 4194304 >"$out") 2> >(keep 4096 >"$err") || rc=$?
+    ssh -o BatchMode=yes -- "$host" "sudo -n sh -c $(printf '%q' "$REMOTE") sh $(printf '%q ' "$bin" "$journal" "$@")" 2> >(keep 4096 "$err") | keep 4194304 "$out" || rc=${PIPESTATUS[0]}
   fi
-  wait # the two readers above
+  wait # the reader of stderr above (stdout's is the pipe, which has ended)
   clean_err <"$err" >&2
+  ! was_cut "$err" || echo "proposal-review: the server's error output above was cut at 4096 bytes" >&2
   clean <"$out"
+  ! was_cut "$out" || echo "proposal-review: the output above was cut at 4194304 bytes" >&2
   case "$rc" in
     0) return 0 ;;
     3) echo "proposal-review: the decision was refused and nothing was written (see above)" >&2 ;;
@@ -200,6 +217,8 @@ echo "fake tool ran: \$2"
 [ -f "$t/hostile" ] && printf 'evil \033[2J\007 text \302\233 end\n' >&2
 [ -f "$t/hostile-out" ] && printf 'out \033]0;title\007 \302\233 back\rspace \177 caf\303\251 tab\there\n'
 [ -f "$t/flood" ] && { head -c 300000 /dev/zero | tr '\0' 'x' >&2; }
+[ -f "$t/hostile-utf8" ] && printf 'bidi \342\200\256txt.exe \342\201\246x\342\201\251 sep\342\200\250x lone\233[2J over\300\233[2J rlm\342\200\217 caf\303\251 ok\n'
+[ -f "$t/flood-out" ] && { head -c 5000000 /dev/zero | tr '\0' 'y'; }
 exit "\$(cat "$t/exit")"
 FAKE
   chmod +x "$t/bin/ssh" "$t/bin/sudo" "$t/bin/setpriv" "$t/onyx-node"
@@ -325,6 +344,14 @@ BAD
   host=local; echo 0 >"$t/exit"; go show "$id"
   check "and when the tool runs on this machine (PTR-R2-L4)" '[ "$rc" = 0 ] && [[ $out == *"out ?]0;title?"* ]] && [[ $out != *$'"'"'\e'"'"'* ]]'
   host=fake-host; rm -f "$t/hostile-out"
+  # THREATS PTR-R3-L3: direction controls, separators and bytes that are not UTF-8.
+  : >"$t/hostile-utf8"; go show "$id"; rm -f "$t/hostile-utf8"
+  check "direction controls and separators become ?, bytes that are not UTF-8 are left out, other text stays (PTR-R3-L3)" '[ "$rc" = 0 ] && [[ $out == *"bidi ?txt.exe ?x? sep?x lone[2J over[2J rlm? café ok"* ]] && [[ $out != *$'"'"'\342\200\256'"'"'* ]] && [[ $out != *$'"'"'\233'"'"'* ]] && [[ $out != *$'"'"'\300'"'"'* ]]'
+  # THREATS PTR-R3-N1: a channel that was cut says so.
+  : >"$t/flood-out"; go list; rm -f "$t/flood-out"
+  check "stdout over its cap is cut at 4 MiB and a line says so (PTR-R3-N1)" '[ "$rc" = 0 ] && [[ $out == *"the output above was cut at 4194304 bytes"* ]] && [ "${#out}" -lt 4300000 ]'
+  : >"$t/flood"; go list
+  check "stderr over its cap says that it was cut (PTR-R3-N1)" '[[ $out == *"the server'"'"'s error output above was cut at 4096 bytes"* ]]'
   : >"$t/flood"; go list; rm -f "$t/flood"
   check "a flood on stderr is cut at 4 KiB while it is captured, and the tool still ends (PTR-R2-L4)" '[ "$rc" = 0 ] && [ "$(grep -o x <<<"$out" | wc -l)" = 4096 ] && [[ $out == *"fake tool ran: list"* ]]'
   local left

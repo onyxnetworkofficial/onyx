@@ -408,10 +408,14 @@ impl Budgets {
 
     /// Give back the unit [`Budgets::take_day`] took with the same arguments, today (review
     /// PTR-R1 L4): for a request that passed the day's budgets and was then refused by another
-    /// budget, so that it costs nobody a unit of the day. Nothing is given back unless every
-    /// key of the client holds a unit today (review PTR-R2): a refund after a take that was
-    /// itself refused, or for a client that took nothing, must not hand out a unit of the
-    /// server's day.
+    /// budget, so that it costs nobody a unit of the day.
+    ///
+    /// What the guard checks, and what it does not (reviews PTR-R2, PTR-R3 N2): nothing is
+    /// given back unless every key of the client holds at least one unit today. So a client
+    /// that took nothing today gets nothing back and cannot lower the server's count. It does
+    /// not know whether this refund belongs to a take: a client that holds a unit from an
+    /// earlier pointer would get one back for a take that was refused. The caller must refund
+    /// only after its own successful take, and the one caller does.
     pub(crate) fn refund_day(&self, scope: &str, client: &str, global: bool) {
         let mut keys: Vec<String> = rate_scopes(client, 1)
             .into_iter()

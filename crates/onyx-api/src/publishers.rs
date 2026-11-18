@@ -95,6 +95,9 @@ pub const DECISION_AT: &str = "see_status_list";
 const MAX_UNIX: u64 = (1 << 53) - 1;
 /// Ledger workers, including work whose HTTP handler was cancelled.
 const MAX_WORKERS: usize = 8;
+/// Status lookups in flight. Their own pool (review PTR-R3 L2): a burst of status reads must
+/// not answer `pointer_busy` to someone who sends a pointer.
+const MAX_READERS: usize = 16;
 
 /// Budgets and caps. With the defaults one IPv4 address or one IPv6 /48 records at most 5
 /// pointers a day and the server at most 50; an entry lives 12 days, so the budgets alone
@@ -492,7 +495,20 @@ pub enum Undropped {
 /// drops journal; the node reads that at its next look, the receipt answers by its age again
 /// (`received` or `expired`) and a waiting pointer holds a place of its host again. Works
 /// beside the running node and never writes the pointer journal.
-pub fn undrop_pointer(journal: &FsPath, id: &str) -> Result<Undropped, DropError> {
+///
+/// Refused when it would put the host over its places (review PTR-R3 N3): the place the drop
+/// freed may have been taken since. A still-waiting pointer is taken back only while its
+/// host holds fewer than [`MAX_PER_ORIGIN`] other waiting pointers; the reviewer drops one
+/// of those first (if it is wrong) or leaves the drop. The check and the node's count are two
+/// reads of one file, so a pointer that arrives in between can still make it one over; that
+/// lasts until a pointer of the host expires or is dropped, and no later pointer is taken
+/// for the host meanwhile.
+pub fn undrop_pointer(
+    journal: &FsPath,
+    capacity: usize,
+    id: &str,
+    now: u64,
+) -> Result<Undropped, DropError> {
     let path = drops_path(journal);
     match std::fs::symlink_metadata(&path) {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Undropped::NotDropped),
@@ -502,13 +518,35 @@ pub fn undrop_pointer(journal: &FsPath, id: &str) -> Result<Undropped, DropError
         _ => {}
     }
     let (mut drops, entries) = Journal::open(&path, DROPS_KIND, &BINDING)?;
-    let held: Vec<u64> = drops_of(entries)?
-        .into_iter()
-        .filter(|(_, d)| d == id)
-        .map(|(seq, _)| seq)
+    let all = drops_of(entries)?;
+    let held: Vec<u64> = all
+        .iter()
+        .filter(|(_, d)| *d == id)
+        .map(|(seq, _)| *seq)
         .collect();
     if held.is_empty() {
+        if drops.dead() > 0 {
+            drops.compact()?;
+        }
         return Ok(Undropped::NotDropped);
+    }
+    let pointers = read_pointers(journal, capacity)?;
+    if let Some(p) = pointers
+        .iter()
+        .find(|p| p.id == id && p.state(now) == RECEIVED)
+    {
+        let waiting = pointers
+            .iter()
+            .filter(|o| {
+                o.id != id
+                    && o.host() == p.host()
+                    && o.state(now) == RECEIVED
+                    && !all.values().any(|d| *d == o.id)
+            })
+            .count();
+        if waiting >= MAX_PER_ORIGIN {
+            return Err(DropError::HostFull);
+        }
     }
     drops.apply(&held, &[])?;
     // As for a removed pointer: the taken-back line does not stay in the file.
@@ -531,6 +569,9 @@ pub enum DropError {
     /// No waiting pointer has the id (unknown, expired, or past its kept time).
     #[error("no waiting pointer has this id")]
     NotWaiting,
+    /// An undrop would give the host more waiting pointers than it may hold.
+    #[error("the host of this pointer already holds {MAX_PER_ORIGIN} waiting pointers; drop one whose hash is not the file's first")]
+    HostFull,
     /// A journal could not be read or written.
     #[error("{0}")]
     Storage(#[from] std::io::Error),
@@ -574,6 +615,10 @@ pub fn drop_pointer(
     let entry = json!({"kind": "drop", "version": 1, "id": id, "reason": DROPPED_REASON,
         "droppedUnix": now.min(MAX_UNIX)});
     drops.apply(&stale, &[entry])?;
+    // Nothing of a taken-out drop stays in the file (also one a crash left there before).
+    if drops.dead() > 0 {
+        drops.compact()?;
+    }
     Ok(Dropped::Now)
 }
 
@@ -659,6 +704,7 @@ pub struct PointerStore {
     ledger: Mutex<Ledger>,
     budgets: Budgets,
     workers: Arc<tokio::sync::Semaphore>,
+    readers: Arc<tokio::sync::Semaphore>,
     limits: PointerLimits,
     clock: Arc<dyn Fn() -> u64 + Send + Sync>,
     /// Where the warning before the recorded cap goes (the node's log).
@@ -706,10 +752,21 @@ impl PointerStore {
         ledger
             .prune(clock())
             .map_err(|e| std::io::Error::other(e.to_string()))?;
+        // Review PTR-R3 L1: a removal is two steps, the `del` line and then the rewrite. A
+        // crash, or a failed rewrite, between them leaves the removed origin and hash in the
+        // file with nothing left to expire, and a journal written before the rewrite existed
+        // is in the same state. So a start rewrites any journal that still holds a removed
+        // entry, whether or not this start removed one.
+        if let Some(journal) = ledger.journal.as_mut() {
+            if journal.dead() > 0 {
+                journal.compact()?;
+            }
+        }
         Ok(PointerStore {
             ledger: Mutex::new(ledger),
             budgets: Budgets::new(),
             workers: Arc::new(tokio::sync::Semaphore::new(MAX_WORKERS)),
+            readers: Arc::new(tokio::sync::Semaphore::new(MAX_READERS)),
             limits,
             clock,
             cap_alert: Arc::new(|line| eprintln!("onyx-node: {line}")),
@@ -865,7 +922,18 @@ impl PointerStore {
     }
 
     fn permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, ApiError> {
-        self.workers.clone().try_acquire_owned().map_err(|_| {
+        Self::permit_of(&self.workers)
+    }
+
+    /// A place among the status lookups, which never takes one from the writes.
+    fn read_permit(&self) -> Result<tokio::sync::OwnedSemaphorePermit, ApiError> {
+        Self::permit_of(&self.readers)
+    }
+
+    fn permit_of(
+        pool: &Arc<tokio::sync::Semaphore>,
+    ) -> Result<tokio::sync::OwnedSemaphorePermit, ApiError> {
+        pool.clone().try_acquire_owned().map_err(|_| {
             ApiError::new(
                 StatusCode::SERVICE_UNAVAILABLE,
                 "pointer_busy",
@@ -994,7 +1062,7 @@ async fn status(
     };
     // Review PTR-R2 N1: the lookup may read the drops journal again (a file read), so it
     // runs on a blocking thread like a write, never on the thread that serves requests.
-    let permit = match store.permit() {
+    let permit = match store.read_permit() {
         Ok(p) => p,
         Err(e) => return e.into_response(),
     };

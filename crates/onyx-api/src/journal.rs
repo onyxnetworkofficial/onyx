@@ -715,6 +715,12 @@ impl Journal {
         self.live.iter().map(|(k, v)| (*k, v))
     }
 
+    /// How many removed entries the file still holds: each is a line that added the entry
+    /// and a line that removed it. Nothing of a removed entry is on disk only when this is 0.
+    pub fn dead(&self) -> usize {
+        self.dead
+    }
+
     /// Whether [`Journal::compact`] would shrink the file meaningfully.
     pub fn wants_compaction(&self) -> bool {
         self.dead >= COMPACT_AFTER && self.dead > self.live.len()

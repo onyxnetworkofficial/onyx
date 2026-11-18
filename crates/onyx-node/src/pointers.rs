@@ -61,7 +61,7 @@ nothing and take no lock; drop and undrop write only the drops journal beside FI
 (publisher-pointers.drops.journal), never to FILE. All are safe while the node runs. Run it as the user that owns the journal; started as root it becomes that user
 before it opens anything, and it refuses a journal that is a link or belongs to root. Exit: 0
 done, 1 a journal cannot be read or written, 2 a usage error, 3 no waiting pointer has this id
-(undrop: no drop of this id is held).";
+(undrop: no drop of this id is held, or its host is full again).";
 
 /// What `onyx-node pointers` was asked for.
 #[derive(Debug, PartialEq, Eq)]
@@ -178,7 +178,7 @@ pub fn main(args: &[String]) -> ExitCode {
                 println!("{id}  dropped\nIt was dropped before; nothing was written.");
                 ExitCode::SUCCESS
             }
-            Err(DropError::NotWaiting) => {
+            Err(DropError::NotWaiting | DropError::HostFull) => {
                 eprintln!("onyx-node pointers: no waiting pointer has the id {id}: nothing written (list --all shows the expired and the dropped ones)");
                 ExitCode::from(3)
             }
@@ -186,7 +186,7 @@ pub fn main(args: &[String]) -> ExitCode {
         };
     }
     if let Ask::Undrop(id) = &ask {
-        return match undrop_pointer(&journal, id) {
+        return match undrop_pointer(&journal, capacity, id, now) {
             Ok(Undropped::Now) => {
                 println!("{id}  not dropped\nThe drop was taken back. Its receipt answers by its age again, and a waiting pointer holds its place again.");
                 ExitCode::SUCCESS
@@ -196,6 +196,10 @@ pub fn main(args: &[String]) -> ExitCode {
                 ExitCode::from(3)
             }
             Err(DropError::NotWaiting) => ExitCode::from(3),
+            Err(DropError::HostFull) => {
+                eprintln!("onyx-node pointers: not taken back, nothing written: the host of {id} already holds 3 waiting pointers (its place was taken after the drop). Drop one of them whose hash is not the file's, then undrop again");
+                ExitCode::from(3)
+            }
             Err(DropError::Storage(e)) => storage(e),
         };
     }
