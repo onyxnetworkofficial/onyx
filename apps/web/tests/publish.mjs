@@ -213,7 +213,12 @@ export async function publish(browser, base, root, expect) {
 			await pg.evaluate(() => scrollTo(0, 0));
 			const words = flat(await pg.getByTestId('publish-words').innerText());
 			const names = flat(await pg.getByTestId('publish-names').innerText());
-			expect(S.WORDS.every((w) => words.includes(w.word) && words.includes(w.means)) && S.WORDS.length === 4, `${at}: signed book, hash, SPDX id and test ETH are each explained in a sentence before the steps`);
+			expect(S.WORDS.every((w) => words.includes(w.word) && words.includes(w.means)) && S.WORDS.length === 6, `${at}: signed book, hash, SPDX id, doctor, MiB and test ETH are each explained in a sentence before the steps`);
+			// Newcomer test 2026-11-18: the total time with the wait, and a reason beside each rule.
+			const total = (await pg.getByTestId('publish-total').innerText()).replace(/\s+/g, ' ');
+			const stepsText = (await pg.getByTestId('publish-steps').innerText()).replace(/\s+/g, ' ');
+			expect(/a wait of 20 to 40 minutes before your upload/.test(total) && /about an hour and a half spread over up to \d+ days/.test(total), `${at}: what it takes names the whole time, the 20 to 40 minute wait included ("${total}")`);
+			expect(/within the hour after the build: the review refuses a first application whose sample was built more than an hour before it/.test(stepsText) && /the signed book suspends a key that signs two different version 1s/.test(stepsText) && /so that nobody can fill the reviewer’s list with pointers at one host/.test(stepsText) && /8 MiB \(about 8\.4 MB\)/.test(stepsText), `${at}: the hour, the second version 1 and the three pointers each say why`);
 			expect(names.includes(S.EXAMPLE_ID) && names.includes(S.EXAMPLE_ORIGIN) && names.includes('bound together for good'), `${at}: the id and the origin are picked before the steps, as in the guide, with made-up examples`);
 			const text = flat(await pg.locator('main').innerText());
 			const says = (testid, words) => pg.getByTestId(testid).innerText().then((t) => words.every((w) => flat(t).includes(w)));

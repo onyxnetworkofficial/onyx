@@ -94,6 +94,12 @@ export async function markets(browser, base, expect) {
 
 		await page.getByTestId('arena-tab-markets').click();
 		expect(/your rank/i.test(await page.getByTestId('arena-overview').innerText()), `markets ${width}: the overview shows open markets, volume, traders and rank`);
+		// Newcomer test 2026-11-18: a practice market never names a day that has passed (its dates
+		// roll with today), and the list keeps its "simulated" label.
+		const days = await page.getByTestId('arena-cards').evaluate((el) => (el.textContent.match(/\b\d{1,2} (?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec) \d{4}\b/g) ?? []).map((d) => [d, Date.parse(`${d} UTC`)]));
+		const startOfToday = new Date().setUTCHours(0, 0, 0, 0);
+		const past = days.filter(([, t]) => !(t >= startOfToday)).map(([d]) => d);
+		expect(days.length >= 10 && past.length === 0 && /simulated in your browser/.test(await page.getByTestId('arena-practice-head').innerText()), `markets ${width}: no practice market names a past day (${days.length} dates; past: ${past.join(', ')})`);
 		await page.evaluate(axe);
 		const violations = await page.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a', 'wcag2aa', 'wcag21aa', 'best-practice'] } })).violations.filter((v) => ['serious', 'critical'].includes(v.impact)).map((v) => v.id));
 		expect(violations.length === 0, `markets ${width}: no serious accessibility issue (${violations.join(',')})`);

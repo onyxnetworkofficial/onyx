@@ -1,9 +1,10 @@
 <script lang="ts">
+	import { LEVELS } from '#lib/levels.ts';
 	// Every kind of data Onyx is built to carry, placed by the strongest proof
 	// its kind allows (the proof ladder, docs/TRACKER.md N9). Only what runs in
 	// code today is marked Live; nothing planned shows a number.
 	import { FALLBACK } from '#lib/mode.ts';
-	const levels = ['Recomputed', 'Re-observed', 'Source-proven', 'Bonded claim', 'Track record'];
+	const levels = LEVELS.map((l) => l.name);
 	type Item = { name: string; level: number; status: 'Live' | 'Built' | 'Planned' | 'Held back'; note: string };
 	const families: { name: string; items: Item[] }[] = [
 		{

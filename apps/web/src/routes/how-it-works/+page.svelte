@@ -17,6 +17,7 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import UserRound from '@lucide/svelte/icons/user-round';
 	import type { PillState } from '#lib/components/Pill.svelte';
+	import { LEVELS } from '#lib/levels.ts';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import { FALLBACK, PUBLIC } from '#lib/mode.ts';
 	import { HELD_BACK, HELD_WHY } from '#lib/components/HeldBack.svelte';
@@ -206,17 +207,17 @@
 	// Level 2's sources are the recorded rounds the site ships (AUD-2-F11), read from their files.
 	let l2Sources = $state.raw<string[]>([]);
 	const ladder = $derived([
-		{ icon: Cpu, name: 'Recomputed', how: 'Anyone reruns the recipe on public inputs', eg: 'Open ledgers, public datasets', status: 'Live', live: true },
+		{ icon: Cpu, name: LEVELS[0].name, how: LEVELS[0].means, eg: 'Open ledgers, public datasets', status: 'Live', live: true },
 		{
 			icon: Globe,
-			name: 'Re-observed',
-			how: 'Observers drawn at random from a bonded pool fetch the same source and seal their answers',
+			name: LEVELS[1].name,
+			how: LEVELS[1].means,
 			eg: 'Prices, open APIs, filings',
 			status: l2Sources.length ? `Built; recorded rounds on ${l2Sources.join(' and ')}, observers simulated` : 'Built; recorded rounds, observers simulated'
 		},
-		{ icon: Signature, name: 'Source-proven', how: 'The source signs it, or a TLS proof of the web response', eg: 'Signed feeds, sensors, keyed APIs', status: 'Live for signed labels; signed data feeds built, none connected yet', live: true },
-		{ icon: Scale, name: 'Bonded claim', how: 'Submitter stakes; anyone can challenge with evidence', eg: 'Your own data, field reports, lists', status: 'Live for unsigned label lists; bond planned', live: true },
-		{ icon: ChartLine, name: 'Track record', how: 'Scored when the truth arrives later', eg: 'Forecasts, labels', status: 'Built; no real records yet' }
+		{ icon: Signature, name: LEVELS[2].name, how: LEVELS[2].means, eg: 'Signed feeds, sensors, keyed APIs', status: 'Live for signed labels; signed data feeds built, none connected yet', live: true },
+		{ icon: Scale, name: LEVELS[3].name, how: LEVELS[3].means, eg: 'Your own data, field reports, lists', status: 'Live for unsigned label lists; bond planned', live: true },
+		{ icon: ChartLine, name: LEVELS[4].name, how: LEVELS[4].means, eg: 'Forecasts, labels', status: 'Built; no real records yet' }
 	]);
 
 	// NORTH-STAR NS1: Onyx is for any data; each kind names the proof level it can reach. The
@@ -477,7 +478,7 @@
 	{#if demo?.live}
 		<section class="section" bind:this={liveEl}>
 			<div class="head">
-				<h2>Live sample: Bitcoin</h2>
+				<h2>Recorded sample: Bitcoin</h2>
 				<p class="meta">Blocks {group(demo.live.from_height)}–{group(demo.live.to_height)} · read from our node</p>
 			</div>
 			<a class="panel preview" href={resolve('/data')}>

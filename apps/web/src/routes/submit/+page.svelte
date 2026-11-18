@@ -7,11 +7,13 @@
 	// server or configured node) posts to the same origin's /v1/submit. A typed API key never leaves this page: it is not part
 	// of the submission object, never sent, never stored, and the page refuses a submission that contains it.
 	import { onDestroy, onMount, tick } from 'svelte';
+	import { afterNavigate } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { probeSubmitApi, submitApi } from '#lib/submit-api.svelte.ts';
 	import SubmissionReceipt from '#lib/components/SubmissionReceipt.svelte';
 	import WantedData from '#lib/components/WantedData.svelte';
 	import AddWithAgents from '#lib/components/AddWithAgents.svelte';
+	import { LEVELS } from '#lib/levels.ts';
 	import Downloads from '#lib/components/Downloads.svelte';
 	import Bot from '@lucide/svelte/icons/bot';
 	import { parseReceipt } from '#lib/submission-receipt.ts';
@@ -371,9 +373,14 @@
 		h?.scrollIntoView({ behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth', block: 'start' });
 		h?.focus({ preventScroll: true });
 	}
-	// READINESS A19: the home page's "Connect an AI assistant" link (#/submit?assistant) opens the steps.
-	onMount(() => {
-		if (/[?&]assistant\b/.test(location.hash)) void openAgents();
+	// READINESS A19: the home page's "Connect an AI assistant" link (#/submit?assistant) opens the
+	// steps and lands on them. After the navigation, not on mount: the router sets the scroll
+	// position (the top of the page) after a page mounts, which undid the scroll to the panel.
+	afterNavigate(async () => {
+		if (!/[?&]assistant\b/.test(location.hash) || agentsOpen) return;
+		await openAgents();
+		// Once more after the first paint: the page below the panel is still taking its height.
+		requestAnimationFrame(() => document.getElementById('add-with-agents')?.scrollIntoView({ block: 'start' }));
 	});
 </script>
 
@@ -382,11 +389,10 @@
 <OnyxSlab>
 	<h1>Add data</h1>
 	<div class="slabside" data-testid="slabside">
-		<p class="slablede">Tell Onyx about data you know. Five questions decide how strongly it can be checked.</p>
-		<p class="slablede">Nothing is published without a review. Data about people is never taken.</p>
+		<p class="slablede">Tell Onyx about data you know, or publish data you hold. Nothing is published without a review. Data about people is never taken.</p>
 		<p class="slabactions">
 			<button type="button" class="agents-btn" aria-expanded={agentsOpen} aria-controls="add-with-agents" onclick={openAgents} data-testid="open-agents"
-				><Bot size={18} /> Add data with AI or the API</button
+				><Bot size={18} /> Use an AI assistant or the API</button
 			>
 		</p>
 	</div>
@@ -395,27 +401,32 @@
 <div class="wrap">
 	<!-- ROADMAP S27 (ADR-0066 item 1): the two paths, named apart, before anything else. -->
 	<section class="section" data-testid="add-paths">
-		<h2>Two ways to add data</h2>
+		<h2>Which way is yours?</h2>
+		<ul class="decide" data-testid="add-decide">
+			<li><span>I know a public source</span><b><a href={resolve('/submit')} onclick={(e) => { e.preventDefault(); toQuestions(); }} data-testid="decide-suggest">Suggest</a> it in the form below (5 minutes)</b></li>
+			<li><span>I hold a dataset I may share</span><b><a href={resolve('/publish')} data-testid="decide-publish">Publish</a> (about 40 minutes of work, 20 to 40 minutes of waiting, and a review of up to 5 days)</b></li>
+			<li><span>My source needs my own API key</span><b>Use <a href={resolve('/download')} data-testid="decide-app">the Onyx app</a>: your key stays on your computer</b></li>
+		</ul>
 		<div class="paths">
 			<div class="panel path" data-testid="path-suggest">
 				<h3 class="ptitle">Suggest a dataset</h3>
-				<p>You answer five questions about data you know of. Your proposal goes to a review queue; nothing is published by itself.</p>
+				<p>Four steps; the first is five short questions about data you know of. Your proposal goes to a review queue; nothing is published by itself.</p>
 				<p class="pfor"><b>For</b> anyone who knows a good public source. No key, about 5 minutes.</p>
 				<p class="pact"><button type="button" onclick={toQuestions} data-testid="path-suggest-go">Start with the questions</button></p>
 			</div>
 			<div class="panel path" data-testid="path-publish">
 				<h3 class="ptitle">Publish your own data</h3>
 				<p>You become a publisher: you sign your data with your own key, and a reviewer checks your application before the first upload.</p>
-				<p class="pfor"><b>For</b> whoever holds a dataset and may share it. About 40 minutes of your time, and a review of up to 5 days.</p>
+				<p class="pfor"><b>For</b> whoever holds a dataset and may share it. About 40 minutes of work, 20 to 40 minutes of waiting, and a review of up to 5 days.</p>
 				<p class="pact"><a class="btn ghost" href={resolve('/publish')} data-testid="path-publish-go">See the steps</a></p>
 			</div>
 		</div>
 	</section>
 	<AddWithAgents bind:open={agentsOpen} />
 	<section class="section" data-testid="submit" inert={sending} aria-busy={sending} bind:this={stepsEl}>
-		<h2>Four steps</h2>
+		<h2>Suggest a dataset: four steps</h2>
 		<p class="lede">
-			Answer the questions, describe the data, check it, then send it for review. Not sure where to start? Try the U.S. Treasury
+			Answer five questions, describe the data, check it, then send it for review. Not sure where to start? Try the U.S. Treasury
 			example: public data anyone can fetch, so Onyx can pull it itself.
 		</p>
 		<div class="row">
@@ -657,11 +668,9 @@
 		<h2>What the levels mean</h2>
 		<div class="levelsbox">
 		<ol class="levels">
-			<li><b>Level 1</b><span>Anyone recomputes it from public chain data.</span></li>
-			<li><b>Level 2</b><span>Several bonded observers fetch it at the same time and must agree.</span></li>
-			<li><b>Level 3</b><span>The source signs it.</span></li>
-			<li><b>Level 4</b><span>A claim nobody has checked, labelled unverified.</span></li>
-			<li><b>Level 5</b><span>A forecast, scored later.</span></li>
+			{#each LEVELS as l (l.level)}
+				<li data-testid="level-{l.level}"><b>Level {l.level}</b><span>{l.name}: {l.means} <span class="lmark">{l.mark}.</span></span></li>
+			{/each}
 		</ol>
 		<p class="planned">Staking on your data being right is planned, not built.</p>
 		</div>
@@ -669,6 +678,34 @@
 </div>
 
 <style>
+	/* The decision line: what you have on the left, where to go on the right. */
+	.decide {
+		list-style: none;
+		margin: 0 0 var(--sp-5);
+		padding: 0;
+		display: grid;
+		gap: var(--sp-2);
+		max-width: 68ch;
+	}
+	.decide li {
+		display: grid;
+		grid-template-columns: minmax(0, 15rem) minmax(0, 1fr);
+		gap: var(--sp-1) var(--sp-4);
+		padding-top: var(--sp-2);
+		border-top: 1px solid var(--line);
+		line-height: var(--lh-body);
+	}
+	.decide li > span {
+		color: var(--muted);
+	}
+	.decide b {
+		font-weight: 400;
+	}
+	@media (max-width: 560px) {
+		.decide li {
+			grid-template-columns: minmax(0, 1fr);
+		}
+	}
 	.paths {
 		display: grid;
 		grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -878,6 +915,10 @@
 	.levelsbox {
 		display: grid;
 		gap: var(--sp-3);
+	}
+	.levels .lmark {
+		color: var(--muted);
+		font-size: var(--text-sm);
 	}
 	.levelsbox .planned {
 		color: var(--muted);

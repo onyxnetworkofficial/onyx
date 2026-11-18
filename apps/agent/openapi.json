@@ -1617,7 +1617,7 @@
       "get": {
         "operationId": "listBulkDatasets",
         "summary": "Bulk datasets this node holds",
-        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); `any` matches whole words, any of a group; `fresh` keeps the datasets with data from the last days asked; `limit` pages them in id order, or with `sort=newest` the newest data first; `after` takes the `next` of the page before. `total` counts every match.",
+        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); a word that is a common asset name (bitcoin, ethereum, tron, wrapped bitcoin: the website's table) also finds the datasets with that asset's id as a whole word (`btc`, never the btc in `wbtc`), and the answer's `assets` lists the names read so; `any` matches whole words, any of a group; `fresh` keeps the datasets with data from the last days asked; `limit` pages them in id order, or with `sort=newest` the newest data first; with `q` the datasets whose asset (the part of the dataset id before the first dot) is one asked for come first, among each the dataset whose other id words are exactly the other words asked, then that order (`btc.price` before `btc.price-drawdown` before `wbtc.price` for `q=bitcoin price` or `q=btc price`, whatever their dates); `after` takes the `next` of the page before. `total` counts every match.",
         "tags": [
           "Bulk"
         ],
@@ -1631,7 +1631,7 @@
               "maxLength": 64,
               "pattern": "^[A-Za-z0-9 ./_-]*$"
             },
-            "description": "Search words, separated by spaces; each must be in `publisher/dataset`."
+            "description": "Search words, separated by spaces; each must be in `publisher/dataset`. A common asset name (one to four words: `bitcoin`, `usd coin`) also matches the datasets of its id. The datasets of the asset asked for are listed first."
           },
           {
             "name": "any",
@@ -5499,7 +5499,7 @@
       },
       "BulkList": {
         "type": "object",
-        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order (or as `sort` asks). A dataset whose key reads as unix seconds (the key column is named as a time and the signed key range fits, as `key.unit` of BulkRows) also has `newest`: the UTC day of its newest key, `YYYY-MM-DD`, and `newest_age_days`: whole days from that key to this node's clock, `now_unix`, read once an answer. A publisher signs its own key range, so the node believes no key dated more than one day after its clock: such a dataset has `newest_in_future: true` and neither field, is in no `fresh` list and sorts with the keys that are no time. Other datasets have none of the three, and nothing says how old they are. These fields are read from the signed header, not proven by the listing. Readers call a dataset not updated when `newest_age_days` is over 30. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped. A dataset other removed ids link to has `replaces` (a count); a links dataset (`onyx.successors`, ADR-0059 amendment 6) has `role: successors` and its `generation`; each catalog entry has `moved`. Both come only from a links index built for the newest catalog: while it is not built, its links are pending, or the publisher or its links dataset is forked, `moved` is null and no entry has `replaces`.",
+        "description": "`datasets`: one object per dataset (publisher, dataset, version, root, rows, bytes, shards, stored_shards, key_min, key_max, license, forked, created_unix: when the publisher made that version), in id order (or as `sort` asks). A dataset whose key reads as unix seconds (the key column is named as a time and the signed key range fits, as `key.unit` of BulkRows) also has `newest`: the UTC day of its newest key, `YYYY-MM-DD`, and `newest_age_days`: whole days from that key to this node's clock, `now_unix`, read once an answer. A publisher signs its own key range, so the node believes no key dated more than one day after its clock: such a dataset has `newest_in_future: true` and neither field, is in no `fresh` list and sorts with the keys that are no time. Other datasets have none of the three, and nothing says how old they are. These fields are read from the signed header, not proven by the listing. Readers call a dataset not updated when `newest_age_days` is over 30. `total`: every match of the query. `next`: the `after` of the next page, or null on the last. `assets`: only when a word of `q` was read as an asset name, each `name` as typed and the `asset` id it stands for. `catalogs`: each publisher's newest catalog this node holds (publisher, number, root, createdUnix, leaves, removed: tombstones in it; erase: records waiting and datasets erased, ADR-0059 amendment 4 item 5a), whatever the query, so a watch sees a refresh that stopped. A dataset other removed ids link to has `replaces` (a count); a links dataset (`onyx.successors`, ADR-0059 amendment 6) has `role: successors` and its `generation`; each catalog entry has `moved`. Both come only from a links index built for the newest catalog: while it is not built, its links are pending, or the publisher or its links dataset is forked, `moved` is null and no entry has `replaces`.",
         "properties": {
           "datasets": {
             "type": "array",
@@ -5516,6 +5516,20 @@
               "string",
               "null"
             ]
+          },
+          "assets": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "asset": {
+                  "type": "string"
+                }
+              }
+            }
           },
           "catalogs": {
             "type": "array",
@@ -6471,7 +6485,7 @@
         "schema": {
           "type": "string"
         },
-        "description": "Subject text, e.g. `us.treasury.federal_debt:2026-10-08`."
+        "description": "Subject text, e.g. `us.treasury.federal_debt:2026-10-08`: for a daily value the source's series name, a colon and the day. Only subjects with a settled round are served. Without it the 400's message names the parameter and one subject this node holds for the metric; the 404 of a subject without a round names one too."
       },
       "window_end": {
         "name": "window_end",

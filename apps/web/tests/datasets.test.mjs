@@ -259,3 +259,124 @@ test('the count is asked as an unfiltered list of one', () => {
 	assert.equal(countUrl(), '/v1/bulk?limit=1');
 	assert.equal(page({ datasets: [good], total: 9054, next: null }).total, 9054);
 });
+
+// ---- Newcomer test 2026-11-18: order, counts, headline column, CSV. ----
+import { rankSearch, searchAssets, defaultOrder, defaultSegments, isTestSet, isFresh, freshCounts, freshIn, freshCountUrl, headlineColumn, newestFirst, csv, csvName, historyUrl, pythonSnippet, anyUrl, HISTORY_PAGE } from '../src/lib/datasets.ts';
+import { datasetTitle } from '../src/lib/glossary.ts';
+
+const D = (dataset, ageDays = 2, publisher = 'onchain-archive') => ({ publisher, dataset, ageDays });
+const ids = (list) => list.map((d) => d.dataset);
+
+test('a search names its assets by id or exact name, and its other words', () => {
+	assert.deepEqual(searchAssets('Bitcoin MVRV'), { assets: ['btc'], rest: ['mvrv'] });
+	assert.deepEqual(searchAssets('btc price'), { assets: ['btc'], rest: ['price'] });
+	assert.deepEqual(searchAssets('usdt-trx supply'), { assets: ['usdt-trx'], rest: ['supply'] });
+	assert.deepEqual(searchAssets('tron staking flows'), { assets: ['trx'], rest: ['staking', 'flows'] });
+	// Part of a name is not an asset: "bitc" stays a word.
+	assert.deepEqual(searchAssets('bitc'), { assets: [], rest: ['bitc'] });
+	assert.deepEqual(searchAssets(''), { assets: [], rest: [] });
+});
+
+test('search ranking: the exact asset first, then the exact metric; a stale exact asset before a fresh other asset', () => {
+	const list = [D('wbtc.mvrv', 1), D('btc.sth-mvrv', 1), D('btc.mvrv', 82), D('btc.mvrv-z-score', 82), D('wbtc.btc-mvrv', 1), D('btc.active-mvrv', 82)];
+	assert.deepEqual(ids(rankSearch(list, 'bitcoin mvrv')), ['btc.mvrv', 'btc.sth-mvrv', 'btc.active-mvrv', 'btc.mvrv-z-score', 'wbtc.mvrv', 'wbtc.btc-mvrv']);
+	// The same with the id typed, and whatever order the node sent.
+	assert.deepEqual(ids(rankSearch([...list].reverse(), 'btc mvrv')), ids(rankSearch(list, 'bitcoin mvrv')));
+	const price = [D('wbtc.price', 0), D('btc.price-floor-levels', 0), D('btc.realized-price', 0), D('btc.price', 82)];
+	assert.deepEqual(ids(rankSearch(price, 'bitcoin price')), ['btc.price', 'btc.realized-price', 'btc.price-floor-levels', 'wbtc.price']);
+	// No asset searched: only the exact metric, freshness, the shorter name and the id decide.
+	assert.deepEqual(ids(rankSearch([D('eth.mvrv-bands', 1), D('eth.mvrv', 90), D('btc.mvrv', 1)], 'mvrv')), ['btc.mvrv', 'eth.mvrv', 'eth.mvrv-bands']);
+	// A key that is no time (no age) counts as not fresh, never as an error.
+	assert.deepEqual(ids(rankSearch([D('btc.b', null), D('btc.a', 5)], 'btc')), ['btc.a', 'btc.b']);
+	assert.deepEqual(rankSearch([], 'btc'), []);
+});
+
+test('the opening order: updated in the last 30 days first, majors first, test data last', () => {
+	const list = [D('testnet.early-contributors', null, 'early-record'), D('1inch.acdd', 2), D('btc.mvrv', 82), D('eth.supply', 3), D('aave.price', 40), D('btc.price', 1), D('sol.price', 30), D('eth.wide', null), D('testnet.x', 1)];
+	const want = ['btc.price', 'eth.supply', '1inch.acdd', 'sol.price', 'btc.mvrv', 'eth.wide', 'aave.price', 'testnet.early-contributors', 'testnet.x'];
+	assert.deepEqual(ids([...list].sort(defaultOrder)), want);
+	assert.equal(isTestSet(D('testnet.x')), true);
+	assert.equal(isTestSet(D('btc.price', 1, 'early-record')), true);
+	assert.equal(isTestSet(D('btc.testnet-fees')), false);
+	assert.deepEqual([isFresh(D('a.b', 30)), isFresh(D('a.b', 31)), isFresh(D('a.b', null))], [true, false, false]);
+});
+
+test('the opening list is read in steps that give the same order', () => {
+	const list = [D('testnet.early-contributors', null, 'early-record'), D('1inch.acdd', 2), D('btc.mvrv', 82), D('eth.supply', 3), D('aave.price', 40), D('btc.price', 1), D('eth.btc-ratio', 1), D('eth.wide', null)];
+	// A fake node: id order, the `fresh` filter, and whole-word `any` terms.
+	const node = (seg) =>
+		[...list]
+			.sort((a, b) => (`${a.publisher}/${a.dataset}` < `${b.publisher}/${b.dataset}` ? -1 : 1))
+			.filter((d) => !seg.fresh || isFresh(d))
+			.filter((d) => !seg.any || seg.any.split(',').some((t) => `${d.publisher}/${d.dataset}`.split(/[^a-z0-9]+/).join(' ').includes(t.replace('*', '').replace('-', ' '))));
+	const read = (freshOnly) => defaultSegments(freshOnly).flatMap((seg) => node(seg).filter(seg.keep));
+	assert.deepEqual(ids(read(false)), ids([...list].sort(defaultOrder)));
+	assert.deepEqual(ids(read(true)), ['btc.price', 'eth.btc-ratio', 'eth.supply', '1inch.acdd']);
+	// Each step is a list call the node takes.
+	assert.deepEqual(defaultSegments(true).map((s) => anyUrl(s.any, null, 50, s.fresh)), ['/v1/bulk?any=btc&fresh=30d&limit=50', '/v1/bulk?any=eth&fresh=30d&limit=50', '/v1/bulk?fresh=30d&limit=50', '/v1/bulk?any=testnet*%2Cearly-record&fresh=30d&limit=50']);
+	assert.equal(defaultSegments(false).length, 7);
+});
+
+test('staleness counts come from the node\'s two totals, or not at all', () => {
+	assert.deepEqual(freshCounts(9054, 6302), { all: 9054, fresh: 6302, stale: 2752 });
+	assert.deepEqual(freshCounts(5, 5), { all: 5, fresh: 5, stale: 0 });
+	assert.deepEqual(freshCounts(5, 0), { all: 5, fresh: 0, stale: 5 });
+	for (const [a, f] of [[null, 3], [9054, null], [3, 4], [0, 0], [-1, 0], [1.5, 1], [5, -1]]) assert.equal(freshCounts(a, f), null, `${a}, ${f}`);
+	assert.equal(freshIn([D('a.b', 1), D('a.c', 31), D('a.d', null), D('a.e', 30)]), 2);
+	assert.equal(freshCountUrl(), '/v1/bulk?fresh=30d&limit=1');
+});
+
+test('the chart opens with the column named like the metric', () => {
+	const S = (columns) => ({ columns, rows: [columns.map((_, i) => String(i + 1)), columns.map((_, i) => String(i + 2))], from: '', to: '', book: '', nextPage: null });
+	const pick = (cols, id) => cols[headlineColumn(S(cols), id)];
+	const mvrv = ['day', 'c_4year_minus_1_sigma', 'c_4year_plus_1_sigma', 'lth_mvrv', 'market_cap_usd', 'mvrv', 'realized_cap_usd', 'sth_mvrv'];
+	assert.equal(pick(mvrv, 'btc.mvrv'), 'mvrv');
+	assert.equal(pick(['day', 'price_usd'], 'btc.price'), 'price_usd');
+	assert.equal(pick(['day', 'market_cap_usd', 'mvrv', 'realized_cap_usd', 'mvrv_zscore'], 'btc.mvrv-z-score'), 'mvrv_zscore');
+	assert.equal(pick(['day', 'lth_percentage', 'lth_sopr', 'lth_supply_native', 'sopr'], 'btc.lth-sopr'), 'lth_sopr');
+	assert.equal(pick(['day', 'mvrv', 'realized_price_usd', 'raw_mvrv'], 'btc.entity-adjusted-mvrv'), 'mvrv');
+	assert.equal(pick(['day', 'sth_btc_in_profit', 'sth_net_position_change', 'sth_accumulation'], 'btc.sth-net-position'), 'sth_net_position_change');
+	// Nothing named like the metric: the first column a chart can draw (never the key).
+	assert.equal(pick(['day', 'net_staked', 'staked'], 'trx.staking-flows-v2'), 'net_staked');
+	assert.equal(pick(['day', 'a', 'b'], 'btc'), 'a');
+	// A column of text is never picked, and a table of series has no chart.
+	const text = { ...S(['day', 'mvrv', 'x']), rows: [['1', 'high', '2'], ['2', 'low', '3']] };
+	assert.equal(text.columns[headlineColumn(text, 'btc.mvrv')], 'x');
+	assert.equal(headlineColumn(S(['day', 'series', 'v']), 'btc.v'), -1);
+});
+
+test('the newest rows are listed newest first', () => {
+	const rows = Array.from({ length: 12 }, (_, i) => [String(i)]);
+	assert.deepEqual(newestFirst(rows).map((r) => r[0]), ['11', '10', '9', '8', '7', '6', '5', '4', '3', '2']);
+	assert.deepEqual(newestFirst([['1'], ['2']]), [['2'], ['1']]);
+	assert.equal(rows[0][0], '0', 'the sample itself keeps its order');
+});
+
+test('CSV: a header, one line a row, quoting, dates for day keys, no formulas', () => {
+	assert.equal(csv(['day', 'price_usd'], [['1787788800', '1.5'], ['1787875200', '-2']], true), 'day,price_usd\r\n2026-08-27,1.5\r\n2026-08-28,-2\r\n');
+	assert.equal(csv(['height', 'v'], [['900000', '']], false), 'height,v\r\n900000,\r\n');
+	assert.equal(csv(['k', 'note'], [['1', 'a,b'], ['2', 'say "hi"'], ['3', 'two\nlines']]), 'k,note\r\n1,"a,b"\r\n2,"say ""hi"""\r\n3,"two\nlines"\r\n');
+	// A text a spreadsheet would run is made plain text; a negative number is left alone.
+	assert.equal(csv(['k', 'v'], [['1', '=1+1'], ['2', '@x'], ['3', '-cmd'], ['4', '-0.5'], ['5', '+1']]), "k,v\r\n1,'=1+1\r\n2,'@x\r\n3,'-cmd\r\n4,-0.5\r\n5,'+1\r\n");
+	assert.equal(csv(['k'], []), 'k\r\n');
+	assert.equal(csvName({ publisher: 'onchain-archive', dataset: 'btc.mvrv' }), 'onchain-archive_btc.mvrv.csv');
+});
+
+test('a full history is read 1,000 rows a call, pinned to one version', () => {
+	assert.equal(HISTORY_PAGE, 1000);
+	const d = item({ ...good, root: '0x' + 'ab'.repeat(32) });
+	assert.equal(historyUrl(d, 0), `/v1/bulk/onchain-archive/btc.sth-net-position/rows?limit=1000&page=0&root=0x${'ab'.repeat(32)}`);
+	assert.equal(historyUrl({ ...d, root: '' }, 3), '/v1/bulk/onchain-archive/btc.sth-net-position/rows?limit=1000&page=3');
+	assert.equal(item({ ...good, root: 'javascript:x' }).root, '');
+	assert.equal(sample({ manifest: { schema: { columns: [{ name: 'day' }] } }, rows: [{ key: '1', values: { day: '1' } }], next_page: 4 }).nextPage, 4);
+	assert.equal(sample({ manifest: { schema: { columns: [{ name: 'day' }] } }, rows: [{ key: '1', values: { day: '1' } }], next_page: null }).nextPage, null);
+	const py = pythonSnippet('https://node.example', d).split('\n');
+	assert.equal(py.length, 5);
+	assert.ok(py[1].includes('https://node.example/v1/bulk/onchain-archive/btc.sth-net-position/rows') && py[2].includes('"limit": 1000') && py[2].includes('"order": "desc"'));
+});
+
+test('"z-score" reads as one term in a title', () => {
+	assert.equal(datasetTitle('btc.mvrv-z-score'), 'Bitcoin · MVRV Z-score');
+	assert.equal(datasetTitle('btc.sth-mvrv-z-score'), 'Bitcoin · Short-term holder MVRV Z-score');
+	assert.equal(datasetTitle('eth.z-score-bands'), 'Ethereum · Z-score bands');
+});

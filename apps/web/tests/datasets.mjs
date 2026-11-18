@@ -1,6 +1,8 @@
-// e2e "datasets" (ROADMAP S22): the #/datasets page against a fake node (page.route): the first
-// page lists the node's datasets, "Show more" follows `next`, a search sends `q` and shows only the
-// matches, an item out of shape is never printed, a dataset opens to its newest rows (a 64-column
+// e2e "datasets" (ROADMAP S22): the #/datasets page against a fake node (page.route): the list
+// opens with the datasets updated in the last 30 days (majors first), then the rest, test data
+// last; "Show more" lists the next 50; a search sends `any`, shows only the matches and ranks the
+// searched asset first; the page says how many datasets are being updated and what a proof shows;
+// an opened dataset charts its headline column, lists its newest rows first and downloads CSV; an item out of shape is never printed, a dataset opens to its newest rows (a 64-column
 // sample stays inside its scroll box on a phone) and the two check commands, a link to a dataset
 // that moved opens its live successor (the node's 410, R-BULK-17), and a busy node (429) says so. Called by tests/e2e.mjs; also runs alone against a build: node tests/datasets.mjs [build dir].
 const BOOK = '0x04bb31d80c8ce9df02c8a03486b5812ec6e5ccc5';
@@ -29,7 +31,16 @@ const FRESHNESS = {
 	'btc.beta': { newest: '2026-08-28', newest_age_days: 80 },
 	'eth.gamma': { newest: '2026-10-17', newest_age_days: 30 }
 };
-const ALL = ['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n, FRESHNESS[n] ?? {}));
+// Newcomer test 2026-11-18: the list opens with the datasets updated in the last 30 days (majors
+// first), then the rest, test data last. aave.btc-beta is fresh and only holds the word btc (a
+// search for "bitcoin beta" must still put the stale btc.beta first); 60 zec.* fillers stopped 80
+// days back, so the first screen of 50 needs "Show more"; one test set of the test publisher.
+const FILL = Array.from({ length: 60 }, (_, i) => ds(`zec.m${String(i).padStart(2, '0')}`, { newest: '2026-08-28', newest_age_days: 80 }));
+const TESTSET = ds('testnet.early-contributors', { publisher: 'early-record', key_min: '348177563648', key_max: '348529885186' });
+// In the node's order (publisher/dataset).
+const ALL = [TESTSET, ds('aave.btc-beta', { newest: '2026-11-15', newest_age_days: 1 }), ...['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n, FRESHNESS[n] ?? {})), ...FILL];
+const N = ALL.length;
+const TOP = ['btc.alpha', 'eth.gamma', 'aave.btc-beta', 'btc.beta', 'eth.wide'];
 // Review FRESH-R1 M1: a dataset whose newest key is dated in the future (found by its own name).
 const AHEAD = ds('sol.ahead', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 });
 // R-BULK-17: what the fake node's 410 says of each removed dataset: eth.old moved to eth.gamma
@@ -39,15 +50,23 @@ const succ = (final, status) => ({ dataset: final, final, generation: 1, hops: 1
 const SUCCESSOR = { 'eth.old': succ('eth.gamma', 'live'), 'eth.parked': succ('eth.nowhere', 'removed'), 'eth.astray': succ('eth.unlisted', 'live'), 'eth.waiting': { status: 'pending' }, 'eth.ended': null };
 const WIDE = ['day', 'series', 'i', 'j', ...Array.from({ length: 60 }, (_, i) => `v${String(i).padStart(2, '0')}`)];
 
-function rowsAnswer(name) {
-	const cols = name === 'eth.wide' ? WIDE : ['day', 'price_usd'];
+// `history`: a page of a full-history download (limit=1000): two pages of 5 rows, by `next_page`.
+function rowsAnswer(name, history = null) {
+	// eth.gamma: the column named like the metric is not the first one (the chart must open on it).
+	const cols = name === 'eth.wide' ? WIDE : name === 'eth.gamma' ? ['day', 'a_first', 'gamma'] : ['day', 'price_usd'];
+	const first = history === null ? 20 : history * 5;
 	const rows = Array.from({ length: 5 }, (_, i) => {
-		const key = String(1_700_006_400 + (20 + i) * DAY);
+		const key = String(1_700_006_400 + (first + i) * DAY);
 		const values = Object.fromEntries(cols.map((c, j) => [c, j === 0 ? key : c === 'series' ? 'bands' : `${1000 + i}.${j}`]));
-		return { index: String(20 + i), key, row: '0x00', shard: '0', values, proof: { index: 0, leaf_count: 1, siblings: [] } };
+		return { index: String(first + i), key, row: '0x00', shard: '0', values, proof: { index: 0, leaf_count: 1, siblings: [] } };
 	});
-	return { anchor: { book: BOOK }, manifest: { schema: { columns: cols.map((name) => ({ name, kind: 'int' })) } }, rows, shards: [], next_page: null };
+	return { anchor: { book: BOOK }, manifest: { schema: { columns: cols.map((name) => ({ name, kind: 'int' })) } }, rows, shards: [], next_page: history === 0 ? 1 : null };
 }
+const rowsRoute = (route) => {
+	const u = new URL(route.request().url());
+	const history = u.searchParams.get('limit') === '1000' ? Number(u.searchParams.get('page') ?? 0) : null;
+	return route.fulfill({ json: rowsAnswer(u.pathname.split('/')[4], history) });
+};
 
 // The node's `any` search (bulk_serve.rs AnyTerm): groups by ';', terms by ',', whole words of the
 // id in a row, a last '*' for a prefix; every group needs one term.
@@ -95,17 +114,24 @@ export async function datasets(browser, base, expect) {
 			const evil = !after && !groups.length ? [ds('<img src=x onerror=__xss()>')] : [];
 			return route.fulfill({ json: { datasets: [...pageItems, ...evil], total: hit.length, next } });
 		});
-		await pg.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => {
-			const name = new URL(route.request().url()).pathname.split('/')[4];
-			return route.fulfill({ json: rowsAnswer(name) });
-		});
+		await pg.route('**/v1/bulk/onchain-archive/*/rows?*', rowsRoute);
 		await pg.goto(base + '#/datasets');
 		const list = pg.getByTestId('datasets-list');
 		await list.waitFor({ timeout: 90000 });
 		expect((await pg.locator('h1').innerText()).trim() === 'All datasets', `${at}: one h1, "All datasets"`);
 		const names = async () => (await pg.getByTestId('datasets-id').allInnerTexts()).map((t) => t.trim());
-		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: the first page lists the node's first datasets (${await names()})`);
-		expect((await pg.getByTestId('datasets-count').innerText()).includes('2 of 4'), `${at}: "Showing 2 of 4"`);
+		const top = async () => JSON.stringify((await names()).slice(0, TOP.length));
+		// The list fills step by step (one node list a step): wait for the first screen of 50.
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
+		expect((await top()) === JSON.stringify(TOP) && (await names()).length === 50, `${at}: the list opens with the datasets updated in the last 30 days (Bitcoin, Ethereum, then by name), then the rest, 50 shown (${(await names()).slice(0, 6)})`);
+		expect((await pg.getByTestId('datasets-count').innerText()).includes(`50 of ${N}`), `${at}: "Showing 50 of ${N}"`);
+		// Staleness in plain numbers, from the node's own two counts; and what a proof does not show.
+		const fresh30 = (await pg.getByTestId('datasets-freshness').innerText()).replace(/\s+/g, ' ').trim();
+		expect(fresh30 === `3 of ${N} datasets were updated in the last 30 days. The other ${N - 3} were not: each of them shows its last day.` && asked.some((q) => q === '?fresh=30d&limit=1') && asked.some((q) => q === '?limit=1'), `${at}: the page says how many datasets are being updated, from the node's counts ("${fresh30}")`);
+		const proofNote = (await pg.getByTestId('datasets-proof-note').innerText()).replace(/\s+/g, ' ').trim();
+		expect(proofNote === 'The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.', `${at}: the page says what a proof shows and what it does not ("${proofNote}")`);
+		const pub = await pg.getByTestId('datasets-publisher').first().evaluate((dd) => ({ text: dd.textContent.trim(), tip: dd.parentElement.getAttribute('title') }));
+		expect(pub.text === 'onchain-archive' && /signed this version with its own key\. Onyx did not check the numbers\./.test(pub.tip ?? ''), `${at}: each card names its publisher and says what that means (${JSON.stringify(pub)})`);
 		expect((await pg.getByTestId('datasets-updated').first().innerText()).trim() === '2026-11-03', `${at}: each dataset shows the day its version was made`);
 		// READINESS A20: the newest day on every time dataset, and a plain mark on the stale one.
 		const F = await pg.evaluate(() =>
@@ -122,51 +148,56 @@ export async function datasets(browser, base, expect) {
 				};
 			})
 		);
-		expect(JSON.stringify(F.map((x) => [x.id, x.newest, x.stale])) === JSON.stringify([['btc.alpha', '2026-11-13', null], ['btc.beta', '2026-08-28', '!No data after 2026-08-28']]), `${at}: each dataset shows its newest day; the one that stopped says "No data after", the detail line's words (review FRESH-R1 L1) (${JSON.stringify(F)})`);
-		expect(F[1].framed === true && F[1].inside === true, `${at}: the mark is words in a dashed frame, inside the page`);
+		expect(JSON.stringify(F.slice(0, 5).map((x) => [x.id, x.newest, x.stale])) === JSON.stringify([['btc.alpha', '2026-11-13', null], ['eth.gamma', '2026-10-17', null], ['aave.btc-beta', '2026-11-15', null], ['btc.beta', '2026-08-28', '!No data after 2026-08-28'], ['eth.wide', null, null]]), `${at}: each dataset shows its newest day; the one that stopped says "No data after", the detail line's words (review FRESH-R1 L1) (${JSON.stringify(F.slice(0, 5))})`);
+		expect(F[3].framed === true && F[3].inside === true, `${at}: the mark is words in a dashed frame, inside the page`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the list with its marks does not scroll sideways`);
 		expect(!(await pg.content()).includes('onerror=__xss'), `${at}: an item out of shape is dropped, never printed`);
 		// The CSP would refuse the handler anyway, so the canary cannot fire: check the markup
 		// itself (review of WEB-CSP-1, finding 3).
 		expect(await pg.evaluate(() => document.querySelector('[onerror]') === null), `${at}: no element carries an onerror handler`);
 		await pg.getByTestId('datasets-more').click();
-		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 4, null, { timeout: 15000 }).catch(() => {});
-		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide']), `${at}: "Show more" follows next (${await names()})`);
+		await pg.waitForFunction((n) => document.querySelectorAll('[data-testid="datasets-row"]').length === n, N, { timeout: 15000 }).catch(() => {});
+		const allNames = await names();
+		expect(allNames.length === N && new Set(allNames).size === N && allNames.slice(5, 65).every((n) => n.startsWith('zec.')), `${at}: "Show more" lists the rest, each dataset once (${allNames.length})`);
 		expect((await pg.getByTestId('datasets-more').count()) === 0, `${at}: no "Show more" on the last page`);
-		const marks = async () => pg.evaluate(() => [...document.querySelectorAll('[data-testid="datasets-row"]')].filter((li) => li.querySelector('[data-testid="datasets-stale"]')).map((li) => li.querySelector('[data-testid="datasets-id"]').textContent.trim()));
+		// Test data is last, with a tag.
+		const lastRow = await pg.getByTestId('datasets-row').last().evaluate((li) => ({ id: li.querySelector('[data-testid="datasets-id"]').textContent.trim(), tag: li.querySelector('[data-testid="datasets-test"]')?.textContent.trim() ?? null, pub: li.querySelector('[data-testid="datasets-publisher"]').textContent.trim() }));
+		expect(lastRow.id === 'testnet.early-contributors' && lastRow.tag === 'test data' && lastRow.pub === 'early-record' && (await pg.getByTestId('datasets-test').count()) === 1, `${at}: test data is listed last with a "test data" tag (${JSON.stringify(lastRow)})`);
+		const marks = async () => pg.evaluate(() => [...document.querySelectorAll('[data-testid="datasets-row"]')].filter((li) => li.querySelector('[data-testid="datasets-stale"]')).map((li) => li.querySelector('[data-testid="datasets-id"]').textContent.trim()).filter((id) => !id.startsWith('zec.')));
 		const newestOf = async (id) => pg.evaluate((id) => [...document.querySelectorAll('[data-testid="datasets-row"]')].find((li) => li.querySelector('[data-testid="datasets-id"]').textContent.trim() === id)?.querySelector('[data-testid="datasets-newest"]')?.textContent.trim() ?? null, id);
 		expect(JSON.stringify(await marks()) === '["btc.beta"]', `${at}: 30 days behind is not marked, and a key that is no time is never marked (${await marks()})`);
 		expect((await newestOf('eth.gamma')) === '2026-10-17' && (await newestOf('eth.wide')) === null, `${at}: a key that is no time shows no newest day`);
 		// The filter asks the node for fresh datasets only, and "All" brings the rest back.
 		expect((await pg.getByTestId('datasets-all').getAttribute('aria-pressed')) === 'true' && (await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed')) === 'false', `${at}: the list starts with all datasets`);
 		await pg.getByTestId('datasets-fresh').click();
-		await pg.waitForFunction(() => /2 of 2/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
-		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma']) && asked.some((s) => new URLSearchParams(s).get('fresh') === '30d') && (await pg.getByTestId('datasets-stale').count()) === 0, `${at}: "Updated in the last 30 days" asks the node's fresh=30d and lists only those (${await names()})`);
+		await pg.waitForFunction(() => /3 of 3/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma', 'aave.btc-beta']) && asked.some((s) => new URLSearchParams(s).get('fresh') === '30d') && (await pg.getByTestId('datasets-stale').count()) === 0, `${at}: "Updated in the last 30 days" asks the node's fresh=30d and lists only those (${await names()})`);
 		expect((await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed')) === 'true', `${at}: the chosen filter says so (aria-pressed)`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the filter fits the page`);
 		await pg.getByTestId('datasets-all').click();
-		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
-		expect(JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: "All" lists every dataset again (${await names()})`);
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
+		expect((await top()) === JSON.stringify(TOP), `${at}: "All" lists every dataset again (${(await names()).slice(0, 6)})`);
 		// Review FRESH-R1 M2: the filter against a node without `fresh`: the page says the filter is
 		// not available, turns it back and lists all; it never says the node has no datasets.
 		oldNode = true;
 		await pg.getByTestId('datasets-fresh').click();
 		await pg.getByTestId('datasets-filter-off').waitFor({ timeout: 15000 }).catch(() => {});
-		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
 		const O = {
 			note: (await pg.getByTestId('datasets-filter-off').allInnerTexts()).join(' '),
 			none: await pg.getByTestId('datasets-none').count(),
 			all: await pg.getByTestId('datasets-all').getAttribute('aria-pressed'),
 			fresh: await pg.getByTestId('datasets-fresh').getAttribute('aria-pressed'),
-			names: await names()
+			names: (await names()).slice(0, 3)
 		};
-		expect(/30-day filter is not available/.test(O.note) && O.none === 0 && O.all === 'true' && O.fresh === 'false' && JSON.stringify(O.names) === JSON.stringify(['btc.alpha', 'btc.beta']), `${at}: a node without the filter: the page says so, turns the switch back and lists all (${JSON.stringify(O)})`);
+		// Without the filter the page cannot tell which datasets are fresh: the node's own order.
+		expect(/30-day filter is not available/.test(O.note) && O.none === 0 && O.all === 'true' && O.fresh === 'false' && JSON.stringify(O.names) === JSON.stringify(['testnet.early-contributors', 'aave.btc-beta', 'btc.alpha']), `${at}: a node without the filter: the page says so, turns the switch back and lists all (${JSON.stringify(O)})`);
 		oldNode = false;
 		await pg.getByTestId('datasets-fresh').click();
-		await pg.waitForFunction(() => /2 of 2/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
-		expect((await pg.getByTestId('datasets-filter-off').count()) === 0 && JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma']), `${at}: once the node takes the filter the note goes`);
+		await pg.waitForFunction(() => /3 of 3/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		expect((await pg.getByTestId('datasets-filter-off').count()) === 0 && JSON.stringify(await names()) === JSON.stringify(['btc.alpha', 'eth.gamma', 'aave.btc-beta']), `${at}: once the node takes the filter the note goes`);
 		await pg.getByTestId('datasets-all').click();
-		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
 		// Review FRESH-R1 M1: dates in the future are said plainly: no newest day, no "fresh".
 		await pg.getByTestId('datasets-q').fill('sol ahead');
 		await pg.getByTestId('datasets-future').waitFor({ timeout: 15000 }).catch(() => {});
@@ -182,14 +213,22 @@ export async function datasets(browser, base, expect) {
 		expect((await pg.getByTestId('datasets-row').count()) === 0, `${at}: a dataset dated in the future is not in the 30-day list`);
 		await pg.getByTestId('datasets-all').click();
 		await pg.getByTestId('datasets-q').fill('');
-		await pg.waitForFunction(() => /2 of 4/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
+		// Search ranking: the dataset of the asset searched comes first, even when it is stale and
+		// another asset's dataset that only holds the word is fresh (the node sends that one first).
+		await pg.getByTestId('datasets-q').fill('bitcoin beta');
+		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 2 && /2 of 2/.test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		const ranked = { names: await names(), note: (await pg.getByTestId('datasets-order').innerText()).replace(/\s+/g, ' ').trim() };
+		expect(JSON.stringify(ranked.names) === JSON.stringify(['btc.beta', 'aave.btc-beta']) && /^Best match first/.test(ranked.note) && /1 of 2 found were updated in the last 30 days\./.test(ranked.note), `${at}: a search for "bitcoin beta" lists the Bitcoin dataset first, though it is stale and the other is fresh (${JSON.stringify(ranked)})`);
+		await pg.getByTestId('datasets-q').fill('');
+		await pg.waitForFunction((n) => new RegExp(`50 of ${n}`).test(document.querySelector('[data-testid="datasets-count"]')?.textContent ?? ''), N, { timeout: 15000 }).catch(() => {});
 		// The opened stale dataset says its rows end there (the dataset view).
-		await pg.getByTestId('datasets-open').nth(1).click();
+		await pg.getByTestId('datasets-open').nth(3).click();
 		await pg.getByTestId('datasets-sample').waitFor({ timeout: 15000 }).catch(() => {});
 		const stale = (await pg.getByTestId('datasets-detail-stale').allInnerTexts()).join(' ');
 		expect(/no data after 2026-08-28/.test(stale) && /not current values/.test(stale), `${at}: an opened stale dataset says its rows are not current (${stale})`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth <= innerWidth + 1), `${at}: the opened stale dataset does not scroll the page sideways`);
-		await pg.getByTestId('datasets-open').nth(1).click();
+		await pg.getByTestId('datasets-open').nth(3).click();
 		await pg.getByTestId('datasets-q').fill('ETH  Wide');
 		await pg.waitForFunction(() => document.querySelectorAll('[data-testid="datasets-row"]').length === 1, null, { timeout: 15000 }).catch(() => {});
 		expect(JSON.stringify(await names()) === '["eth.wide"]' && asked.some((s) => new URLSearchParams(s).get('any') === 'eth*;wide*'), `${at}: a search sends the node's whole-word any search and shows the matches (${await names()})`);
@@ -210,7 +249,9 @@ export async function datasets(browser, base, expect) {
 				expanded: document.querySelector('[data-testid="datasets-open"]').getAttribute('aria-expanded')
 			};
 		});
-		expect(S.cols === 64 && S.rows === 5 && S.first === '2023-12-05', `${at}: the newest rows, 64 columns, day keys as dates (${S.cols}, ${S.rows}, ${S.first})`);
+		expect(S.cols === 64 && S.rows === 5 && S.first === '2023-12-09', `${at}: the newest rows, newest first, 64 columns, day keys as dates (${S.cols}, ${S.rows}, ${S.first})`);
+		const py = await pg.getByTestId('datasets-python').innerText();
+		expect(py.split('\n').length === 5 && py.includes('import requests, pandas as pd') && py.includes('/v1/bulk/onchain-archive/eth.wide/rows"') && py.includes('"limit": 1000'), `${at}: five lines of Python read the same dataset (${py.split('\n').length} lines)`);
 		expect((await pg.getByTestId('datasets-chart').count()) === 0, `${at}: a table of series (one row per series and day) gets no chart`);
 		expect(!S.pageScroll && (width > 1000 || S.boxScrolls), `${at}: the wide sample scrolls in its own box, never the page`);
 		expect(S.expanded === 'true', `${at}: the opened dataset says so (aria-expanded)`);
@@ -226,7 +267,7 @@ export async function datasets(browser, base, expect) {
 				const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`));
 				return route.fulfill({ json: { datasets: hit, total: hit.length, next: null } });
 			});
-			await p.route('**/v1/bulk/onchain-archive/*/rows?*', (route) => route.fulfill({ json: rowsAnswer(new URL(route.request().url()).pathname.split('/')[4]) }));
+			await p.route('**/v1/bulk/onchain-archive/*/rows?*', rowsRoute);
 			// R-BULK-17: the node's answer about one dataset. A removed one is 410 with its successor.
 			await p.route('**/v1/bulk/onchain-archive/*', (route) => {
 				const name = new URL(route.request().url()).pathname.split('/')[4];
@@ -248,6 +289,26 @@ export async function datasets(browser, base, expect) {
 			return { line: !!svg?.querySelector('path.line'), overlap, scroll: document.documentElement.scrollWidth > innerWidth + 1 };
 		});
 		expect(C.line && !C.scroll && !C.overlap, `${at}: a dataset of plain numbers opens with a chart of its newest rows, inside the page, its dates apart (${JSON.stringify(C)})`);
+		// The chart opens on the column named like the metric (gamma), not the first one (a_first).
+		const col = await pg2.getByTestId('datasets-chart-col').evaluate((sel) => sel.options[sel.selectedIndex].textContent.trim());
+		expect(col === 'gamma', `${at}: the chart opens on the dataset's headline column (${col})`);
+		// A dataset link brings its opened card to the top of the screen.
+		await pg2.waitForFunction(() => {
+			const r = document.querySelector('[data-testid="datasets-row"]')?.getBoundingClientRect();
+			return r && r.top >= 0 && r.top < innerHeight / 2;
+		}, null, { timeout: 15000 }).catch(() => {});
+		const cardTop = await pg2.evaluate(() => Math.round(document.querySelector('[data-testid="datasets-row"]').getBoundingClientRect().top));
+		expect(cardTop >= 0 && cardTop < 450 && (await pg2.evaluate(() => scrollY)) > 0, `${at}: a dataset link scrolls the opened card into view (top at ${cardTop} px)`);
+		// Download CSV: the rows loaded for the chart, then the full history page by page.
+		const text = async (download) => (await import('node:fs/promises')).readFile(await download.path(), 'utf8');
+		const [shownCsv] = await Promise.all([pg2.waitForEvent('download', { timeout: 15000 }), pg2.getByTestId('datasets-csv').click()]);
+		const shownText = await text(shownCsv);
+		expect(shownCsv.suggestedFilename() === 'onchain-archive_eth.gamma.csv' && shownText.startsWith('day,a_first,gamma\r\n2023-12-05,1000.1,1000.2\r\n') && shownText.trim().split('\r\n').length === 6, `${at}: "Download CSV" saves the rows shown, with a header and dates (${JSON.stringify(shownText.slice(0, 60))})`);
+		const [allCsv] = await Promise.all([pg2.waitForEvent('download', { timeout: 15000 }), pg2.getByTestId('datasets-csv-all').click()]);
+		const allText = await text(allCsv);
+		await pg2.waitForFunction(() => /Saved 10 rows/.test(document.querySelector('[data-testid="datasets-csv-status"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
+		const status = (await pg2.getByTestId('datasets-csv-status').innerText()).replace(/\s+/g, ' ').trim();
+		expect(allText.trim().split('\r\n').length === 11 && allText.includes('\r\n2023-11-15,1000.1,1000.2\r\n') && allText.includes('\r\n2023-11-24,') && /^Saved 10 rows, oldest first\./.test(status), `${at}: "Download full history" pages through the node (2 calls here) and says what it saved ("${status}")`);
 		// A link to a dataset this node does not hold says so and shows the closest names.
 		await pg2.close();
 		const pg3 = await fresh();

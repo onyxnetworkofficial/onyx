@@ -318,6 +318,12 @@ export function metricTitle(words: string[]): string {
 			i++;
 			continue;
 		}
+		// "z-score" is one term ("mvrv-z-score": MVRV Z-score, not "Z-score score").
+		if (w === 'z' && next === 'score') {
+			out.push('Z-score');
+			i++;
+			continue;
+		}
 		if (w === 'op' && next === 'return') {
 			out.push('OP_RETURN');
 			i++;

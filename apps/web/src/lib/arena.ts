@@ -79,3 +79,15 @@ export function level(xp: number): { level: number; into: number; need: number }
 	}
 	return { level: lv, into: left, need };
 }
+
+const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+
+/** A time as the practice markets write a day: "29 Nov 2026" (UTC). */
+export function practiceDayLabel(ms: number): string {
+	const d = new Date(ms);
+	return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
+}
+
+/** The day `days` days after `now`: the practice markets' dates roll with today, so an open
+ * practice market never names a day that has passed. */
+export const practiceDay = (days: number, now = Date.now()): string => practiceDayLabel(now + days * 86_400_000);

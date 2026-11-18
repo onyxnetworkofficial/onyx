@@ -409,7 +409,7 @@ Not in the file, so the host has to provide it:
 - **Per-client connection cap.** onyx-node exempts its trusted proxy from `ONYX_MAX_CONNS_PER_IP`
   (AUD-1R-F1), and stock Caddy has no per-client connection limit. Cap new connections per
   source address in the host firewall, or accept that one client can hold many proxy
-  connections (THREATS TLS-2). The ready file is `deploy/nftables/onyx-conn-cap.nft` (32 open
+  connections (THREATS TLS-2). The ready file is `deploy/nftables/onyx-conn-cap.nft` (64 open
   connections per IPv4 address or IPv6 /64 on 443, its own table, loaded by
   `deploy/systemd/onyx-conn-cap.service`; tested with `scripts/conn-cap-test.sh`). The file serves
   HTTP/1.1 only, so that cap also bounds the client's requests in flight; onyx-api still has one

@@ -67,7 +67,10 @@ it equal to the code, and every answer the tests see is validated against it.
   answer, value, proofLevel, templateId, specId, roundId, resultHash, factKey, registryFactKey,
   settledUnix, rights, license, attribution, onchain, limits}` (`limits`: §Level-2 limits; also in
   its 402 body and in the `PAYMENT-REQUIRED` offer's `extensions.limits.info.limits`, so it is seen before paying). `subject` is the Borsh `Subject` (hex),
-  asked for by its text (`subjectText`, e.g. `us.treasury.federal_debt:2026-10-08`); `answer` is
+  asked for by its text (`subjectText`, e.g. `us.treasury.federal_debt:2026-10-08`: for a daily
+  value the source's series name, a colon and the day; without `subject` the 400 `bad_request`
+  names the parameter and one subject this node holds a round of for the metric, and the 404
+  `unknown_subject` of a subject without a round names one too, once the metric's rights admit); `answer` is
   the Borsh `Answer` and `observation` the Borsh `Observation`; `value` is the answer as text (a
   decimal at the feed's scale). `window_end` picks a fixed feed's round, or `as_of` the newest
   whose window ends at or before it (default: the newest; not both, 400); a dated feed has one
@@ -460,7 +463,10 @@ body, built by the server and checked by every client, the browser included).
 ### Bulk datasets (contributor loop CL5, ADR-0059)
 - Mounted only with `ONYX_BULK_DIR` and a manifest pinning `OnyxSignedBook` (docs/spec/bulk-datasets.md).
   Reading is free on the test network (60 answers per client per minute, `no-store`).
-- `GET /v1/bulk` lists the datasets; `GET /v1/bulk/{publisher}/{dataset}` gives the latest manifest
+- `GET /v1/bulk` lists the datasets (`q` searches them: every word must be in `publisher/dataset`;
+  a common asset name such as bitcoin, ethereum or tron also finds the datasets of its id, `btc`,
+  `eth`, `trx`, and the datasets of the asset asked for are listed first: docs/spec/bulk-datasets.md
+  "Routes"); `GET /v1/bulk/{publisher}/{dataset}` gives the latest manifest
   (root, Borsh header, schema, rights), its anchor, the versions and every shard entry with its proof
   and tier; `GET /v1/bulk/{publisher}/{dataset}/rows?from=&to=&page=&limit=&order=` gives the rows whose key
   is in [`from`, `to`] in key order (`limit` 1..=1000, default 100; `order=desc` gives the newest

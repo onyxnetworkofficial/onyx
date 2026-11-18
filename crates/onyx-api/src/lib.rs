@@ -1951,7 +1951,57 @@ fn path_err(e: PathRejection) -> ApiError {
 }
 
 fn query_err(e: QueryRejection) -> ApiError {
-    bad_request(e.body_text())
+    let text = e.body_text();
+    match missing_parameter(&text) {
+        Some(name) => bad_request(format!("missing query parameter {name}")),
+        None => bad_request(text),
+    }
+}
+
+/// The name of the required query parameter a rejection says is missing
+/// (serde's "missing field `subject`"), when that is what it says. A name is
+/// one of this API's own field names, never a reader's text.
+fn missing_parameter(text: &str) -> Option<&str> {
+    let name = text.split_once("missing field `")?.1.split_once('`')?.0;
+    let plain = !name.is_empty() && name.bytes().all(|b| b.is_ascii_lowercase() || b == b'_');
+    plain.then_some(name)
+}
+
+/// How a subject is written when a node has no round to name.
+const SUBJECT_EXAMPLE: &str = "us.treasury.federal_debt:2026-10-08";
+
+/// A subject `metric` has a settled round for on this node, to show a
+/// reader who sent none or an unknown one: the last in text order (the
+/// newest day of a dated feed), found without walking the rounds. None for
+/// a metric this node does not serve or may not deliver.
+fn subject_held(state: &ApiState, metric: &str) -> Option<String> {
+    let c = state.catalog.read().ok()?;
+    let feed = c.observations(metric)?;
+    admit_rights(&feed.template.rights).ok()?;
+    feed.records.keys().next_back().map(|(s, _)| s.clone())
+}
+
+/// The 400 for an observation asked without `subject`: the parameter by
+/// name and one example, a round this node holds when it has one.
+fn subject_missing(state: &ApiState, metric: &str) -> ApiError {
+    let example = match subject_held(state, metric) {
+        Some(s) => format!("for example ?subject={s} (a round this node holds)"),
+        None => format!(
+            "written like ?subject={SUBJECT_EXAMPLE} (a name, a colon and a day for a daily value)"
+        ),
+    };
+    bad_request(format!(
+        "missing query parameter subject: the subject of the value, {example}"
+    ))
+}
+
+/// [`query_err`] for the observation routes: a missing `subject` names an example.
+fn observation_query_err(state: &ApiState, metric: &str, e: QueryRejection) -> ApiError {
+    if missing_parameter(&e.body_text()) == Some("subject") {
+        subject_missing(state, metric)
+    } else {
+        query_err(e)
+    }
 }
 
 fn paid(state: &ApiState, price: u64) -> bool {
@@ -2616,8 +2666,11 @@ async fn observation_reply(
 ) -> Reply {
     let Path(metric) = path.map_err(path_err)?;
     check_name(&metric, "metric")?;
-    let Query(q) = query.map_err(query_err)?;
-    if q.subject.is_empty() || q.subject.len() > 256 {
+    let Query(q) = query.map_err(|e| observation_query_err(state, &metric, e))?;
+    if q.subject.is_empty() {
+        return Err(subject_missing(state, &metric).into());
+    }
+    if q.subject.len() > 256 {
         return Err(bad_request("subject must be 1 to 256 bytes").into());
     }
     let mut qs = vec![("subject", q.subject.clone())];
@@ -2704,12 +2757,15 @@ async fn observation_reply(
                 return r;
             }
         }
-        return Err(ApiError::new(
-            StatusCode::NOT_FOUND,
-            "unknown_subject",
-            "no settled round for this subject",
-        )
-        .into());
+        // The metric is served and its rights admit (both checked above),
+        // so a round it does hold may be named: its facts are on chain.
+        let message = match subject_held(state, &metric) {
+            Some(s) => format!(
+                "no settled round for this subject; this node holds, for example, ?subject={s}"
+            ),
+            None => "no settled round for this subject".to_string(),
+        };
+        return Err(ApiError::new(StatusCode::NOT_FOUND, "unknown_subject", message).into());
     };
     let price = if state.payments.is_some() {
         state
@@ -2835,8 +2891,11 @@ fn observation_attempts_reply(
 ) -> Reply {
     let Path(metric) = path.map_err(path_err)?;
     check_name(&metric, "metric")?;
-    let Query(q) = query.map_err(query_err)?;
-    if q.subject.is_empty() || q.subject.len() > 256 {
+    let Query(q) = query.map_err(|e| observation_query_err(state, &metric, e))?;
+    if q.subject.is_empty() {
+        return Err(subject_missing(state, &metric).into());
+    }
+    if q.subject.len() > 256 {
         return Err(bad_request("subject must be 1 to 256 bytes").into());
     }
     let mut qs = vec![("subject", q.subject.clone())];

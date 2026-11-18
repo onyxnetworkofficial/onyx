@@ -54,12 +54,32 @@ It gets each match with its proof level (what the level means), the newest date 
 it, or `"found": false` and how to propose it. The list is the website's own dataset list,
 shipped with the toolkit; the newest dates come from the node's website files.
 
+A value that observers read from a public source (earthquakes, temperatures, Treasury numbers) is
+asked for by its `subject`: the source's series name, a colon and the day, for example
+`usgs.earthquakes.m5_world:2026-07-19`. Only days a round settled are served. So each such match
+has `example`: a call that works on the hosted node, as the tool call (`onyx_get_observation` with
+its `metric` and `subject`) and as the HTTP request. The subjects are the settled rounds the
+website ships (`level2/ladders-base-sepolia.json`), copied into the toolkit. A match the hosted
+node holds no round of has `"readable": false` and says so in `access`. Asked without a subject,
+the node answers 400 and names one it holds; asked for a day without a round, its 404 does too.
+
 The same call also searches the bulk datasets publishers upload (`GET /v1/bulk?q=`), for example
-`{ "query": "bitcoin mvrv" }`. Their ids use short names (`btc.mvrv`), so common full names
-(bitcoin, ethereum, solana and a few more) are translated. Matches come under `bulk.matches`, each
+`{ "query": "bitcoin mvrv" }`. Their ids start with the asset's short name (`btc.mvrv`), so the
+asset names of the website's table (bitcoin, ethereum, tron, wrapped bitcoin and the rest) are
+translated; `bulk.assets` lists the names read so. Matches come under `bulk.matches`, each
 with its rows, key range and `read`: the exact `onyx_get_bulk_rows` call for a newest-first page.
 A match whose key is a time also has `newest` (the newest day of data) and `stale`: `true`, with
-one sentence in `staleNote`, when it has no data in the last 30 days. Fresh matches come first.
+one sentence in `staleNote`, when it has no data in the last 30 days.
+
+The order is: the datasets of the asset asked for (the part of the id before the first dot is
+that asset: `btc.mvrv` for bitcoin) before those that only hold its id inside another word
+(`wbtc.mvrv` is Wrapped Bitcoin, a different asset); then the dataset whose other id words are
+exactly the other words asked; then fresh before stale. A stale dataset of the asset asked for
+still comes before a fresh one of another asset. When a shown match is of another asset, or the
+asked asset's dataset is stale, `bulk.assetNote` says so in plain words and `next` starts with
+it, for example: "`btc.mvrv` is the Bitcoin dataset; it has no data after 2026-08-28. The wbtc.*
+datasets are Wrapped Bitcoin, a different asset." Never report another asset's numbers as the
+one asked for. `GET /v1/bulk?q=` on the node takes the same names and lists in the same order.
 `onyx_get_bulk_rows` says the same under `freshness`. Tell your user before using a stale one.
 A dataset whose newest key is dated in the future has `newestInFuture`: `true` instead: its newest
 day is not known, and it is never counted as fresh. All of this is the node's word, not checked.

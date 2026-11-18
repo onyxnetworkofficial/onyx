@@ -8,13 +8,16 @@ Quickstart for AI agents: [docs/agents.md](../../docs/agents.md).
 - `src/mcp.mjs`: an MCP server (stdio) with one tool per operation, `onyx_check_answer` and the
   agent-connect tools of `src/connect.mjs`: `onyx_find_dataset` ("does Onyx have X?"),
   `onyx_propose_dataset` (check, then record on confirm) and `onyx_proposal_status`.
-  `onyx_find_dataset` also searches the node's bulk datasets (`GET /v1/bulk?q=`), and
+  `onyx_find_dataset` also searches the node's bulk datasets (`GET /v1/bulk?q=`; asset names
+  are made their short ids, and the asset asked for is listed before any other, with a sentence
+  when a shown match is of another asset), gives each observed dataset a call that works, and
   `onyx_get_bulk_rows` answers 10 rows in a compact form unless asked for `full`.
 - `src/http.mjs`: the read tools over HTTP (MCP Streamable HTTP, one URL), read-only by default,
   rate-limited per client address, sessions by `Mcp-Session-Id`, foreign browser origins refused.
   It leaves out the tools that write (uploads, the relay, wants) or hand out whole stored files.
 - `openapi.json` and `catalog.json`: copies of `docs/api/openapi.json` and the website's dataset
-  list, so this folder runs on its own. `node scripts/sync.mjs` writes them; `--check`, the tests
+  list (with its asset names and the settled round of each observed dataset on the hosted
+  node), so this folder runs on its own. `node scripts/sync.mjs` writes them; `--check`, the tests
   and `scripts/check-openapi.py` fail on a stale copy.
 - `src/check.mjs`: runs `onyx-check`, the Rust command that checks an answer
   (`crates/onyx-check`). No check is written in JavaScript.

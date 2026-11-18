@@ -3,7 +3,7 @@
 // browser with practice credits: the prices move because simulated traders trade against the
 // LMSR market maker (arena.ts), and a market resolves when the presenter asks, through a replay
 // of the Onyx observer check. Nothing is sent anywhere; the account is kept in localStorage.
-import { level, parlayPayout, prices, quote, refundFor, rng, seed } from '#lib/arena.ts';
+import { level, parlayPayout, practiceDay, practiceDayLabel, prices, quote, refundFor, rng, seed } from '#lib/arena.ts';
 
 export type Category = 'Economy' | 'Bitcoin' | 'Ethereum' | 'Companies' | 'AI & compute' | 'Weather';
 export const CATEGORIES: Category[] = ['Economy', 'Bitcoin', 'Ethereum', 'Companies', 'AI & compute', 'Weather'];
@@ -33,19 +33,28 @@ export type Market = {
 
 type Def = Omit<Market, 'q' | 'hist' | 'vol' | 'traders' | 'lean' | 'status' | 'winner'> & { open: number[]; vol: number };
 
+/** One date style across the practice markets: "29 Nov 2026" (UTC). */
+export const dayLabel = practiceDayLabel;
+
+// Newcomer test 2026-11-18: the practice markets carried fixed dates, so after those days they
+// read as open markets that had already closed. Their dates now roll: each market names a day a
+// fixed number of days after today and closes the day before it.
+/** The day `n` days from now, as the practice markets write it. */
+const D = (n: number) => practiceDay(n);
+
 const DEFS: Def[] = [
-	{ id: 'debt-406', kind: 'binary', cat: 'Economy', title: 'U.S. total public debt above $40.60 trillion on 30 Nov 2026?', outcomes: ['Yes', 'No'], evidence: ['$40,612,880,301,447.18', '$40,571,004,512,903.66'], source: 'U.S. Treasury, Debt to the Penny API', dataset: 'us.treasury.total_public_debt_outstanding', closes: '29 Nov 2026', b: 900, open: [0.62, 0.38], vol: 48210 },
-	{ id: 'debt-range', kind: 'range', cat: 'Economy', title: 'U.S. total public debt on 31 Dec 2026', outcomes: ['Below $40.50T', '$40.50T–$40.60T', '$40.60T–$40.70T', '$40.70T–$40.80T', '$40.80T or more'], evidence: ['$40,486,112,004,915.02', '$40,557,301,846,220.40', '$40,651,918,370,662.13', '$40,740,207,155,018.77', '$40,833,560,918,004.51'], source: 'U.S. Treasury, Debt to the Penny API', dataset: 'us.treasury.total_public_debt_outstanding', closes: '30 Dec 2026', b: 1100, open: [0.08, 0.27, 0.36, 0.21, 0.08], vol: 91340 },
-	{ id: 'btc-fees', kind: 'binary', cat: 'Bitcoin', title: 'Average Bitcoin fees above 0.05 BTC per block on 15 Nov 2026?', outcomes: ['Yes', 'No'], evidence: ['0.0617 BTC per block', '0.0389 BTC per block'], source: 'Bitcoin blocks, recomputed by an open recipe', dataset: 'btc.chain-stats', closes: '14 Nov 2026', b: 600, open: [0.41, 0.59], vol: 22870 },
-	{ id: 'btc-blocks', kind: 'range', cat: 'Bitcoin', title: 'Bitcoin blocks mined 1–7 Nov 2026', outcomes: ['Under 990', '990–1,019', '1,020–1,049', '1,050 or more'], evidence: ['982 blocks', '1,006 blocks', '1,031 blocks', '1,058 blocks'], source: 'Bitcoin blocks, recomputed by an open recipe', dataset: 'btc.blocks', closes: '31 Oct 2026', b: 700, open: [0.16, 0.39, 0.33, 0.12], vol: 30410 },
-	{ id: 'pool-share', kind: 'binary', cat: 'Bitcoin', title: 'Largest mining pool finds over 30% of blocks this week?', outcomes: ['Yes', 'No'], evidence: ['31.8% of blocks', '28.4% of blocks'], source: 'Coinbase tags in Bitcoin blocks', dataset: 'btc.pools', closes: '1 Nov 2026', b: 500, open: [0.55, 0.45], vol: 15920 },
-	{ id: 'eth-gas', kind: 'binary', cat: 'Ethereum', title: 'Ethereum median gas price under 1 gwei on 10 Nov 2026?', outcomes: ['Yes', 'No'], evidence: ['0.71 gwei', '1.36 gwei'], source: 'Ethereum blocks, recomputed by an open recipe', dataset: 'eth.chain-stats', closes: '9 Nov 2026', b: 600, open: [0.68, 0.32], vol: 19650 },
-	{ id: 'etf-btc', kind: 'binary', cat: 'Companies', title: 'U.S. spot Bitcoin ETFs hold over 1.40 million BTC on 1 Dec 2026?', outcomes: ['Yes', 'No'], evidence: ['1,412,906 BTC', '1,381,440 BTC'], source: 'Fund issuers’ daily holdings files', dataset: 'sec.etf-btc', closes: '30 Nov 2026', b: 800, open: [0.47, 0.53], vol: 37280 },
+	{ id: 'debt-406', kind: 'binary', cat: 'Economy', title: `U.S. total public debt above $40.60 trillion on ${D(12)}?`, outcomes: ['Yes', 'No'], evidence: ['$40,612,880,301,447.18', '$40,571,004,512,903.66'], source: 'U.S. Treasury, Debt to the Penny API', dataset: 'us.treasury.total_public_debt_outstanding', closes: D(11), b: 900, open: [0.62, 0.38], vol: 48210 },
+	{ id: 'debt-range', kind: 'range', cat: 'Economy', title: `U.S. total public debt on ${D(43)}`, outcomes: ['Below $40.50T', '$40.50T–$40.60T', '$40.60T–$40.70T', '$40.70T–$40.80T', '$40.80T or more'], evidence: ['$40,486,112,004,915.02', '$40,557,301,846,220.40', '$40,651,918,370,662.13', '$40,740,207,155,018.77', '$40,833,560,918,004.51'], source: 'U.S. Treasury, Debt to the Penny API', dataset: 'us.treasury.total_public_debt_outstanding', closes: D(42), b: 1100, open: [0.08, 0.27, 0.36, 0.21, 0.08], vol: 91340 },
+	{ id: 'btc-fees', kind: 'binary', cat: 'Bitcoin', title: `Average Bitcoin fees above 0.05 BTC per block on ${D(5)}?`, outcomes: ['Yes', 'No'], evidence: ['0.0617 BTC per block', '0.0389 BTC per block'], source: 'Bitcoin blocks, recomputed by an open recipe', dataset: 'btc.chain-stats', closes: D(4), b: 600, open: [0.41, 0.59], vol: 22870 },
+	{ id: 'btc-blocks', kind: 'range', cat: 'Bitcoin', title: `Bitcoin blocks mined in the 7 days to ${D(9)}`, outcomes: ['Under 990', '990–1,019', '1,020–1,049', '1,050 or more'], evidence: ['982 blocks', '1,006 blocks', '1,031 blocks', '1,058 blocks'], source: 'Bitcoin blocks, recomputed by an open recipe', dataset: 'btc.blocks', closes: D(2), b: 700, open: [0.16, 0.39, 0.33, 0.12], vol: 30410 },
+	{ id: 'pool-share', kind: 'binary', cat: 'Bitcoin', title: 'Largest mining pool finds over 30% of blocks this week?', outcomes: ['Yes', 'No'], evidence: ['31.8% of blocks', '28.4% of blocks'], source: 'Coinbase tags in Bitcoin blocks', dataset: 'btc.pools', closes: D(3), b: 500, open: [0.55, 0.45], vol: 15920 },
+	{ id: 'eth-gas', kind: 'binary', cat: 'Ethereum', title: `Ethereum median gas price under 1 gwei on ${D(7)}?`, outcomes: ['Yes', 'No'], evidence: ['0.71 gwei', '1.36 gwei'], source: 'Ethereum blocks, recomputed by an open recipe', dataset: 'eth.chain-stats', closes: D(6), b: 600, open: [0.68, 0.32], vol: 19650 },
+	{ id: 'etf-btc', kind: 'binary', cat: 'Companies', title: `U.S. spot Bitcoin ETFs hold over 1.40 million BTC on ${D(14)}?`, outcomes: ['Yes', 'No'], evidence: ['1,412,906 BTC', '1,381,440 BTC'], source: 'Fund issuers’ daily holdings files', dataset: 'sec.etf-btc', closes: D(13), b: 800, open: [0.47, 0.53], vol: 37280 },
 	{ id: 'sec-filer', kind: 'binary', cat: 'Companies', title: 'Largest corporate Bitcoin holder reports more BTC in its next 10-Q?', outcomes: ['Yes', 'No'], evidence: ['More units than the last filing', 'Same or fewer units'], source: 'SEC EDGAR filings', dataset: 'sec.crypto-units', closes: 'at the next 10-Q', b: 700, open: [0.83, 0.17], vol: 26110 },
-	{ id: 'gpu-h100', kind: 'binary', cat: 'AI & compute', title: 'H100 GPU rental index below $2.00 per hour on 31 Dec 2026?', outcomes: ['Yes', 'No'], evidence: ['$1.87 per GPU-hour', '$2.14 per GPU-hour'], source: 'A published GPU rental price index', dataset: 'compute.gpu-rental (proposed)', closes: '30 Dec 2026', b: 500, open: [0.36, 0.64], vol: 12740 },
-	{ id: 'ai-tokens', kind: 'binary', cat: 'AI & compute', title: 'One model passes 1 billion tokens in a day in a public usage sample?', outcomes: ['Yes', 'No'], evidence: ['1.21 billion tokens', '0.88 billion tokens'], source: 'A model aggregator’s public usage sample', dataset: 'ai.model-usage (proposed)', closes: '30 Dec 2026', b: 500, open: [0.58, 0.42], vol: 17330 },
-	{ id: 'nyc-snow', kind: 'binary', cat: 'Weather', title: 'Measurable snow in New York’s Central Park before 1 Dec 2026?', outcomes: ['Yes', 'No'], evidence: ['0.4 in on 26 Nov 2026', '0.0 in all month'], source: 'NOAA daily station records', dataset: 'weather.noaa-daily (proposed)', closes: '30 Nov 2026', b: 400, open: [0.22, 0.78], vol: 9850 },
-	{ id: 'cpi', kind: 'range', cat: 'Economy', title: 'U.S. CPI, 12-month change, November 2026 release', outcomes: ['Under 2.5%', '2.5%–2.8%', '2.9%–3.2%', '3.3% or more'], evidence: ['2.4%', '2.7%', '3.0%', '3.4%'], source: 'U.S. Bureau of Labor Statistics', dataset: 'us.bls.cpi (proposed)', closes: 'on CPI release day', b: 800, open: [0.12, 0.41, 0.35, 0.12], vol: 41760 }
+	{ id: 'gpu-h100', kind: 'binary', cat: 'AI & compute', title: `H100 GPU rental index below $2.00 per hour on ${D(43)}?`, outcomes: ['Yes', 'No'], evidence: ['$1.87 per GPU-hour', '$2.14 per GPU-hour'], source: 'A published GPU rental price index', dataset: 'compute.gpu-rental (proposed)', closes: D(42), b: 500, open: [0.36, 0.64], vol: 12740 },
+	{ id: 'ai-tokens', kind: 'binary', cat: 'AI & compute', title: 'One model passes 1 billion tokens in a day in a public usage sample?', outcomes: ['Yes', 'No'], evidence: ['1.21 billion tokens', '0.88 billion tokens'], source: 'A model aggregator’s public usage sample', dataset: 'ai.model-usage (proposed)', closes: D(42), b: 500, open: [0.58, 0.42], vol: 17330 },
+	{ id: 'nyc-snow', kind: 'binary', cat: 'Weather', title: `Measurable snow in New York’s Central Park before ${D(14)}?`, outcomes: ['Yes', 'No'], evidence: ['0.4 in on one day', '0.0 in on every day'], source: 'NOAA daily station records', dataset: 'weather.noaa-daily (proposed)', closes: D(13), b: 400, open: [0.22, 0.78], vol: 9850 },
+	{ id: 'cpi', kind: 'range', cat: 'Economy', title: 'U.S. CPI, 12-month change, next monthly release', outcomes: ['Under 2.5%', '2.5%–2.8%', '2.9%–3.2%', '3.3% or more'], evidence: ['2.4%', '2.7%', '3.0%', '3.4%'], source: 'U.S. Bureau of Labor Statistics', dataset: 'us.bls.cpi (proposed)', closes: 'on CPI release day', b: 800, open: [0.12, 0.41, 0.35, 0.12], vol: 41760 }
 ];
 
 /** Datasets a new market can be listed on. `latest` is the newest value: the debt is the real
@@ -127,13 +136,6 @@ function freshMarket(d: Def, k: number): Market {
 }
 
 const today = () => new Date().toISOString().slice(0, 10);
-
-const MONTHS = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-/** One date style across the practice markets: "29 Nov 2026" (UTC). */
-export function dayLabel(ms: number): string {
-	const d = new Date(ms);
-	return `${d.getUTCDate()} ${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}`;
-}
 
 class Arena {
 	markets = $state<Market[]>(DEFS.map(freshMarket));

@@ -3621,7 +3621,10 @@ impl BulkStore {
 
     /// `GET /v1/bulk`: every dataset, or with a [`ListQuery`] the datasets
     /// whose `publisher/dataset` holds every search word, one page at a time
-    /// in id order. `total` counts every match; `next` is the cursor of the
+    /// in id order. A search word that is a common asset name ("bitcoin")
+    /// also finds the datasets of that asset's id, and a search lists the
+    /// datasets of the asset asked for first, then in id order
+    /// ([`names::rank`]). `total` counts every match; `next` is the cursor of the
     /// page after (`null` on the last). An entry whose key reads as unix
     /// seconds has `newest` (its newest key's UTC day) and `newest_age_days`
     /// (whole days behind this node's clock, read once an answer:
@@ -3682,8 +3685,12 @@ impl BulkStore {
             if !q.words.iter().all(|w| id.contains(w.as_str())) {
                 return false;
             }
+            if q.any.is_empty() && q.names.is_empty() {
+                return true;
+            }
             let words = id_words(&id);
-            q.any.iter().all(|g| g.iter().any(|t| t.matches(&words)))
+            q.names.iter().all(|n| n.matches(&id, &words))
+                && q.any.iter().all(|g| g.iter().any(|t| t.matches(&words)))
         };
         // The clock is read once an answer: `fresh` and each entry's age
         // come from it and the signed newest keys, nothing is kept.
@@ -3701,32 +3708,47 @@ impl BulkStore {
         };
         let (mut total, mut more) = (0usize, false);
         let mut page = Vec::new();
-        if q.newest_first {
+        // A search (`q`) lists the datasets of the asset asked for first,
+        // then the exact metric ([`names::rank`]): `btc.price` before
+        // `wbtc.price`, whatever their dates.
+        let searched = !q.words.is_empty() || !q.names.is_empty();
+        if q.newest_first || searched {
             // `sort=newest`: the newest key first, a key that is not a time
-            // (or lies in the future) last, ties in id order. Only this
-            // order collects every match to sort it (review FRESH-R1 L3).
-            let rank = |k: Option<i128>| (k.is_none(), std::cmp::Reverse(k.unwrap_or(0)));
+            // (or lies in the future) last, ties in id order. Only these
+            // two orders collect every match to sort it (review FRESH-R1
+            // L3): references, no more than the count already walks.
+            let rank = |p: &str, d: &str, k: Option<i128>| {
+                let k = k.filter(|_| q.newest_first);
+                (
+                    names::rank(&q.names, &q.words, p, d),
+                    q.newest_first && k.is_none(),
+                    std::cmp::Reverse(k.unwrap_or(0)),
+                )
+            };
             let mut found = Vec::new();
             for ((p, d), x) in ds.iter() {
                 let Some(h) = x.latest() else { continue };
                 let newest = newest_now(&h.manifest.header, now);
                 if listed(p, d) && fresh(newest) {
-                    found.push((rank(newest), p, d, x, h));
+                    found.push((rank(p, d, newest), p, d, x, h));
                 }
             }
             total = found.len();
             found.sort_by_key(|(r, p, d, _, _)| (*r, *p, *d));
-            // The cursor's place: by the newest key its dataset has now.
+            // The cursor's place: by the newest key its dataset has now
+            // (`sort=newest`), and by its id alone in a search.
             let after = match &q.after {
                 None => None,
-                Some(a) => {
+                Some(a) if q.newest_first => {
                     let x = ds.get(a).and_then(Dataset::latest).ok_or_else(|| {
                         bad_request(
                             "after: no such dataset now; start the list again without after",
                         )
                     })?;
-                    Some((rank(newest_now(&x.manifest.header, now)), &a.0, &a.1))
+                    let newest = newest_now(&x.manifest.header, now);
+                    Some((rank(&a.0, &a.1, newest), &a.0, &a.1))
                 }
+                Some(a) => Some((rank(&a.0, &a.1, None), &a.0, &a.1)),
             };
             for (r, p, d, x, h) in found {
                 if after.is_some_and(|a| (r, p, d) <= a) {
@@ -3800,6 +3822,15 @@ impl BulkStore {
             "datasets": items, "total": total, "next": next, "catalogs": catalogs,
             "now_unix": now,
         });
+        if !q.names.is_empty() {
+            // The names read as assets, so a reader sees why `btc.*` is
+            // listed for "bitcoin".
+            answer["assets"] = q
+                .names
+                .iter()
+                .map(|n| json!({"name": n.typed.join(" "), "asset": n.asset}))
+                .collect();
+        }
         if let Some(id) = &q.listed {
             // Only the asked id's own line: no other publisher's entry and
             // no number is shown (review S3-R1 M3).
@@ -4266,7 +4297,9 @@ fn id_words(id: &str) -> Vec<&str> {
 }
 
 /// `GET /v1/bulk` query: `q` (search words, each must be in
-/// `publisher/dataset`; letters, digits, `.`, `-`, `_`, `/` and spaces),
+/// `publisher/dataset`; letters, digits, `.`, `-`, `_`, `/` and spaces; a
+/// common asset name also finds the datasets of its id, and the matches are
+/// ranked, [`names`]),
 /// `any` (groups split by `;`, terms by `,`: every group must have a term
 /// among the id's whole words, [`AnyTerm`]), `limit` (1..=[`MAX_LIST_PAGE`])
 /// and `after` (the `next` cursor of the page before), `fresh` (`30d`: only
@@ -4281,8 +4314,10 @@ pub struct ListQuery {
     /// `sort=newest`: the newest key first; datasets whose key is not a
     /// time last; ties in id order.
     pub newest_first: bool,
-    /// Lowercase search words.
+    /// Lowercase search words, without the asset names among them.
     pub words: Vec<String>,
+    /// The asset names among the search words (`bitcoin`: the asset `btc`).
+    pub names: Vec<names::Named>,
     /// `any` groups: each must match.
     pub any: Vec<Vec<AnyTerm>>,
     /// Page size; `None` lists every match.
@@ -4333,11 +4368,12 @@ pub fn parse_list_query(q: Option<&str>) -> Result<ListQuery, ApiError> {
                         "q: at most {MAX_SEARCH_CHARS} letters, digits, spaces and . - _ /"
                     )));
                 }
-                out.words = v
+                let typed = v
                     .split(' ')
                     .filter(|w| !w.is_empty())
                     .map(str::to_ascii_lowercase)
                     .collect();
+                (out.names, out.words) = names::split_names(typed);
             }
             "limit" => {
                 out.limit = Some(
@@ -5474,6 +5510,9 @@ pub use learn::{check_leaf_answer, Learn, LearnPass, Recheck, RemovalsMode};
 mod publishers;
 use publishers::pause_gate;
 pub use publishers::{PublisherGrant, PublisherLimits, MAX_GRANT_GIB, MAX_PUBLISHERS_FILE_BYTES};
+
+#[path = "bulk_names.rs"]
+pub mod names;
 
 #[path = "bulk_succ.rs"]
 mod succ;

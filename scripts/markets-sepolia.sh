@@ -7,11 +7,13 @@
 #       Deploys tONYX, OnyxReobserve, OnyxPanelOracle, OnyxStakes, OnyxObservedFacts and OnyxFutures
 #       next to the registry named in <export dir>/deployment.json and writes
 #       <export dir>/markets.json (refused when it exists).
-#   scripts/markets-sepolia.sh market <export dir> open|bet|settle|status|underwrite [flags]
+#   scripts/markets-sepolia.sh market <export dir> open|bet|settle|void|status|underwrite [flags]
 #       Runs the Treasury market tool (adapters/source-fiscaldata/examples/market.rs) on that file:
 #       open --record-date D --edges E1[,E2] --close T --observable T --resolve-by T
 #       bet --market N --key-file .onyx-testnet/keys/miner-0.key --bucket B --amount A
 #       settle --market N --store <export dir>/observations/fiscaldata.json [--key-file F]...
+#       void --market N [--key-file F]...   (no value by resolveBy: voids it, each listed bettor
+#       withdraws its whole bet; refused when a value is recorded)
 #       status [--out FILE]
 #       underwrite --key-file F --amount A (with ONYX_MARKETS_FILE=<export dir>/insurance.json):
 #       funds the parametric pool so its products have cover for sale; insiders refused (R-PI-4)

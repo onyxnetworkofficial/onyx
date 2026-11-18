@@ -75,7 +75,7 @@
 			<div class="panel" data-testid="publish-time">
 				<span class="ititle">What it takes</span>
 				<ul class="plain">
-					<li>About 40 minutes of your own time, and a review of up to {DECIDE_DAYS} days in between.</li>
+					<li data-testid="publish-total">About 40 minutes of your own work, a review of up to {DECIDE_DAYS} days in between, then a wait of 20 to 40 minutes before your upload (the test chain must first make your registration final). In all: about an hour and a half spread over up to {DECIDE_DAYS} days.</li>
 					<li>Data you own or may share, under terms that let anyone pass it on, and that names no individual person.</li>
 					<li>An HTTPS host you control, to put three small files on.</li>
 					<li>A computer with a terminal. The download is for Linux x86-64; elsewhere you build the tools.</li>
@@ -133,8 +133,8 @@
 	<section class="section" data-testid="publish-steps">
 		<h2>Ten steps</h2>
 		<p class="lede">
-			Run every command in one folder and replace the values in <code>&lt;...&gt;</code>. At any time <code>onyx-publish doctor</code> names the step that is
-			missing and the command for it; it sends nothing.
+			Run every command in one folder and replace the values in <code>&lt;...&gt;</code>. At any time <code>onyx-publish doctor</code>, a command
+			that checks your folder and says what is missing, names the next step and the command for it; it sends nothing.
 		</p>
 		<ol class="steps">
 			{#each STEPS as s, i (s.title)}

@@ -23,6 +23,9 @@ export async function product(browser, base, root, expect) {
 		const errors = [];
 		pg.on('request', (r) => requests.push({ path: new URL(r.url()).pathname, method: r.method() }));
 		pg.on('pageerror', (e) => errors.push(String(e)));
+		// Home asks the site's node for its two dataset counts (all, and updated in the last 30
+		// days): the node is faked here; this run's server holds the built files only.
+		await pg.route('**/v1/bulk?*', (r) => r.fulfill({ json: { datasets: [], total: new URL(r.request().url()).searchParams.get('fresh') ? 6302 : 9054, next: null } }));
 		await pg.goto(base);
 		await settled(pg);
 		await pg.waitForLoadState('networkidle');
@@ -32,12 +35,18 @@ export async function product(browser, base, root, expect) {
 		const browse = pg.getByTestId('home-primary');
 		const what = (await pg.getByTestId('home-what').innerText()).replace(/\s+/g, ' ').trim();
 		expect((await pg.title()) === 'Onyx · Data anyone can check' && (await pg.locator('h1').innerText()).replace(/\s+/g, ' ').trim() === 'Data anyone can check.', `U1 ${width}: the headline and the tab title say what Onyx is`);
-		expect(/Every answer comes with a proof you can verify yourself\./.test(what) && /browse about 9,000 datasets, get them by API, or connect an AI assistant/.test(what), `U1 ${width}: the first paragraph says what a data user gets and can do now ("${what}")`);
+		expect(/Every answer comes with a proof you can verify yourself\./.test(what) && /browse 9,054 datasets, get them by API, or connect an AI assistant/.test(what), `U1 ${width}: the first paragraph says what a data user gets and can do now ("${what}")`);
 		expect((await browse.innerText()).trim() === 'Browse datasets' && (await browse.getAttribute('href')) === '#/datasets' && !/ghost/.test(await browse.getAttribute('class')), `U1 ${width}: the primary action opens the datasets`);
 		expect((await cta.innerText()).trim() === 'Add your data' && (await cta.getAttribute('href')) === '#/submit' && /ghost/.test(await cta.getAttribute('class')), `U1 ${width}: adding data is the second action`);
 		const testnet = pg.getByTestId('home-testnet');
 		const testnetText = await testnet.innerText();
-		expect(/^Testnet preview\./.test(testnetText) && /test tokens have no value/.test(testnetText) && /not being updated/.test(testnetText), `U1 ${width}: the hero says testnet, tokens without value and stale datasets ("${testnetText}")`);
+		expect(/^Testnet preview\./.test(testnetText) && /test tokens have no value/.test(testnetText) && /6,302 of 9,054 datasets were updated in the last 30 days; the other 2,752 were not\./.test(testnetText.replace(/\s+/g, ' ')), `U1 ${width}: the hero says testnet, tokens without value and how many datasets are being updated, from the node's counts ("${testnetText}")`);
+		const proofText = (await pg.getByTestId('home-proof').innerText()).replace(/\s+/g, ' ').trim();
+		expect(proofText === 'The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.', `U1 ${width}: the hero says what a proof shows and what it does not ("${proofText}")`);
+		const assistantText = await pg.getByTestId('users-assistant').innerText();
+		expect(!/checks answers/.test(assistantText) && /onyx-check program on your own machine/.test(assistantText), `U1 ${width}: the assistant card does not claim the connector checks answers`);
+		const marketText = (await pg.locator('.market-preview').innerText()).replace(/\s+/g, ' ');
+		expect(!/one settled|open for test bets/.test(marketText) && /Test markets on the U\.S\. Treasury’s debt that settle from the value Onyx observers recorded/.test(marketText), `U1 ${width}: the markets text names no state that changes`);
 		const fold = await pg.evaluate(() => {
 			const bottom = (id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().bottom;
 			const top = (id) => document.querySelector(`[data-testid="${id}"]`).getBoundingClientRect().top;
@@ -50,8 +59,9 @@ export async function product(browser, base, root, expect) {
 		expect(JSON.stringify(users) === JSON.stringify(['#/datasets', '#/api', '#/submit?assistant']), `U1 ${width}: home lists what works today: datasets, API and the AI assistant (${users.join(', ')})`);
 		const wide = await pg.evaluate(() => [...document.querySelectorAll('main code, main pre')].filter((e) => e.textContent.length > 24).length);
 		expect(wide === 0, `U1 ${width}: home has no long code span`);
-		const unwanted = requests.filter((r) => r.method !== 'GET' || /\/data\/|\.wasm$|verifier\.worker|\/v1\//.test(r.path));
-		expect(unwanted.length === 0, `U1 ${width}: home makes no submissions and fetches no datasets, verifier or API (${JSON.stringify(unwanted)})`);
+		const counts = requests.filter((r) => r.path === '/v1/bulk');
+		const unwanted = requests.filter((r) => r.method !== 'GET' || (/\/data\/|\.wasm$|verifier\.worker|\/v1\//.test(r.path) && r.path !== '/v1/bulk'));
+		expect(unwanted.length === 0 && counts.length === 2, `U1 ${width}: home makes no submissions and fetches no datasets or verifier; from the API only the node's two dataset counts (${JSON.stringify(unwanted)}, ${counts.length} counts)`);
 		expect(await pg.evaluate(() => document.documentElement.scrollWidth === innerWidth), `U1 ${width}: home fits the viewport`);
 		await pg.evaluate(axeSrc);
 		const violations = await pg.evaluate(async () => (await window.axe.run(document, { runOnly: { type: 'tag', values: ['wcag2a','wcag2aa','wcag21aa','wcag22aa','best-practice'] } })).violations.filter((v) => ['serious','critical'].includes(v.impact)).map((v) => v.id));
@@ -62,7 +72,7 @@ export async function product(browser, base, root, expect) {
 		// Meeting polish MP1: a clear second way in, the steps for an AI assistant (MCP) and for the API.
 		const before = requests.length;
 		const openBtn = pg.getByTestId('open-agents');
-		expect((await openBtn.isVisible()) && /AI or the API/.test(await openBtn.innerText()) && (await openBtn.getAttribute('aria-expanded')) === 'false', `MP1 ${width}: Add data shows an "Add data with AI or the API" button, closed`);
+		expect((await openBtn.isVisible()) && /AI assistant or the API/.test(await openBtn.innerText()) && (await openBtn.getAttribute('aria-expanded')) === 'false', `MP1 ${width}: Add data shows a "Use an AI assistant or the API" button, closed`);
 		await openBtn.click();
 		const panel = pg.getByTestId('add-with-agents');
 		await panel.waitFor();
@@ -97,6 +107,16 @@ export async function product(browser, base, root, expect) {
 		await pg.getByTestId('add-with-agents').waitFor();
 		await pg.waitForFunction(() => document.activeElement?.id === 'agents-title', null, { timeout: WAIT_CAP }).catch(() => {});
 		const sentAssistant = requests.slice(beforeAssistant).filter((r) => r.method !== 'GET');
+		// The link lands on the connector steps (not the top of Add data), and the first example reads data.
+		await pg.waitForFunction(() => {
+			const r = document.getElementById('add-with-agents')?.getBoundingClientRect();
+			return r && r.top < innerHeight / 2 && r.bottom > 0;
+		}, null, { timeout: WAIT_CAP }).catch(() => {});
+		const landed = await pg.evaluate(() => {
+			const r = document.getElementById('add-with-agents').getBoundingClientRect();
+			return { top: Math.round(r.top), h: innerHeight, title: document.getElementById('agents-title').textContent.trim(), first: document.querySelector('[data-testid="agents-ai"] pre')?.textContent, second: document.querySelectorAll('[data-testid="agents-ai"] li')[1]?.querySelector('pre')?.textContent, claim: document.querySelector('[data-testid="agents-no-check"]')?.textContent.replace(/\s+/g, ' ') };
+		});
+		expect(landed.top < landed.h / 2 && landed.title === 'Connect an AI assistant' && landed.second === 'Does Onyx have daily Tron staking flows? Show the newest 10 rows.' && /cannot check a proof: for that, run the onyx-check program on your own machine/.test(landed.claim ?? ''), `U1 ${width}: the AI assistant link lands on "Connect an AI assistant", which leads with a read example and says the hosted connector cannot check a proof (${JSON.stringify(landed)})`);
 		expect((await pg.locator('h1').innerText()).trim() === 'Add data' && (await pg.getByTestId('open-agents').getAttribute('aria-expanded')) === 'true' && (await pg.evaluate(() => document.activeElement?.id)) === 'agents-title' && (await pg.getByTestId('agents-ai').innerText()).includes('/mcp') && sentAssistant.length === 0, `U1 ${width}: the AI assistant link opens the connector steps with the focus on their title`);
 		await go(pg, pg.locator('header a.mark'), HOME);
 		await go(pg, pg.getByTestId('home-primary'), ['#/datasets']);

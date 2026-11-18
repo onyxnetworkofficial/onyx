@@ -244,3 +244,75 @@ fn store_load_is_not_quadratic_in_rounds() {
         "{PROBES} adds cost {b} ms into a store of {BIG} rounds, {s} ms into an empty one"
     );
 }
+
+/// The status and JSON body of a GET.
+async fn get_json(app: &axum::Router, uri: &str) -> (StatusCode, serde_json::Value) {
+    let r = app
+        .clone()
+        .oneshot(Request::get(uri).body(Body::empty()).expect("req"))
+        .await
+        .expect("resp");
+    let status = r.status();
+    let bytes = axum::body::to_bytes(r.into_body(), 1 << 20)
+        .await
+        .expect("body");
+    (status, serde_json::from_slice(&bytes).expect("json"))
+}
+
+/// Newcomer finding: `GET /v1/observations/{metric}` without `subject`
+/// answered serde's words ("Failed to deserialize query string: missing
+/// field `subject`") and nothing said how a subject is written. It is the
+/// API's usual error object, names the parameter and gives one example: a
+/// round this node holds when it has one. An unknown subject's 404 names
+/// one too.
+#[tokio::test]
+async fn a_missing_subject_is_a_plain_400_with_an_example() {
+    let app = app_of(3);
+    for uri in [
+        "/v1/observations/test.index",
+        "/v1/observations/test.index?subject=",
+        "/v1/observations/test.index/attempts",
+    ] {
+        let (status, body) = get_json(&app, uri).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST, "{uri}");
+        assert_eq!(
+            body,
+            serde_json::json!({"error": {
+                "code": "bad_request",
+                "message": "missing query parameter subject: the subject of the value, for example ?subject=test.index (a round this node holds)",
+            }}),
+            "{uri}"
+        );
+    }
+    // A metric this node does not serve: how a subject is written.
+    let (status, body) = get_json(&app, "/v1/observations/test.other").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert_eq!(body["error"]["code"], "bad_request");
+    assert_eq!(
+        body["error"]["message"],
+        "missing query parameter subject: the subject of the value, written like ?subject=us.treasury.federal_debt:2026-10-08 (a name, a colon and a day for a daily value)"
+    );
+    // The example is a call that works.
+    let (status, body) = get_json(&app, "/v1/observations/test.index?subject=test.index").await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["subjectText"], "test.index");
+    // Any other bad query keeps its own words; an unknown subject names a held one.
+    let (status, body) = get_json(&app, "/v1/observations/test.index?subject=a&nope=1").await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .expect("message")
+            .contains("unknown field `nope`"),
+        "{body}"
+    );
+    let (status, body) = get_json(&app, "/v1/observations/test.index?subject=nope").await;
+    assert_eq!(status, StatusCode::NOT_FOUND);
+    assert_eq!(
+        body,
+        serde_json::json!({"error": {
+            "code": "unknown_subject",
+            "message": "no settled round for this subject; this node holds, for example, ?subject=test.index",
+        }})
+    );
+}

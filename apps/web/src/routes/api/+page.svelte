@@ -12,8 +12,9 @@
 	import ApiReference from '#lib/components/ApiReference.svelte';
 	import spec from '../../../static/openapi.json';
 	import { operations } from '#lib/openapi.ts';
-	import { ORDER_SINCE, PAGE, REPO } from '#lib/release.ts';
-	import { HOSTED_NODE, checkCommands, checkRangeCommands, quickCommands } from '#lib/quickstart.ts';
+	import { BASE, ORDER_SINCE, PAGE, REPO } from '#lib/release.ts';
+	import { CHECK_FILE, HOSTED_NODE, MAX_ROWS, checkCommands, checkRangeCommands, pageCommand, quickCommands } from '#lib/quickstart.ts';
+	import { group } from '#lib/format.ts';
 
 	let demo = $state.raw<Demo | null>(null);
 	let pill = $state<{ state: PillState; text: string }>({ state: 'idle', text: 'Not checked' });
@@ -57,6 +58,7 @@
 	const quick = $derived(quickCommands(origin));
 	const checkCmd = $derived(checkCommands(origin));
 	const checkRangeCmd = $derived(checkRangeCommands(origin));
+	const pageCmd = $derived(pageCommand(origin));
 
 	let tab = $state<'request' | 'response'>('response');
 	// PP6: the paid data routes, from the OpenAPI file (the Reference below lists every route).
@@ -91,9 +93,9 @@
 <OnyxSlab>
 	<h1>Query API</h1>
 	<div class="slabside wide" data-testid="slabside">
-		<p class="meta slabmeta" data-testid="api-status">Hosted test node at <a href="https://onyx.cryptagraph.com/v1/health" target="_blank" rel="noopener">onyx.cryptagraph.com/v1</a> · <span class="nw">testnet only</span> · <span class="nw">test USDC, not switched on yet</span></p>
+		<p class="meta slabmeta" data-testid="api-status">Hosted test node at <a href="https://onyx.cryptagraph.com/v1/health" target="_blank" rel="noopener">onyx.cryptagraph.com/v1</a> · <span class="nw">testnet only</span> · <span class="nw">free to read</span></p>
 		<div class="perks">
-			<span><Wallet size={16} /> Testnet USDC per call (x402, HTTP 402)</span>
+			<span><Wallet size={16} /> Free to read today: no key, no sign-up</span>
 			<span><GitMerge size={16} /> A proof with every row</span>
 			<span><Link size={16} /> Roots on Base Sepolia since 2026-10-12</span>
 		</div>
@@ -103,8 +105,9 @@
 <div class="wrap">
 	{#if loadError}<p class="section">Could not load the demo data: {loadError}</p>{/if}
 	<section class="section quick" data-testid="api-quick">
+		<p class="free" data-testid="api-free">Everything on this page is free to read today: no key, no sign-up.</p>
 		<h2>Get data in 3 commands</h2>
-		<p class="qnote">Free to read on the test network: no key, no sign-up. Every answer is JSON.</p>
+		<p class="qnote">Every answer is JSON. The paid routes further down are planned and switched off.</p>
 		<ol class="qsteps">
 			{#each quick as q, i (q.cmd)}
 				<li>
@@ -118,6 +121,13 @@
 			A row's key is a whole number; for a daily series it is the day's first second in unix time (UTC), so 2026-01-01 is
 			<code>1767225600</code>. Narrow the last command with <code>from=</code> and <code>to=</code>.
 		</p>
+		<p class="qnote" data-testid="api-quick-paging">
+			Rows come at most {group(MAX_ROWS)} per call (<code>limit={MAX_ROWS}</code>; without <code>limit</code> a call returns 100). For a
+			longer history, ask page after page: <code>page=0</code> is the first, and each answer's <code>next_page</code> names the next
+			one (it is <code>null</code> on the last page). The second page:
+		</p>
+		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
+		<pre class="code qcmd" tabindex="0" role="region" aria-label="Read the second page" data-testid="api-quick-page">{pageCmd}</pre>
 		<h3 class="qcheck">Check an answer yourself</h3>
 		<p class="qnote">
 			<code>onyx-check</code> proves every row of a saved answer against the publisher's signature and the record on Base Sepolia, read
@@ -128,9 +138,11 @@
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save an answer and check it" data-testid="api-quick-check">{checkCmd}</pre>
 		<p class="qnote" data-testid="api-quick-get">
-			Get <code>onyx-check</code> from the <a href={PAGE} target="_blank" rel="noopener">release page</a> (the command-line file for
-			Linux holds it), or build it from the <a href={REPO} target="_blank" rel="noopener">source code</a> with
-			<code class="cmd">cargo build --release -p onyx-check</code>.
+			For Linux (x86-64), <code>onyx-check</code> is in the release file
+			<a href={BASE + CHECK_FILE} data-testid="api-check-file"><code>{CHECK_FILE}</code></a> (unpack it; the program is in its
+			<code>bin</code> folder; all files are on the <a href={PAGE} target="_blank" rel="noopener">release page</a>). There is no
+			ready-made <code>onyx-check</code> for macOS or Windows yet: build it from the
+			<a href={REPO} target="_blank" rel="noopener">source code</a> with <code class="cmd">cargo build --release -p onyx-check</code>.
 		</p>
 		<p class="qnote" data-testid="api-quick-range-note">
 			A range, oldest first (January 2026 here): pass the same <code>--from</code> and <code>--to</code> you asked, so a row outside
@@ -144,7 +156,8 @@
 		</p>
 	</section>
 	<section class="section grid">
-		<h2 class="span">Paid data routes</h2>
+		<h2 class="span">Planned: paid data routes (switched off)</h2>
+		<p class="span fine planned" data-testid="api-paid-planned">These routes are planned to charge test USDC per call (x402, HTTP 402). They are switched off on the hosted test node today: nothing above needs a payment.</p>
 		<div class="eps" class:solo={!sample}>
 			{#each endpoints as [path, what] (path)}
 				<div class="ep"><span class="mp"><span class="get">GET</span> <code>{#each segs(path) as sg, i (i)}{sg}<wbr />{/each}</code></span><span class="muted">{what}</span></div>
@@ -251,6 +264,18 @@
 </div>
 
 <style>
+	.free {
+		font-size: var(--text-md);
+		line-height: var(--lh-body);
+		margin: 0 0 var(--sp-4);
+		padding: var(--sp-3) var(--sp-4);
+		border: 1px solid var(--line-strong);
+		border-radius: var(--radius-sm);
+		max-width: 68ch;
+	}
+	.planned {
+		margin: 0;
+	}
 	/* A14: the three commands. Each is a block that scrolls sideways on a wide screen and wraps
 	   on a phone (a long command in a line of text would push the page wider than the screen). */
 	.quick {

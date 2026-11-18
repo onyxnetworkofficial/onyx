@@ -1,26 +1,78 @@
 <script lang="ts">
-	// ROADMAP S22: every bulk dataset the node holds, searched and paged by the node
-	// (`GET /v1/bulk?q=&limit=&after=`, 50 a page). A dataset opens to its newest rows (one rows
-	// answer, with its proofs) and the two commands that check them against Base Sepolia. Every value
-	// comes through #lib/datasets.ts, which drops anything out of shape.
-	import { onMount } from 'svelte';
+	// ROADMAP S22: every bulk dataset the node holds, searched by the node (`GET /v1/bulk?any=`). A
+	// search loads its matches (up to SEARCH_CAP) and ranks them here (rankSearch: the searched
+	// asset first); with no search the list opens in defaultOrder, read from the node in steps
+	// (defaultSegments), 50 shown at a time. A dataset opens to its newest rows (one rows answer,
+	// with its proofs), a chart, a CSV download and the commands that check the rows against Base
+	// Sepolia. Every value comes through #lib/datasets.ts, which drops anything out of shape.
+	import { onMount, tick } from 'svelte';
 	import { replaceState } from '$app/navigation';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
 	import DatasetChart from '#lib/components/DatasetChart.svelte';
 	import { group } from '#lib/format.ts';
 	import { datasetTitle, meanings, split } from '#lib/glossary.ts';
-	import { MAX_SEARCH, STALE_DAYS, staleSince, chartColumns, chartPoints, cleanSearch, dayKeys, detailUrl, fromLink, isoDay, toLink, keyRange, keyText, infoUrl, listUrl, moved as readMoved, page as readPage, sample as readSample, size, type Dataset, type Moved, type Sample } from '#lib/datasets.ts';
+	import {
+		HISTORY_CAP,
+		LIST_MAX,
+		MAX_SEARCH,
+		PAGE,
+		SEARCH_CAP,
+		STALE_DAYS,
+		anyUrl,
+		chartColumns,
+		chartPoints,
+		cleanSearch,
+		countUrl,
+		csv,
+		csvName,
+		dayKeys,
+		defaultSegments,
+		detailUrl,
+		freshCountUrl,
+		freshCounts,
+		freshIn,
+		fromLink,
+		headlineColumn,
+		historyUrl,
+		infoUrl,
+		isTestSet,
+		isoDay,
+		keyRange,
+		keyText,
+		listUrl,
+		moved as readMoved,
+		newestFirst,
+		page as readPage,
+		pythonSnippet,
+		rankSearch,
+		sample as readSample,
+		size,
+		staleSince,
+		toLink,
+		type Dataset,
+		type Moved,
+		type Page,
+		type Sample,
+		type Segment
+	} from '#lib/datasets.ts';
 
 	let query = $state('');
 	// READINESS A20: only the datasets with data from the last STALE_DAYS days (the node's `fresh`).
 	let freshOnly = $state(false);
 	// Review FRESH-R1 M2: said when the node does not take the filter (an older node answers 400).
 	let filterOff = $state(false);
-	let items = $state<Dataset[]>([]);
+	// Everything loaded for this view, in the order shown; the page shows the first `shown`.
+	let found = $state<Dataset[]>([]);
+	let shown = $state(PAGE);
 	let total = $state<number | null>(null);
+	// The node's two counts: every dataset, and those with data from the last STALE_DAYS days.
 	let all = $state<number | null>(null);
-	let next = $state<string | null>(null);
+	let fresh = $state<number | null>(null);
+	// More matches than SEARCH_CAP: only the loaded ones are ranked (said on the page).
+	let capped = $state(false);
+	// The search the list on screen answers (the count line speaks about it).
+	let listed = $state('');
 	let pill = $state<{ state: PillState; text: string }>({ state: 'run', text: 'Asking the node' });
 	let busy = $state(false);
 	let none = $state(false);
@@ -28,6 +80,9 @@
 	let samples = $state<Record<string, Sample | 'none' | 'loading'>>({});
 	// The column each open dataset's chart draws (an index into its sample's columns).
 	let drawn = $state<Record<string, number>>({});
+	// A full-history download: rows read so far and how it ended.
+	type Download = { state: 'run' | 'done' | 'capped' | 'busy' | 'fail'; rows: number };
+	let history = $state<Record<string, Download>>({});
 	let origin = $state('');
 	// A dataset link whose dataset this node does not hold (the search shows the closest names).
 	let missing = $state<string | null>(null);
@@ -36,40 +91,101 @@
 	let gone = $state<{ from: string } & Moved | null>(null);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
+	// The opening list's steps (no search), the step being read and its cursor. `plain`: a node
+	// without the `fresh` filter, listed in its own order.
+	let segs = $state.raw<Segment[]>([]);
+	let segAt = $state(0);
+	let cursor: string | null = null;
+	let plain = false;
 
 	const idOf = (d: Dataset) => `${d.publisher}/${d.dataset}`;
+	const items = $derived(found.slice(0, shown));
+	const counts = $derived(freshCounts(all, fresh));
+	const more = $derived(shown < found.length || segAt < segs.length);
 
-	async function load(q: string, after: string | null) {
-		const my = ++seq;
-		busy = true;
-		if (!after) pill = { state: 'run', text: 'Asking the node' };
-		try {
-			const r = await fetch(listUrl(q, after, undefined, freshOnly), { headers: { accept: 'application/json' } });
+	async function ask(url: string): Promise<Page | 'busy' | null> {
+		const r = await fetch(url, { headers: { accept: 'application/json' } });
+		if (r.status === 429) return 'busy';
+		return r.ok && (r.headers.get('content-type') ?? '').includes('json') ? readPage(await r.json()) : null;
+	}
+
+	const say = (n: number | null, q: string) => (pill = { state: 'good', text: n === null ? 'Datasets listed' : `${group(n)} ${n === 1 ? 'dataset' : 'datasets'}${q ? ' found' : ''}` });
+
+	// The node does not take `fresh`: say so when the reader asked for the filter, and list all.
+	function withoutFilter(q: string) {
+		if (freshOnly) filterOff = true;
+		freshOnly = false;
+		plain = true;
+		return load(q);
+	}
+
+	// Reads the opening list's next steps until `shown` datasets are loaded or the steps end.
+	async function fill(my: number): Promise<void> {
+		while (found.length < shown && segAt < segs.length) {
+			const seg = segs[segAt];
+			const p = await ask(anyUrl(seg.any, cursor, plain ? PAGE : seg.any === '' && !seg.fresh ? LIST_MAX : 2 * PAGE, seg.fresh));
 			if (my !== seq) return;
-			if (r.status === 429) {
-				pill = { state: 'warn', text: 'Busy: try again in a minute' };
+			if (p === 'busy') return void (pill = { state: 'warn', text: 'Busy: try again in a minute' });
+			if (!p && seg.fresh && !plain) return withoutFilter('');
+			if (!p) {
+				if (!found.length) {
+					none = true;
+					pill = { state: 'idle', text: 'No datasets here' };
+				}
 				return;
 			}
-			const p = r.ok && (r.headers.get('content-type') ?? '').includes('json') ? readPage(await r.json()) : null;
+			none = false;
+			if (plain) total = p.total;
+			found.push(...p.items.filter(seg.keep));
+			cursor = p.next;
+			if (!cursor) segAt++;
+		}
+		say(total, '');
+	}
+
+	// A search: every match (up to SEARCH_CAP), ranked here.
+	async function searchFor(q: string, my: number): Promise<void> {
+		const got: Dataset[] = [];
+		let after: string | null = null;
+		let matches = 0;
+		do {
+			const p = await ask(listUrl(q, after, LIST_MAX, freshOnly));
 			if (my !== seq) return;
-			if (!p && freshOnly) {
-				// The filtered list failed (a node without `fresh` refuses the parameter): that says
-				// nothing about the node's datasets. Say the filter is off and list all of them.
-				freshOnly = false;
-				filterOff = true;
-				return void load(q, null);
-			}
+			if (p === 'busy') return void (pill = { state: 'warn', text: 'Busy: try again in a minute' });
+			if (!p && freshOnly) return withoutFilter(q);
 			if (!p) {
 				none = true;
 				pill = { state: 'idle', text: 'No datasets here' };
 				return;
 			}
-			none = false;
-			items = after ? [...items, ...p.items] : p.items;
-			total = p.total;
-			next = p.next;
-			if (!q && !freshOnly) all = p.total;
-			pill = { state: 'good', text: `${group(p.total)} ${p.total === 1 ? 'dataset' : 'datasets'}${q ? ' found' : ''}` };
+			got.push(...p.items);
+			matches = p.total;
+			after = p.next;
+		} while (after && got.length < SEARCH_CAP);
+		none = false;
+		capped = after !== null;
+		found = rankSearch(got, q);
+		total = matches;
+		say(matches, q);
+	}
+
+	async function load(q: string) {
+		const my = ++seq;
+		busy = true;
+		pill = { state: 'run', text: 'Asking the node' };
+		found = [];
+		shown = PAGE;
+		capped = false;
+		listed = q;
+		segs = q ? [] : plain ? [{ any: '', fresh: false, keep: () => true }] : defaultSegments(freshOnly);
+		segAt = 0;
+		cursor = null;
+		try {
+			if (q) await searchFor(q, my);
+			else {
+				total = plain ? null : freshOnly ? fresh : all;
+				await fill(my);
+			}
 		} catch {
 			if (my === seq) {
 				none = true;
@@ -78,6 +194,33 @@
 		} finally {
 			if (my === seq) busy = false;
 		}
+	}
+
+	async function showMore() {
+		shown += PAGE;
+		if (!segs.length || found.length >= shown) return;
+		const my = seq;
+		busy = true;
+		try {
+			await fill(my);
+		} catch {
+			// The rows already listed stay; the button asks again.
+		} finally {
+			if (my === seq) busy = false;
+		}
+	}
+
+	// The node's own counts, for the line that says how many datasets are being updated.
+	async function count() {
+		const one = async (url: string) => {
+			try {
+				const p = await ask(url);
+				return p && p !== 'busy' && p.total > 0 ? p.total : null;
+			} catch {
+				return null;
+			}
+		};
+		[all, fresh] = await Promise.all([one(countUrl()), one(freshCountUrl())]);
 	}
 
 	// The address bar keeps the search and the open dataset, so a link shows the same view.
@@ -96,20 +239,22 @@
 			missing = null;
 			gone = null;
 			remember();
-			load(cleanSearch(query), null);
+			load(cleanSearch(query));
 		}, 350);
 	}
 
-	function show(fresh: boolean) {
-		if (freshOnly === fresh) return;
-		freshOnly = fresh;
+	function show(onlyFresh: boolean) {
+		if (freshOnly === onlyFresh) return;
+		freshOnly = onlyFresh;
 		filterOff = false;
+		// Asked again: an updated node may take the filter now.
+		plain = false;
 		clearTimeout(timer);
 		open = null;
 		missing = null;
 		gone = null;
 		remember();
-		load(cleanSearch(query), null);
+		load(cleanSearch(query));
 	}
 
 	async function toggle(d: Dataset) {
@@ -127,10 +272,23 @@
 			const r = await fetch(detailUrl(d), { headers: { accept: 'application/json' } });
 			const s = (r.ok ? readSample(await r.json()) : null) ?? 'none';
 			samples[id] = s;
-			if (s !== 'none') drawn[id] = chartColumns(s)[0] ?? -1;
+			if (s !== 'none') drawn[id] = headlineColumn(s, d.dataset);
 		} catch {
 			samples[id] = 'none';
 		}
+	}
+
+	// Brings an opened card to the top of the screen (a dataset link, opened or pressed).
+	async function reveal(id: string) {
+		await tick();
+		document.getElementById(`card-${id}`)?.scrollIntoView({ block: 'start' });
+	}
+
+	// A linked dataset: shown (past the first 50 too), opened and scrolled to.
+	async function openLinked(d: Dataset) {
+		shown = Math.max(shown, found.indexOf(d) + 1);
+		if (open !== idOf(d)) await toggle(d);
+		await reveal(idOf(d));
 	}
 
 	// A linked dataset that is not in the list: the node's own answer about it says whether its
@@ -144,32 +302,72 @@
 		}
 	}
 
+	function save(name: string, text: string) {
+		const url = URL.createObjectURL(new Blob([text], { type: 'text/csv' }));
+		const a = document.createElement('a');
+		a.href = url;
+		a.download = name;
+		document.body.append(a);
+		a.click();
+		a.remove();
+		setTimeout(() => URL.revokeObjectURL(url), 1000);
+	}
+
+	// The whole history, 1,000 rows a call (the node's limit), oldest first, up to HISTORY_CAP rows.
+	async function saveHistory(d: Dataset) {
+		const id = idOf(d);
+		if (history[id]?.state === 'run') return;
+		history[id] = { state: 'run', rows: 0 };
+		const rows: string[][] = [];
+		let columns: string[] = [];
+		let at: number | null = 0;
+		try {
+			while (at !== null && rows.length < HISTORY_CAP) {
+				const r = await fetch(historyUrl(d, at), { headers: { accept: 'application/json' } });
+				if (r.status === 429) return void (history[id] = { state: 'busy', rows: rows.length });
+				const s = r.ok ? readSample(await r.json()) : null;
+				if (!s || (columns.length && s.columns.join() !== columns.join())) return void (history[id] = { state: 'fail', rows: rows.length });
+				columns = s.columns;
+				rows.push(...s.rows);
+				at = s.nextPage;
+				history[id] = { state: 'run', rows: rows.length };
+			}
+			save(csvName(d), csv(columns, rows, dayKeys(d.keyMin, d.keyMax)));
+			history[id] = { state: at === null ? 'done' : 'capped', rows: rows.length };
+		} catch {
+			history[id] = { state: 'fail', rows: rows.length };
+		}
+	}
+
 	onMount(() => {
 		origin = location.origin;
 		const link = fromLink(location.hash);
 		// A dataset link searches for its name and opens it.
 		query = link.q || (link.d ? cleanSearch(link.d.split('/')[1]) : '');
-		load(cleanSearch(query), null).then(async () => {
-			const d = link.d ? items.find((x) => idOf(x) === link.d) : undefined;
-			if (d) return void toggle(d);
-			if (!link.d || none) return;
-			const m = await successor(link.d);
-			if (!m) return void (missing = link.d);
-			gone = { from: link.d, ...m };
-			if (!m.live || !m.to) return;
-			// The dataset moved: search for the id it moved to and open that one.
-			query = cleanSearch(m.to.split('/')[1]);
-			await load(cleanSearch(query), null);
-			const to = items.find((x) => idOf(x) === m.to);
-			if (to) await toggle(to);
-			else gone = { from: link.d, to: m.to, live: false };
-		});
+		count()
+			.then(() => load(cleanSearch(query)))
+			.then(async () => {
+				const d = link.d ? found.find((x) => idOf(x) === link.d) : undefined;
+				if (d) return void openLinked(d);
+				if (!link.d || none) return;
+				const m = await successor(link.d);
+				if (!m) return void (missing = link.d);
+				gone = { from: link.d, ...m };
+				if (!m.live || !m.to) return;
+				// The dataset moved: search for the id it moved to and open that one.
+				query = cleanSearch(m.to.split('/')[1]);
+				await load(cleanSearch(query));
+				const to = found.find((x) => idOf(x) === m.to);
+				if (to) await openLinked(to);
+				else gone = { from: link.d, to: m.to, live: false };
+			});
 		return () => clearTimeout(timer);
 	});
 
 	const curl = (d: Dataset, s: Sample) => `curl -s "${origin}/v1/bulk/${d.publisher}/${d.dataset}/rows?from=${s.from}&to=${s.to}&limit=100" > rows.json`;
 	const check = (d: Dataset, s: Sample) =>
 		`onyx-check --bulk rows.json --publisher ${d.publisher} --dataset ${d.dataset} --from ${s.from} --to ${s.to} --rpc https://sepolia.base.org --chain-id 84532 --book ${s.book}`;
+	const SIGNED = 'The publisher signed this version with its own key. Onyx did not check the numbers.';
 </script>
 
 <svelte:head><title>All datasets · Onyx</title></svelte:head>
@@ -178,6 +376,7 @@
 	<h1>All datasets</h1>
 	<div class="slabside">
 		<p class="slablede">Every dataset this node holds, to search and read. Each version is signed by its publisher and anchored on Base Sepolia, and every row comes with its proof.</p>
+		<p class="slablede proofnote" data-testid="datasets-proof-note">The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.</p>
 		<p class="meta slabmeta">Test network only · <span class="nw">each dataset under its own license</span></p>
 	</div>
 </OnyxSlab>
@@ -188,6 +387,9 @@
 			<h2>Search</h2>
 			<Pill live state={pill.state} text={pill.text} />
 		</div>
+		{#if counts}
+			<p class="updated" data-testid="datasets-freshness"><b>{group(counts.fresh)} of {group(counts.all)}</b> datasets were updated in the last {STALE_DAYS} days. {#if counts.stale}The other {group(counts.stale)} were not: each of them shows its last day.{/if}</p>
+		{/if}
 		<div class="find">
 			<label for="ds-q" class="muted">Names or meanings, for example <span class="mono">bitcoin holders</span>, <span class="mono">whale</span> or <span class="mono">eth supply</span></label>
 			<input id="ds-q" type="search" bind:value={query} oninput={search} maxlength={MAX_SEARCH} spellcheck="false" autocomplete="off" placeholder={all !== null ? `Search ${group(all)} datasets` : 'Search datasets'} data-testid="datasets-q" />
@@ -217,17 +419,28 @@
 		{#if none}
 			<p class="muted" data-testid="datasets-none">This site’s node shows no datasets.</p>
 		{:else if items.length}
+			<p class="fine order" data-testid="datasets-order">
+				{#if listed}
+					Best match first: datasets of the asset you searched come before others.{!freshOnly ? ` ${group(freshIn(found))} of ${group(found.length)} ${capped ? 'loaded' : 'found'} were updated in the last ${STALE_DAYS} days.` : ''}{capped ? ` Only the first ${group(SEARCH_CAP)} matches are loaded: add a word to narrow the search.` : ''}
+				{:else if segs.length > 1}
+					{freshOnly ? 'Bitcoin and Ethereum first, then by name.' : `Datasets updated in the last ${STALE_DAYS} days first (Bitcoin and Ethereum, then by name), then the rest. Test data is last.`}
+				{:else}
+					Listed by name.
+				{/if}
+			</p>
 			<ul class="list" aria-label="Datasets" data-testid="datasets-list">
 				{#each items as d (idOf(d))}
 					{@const id = idOf(d)}
 					{@const since = staleSince(d)}
-					<li class="panel item" data-testid="datasets-row">
+					<li class="panel item" id="card-{id}" data-testid="datasets-row">
 						<button type="button" class="name" aria-expanded={open === id} aria-controls="ds-{id}" onclick={() => toggle(d)} data-testid="datasets-open">
 							<span class="ttl" data-testid="datasets-title">{datasetTitle(d.dataset)}</span>
-							<span class="muted pub"><span class="mono" data-testid="datasets-id">{d.dataset}</span> · {d.publisher} · version {d.version}</span>
+							<span class="muted pub"><span class="mono" data-testid="datasets-id">{d.dataset}</span> · version {d.version}</span>
 						</button>
+						{#if isTestSet(d)}<p class="chip testtag" data-testid="datasets-test">test data</p>{/if}
 						{#each meanings(split(d.dataset).words) as m (m)}<p class="about" data-testid="datasets-about">{m}</p>{/each}
 						<dl class="dsfacts">
+							<div title={SIGNED}><dt>Published by</dt><dd class="mono" data-testid="datasets-publisher">{d.publisher}</dd></div>
 							<div><dt>Rows</dt><dd class="mono">{group(d.rows)}</dd></div>
 							<div><dt>Covers</dt><dd class="mono">{keyRange(d.keyMin, d.keyMax)}</dd></div>
 							<div><dt>Size</dt><dd class="mono">{size(d.bytes)}</dd></div>
@@ -240,6 +453,7 @@
 						{#if open === id}
 							{@const s = samples[id]}
 							<div class="more" id="ds-{id}" data-testid="datasets-detail">
+								<p class="fine" data-testid="datasets-signed">Published by <span class="mono">{d.publisher}</span>. {SIGNED}</p>
 								{#if s === 'loading' || s === undefined}
 									<p class="muted">Reading the newest rows…</p>
 								{:else if s === 'none'}
@@ -247,6 +461,7 @@
 								{:else}
 									{@const cols = chartColumns(s)}
 									{@const days = dayKeys(d.keyMin, d.keyMax)}
+									{@const h = history[id]}
 									{#if cols.length && (drawn[id] ?? -1) >= 0}
 										<div class="chartrow">
 											{#if cols.length > 1}
@@ -257,25 +472,42 @@
 										</div>
 										<div class="panel chartbox"><DatasetChart points={chartPoints(s, drawn[id], days)} name={s.columns[drawn[id]]} testid="datasets-chart" /></div>
 									{/if}
-									{@const shown = s.rows.slice(-10)}
+									{@const newest = newestFirst(s.rows)}
 									{#if since}<p class="fine" data-testid="datasets-detail-stale">This dataset has no data after {since}: the chart and the rows below end there, and are not current values.</p>{/if}
-									<p class="fine">The newest {shown.length} {shown.length === 1 ? 'row' : 'rows'}{d.license ? ` · license ${d.license}` : ''} · <a href={toLink('', id)} data-testid="datasets-link">link to this dataset</a></p>
+									<p class="fine">The newest {newest.length} {newest.length === 1 ? 'row' : 'rows'}, newest first{d.license ? ` · license ${d.license}` : ''} · <a href={toLink('', id)} onclick={() => reveal(id)} data-testid="datasets-link">link to this dataset</a></p>
 									<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 									<div class="tablebox sample" tabindex="0" role="region" aria-label="Newest rows of {d.dataset}">
 										<table data-testid="datasets-sample">
 											<thead><tr>{#each s.columns as c, i (c)}<th class:r={i > 0}>{c}</th>{/each}</tr></thead>
 											<tbody>
-												{#each shown as r, ri (ri)}
-													<tr>{#each r as v, i (i)}<td class="mono" class:r={i > 0}>{i === 0 ? keyText(v, dayKeys(d.keyMin, d.keyMax)) : v}</td>{/each}</tr>
+												{#each newest as r, ri (ri)}
+													<tr>{#each r as v, i (i)}<td class="mono" class:r={i > 0}>{i === 0 ? keyText(v, days) : v}</td>{/each}</tr>
 												{/each}
 											</tbody>
 										</table>
 									</div>
+									<div class="dl" data-testid="datasets-download">
+										<button type="button" class="btn ghost" onclick={() => save(csvName(d), csv(s.columns, s.rows, days))} data-testid="datasets-csv">Download CSV ({group(s.rows.length)} {s.rows.length === 1 ? 'row' : 'rows'})</button>
+										{#if d.rows > s.rows.length}
+											<button type="button" class="btn ghost" disabled={h?.state === 'run'} onclick={() => saveHistory(d)} data-testid="datasets-csv-all">Download full history (CSV)</button>
+										{/if}
+									</div>
+									<p class="fine" role="status" data-testid="datasets-csv-status">
+										{#if h?.state === 'run'}Reading {group(h.rows)} of {group(d.rows)} rows, 1,000 a call…
+										{:else if h?.state === 'done'}Saved {group(h.rows)} rows, oldest first.
+										{:else if h?.state === 'capped'}Saved the first {group(h.rows)} rows, oldest first. A download here stops at {group(HISTORY_CAP)} rows; the API pages through the rest in the same way.
+										{:else if h?.state === 'busy'}The node is busy. Nothing was saved: try again in a minute.
+										{:else if h?.state === 'fail'}The node did not answer with every row. Nothing was saved: try again in a minute.
+										{:else if d.rows > s.rows.length}The first button saves the rows of the chart. The full history is read 1,000 rows a call and stops at {group(HISTORY_CAP)} rows.{/if}
+										{#if days}Days are written as dates (UTC).{/if}
+									</p>
 									{#if s.book}
 										<p class="fine">Check these rows yourself: the first command saves them with their proofs, the second checks every proof against the signed book on Base Sepolia.</p>
 										<pre class="code" data-testid="datasets-commands">{curl(d, s)}
 {check(d, s)}</pre>
 									{/if}
+									<p class="fine">Or read the newest rows in Python (needs <span class="mono">requests</span> and <span class="mono">pandas</span>; at most 1,000 rows a call):</p>
+									<pre class="code" data-testid="datasets-python">{pythonSnippet(origin, d)}</pre>
 								{/if}
 							</div>
 						{/if}
@@ -283,18 +515,39 @@
 				{/each}
 			</ul>
 			<div class="pager">
-				<span class="muted" data-testid="datasets-count">Showing {group(items.length)} of {group(total ?? items.length)}</span>
-				{#if next}
-					<button type="button" class="btn ghost" disabled={busy} onclick={() => load(cleanSearch(query), next)} data-testid="datasets-more">Show more</button>
+				<span class="muted" data-testid="datasets-count">Showing {group(items.length)} of {group(total ?? found.length)}</span>
+				{#if more}
+					<button type="button" class="btn ghost" disabled={busy} onclick={showMore} data-testid="datasets-more">Show more</button>
 				{/if}
 			</div>
-		{:else if total === 0}
+		{:else if total === 0 || (!busy && pill.state === 'good')}
 			<p class="muted" data-testid="datasets-empty">{freshOnly ? `No dataset${cleanSearch(query) ? ' with every word of this search in its name' : ''} has data from the last ${STALE_DAYS} days.` : 'No dataset has every word of this search in its name.'}</p>
 		{/if}
 	</section>
 </div>
 
 <style>
+	.updated {
+		margin: var(--sp-3) 0 0;
+		max-width: 68ch;
+		line-height: var(--lh-body);
+	}
+	.proofnote {
+		margin-top: var(--sp-2);
+	}
+	.order {
+		margin: 0 0 var(--sp-3);
+	}
+	.testtag {
+		justify-self: start;
+		margin: 0;
+	}
+	.dl {
+		display: flex;
+		flex-wrap: wrap;
+		gap: var(--sp-2);
+		margin-bottom: var(--sp-2);
+	}
 	.find {
 		display: grid;
 		gap: var(--sp-2);
@@ -384,6 +637,8 @@
 		display: grid;
 		gap: var(--sp-2);
 		min-width: 0;
+		/* A dataset link scrolls its card to the top: clear of the fixed header. */
+		scroll-margin-top: 5rem;
 	}
 	.dsfacts {
 		display: flex;

@@ -54,3 +54,21 @@ test('a value keeps its digits: only the whole part is grouped', () => {
 	assert.equal(groupDecimal('0.0'), '0.0');
 	assert.equal(groupDecimal('n/a'), 'n/a');
 });
+
+// Newcomer test 2026-11-18: the five levels read the same on Add data and How it works.
+import { readFileSync } from 'node:fs';
+import { LEVELS } from '../src/lib/levels.ts';
+import * as C from '../src/lib/catalog.ts';
+
+test('one wording for the five levels, with what is built and what is planned', () => {
+	assert.deepEqual(LEVELS.map((l) => l.level), [1, 2, 3, 4, 5]);
+	assert.deepEqual(LEVELS.map((l) => l.name), [1, 2, 3, 4, 5].map((n) => C.LEVEL_NAME[n]));
+	for (const l of LEVELS) assert.ok(/\.$/.test(l.means) && /^Built/.test(l.mark), l.name);
+	assert.match(LEVELS[3].means, /^A claim nobody has checked, labelled unverified\./);
+	assert.match(LEVELS[3].mark, /bond .*planned/);
+	const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+	for (const f of ['routes/submit/+page.svelte', 'routes/how-it-works/+page.svelte', 'lib/components/DataMap.svelte']) {
+		assert.match(src(f), /from '#lib\/levels\.ts'/, f);
+		assert.doesNotMatch(src(f), /Bonded claim|Submitter stakes/, f);
+	}
+});

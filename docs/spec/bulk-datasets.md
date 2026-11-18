@@ -220,7 +220,14 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
 ### Routes
 `GET /v1/bulk?q=&limit=&after=&fresh=&sort=` (every dataset, or those whose `publisher/dataset`
 holds every word of `q`, `limit` at a time in id order, `after` the `next` of the page before;
-`total` counts the matches; a dataset whose key reads as unix seconds, by the rule of `key.unit`,
+`total` counts the matches; a word of `q` that is a common asset name also finds the datasets
+with that asset's id as a whole word, so `q=bitcoin` finds `btc.mvrv` and not `wbtc.mvrv`, and the
+answer's `assets` says which names were read so; a search lists the datasets whose asset, the
+part of the dataset id before the first dot, is one asked for by name or typed as an id before
+those that only hold the words, and among each the dataset whose other id words are exactly the
+other words typed, so `q=btc price` lists `btc.price` before `btc.price-drawdown` and both
+before `wbtc.price`, whatever their dates; the names are the website's table, copied in
+`crates/onyx-api/src/bulk_names.rs` with a test that reads the website's file; a dataset whose key reads as unix seconds, by the rule of `key.unit`,
 has `newest`, the UTC day of its newest key, and `newest_age_days`, whole days behind the node's
 clock at the answer (a newest key dated more than a day after that clock gives only
 `newest_in_future`: the publisher signs its own range, THREATS FRESH-R1-M1); `fresh=30d` keeps those

@@ -51,8 +51,8 @@
 	<h4 class="way">First way: send the two values here, without an account</h4>
 	<p>
 		The form sends your origin and the hash to this site’s node and nothing else. The node keeps the two values for {POINTER_DAYS} days, never
-		your address, and does not contact your origin. Your origin is public either way. A host holds three waiting pointers; if the form says
-		they are taken, the issue below works at once.
+		your address, and does not contact your origin. Your origin is public either way. A host holds three waiting pointers, so that nobody can fill the
+		reviewer’s list with pointers at one host; if the form says they are taken, the issue below works at once.
 	</p>
 	<form class="send" onsubmit={send} novalidate data-testid="pointer-form">
 		<label class="field" for="pointer-origin">Your origin</label>

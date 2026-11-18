@@ -18,6 +18,8 @@
 //! - `settle --market N --store FILE [--key-file F]...`: prove the value from
 //!   the round's results store, resolve, pay each listed bettor.
 //! - `status [--out FILE]`: every market as JSON (the website's snapshot).
+//! - `void --market N [--key-file F]...`: a market with no recorded value past
+//!   its `resolveBy`: `resolve` voids it, each listed bettor withdraws its bet.
 //! - `underwrite --key-file F --amount A` (whole tONYX): fund the pool of the
 //!   deployment's `OnyxParametric` (`--markets` names `insurance.json`), so
 //!   its products have cover for sale. Insiders and observers are refused
@@ -364,8 +366,10 @@ pub fn run(src: &dyn Source, args: &[String]) -> Result<(), String> {
         "settle" => settle(src, &chain, &mut d, args),
         "status" => status(&chain, &d, args),
         "underwrite" => underwrite(&chain, &d, args),
+        "void" => void(&chain, &d, args),
         _ => Err(
-            "usage: market open|bet|settle|status|underwrite --rpc URL --markets FILE ...".into(),
+            "usage: market open|bet|settle|void|status|underwrite --rpc URL --markets FILE ..."
+                .into(),
         ),
     }
 }
@@ -733,6 +737,100 @@ fn settle(
     Ok(())
 }
 
+/// Whether `void` must call `resolve` (true) or the market is void already
+/// (false). Refused for a market that is not open, for one whose fact has a
+/// recorded value (`resolve` would settle it: that is `settle`'s work, with
+/// the value proven first) and before `resolveBy` (the contract would
+/// revert). States: 1 open, 2 resolved, 3 void.
+fn void_precheck(state: u128, fact_final: bool, resolve_by: u64, now: u64) -> Result<bool, String> {
+    match state {
+        3 => return Ok(false),
+        1 => {}
+        2 => return Err("the market is resolved: nothing to void".into()),
+        _ => return Err("no such market on the futures contract".into()),
+    }
+    if fact_final {
+        return Err("a value is recorded for this market's fact: settle it, do not void it".into());
+    }
+    if now < resolve_by {
+        return Err(format!(
+            "the market can be voided from {resolve_by} on (its resolveBy), it is {now} now"
+        ));
+    }
+    Ok(true)
+}
+
+/// End a market that got no value by its `resolveBy`: `resolve` voids it
+/// (reason 2), then each `--key-file` bettor withdraws its whole bet. Proves
+/// nothing and records nothing: a market with a recorded value is refused.
+fn void(chain: &CastChain, d: &Deployment, args: &[String]) -> Result<(), String> {
+    let id: u64 = need(args, "--market")?
+        .parse()
+        .map_err(|e| format!("--market: {e}"))?;
+    let fact = d.doc["markets"]
+        .as_array()
+        .and_then(|m| m.iter().find(|e| e["id"].as_u64() == Some(id)))
+        .and_then(|m| m["fact"].as_str())
+        .ok_or(format!("market {id} is not in the deployment file"))?
+        .to_string();
+    let market = |c: &CastChain| -> Result<(u128, u64), String> {
+        let s = &call(c, &d.futures, MARKET_SIG, &[id.to_string()])?[0];
+        let by = u64::try_from(num(&s[3], "resolveBy")?).map_err(|e| e.to_string())?;
+        Ok((num(&s[4], "state")?, by))
+    };
+    let (state, resolve_by) = market(chain)?;
+    let fv = call(
+        chain,
+        &d.facts,
+        "factValue(bytes32)(bool,int256,uint8,uint64)",
+        std::slice::from_ref(&fact),
+    )?;
+    let fact_final = fv.first() == Some(&Json::Bool(true));
+    if void_precheck(state, fact_final, resolve_by, SystemClock.now())? {
+        send(
+            chain,
+            &admin(chain)?,
+            &d.futures,
+            "resolve(uint256)",
+            &[id.to_string()],
+        )?;
+    }
+    let (state, _) = market(chain)?;
+    if state != 3 {
+        return Err(format!(
+            "after resolve the market is in state {state}, not void: a value was recorded meanwhile"
+        ));
+    }
+    let mut paid = vec![];
+    for f in key_files(args) {
+        let who = signer_of(chain, &f)?;
+        let owed = num(
+            &call(
+                chain,
+                &d.futures,
+                "owed(uint256,address)(uint256)",
+                &[id.to_string(), ax(&who.address())],
+            )?[0],
+            "owed",
+        )?;
+        if owed > 0 {
+            send(
+                chain,
+                &who,
+                &d.futures,
+                "withdraw(uint256)",
+                &[id.to_string()],
+            )?;
+            paid.push(json!({"bettor": ax(&who.address()), "tonyx": owed.to_string()}));
+        }
+    }
+    println!(
+        "{}",
+        json!({"market": id, "fact": fact, "state": "void", "refunded": paid})
+    );
+    Ok(())
+}
+
 fn status(chain: &CastChain, d: &Deployment, args: &[String]) -> Result<(), String> {
     const STATES: [&str; 4] = ["none", "open", "resolved", "void"];
     let mut out = vec![];
@@ -856,6 +954,19 @@ mod tests {
             bet_precheck(true, 1, close, now, 3, 3).is_err(),
             "no bucket 3"
         );
+    }
+
+    /// `void` ends only an open market with no recorded value, past its
+    /// `resolveBy`; a void market goes straight on to the withdrawals.
+    #[test]
+    fn only_an_open_market_past_its_date_with_no_value_is_voided() {
+        let by = 2_000;
+        assert_eq!(void_precheck(1, false, by, by), Ok(true));
+        assert_eq!(void_precheck(3, false, by, 0), Ok(false), "void already");
+        assert!(void_precheck(1, false, by, by - 1).is_err(), "too early");
+        assert!(void_precheck(1, true, by, by).is_err(), "has a value");
+        assert!(void_precheck(2, false, by, by).is_err(), "resolved");
+        assert!(void_precheck(0, false, by, by).is_err(), "no market");
     }
 
     /// An underwriter the pool would refuse gets no gas grant and no mint

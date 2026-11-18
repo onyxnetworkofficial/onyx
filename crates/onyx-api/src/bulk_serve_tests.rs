@@ -1888,6 +1888,148 @@ fn a_newest_key_reads_as_a_day_and_an_age() {
     assert_eq!(age_days(2_000_000, 1_000_000), 0);
 }
 
+/// Newcomer findings (2026-11-18): `q=bitcoin` found nothing while the
+/// website found the `btc.*` datasets, and a search for Bitcoin was answered
+/// with `wbtc.*` (Wrapped Bitcoin, another asset). A common asset name finds
+/// the datasets of its id as a whole word; a search lists the datasets of
+/// the asset asked for first, the exact metric first among them, and a
+/// stale dataset of that asset before a fresh one of another; pages follow
+/// that order; a search of ids finds what it found before.
+#[tokio::test]
+async fn a_search_takes_asset_names_and_lists_the_asked_asset_first() {
+    const DAY: i128 = 86_400;
+    let w = world();
+    let t0 = i128::from(T0);
+    let (fresh, stale) = (t0 - 2 * DAY, t0 - 80 * DAY);
+    // Bitcoin's datasets stopped 80 days back; Wrapped Bitcoin's are fresh.
+    for (name, newest) in [
+        ("btc.price", stale),
+        ("btc.price-drawdown", stale),
+        ("btc.mvrv", stale),
+        ("wbtc.price", fresh),
+        ("wbtc.mvrv", fresh),
+        ("eth.btc-price", fresh),
+        ("eth.price", fresh),
+        ("trx.staking-flows", fresh),
+    ] {
+        post_named(&w, name, newest - 2..newest + 1).await;
+    }
+    let list = |q: &str| {
+        w.store
+            .list(&parse_list_query(Some(q)).expect(q))
+            .expect("ok")
+    };
+    let ids = |v: &Value| -> Vec<String> {
+        v["datasets"]
+            .as_array()
+            .expect("ok")
+            .iter()
+            .map(|d| d["dataset"].as_str().expect("ok").to_string())
+            .collect()
+    };
+    // The name: the asset's id as a whole word, never the btc in wbtc.
+    let bitcoin = list("q=bitcoin");
+    assert_eq!(
+        ids(&bitcoin),
+        [
+            "btc.mvrv",
+            "btc.price",
+            "btc.price-drawdown",
+            "eth.btc-price"
+        ]
+    );
+    assert_eq!(bitcoin["total"], json!(4));
+    assert_eq!(
+        bitcoin["assets"],
+        json!([{"name": "bitcoin", "asset": "btc"}])
+    );
+    assert_eq!(
+        ids(&list("q=bitcoin+price")),
+        ["btc.price", "btc.price-drawdown", "eth.btc-price"],
+        "the exact metric, then the asset's others, then another asset's"
+    );
+    assert_eq!(ids(&list("q=Bitcoin%20MVRV")), ["btc.mvrv"]);
+    assert_eq!(ids(&list("q=tron+staking+flows")), ["trx.staking-flows"]);
+    assert_eq!(ids(&list("q=wrapped+bitcoin")), ["wbtc.mvrv", "wbtc.price"]);
+    assert_eq!(
+        list("q=wrapped+bitcoin")["assets"],
+        json!([{"name": "wrapped bitcoin", "asset": "wbtc"}])
+    );
+    assert_eq!(
+        ids(&list("q=ethereum+price")),
+        ["eth.price", "eth.btc-price"]
+    );
+    // The id typed: every dataset that holds it, as before, the asset's own
+    // first though they are stale and wbtc's are fresh.
+    let btc = list("q=btc+price");
+    assert_eq!(
+        ids(&btc),
+        [
+            "btc.price",
+            "btc.price-drawdown",
+            "eth.btc-price",
+            "wbtc.price"
+        ]
+    );
+    assert_eq!(btc["assets"], Value::Null, "no name was read as an asset");
+    assert_eq!(
+        (
+            btc["datasets"][0]["newest_age_days"].clone(),
+            btc["datasets"][3]["newest_age_days"].clone()
+        ),
+        (json!(80), json!(2))
+    );
+    assert_eq!(
+        ids(&list("q=btc")),
+        [
+            "btc.mvrv",
+            "btc.price",
+            "btc.price-drawdown",
+            "eth.btc-price",
+            "wbtc.mvrv",
+            "wbtc.price"
+        ]
+    );
+    // With sort=newest too: the asset first, the newest first within it.
+    assert_eq!(
+        ids(&list("q=btc+price&sort=newest")),
+        [
+            "btc.price",
+            "btc.price-drawdown",
+            "eth.btc-price",
+            "wbtc.price"
+        ]
+    );
+    assert_eq!(
+        ids(&list("q=btc+price&fresh=30d")),
+        ["eth.btc-price", "wbtc.price"]
+    );
+    // Pages follow the order shown, one dataset each, none twice.
+    let mut seen = Vec::new();
+    let mut after = String::new();
+    loop {
+        let page = list(&format!("q=btc+price&limit=1{after}"));
+        assert_eq!(page["total"], json!(4));
+        seen.extend(ids(&page));
+        match page["next"].as_str() {
+            Some(n) => after = format!("&after={}", n.replace('/', "%2F")),
+            None => break,
+        }
+    }
+    assert_eq!(seen, ids(&btc));
+    // A cursor of a dataset no longer held still has its place.
+    assert_eq!(
+        ids(&list("q=btc+price&after=example.publisher%2Fbtc.price-a")),
+        ["btc.price-drawdown", "eth.btc-price", "wbtc.price"]
+    );
+    // No search: id order, nothing collected, as before.
+    assert_eq!(ids(&list("limit=2")), ["btc.mvrv", "btc.price"]);
+    assert_eq!(
+        ids(&list("any=price&limit=2")),
+        ["btc.price", "btc.price-drawdown"]
+    );
+}
+
 /// `GET /v1/bulk` search and pages: every word must be in
 /// `publisher/dataset` (any case), pages follow id order through `next`,
 /// `total` counts every match, and a bad query is a 400.

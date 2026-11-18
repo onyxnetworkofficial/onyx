@@ -7,8 +7,10 @@
 # connections per source is also a cap on requests in flight. A new connection from a source that
 # already holds CAP open ones is reset; the others are untouched.
 #
-# CAP: browsers open at most 6 HTTP/1.1 connections per host; 32 leaves room for a shared NAT.
-# One source then holds at most 32 of the node's 256 slots. IPv6 sources count per /64 (one
+# CAP: browsers open at most 6 HTTP/1.1 connections per host and Caddy keeps an idle one for 60 s,
+# so each person behind one address holds 6. With 32 the sixth person behind one address was reset
+# (seen 2026-11-18: 6 browsers, 36 connections); 64 fits 10 people.
+# One source then holds at most 64 of the node's 256 slots (a quarter; four sources can fill it). IPv6 sources count per /64 (one
 # customer's prefix), so stepping through addresses in one prefix does not get past the cap.
 #
 # This is its own table: it never touches ufw's rules, and loading it again replaces only this
@@ -34,7 +36,7 @@ table inet onyx_conn_cap {
     # Before ufw's filter chains (priority filter = 0), and policy accept: this table only ever
     # rejects over-cap connections; everything else goes on to ufw unchanged.
     type filter hook input priority filter - 1; policy accept;
-    tcp dport 443 ct state new add @https_v4 { ip saddr ct count over 32 } counter reject with tcp reset
-    tcp dport 443 ct state new add @https_v6 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over 32 } counter reject with tcp reset
+    tcp dport 443 ct state new add @https_v4 { ip saddr ct count over 64 } counter reject with tcp reset
+    tcp dport 443 ct state new add @https_v6 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over 64 } counter reject with tcp reset
   }
 }

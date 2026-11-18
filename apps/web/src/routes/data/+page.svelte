@@ -581,9 +581,9 @@
 	<h1>Browse data</h1>
 	<div class="slabside" data-testid="slabside">
 		{#if live}
-			<p class="meta slabmeta">Live sample: Bitcoin mainnet · <span class="nw">blocks {int(live.from_height)}–{int(live.to_height)}</span> · <span class="nw">{span}</span></p>
+			<p class="meta slabmeta">Recorded sample: Bitcoin mainnet · <span class="nw">blocks {int(live.from_height)}–{int(live.to_height)}</span> · <span class="nw">{span}</span></p>
 		{:else}
-			<p class="meta slabmeta">Live sample: Bitcoin mainnet</p>
+			<p class="meta slabmeta">Recorded sample: Bitcoin mainnet</p>
 		{/if}
 	</div>
 </OnyxSlab>

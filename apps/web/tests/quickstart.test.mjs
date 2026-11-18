@@ -94,3 +94,25 @@ test('the page shows these commands and names the release a newest-first check n
 	assert.doesNotMatch(page, /onyx-check --bulk/);
 	assert.match(page, /data-testid="api-quick-release"/);
 });
+
+// Newcomer test 2026-11-18: the page says rows come 1,000 a call at most and how to page, with
+// the node's own parameter names, and names the release file that holds onyx-check.
+test('the paging command uses the node\'s limit and page; the check file is the publisher bundle', () => {
+	const u = new URL(Q.pageCommand('https://node.example').replace(/^curl "|"$/g, ''));
+	assert.equal(u.pathname, `/v1/bulk/${Q.EXAMPLE.publisher}/${Q.EXAMPLE.dataset}/rows`);
+	assert.deepEqual([...u.searchParams.keys()], ['limit', 'page']);
+	assert.equal(u.searchParams.get('limit'), '1000');
+	assert.equal(Q.MAX_ROWS, 1000);
+	// The same limit and parameter names as the node (crates/onyx-api/src/bulk_serve.rs).
+	const node = readFileSync(new URL('../../../crates/onyx-api/src/bulk_serve.rs', import.meta.url), 'utf8');
+	assert.match(node, /pub const MAX_PAGE_ROWS: u64 = 1_000;/);
+	assert.match(node, /"page" => \{/);
+	assert.match(node, /"next_page"/);
+	// The release script puts onyx-check in exactly this file.
+	const build = readFileSync(new URL('../../../scripts/release-build.sh', import.meta.url), 'utf8');
+	assert.ok(build.includes(`${Q.CHECK_FILE} `) && /onyx-publish and onyx-check/.test(build));
+	const page = readFileSync(new URL('../src/routes/api/+page.svelte', import.meta.url), 'utf8');
+	assert.match(page, /pageCommand\(origin\)/);
+	assert.match(page, /Everything on this page is free to read today: no key, no sign-up/);
+	assert.match(page, /CHECK_FILE/);
+});

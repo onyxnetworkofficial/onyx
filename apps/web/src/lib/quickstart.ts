@@ -44,3 +44,15 @@ export function checkRangeCommands(origin: string): string {
 	const { from, to } = CHECK_RANGE;
 	return `curl -s "${rows(origin)}?from=${from}&to=${to}&limit=31" > rows.json\n` + check(`--from ${from} --to ${to}`);
 }
+
+/** Rows one call returns at most (the node's MAX_PAGE_ROWS; without `limit` a call returns 100). */
+export const MAX_ROWS = 1000;
+
+/** The second page of a full read: `limit` at the most a call returns and `page` counted from 0.
+ * Each answer's `next_page` names the page after it and is null on the last one. */
+export function pageCommand(origin: string): string {
+	return `curl "${rows(origin)}?limit=${MAX_ROWS}&page=1"`;
+}
+
+/** The release file that holds onyx-check (scripts/release-build.sh: Linux x86-64 only). */
+export const CHECK_FILE = 'onyx-publish-linux-x86_64.tar.gz';

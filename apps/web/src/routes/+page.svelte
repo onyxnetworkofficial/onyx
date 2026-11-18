@@ -5,31 +5,54 @@
 	import Code from '@lucide/svelte/icons/code';
 	import Bot from '@lucide/svelte/icons/bot';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
+	import { onMount } from 'svelte';
+	import { STALE_DAYS, countUrl, freshCountUrl, freshCounts, page as readPage } from '#lib/datasets.ts';
+	import { group } from '#lib/format.ts';
+
+	// How many datasets the node holds and how many have data from the last STALE_DAYS days: the
+	// node's own two counts (two lists of one). Until both answer, the text names no number.
+	let all = $state<number | null>(null);
+	let fresh = $state<number | null>(null);
+	const counts = $derived(freshCounts(all, fresh));
+	onMount(() => {
+		const one = (url: string) =>
+			fetch(url, { headers: { accept: 'application/json' } })
+				.then((r) => (r.ok && (r.headers.get('content-type') ?? '').includes('json') ? r.json() : null))
+				.then((v) => readPage(v)?.total || null)
+				.catch(() => null);
+		void Promise.all([one(countUrl()), one(freshCountUrl())]).then(([a, f]) => ([all, fresh] = [a, f]));
+	});
+	const many = $derived(counts ? group(counts.all) : 'about 9,000');
 </script>
 
 <svelte:head><title>Onyx · Data anyone can check</title></svelte:head>
 
 <!-- READINESS A19: the first screen speaks to a data user (what Onyx is, what works today), then to a
-     contributor. Static text: the dataset count is rounded by hand (9,047 on 2026-11-16). -->
+     contributor. The dataset counts are the node's own (asked when the page opens); without an
+     answer the text says "about 9,000" and names no count of updated datasets. -->
 <OnyxSlab>
 	<div class="wrap welcome">
 		<div class="intro">
 			<p class="eyebrow">Open data network · testnet</p>
 			<h1>Data anyone<br />can check.</h1>
-			<p class="lede" data-testid="home-what">Onyx is one place for data from many sources. Every answer comes with a proof you can verify yourself. Today you can browse about 9,000 datasets, get them by API, or connect an AI assistant.</p>
+			<p class="lede" data-testid="home-what">Onyx is one place for data from many sources. Every answer comes with a proof you can verify yourself. Today you can browse {many} datasets, get them by API, or connect an AI assistant.</p>
 			<div class="actions">
 				<a class="btn" href={resolve('/datasets')} data-testid="home-primary">Browse datasets <ArrowRight size={18} /></a>
 				<a class="btn ghost" href={resolve('/submit')} data-testid="home-secondary">Add your data <ArrowRight size={18} /></a>
 			</div>
-			<p class="preview-note" data-testid="home-testnet">Testnet preview. Reading is free, and test tokens have no value. Some datasets are not being updated right now: each one shows its newest day.</p>
+			<p class="preview-note" data-testid="home-testnet">
+				Testnet preview. Reading is free, and test tokens have no value.
+				{#if counts}<span data-testid="home-freshness">{group(counts.fresh)} of {group(counts.all)} datasets were updated in the last {STALE_DAYS} days{counts.stale ? `; the other ${group(counts.stale)} were not` : ''}.</span> Each one shows its newest day.{:else}Some datasets are not being updated right now: each one shows its newest day.{/if}
+			</p>
+			<p class="preview-note proof-note" data-testid="home-proof">The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.</p>
 		</div>
 		<aside class="starting-point" aria-labelledby="starting-title" data-testid="data-users">
 			<p class="eyebrow">What you can do now</p>
 			<h2 id="starting-title">One place, one API,<br />one format.</h2>
 			<ul>
-				<li><a href={resolve('/datasets')} data-testid="users-datasets"><Table size={22} /><span><h3>Browse about 9,000 datasets</h3><p>Search by name and read the newest rows of any of them.</p></span><ArrowRight size={18} /></a></li>
+				<li><a href={resolve('/datasets')} data-testid="users-datasets"><Table size={22} /><span><h3>Browse {many} datasets</h3><p>Search by name and read the newest rows of any of them.</p></span><ArrowRight size={18} /></a></li>
 				<li><a href={resolve('/api')} data-testid="users-api"><Code size={22} /><span><h3>Get them by API</h3><p>The same data over HTTP, from a script or a notebook. No key.</p></span><ArrowRight size={18} /></a></li>
-				<li><a href={`${resolve('/submit')}?assistant`} data-testid="users-assistant"><Bot size={22} /><span><h3>Connect an AI assistant</h3><p>One connector for ChatGPT, Claude, Cursor and others. It finds datasets, reads rows and checks answers.</p></span><ArrowRight size={18} /></a></li>
+				<li><a href={`${resolve('/submit')}?assistant`} data-testid="users-assistant"><Bot size={22} /><span><h3>Connect an AI assistant</h3><p>One connector for ChatGPT, Claude, Cursor and others. It finds datasets and reads rows. To check a proof you run the onyx-check program on your own machine.</p></span><ArrowRight size={18} /></a></li>
 			</ul>
 		</aside>
 	</div>
@@ -50,7 +73,7 @@
 		<a class="btn ghost" href={resolve('/how-it-works')} data-testid="home-technical">How it works <ArrowRight size={18} /></a>
 	</section>
 	<section class="market-preview" aria-labelledby="market-preview-title">
-		<div><p class="eyebrow">Live on the test network</p><h2 id="market-preview-title">Markets that settle on observed data.</h2><p>Two markets on the U.S. Treasury’s debt: one settled from the value Onyx observers recorded, one open for test bets. Plus test insurance that pays on the weather and earthquakes. Markets use tONYX test tokens. No real money.</p></div>
+		<div><p class="eyebrow">Live on the test network</p><h2 id="market-preview-title">Markets that settle on observed data.</h2><p>Test markets on the U.S. Treasury’s debt that settle from the value Onyx observers recorded. Plus test insurance that pays on the weather and earthquakes. Markets use tONYX test tokens. No real money.</p></div>
 		<a class="btn ghost" href={resolve('/markets')} data-testid="home-markets">Open markets <ArrowRight size={18} /></a>
 	</section>
 </div>
@@ -63,6 +86,7 @@
 	.lede { max-width: 54ch; font-size: var(--text-md); line-height: var(--lh-body); }
 	.actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--sp-4); margin-top: var(--sp-7); }
 	.preview-note { max-width: 55ch; margin: var(--sp-6) 0 0; color: var(--muted); font-size: var(--text-sm); line-height: var(--lh-body); }
+	.proof-note { margin-top: var(--sp-3); }
 	.starting-point { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius-lg); padding: var(--sp-7); }
 	.starting-point h2 { font-size: var(--text-2xl); line-height: var(--lh-tight); }
 	.starting-point ul { list-style: none; padding: 0; margin: var(--sp-6) 0; }

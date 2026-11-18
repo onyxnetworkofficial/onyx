@@ -40,3 +40,17 @@ test('a settled or void market says its own state, and nothing is due without a 
 	assert.equal(refundDue({ ...closed, resolveBy: 0 }, BY + 1), false);
 	assert.equal(refundDue({ ...closed, trading: true }, BY + 1), false);
 });
+
+// Newcomer test 2026-11-18: the practice markets' dates roll with today (never a day that passed).
+import { practiceDay, practiceDayLabel } from '../src/lib/arena.ts';
+
+test('a practice market names a day counted from today, in one date style', () => {
+	const now = Date.UTC(2026, 10, 18, 15, 30);
+	assert.equal(practiceDayLabel(now), '18 Nov 2026');
+	assert.equal(practiceDay(0, now), '18 Nov 2026');
+	assert.equal(practiceDay(12, now), '30 Nov 2026');
+	assert.equal(practiceDay(43, now), '31 Dec 2026');
+	assert.equal(practiceDay(2, Date.UTC(2026, 11, 31)), '2 Jan 2027');
+	// Whatever today is, a day two or more days ahead has not passed.
+	assert.ok(Date.parse(`${practiceDay(2)} UTC`) > Date.now());
+});

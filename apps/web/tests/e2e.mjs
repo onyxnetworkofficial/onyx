@@ -185,7 +185,8 @@ try {
 	// "Browse all N datasets"). This run's server holds the built files only, so the node is faked
 	// here as in tests/datasets.mjs and tests/pp4.mjs; any other missing file still fails the
 	// "no console errors" check below (a 404 always logs one).
-	await p.route('**/v1/bulk?*', (r) => r.fulfill({ json: { datasets: [], total: 9054, next: null } }));
+	// Home asks for the same count and for the count of datasets updated in the last 30 days.
+	await p.route('**/v1/bulk?*', (r) => r.fulfill({ json: { datasets: [], total: new URL(r.request().url()).searchParams.get('fresh') ? 6302 : 9054, next: null } }));
 
 	await p.goto(base + '#/how-it-works');
 	await p.locator('header.top').waitFor();

@@ -62,7 +62,7 @@
 #                      contacts no origin and keeps no client address; docs/ops/publisher-review.md
 #                      "Pointers sent to the node"); default 0, and the route then answers 404. Written
 #                      anew by each deploy: pass it each time to keep it on
-#   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (32 connections per address on 443),
+#   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (64 connections per address on 443),
 #                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
 set -euo pipefail

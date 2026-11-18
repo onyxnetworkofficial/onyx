@@ -33,6 +33,8 @@
 	];
 	let client = $state('chatgpt');
 	const chosen = $derived(CLIENTS.find((c) => c.id === client) ?? CLIENTS[0]);
+	// The first example reads data (what most visitors come for); proposing new data comes after.
+	const read = 'Does Onyx have daily Tron staking flows? Show the newest 10 rows.';
 	const ask = 'Does Onyx have the U.S. Treasury’s daily cash balance? If not, propose it as a new dataset.';
 	const follow = 'What is the status of my Onyx proposal sub_…?';
 	const proposal = JSON.stringify(
@@ -84,8 +86,8 @@
 		<div class="top">
 			<div>
 				<p class="eyebrow">No forms needed</p>
-				<h2 id="agents-title" tabindex="-1">Add data with an AI assistant or the API</h2>
-				<p class="intro">Both take the same proposal as the form below and give the same receipt. Nothing is published before a review.</p>
+				<h2 id="agents-title" tabindex="-1">Connect an AI assistant</h2>
+				<p class="intro">Your assistant can find datasets and read their rows, and it can propose data Onyx does not have yet. The API tab sends the same proposal from a script. Nothing is published before a review.</p>
 			</div>
 			<button type="button" class="ghost close" onclick={() => (open = false)} aria-label="Close" data-testid="agents-close"><X size={18} /></button>
 		</div>
@@ -110,12 +112,13 @@
 				</li>
 				<li>
 					<h3>Ask in your own words</h3>
-					{@render code('mcp-ask', ask, 'the example question')}
-					<p>It searches Onyx first. If the data is missing, it drafts a proposal and checks it with Onyx. Nothing is recorded yet.</p>
+					{@render code('mcp-read', read, 'the example question')}
+					<p>It searches Onyx and reads the rows. <span data-testid="agents-no-check">The hosted connector cannot check a proof: for that, run the <code>onyx-check</code> program on your own machine (see the <a href={resolve('/api')}>API page</a>).</span></p>
 				</li>
 				<li>
-					<h3>Say yes, get a receipt</h3>
-					<p>Your assistant shows you the check and sends the proposal only after you agree. You get a receipt id that starts with <code>sub_</code>.</p>
+					<h3>Missing data? Propose it</h3>
+					{@render code('mcp-ask', ask, 'the example proposal request')}
+					<p>It searches Onyx first. If the data is missing, it drafts a proposal and checks it with Onyx. It sends the proposal only after you agree, and you get a receipt id that starts with <code>sub_</code>.</p>
 				</li>
 				<li>
 					<h3>Follow it</h3>

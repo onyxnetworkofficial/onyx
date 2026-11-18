@@ -81,7 +81,7 @@ export function steps(node: string = HOSTED_NODE): Step[] {
 			title: 'Prepare a small first dataset',
 			time: 'depends on you',
 			leaves: 'Nothing is sent',
-			what: 'A real dataset, small: one CSV file with a header line, at most 8 MiB, sorted by its key column (usually a time in unix seconds). The reviewer reads its rows. It becomes version 1 of that dataset; you add the rest later as version 2. Write a schema.json that names every column, for example:',
+			what: 'A real dataset, small: one CSV file with a header line, at most 8 MiB (about 8.4 MB), sorted by its key column (usually a time in unix seconds). The reviewer reads its rows. It becomes version 1 of that dataset; you add the rest later as version 2. Write a schema.json that names every column, for example:',
 			commands: [SCHEMA_EXAMPLE]
 		},
 		{
@@ -98,15 +98,15 @@ export function steps(node: string = HOSTED_NODE): Step[] {
 			title: 'Write your application',
 			time: '1 minute',
 			leaves: 'Becomes public',
-			what: 'Do this within the hour after the build. The file holds your id, origin and key address, one sentence about the data, the sample’s fingerprint and the limits you ask for, signed with your key. It expires after 6 days.',
+			what: 'Do this within the hour after the build: the review refuses a first application whose sample was built more than an hour before it. The file holds your id, origin and key address, one sentence about the data, the sample’s fingerprint and the limits you ask for, signed with your key. It expires after 6 days.',
 			commands: [`onyx-publish apply --key publisher.key --publisher <publisher id> --origin <origin> --data "<one sentence about the data>" --chain-id ${CHAIN_ID} --book ${BOOK}`],
-			warn: 'From here on, never build version 1 of this dataset again: a second version 1 would suspend your key.'
+			warn: 'From here on, never build version 1 of this dataset again. Its signed report is public, and the signed book suspends a key that signs two different version 1s. The build command refuses a second one.'
 		},
 		{
 			title: 'Put site/ on your origin; run the doctor',
 			time: '10 minutes',
 			leaves: 'Nothing is sent',
-			what: 'Copy the content of site/ to your origin (HTTPS, no redirect). The doctor reads the files back, compares them with yours and prints one line per step: ok, missing or problem, each with the next command. When nothing is missing it prints the two lines for the next step. If you made your spare key somewhere else, add --spare-offline.',
+			what: 'Copy the content of site/ to your origin (HTTPS, no redirect). The doctor is a command that checks your folder and says what is missing. With --live it also reads the files back, compares them with yours and prints one line per step: ok, missing or problem, each with the next command. When nothing is missing it prints the two lines for the next step. If you made your spare key somewhere else, add --spare-offline.',
 			commands: ['onyx-publish doctor --live']
 		},
 		{
@@ -155,5 +155,7 @@ export const WORDS: { word: string; means: string }[] = [
 	{ word: 'Signed book', means: 'The contract on the test chain that records which key signs for which publisher id. Only the reviewer’s key can add one.' },
 	{ word: 'Hash', means: 'A short fingerprint of a file, written as 0x and 64 digits (Keccak-256). Change one byte of the file and the hash changes.' },
 	{ word: 'SPDX id', means: 'The short standard name of a licence, such as CC0-1.0 or CC-BY-4.0.' },
+	{ word: 'Doctor', means: 'A command of the tools (onyx-publish doctor) that checks your folder and says what is missing, with the next command. It sends nothing.' },
+	{ word: 'MiB', means: 'A mebibyte: 1,048,576 bytes, a little more than a megabyte (MB). 8 MiB is about 8.4 MB.' },
 	{ word: 'Test ETH', means: 'What a transaction on the test chain is paid with. It is free from a faucet and worth nothing.' }
 ];

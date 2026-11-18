@@ -6,6 +6,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFile } from 'node:fs/promises';
+import { readFileSync } from 'node:fs';
 import { APPLICATION_STATES, BEFORE_RECORD, DECIDE_DAYS, MIN_PREFIX, PUBLISHER_STATES, REASONS, lookup, nextStep, parseStatus, parseStatusText, utcMinute } from '../src/lib/publishers.ts';
 import { BOOK, CHAIN_ID, EXAMPLE_ID, EXAMPLE_ORIGIN, HOSTED_NODE, ISSUE_LINES, ISSUE_TITLE, ISSUES, SCHEMA_EXAMPLE, STATUS_URL, TOOLS_FILE, TOOLS_URL, UNPACK, WORDS, buildFromSource, steps, subcommands } from '../src/lib/publish-steps.ts';
 import { BASE, ONBOARDING_SINCE, RELEASE, REPO, hasOnboarding } from '../src/lib/release.ts';
@@ -241,7 +242,17 @@ test('the ten steps are those of the guide, by number, title and command', async
 	// Visitor text carries no internal code.
 	for (const s of S) for (const t of [s.title, s.time, s.what, s.warn ?? '']) assert.doesNotMatch(t, /ADR|THREATS|PUBON|READINESS|ROADMAP/);
 	for (const w of WORDS) assert.doesNotMatch(w.word + w.means, /ADR|THREATS|PUBON|READINESS|ROADMAP/);
-	assert.deepEqual(WORDS.map((w) => w.word), ['Signed book', 'Hash', 'SPDX id', 'Test ETH']);
+	assert.deepEqual(WORDS.map((w) => w.word), ['Signed book', 'Hash', 'SPDX id', 'Doctor', 'MiB', 'Test ETH']);
+	// Newcomer test 2026-11-18: each rule says why, in the guide's and the review's own terms.
+	const guideFlat = readFileSync(new URL('../../../docs/ops/bulk-publish.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+	const review = readFileSync(new URL('../../../docs/ops/publisher-review.md', import.meta.url), 'utf8').replace(/\s+/g, ' ');
+	assert.match(S[4].what, /the review refuses a first application whose sample was built more than an hour before it/);
+	assert.ok(guideFlat.includes("a first application's sample is built within the hour before it") && review.includes("a first application's sample was built within the hour before it"));
+	assert.match(S[4].warn, /Its signed report is public, and the signed book suspends a key that signs two different version 1s/);
+	assert.ok(guideFlat.includes('its signed report is public, and a second version 1 would make the book suspend your key. `build` refuses it.'));
+	assert.ok(review.includes('at most 3 waiting pointers with different hashes per host'));
+	assert.match(S[2].what, /at most 8 MiB \(about 8\.4 MB\)/);
+	assert.equal((8 * 1024 * 1024 / 1e6).toFixed(1), '8.4');
 });
 
 test('every subcommand the page names is one the packaged tool has, by its guide and its own usage', async () => {
