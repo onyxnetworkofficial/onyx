@@ -11,7 +11,8 @@
 # anvil's finalized lag; start onyx-node with ONYX_BULK_DIR; upload; query ranges and check every
 # row with onyx-check --bulk against the book at the client's own finalized block; then the
 # attacks (THREATS CL5-1..7): a forged row, a forged shard, an unanchored swapped manifest, a key
-# the book does not know, a compromised key and its recovery; an appended version 2; a node restart;
+# the book does not know, a compromised key and its recovery; an appended version 2, whose anchor
+# is first left unmined, replaced with a higher fee at its nonce and then mined (RETRY-R1-H1); a node restart;
 # three more datasets anchored by one catalog (ADR-0059 amendment 1), checked by onyx-check.
 # Prints measured sizes and times, then BULK DEMO LOCAL PASSED.
 # Env: BULK_DEMO_MIB (100), BULK_DEMO_SHARD_MIB (8), FOUNDRY_BIN (~/.foundry/bin), CARGO_TARGET_DIR.
@@ -232,7 +233,43 @@ PY
 "$pub_bin" build --schema "$work/schema.json" --input "$work/more.csv" --dataset synthetic.chain-metrics \
   --publisher "$publisher" --license CC0-1.0 --out "$work/v2" --prev "$work/v1" --created "$((created + 2))" | tee "$work/build2.log"
 "$pub_bin" sign --key "$work/publisher.key" --dir "$work/v2" >/dev/null
+# THREATS RETRY-R1-H1 on a real node's pool: with mining off the anchor is not mined (exit 75,
+# not_mined); run again while it is young it only waits; run again past --stuck-secs it replaces
+# its OWN transaction at the SAME nonce with a higher fee (one transaction in the pool, never
+# two); once a block is mined the book holds the report once and the next run sends nothing.
+castw rpc evm_setAutomine false >/dev/null
+nonce0=$(castw nonce "$signer")
+stuck() {
+  local rc=0
+  "$pub_bin" anchor --dir "$work/v2" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/publisher.key" \
+    --mine-secs 2 "$@" >"$work/stuck.log" 2>&1 || rc=$?
+  [ "$rc" = 75 ] || { cat "$work/stuck.log"; fail "an anchor that cannot be mined ended $rc, not 75"; }
+}
+versions() { python3 -I -c 'import json,sys; r=json.load(open(sys.argv[1])); print(len(r["txs"]), r["nonce"], *[t["max_fee_per_gas"] for t in r["txs"]], *[t["hash"] for t in r["txs"]])' "$work/v2/anchor-tx.json"; }
+stuck
+grep -q 'TRANSIENT class=not_mined' "$work/stuck.log" || { cat "$work/stuck.log"; fail "the unmined anchor is not not_mined"; }
+read -r count nonce fee1 hash1 <<<"$(versions)"
+[ "$count" = 1 ] && [ "$nonce" = "$nonce0" ] || fail "the record after the first send: $(versions)"
+stuck --stuck-secs 3600
+read -r count _ <<<"$(versions)"
+[ "$count" = 1 ] || fail "a young transaction was replaced"
+stuck --stuck-secs 0
+grep -q 'is replaced by 0x' "$work/stuck.log" || { cat "$work/stuck.log"; fail "a stuck transaction was not replaced"; }
+read -r count nonce fee1b fee2 hash1b hash2 <<<"$(versions)"
+[ "$count" = 2 ] && [ "$nonce" = "$nonce0" ] && [ "$fee1b" = "$fee1" ] && [ "$hash1b" = "$hash1" ] \
+  && [ $((fee2 * 8)) -ge $((fee1 * 9)) ] || fail "the replacement: $(versions)"
+[ "$(castw rpc txpool_status | python3 -I -c 'import json,sys; print(int(json.load(sys.stdin)["pending"], 16))')" = 1 ] \
+  || fail "the pool does not hold exactly one transaction of the key"
+castw rpc evm_mine >/dev/null
+castw rpc evm_setAutomine true >/dev/null
+[ "$(castw nonce "$signer")" = $((nonce0 + 1)) ] || fail "the replacement used more than one nonce"
+[ "$(castw rpc eth_getTransactionReceipt "$hash2" | python3 -I -c 'import json,sys; print((json.load(sys.stdin) or {}).get("status"))')" = 0x1 ] \
+  || fail "the replacement was not mined"
+[ "$(castw rpc eth_getTransactionReceipt "$hash1")" = null ] || fail "the replaced transaction was mined too"
 "$pub_bin" anchor --dir "$work/v2" --rpc "$RPC" --chain-id 31337 --book "$book" --gas-key "$work/publisher.key" >"$work/anchor2.log"
+grep -q '^ANCHORED already' "$work/anchor2.log" || { cat "$work/anchor2.log"; fail "the anchor after the replacement sent again"; }
+[ "$(castw nonce "$signer")" = $((nonce0 + 1)) ] || fail "a second transaction was sent after the replacement mined"
+pass "a stuck anchor is replaced at its own nonce and recorded once"
 castw rpc anvil_mine 70 >/dev/null
 "$pub_bin" upload --dir "$work/v2" --node "$NODE" | tee "$work/upload2.log"
 grep -q 'shards_sent=1 ' "$work/upload2.log" || fail "version 2 should send only its one new shard"

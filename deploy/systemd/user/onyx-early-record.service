@@ -42,7 +42,14 @@
 #
 # Exit codes (the header of scripts/early-record-daily.sh): 1 (a node or a tool failed) starts the
 # run again after 20 minutes, at most 4 starts in 12 hours; 2 (config), 3 (the second node
-# differs), 4 (a privacy hit) and 5 (another run holds the lock) never restart. When the unit ends
+# differs), 4 (a privacy hit), 5 (another run holds the lock) and 7 (onyx-publish refused a last
+# stage) never restart. The script tries its last stages (the anchor, the wait for it to be
+# final, the uploads) again by itself before it gives up with 6 (they kept failing in a way that
+# passes by itself) or 8 (the run's time was up), which are started again like 1. The script
+# time-boxes its whole run (ONYX_EARLY_RUN_SECS, 2 hours, at most 2 h 20 min), so four runs and
+# their gaps fit inside the 12 hours: a day that keeps failing uses up the 4 starts and the unit
+# ends failed for good. Every exit but 0 also logs one line with the tag onyx-early-record-alert
+# from the script itself, at once. When the unit ends
 # failed, onyx-early-record-alert.service logs one line with the tag onyx-early-record-alert
 # (`journalctl --user -t onyx-early-record-alert`). 3 and 4 need a person before any later day is
 # published. `journalctl --user -u onyx-early-record` shows every step.
@@ -65,7 +72,11 @@ StateDirectoryMode=0700
 TimeoutStartSec=6h
 Restart=on-failure
 RestartSec=20min
-RestartPreventExitStatus=2 3 4 5
+# 7: onyx-publish refused a last stage (a stuck transaction a person must look at, a report the
+# book rejects, no gas money): a restart would only repeat the refusal. An installed unit without
+# the 7 still behaves safely (the refusal repeats, nothing is sent, the script logs the alert line
+# each time); installing this line again is an operator step.
+RestartPreventExitStatus=2 3 4 5 7
 MemoryMax=4G
 Nice=10
 NoNewPrivileges=yes

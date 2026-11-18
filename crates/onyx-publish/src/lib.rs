@@ -12,6 +12,7 @@
 //! onyx-publish schema-fit --prev DIR --input data.csv --out new.json   # one widening for new rows
 //! onyx-publish sign     --key publisher.key --dir DIR
 //! onyx-publish anchor   --dir DIR --rpc URL --chain-id N --book 0x… --gas-key FILE
+//!                       [--stuck-secs 1800] [--max-bumps 4] [--max-fee-wei 10000000000] [--mine-secs 180]
 //! onyx-publish upload   --dir DIR --node URL [--wait-secs N] [--catalog N]
 //!
 //! # Becoming a publisher (ADR-0066; the site folder mirrors your origin):
@@ -38,6 +39,7 @@
 //!                             [--relink OLD=NEW[,...]] [--unlink OLD[,...]] [--links-next-generation]
 //! onyx-publish catalog-sign   --key publisher.key --catalog FILE
 //! onyx-publish catalog-anchor --catalog FILE --rpc URL --chain-id N --book 0x… --gas-key FILE
+//!                             [--stuck-secs 1800] [--max-bumps 4] [--max-fee-wei 10000000000] [--mine-secs 180]
 //! onyx-publish catalog-upload --catalog FILE --node URL [--wait-secs N]
 //! ```
 //!
@@ -76,10 +78,27 @@
 //!
 //! Keys are read from files that only their owner can read and are never
 //! printed. Exit 0 done, 1 refused or failed, 2 usage.
+//!
+//! `anchor`, `catalog-anchor`, `upload` and `catalog-upload` also end with
+//! exit 75 when what stopped them passes by itself ([`Stop::Transient`]): the
+//! chain node could not be reached, answered 429 or 5xx or was rate-limited,
+//! the transaction was not mined before the deadline, an earlier transaction
+//! of the gas key is still unmined, the anchor was not final within
+//! `--wait-secs`, or the Onyx node kept answering "try again". `anchor` and
+//! `catalog-anchor` keep what they sent (nonce, hashes, fees; never a key)
+//! beside the report and, run again, replace their own transaction once it
+//! has been unmined for `--stuck-secs`, with a higher fee under
+//! `--max-fee-wei`, at most `--max-bumps` times; then, and for an unmined
+//! transaction they did not send, they refuse (`anchor.rs`). The last line
+//! on stderr is then `onyx-publish <command>: TRANSIENT class=<class> ...`
+//! (the classes: [`classes`]). Each of the four is safe to run again: a
+//! recorded report is never sent twice (`post_report`), and a node takes
+//! only what it misses. Exit 1 from them is a refusal that a second run
+//! would get again (a report the book rejects, a gas key with no money, a
+//! full node, a wrong chain): look before running again.
 
 use borsh::BorshDeserialize;
 use http_body_util::BodyExt;
-use onyx_api::evm_tx::Sender;
 use onyx_api::roots::{HttpJsonRpc, JsonRpc};
 use onyx_api::x402::{check_facilitator_url, HyperPost};
 use onyx_bulk::input::{Format, Records};
@@ -95,19 +114,270 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+mod anchor;
 mod book_reviewer;
 mod links;
 mod onboard;
 mod record;
 pub use book_reviewer::reviewer_main;
 #[cfg(test)]
+mod retry_tests;
+#[cfg(test)]
 mod succ_e2e;
 
 const USAGE: &str =
     "usage: onyx-publish <keygen|address|keys-doc|synth|build|schema-fit|sign|anchor|upload|apply|doctor|verify-application|request|verify-request|catalog-build|catalog-sign|catalog-anchor|catalog-upload> [options]\n\
-see the header of crates/onyx-publish/src/lib.rs or docs/ops/bulk-publish.md";
+see the header of crates/onyx-publish/src/lib.rs or docs/ops/bulk-publish.md\n\
+anchor, catalog-anchor, upload, catalog-upload: exit 75 = a stop that passes by itself (last line TRANSIENT class=...)";
 
 type Res<T> = Result<T, String>;
+
+/// Exit code of `anchor`, `catalog-anchor`, `upload` and `catalog-upload`
+/// when the failure passes by itself (`EX_TEMPFAIL` of sysexits.h): the
+/// caller may run the same command again. scripts/early-record-daily.sh
+/// retries on it and on nothing else.
+pub const EXIT_TRANSIENT: u8 = 75;
+
+/// The stable names after `TRANSIENT class=` on the last stderr line of a
+/// command that ended with [`EXIT_TRANSIENT`].
+pub mod classes {
+    /// Broadcast, no receipt before the deadline: the outcome is unknown.
+    pub const NOT_MINED: &str = "not_mined";
+    /// An earlier transaction of the gas key is still unmined (this
+    /// report's own, younger than `--stuck-secs`, or one this tool did not
+    /// send, seen for less than that), or the node says the nonce is taken:
+    /// nothing new was sent.
+    pub const EARLIER_PENDING: &str = "earlier_pending";
+    /// The chain node could not be reached, or its answer was cut off.
+    pub const RPC_UNREACHABLE: &str = "rpc_unreachable";
+    /// The chain node answered HTTP 429, 408 or 5xx.
+    pub const RPC_HTTP: &str = "rpc_http";
+    /// The chain node was rate-limited (not a quota) or behind the head.
+    pub const RPC_BUSY: &str = "rpc_busy";
+    /// The chain node answered a JSON-RPC internal error (-32603).
+    pub const RPC_INTERNAL: &str = "rpc_internal";
+    /// The node's transaction pool is full.
+    pub const POOL_FULL: &str = "pool_full";
+    /// The fee moved between the estimate and the send: the next run
+    /// prices it again.
+    pub const UNDERPRICED: &str = "underpriced";
+    /// The base fee is at or above the fee cap (`--max-fee-wei`), or the
+    /// cap leaves no room to replace a stuck transaction: a fee spike.
+    pub const FEE_CAP: &str = "fee_cap";
+    /// The transaction mined (or the book refused a second copy) but the
+    /// node's `latest` does not show the record yet (a backend behind).
+    pub const NOT_VISIBLE: &str = "not_visible";
+    /// The anchor was not final within `--wait-secs`.
+    pub const NOT_FINAL: &str = "not_final";
+    /// The Onyx node kept answering "try again" (429, 502, a passing 503).
+    pub const NODE_BUSY: &str = "node_busy";
+    /// The Onyx node (or a proxy before it) answered another 5xx.
+    pub const NODE_ERROR: &str = "node_error";
+    /// The Onyx node could not be reached.
+    pub const NODE_UNREACHABLE: &str = "node_unreachable";
+}
+
+/// Why `anchor`, `catalog-anchor`, `upload` or `catalog-upload` stopped.
+#[derive(Debug, PartialEq, Eq)]
+enum Stop {
+    /// Refused, or failed in a way a second run would meet again: exit 1.
+    Refused(String),
+    /// Passes by itself; running the command again is safe:
+    /// [`EXIT_TRANSIENT`]. `class` is one of [`classes`].
+    Transient { class: &'static str, msg: String },
+}
+
+impl Stop {
+    fn transient(class: &'static str, msg: impl Into<String>) -> Stop {
+        Stop::Transient {
+            class,
+            msg: msg.into(),
+        }
+    }
+
+    /// The message, whichever kind.
+    fn msg(&self) -> &str {
+        match self {
+            Stop::Refused(m) | Stop::Transient { msg: m, .. } => m,
+        }
+    }
+
+    /// The class of a transient stop.
+    #[cfg(test)]
+    fn class(&self) -> Option<&'static str> {
+        match self {
+            Stop::Refused(_) => None,
+            Stop::Transient { class, .. } => Some(class),
+        }
+    }
+
+    /// The same stop with `f` applied to its message.
+    fn map_msg(self, f: impl FnOnce(String) -> String) -> Stop {
+        match self {
+            Stop::Refused(m) => Stop::Refused(f(m)),
+            Stop::Transient { class, msg } => Stop::Transient { class, msg: f(msg) },
+        }
+    }
+}
+
+impl From<String> for Stop {
+    fn from(m: String) -> Stop {
+        Stop::Refused(m)
+    }
+}
+
+impl From<&str> for Stop {
+    fn from(m: &str) -> Stop {
+        Stop::Refused(m.to_string())
+    }
+}
+
+/// The `code` and the lower-case `message` of the JSON-RPC error object in
+/// `e` (`... node error: {"code":N,"message":"..."...`, cut at 200
+/// characters by the client), when it has one.
+fn node_error(e: &str) -> Option<(Option<i64>, String)> {
+    let (_, json) = e.split_once("node error: ")?;
+    let after = |key: &str| json.find(key).map(|i| json[i + key.len()..].trim_start());
+    let code = after("\"code\":").and_then(|r| {
+        let n: String = r
+            .chars()
+            .take_while(|c| c.is_ascii_digit() || *c == '-')
+            .collect();
+        n.parse().ok()
+    });
+    // The message up to its closing quote (or the cut).
+    let message = after("\"message\":")
+        .and_then(|r| r.strip_prefix('"'))
+        .map(|r| {
+            let mut out = String::new();
+            let mut esc = false;
+            for c in r.chars() {
+                match (esc, c) {
+                    (false, '\\') => esc = true,
+                    (false, '"') => break,
+                    _ => {
+                        esc = false;
+                        out.push(c.to_ascii_lowercase());
+                    }
+                }
+            }
+            out
+        })
+        .unwrap_or_default();
+    Some((code, message))
+}
+
+/// What a chain node's error `e` (a [`JsonRpc`] error string, or a
+/// [`SendError::Rpc`](onyx_api::evm_tx::SendError) carrying one) is: a class
+/// of [`classes`] when it passes by itself, `None` when a second run would
+/// meet it again (review RETRY-R1-M2: by the error's code and by whole
+/// phrases of its message, never by a word that may be part of another).
+///
+/// Refused, whatever else the text says: a gas key without money; a quota
+/// (a plan's daily or monthly count, not a rate); an answer that is not a
+/// JSON-RPC node's (a landing page, a typo in the URL); an HTTP status
+/// other than 408, 429 and 5xx; a revert; an error this does not know (a
+/// person reads it once, then it is added here or fixed).
+fn rpc_class(e: &str) -> Option<&'static str> {
+    let l = e.to_ascii_lowercase();
+    let has = |phrases: &[&str]| phrases.iter().any(|m| l.contains(m));
+    if has(&["insufficient funds", "insufficient balance"]) {
+        return None;
+    }
+    // This tool's own fee cap (evm_tx): a fee spike passes.
+    if l.contains("is at or above the fee cap") {
+        return Some(classes::FEE_CAP);
+    }
+    // The client's own words for the transport and the HTTP status.
+    if let Some(i) = l.find("node answered http ") {
+        let code: String = l[i + "node answered http ".len()..]
+            .chars()
+            .take_while(char::is_ascii_digit)
+            .collect();
+        return match code.parse::<u16>() {
+            Ok(429 | 408 | 500..=599) => Some(classes::RPC_HTTP),
+            _ => None,
+        };
+    }
+    if has(&[
+        "node unreachable:",
+        "node call timed out",
+        "node answer unreadable",
+    ]) {
+        return Some(classes::RPC_UNREACHABLE);
+    }
+    // evm_tx's own words for a block the estimate named and the node lacks.
+    if l.contains("still missing after") {
+        return Some(classes::RPC_BUSY);
+    }
+    let (code, msg) = node_error(e)?;
+    let says = |phrases: &[&str]| phrases.iter().any(|m| msg.contains(m));
+    // A quota is not a rate limit: it does not pass within the hour.
+    if says(&[
+        "capacity limit exceeded",
+        "daily request count exceeded",
+        "monthly",
+        "quota",
+        "upgrade your plan",
+    ]) {
+        return None;
+    }
+    // An earlier send of this report holds the nonce (pooled or mined):
+    // the run of 2026-11-18, started again 28 s after "not mined", was
+    // answered "already known".
+    if says(&[
+        "already known",
+        "nonce too low",
+        "replacement transaction underpriced",
+    ]) {
+        return Some(classes::EARLIER_PENDING);
+    }
+    if says(&["txpool is full", "transaction pool is full"]) {
+        return Some(classes::POOL_FULL);
+    }
+    if says(&[
+        "transaction underpriced",
+        "max fee per gas less than block base fee",
+        "fee cap less than block base fee",
+    ]) {
+        return Some(classes::UNDERPRICED);
+    }
+    if says(&[
+        "block not found",
+        "unknown block",
+        "header not found",
+        "could not be found",
+        "missing trie node",
+    ]) {
+        return Some(classes::RPC_BUSY);
+    }
+    if code == Some(-32005)
+        || code == Some(429)
+        || says(&[
+            "rate limit",
+            "too many requests",
+            "request timed out",
+            "context deadline exceeded",
+            "temporarily unavailable",
+            "service unavailable",
+            "server is overloaded",
+        ])
+    {
+        return Some(classes::RPC_BUSY);
+    }
+    if code == Some(-32603) || msg == "internal error" {
+        return Some(classes::RPC_INTERNAL);
+    }
+    None
+}
+
+/// A chain node's error as a [`Stop`], by [`rpc_class`].
+fn rpc_stop(e: String) -> Stop {
+    match rpc_class(&e) {
+        Some(class) => Stop::transient(class, e),
+        None => Stop::Refused(e),
+    }
+}
 
 /// The `onyx-publish` command: the arguments of the process in, its exit
 /// code out.
@@ -135,6 +405,21 @@ pub fn publish_main() -> ExitCode {
         }
     };
     let r = match cmd.as_str() {
+        "anchor" | "upload" | "catalog-anchor" | "catalog-upload" => {
+            let r = match cmd.as_str() {
+                "anchor" => rt.block_on(anchor_cmd(&opts)),
+                "upload" => rt.block_on(upload_cmd(&opts)),
+                "catalog-anchor" => rt.block_on(catalog_anchor_cmd(&opts)),
+                _ => rt.block_on(catalog_upload_cmd(&opts)),
+            };
+            return match r {
+                Ok(()) => ExitCode::SUCCESS,
+                Err(e) => {
+                    eprint!("{}", stop_lines(cmd, &e));
+                    ExitCode::from(stop_exit(&e))
+                }
+            };
+        }
         "keygen" => keygen(&opts),
         "address" => address(&opts),
         "keys-doc" => keys_doc(&opts),
@@ -142,8 +427,6 @@ pub fn publish_main() -> ExitCode {
         "build" => build_cmd(&opts),
         "schema-fit" => schema_fit_cmd(&opts),
         "sign" => sign_cmd(&opts),
-        "anchor" => rt.block_on(anchor_cmd(&opts)),
-        "upload" => rt.block_on(upload_cmd(&opts)),
         "apply" => onboard::apply(&opts).map(|s| print!("{s}")),
         "request" => onboard::request(&opts).map(|s| print!("{s}")),
         "verify-application" | "verify-request" | "doctor" => {
@@ -162,8 +445,6 @@ pub fn publish_main() -> ExitCode {
         }
         "catalog-build" => catalog_build_cmd(&opts),
         "catalog-sign" => catalog_sign_cmd(&opts),
-        "catalog-anchor" => rt.block_on(catalog_anchor_cmd(&opts)),
-        "catalog-upload" => rt.block_on(catalog_upload_cmd(&opts)),
         "-h" | "--help" | "help" => {
             println!("{USAGE}");
             return ExitCode::SUCCESS;
@@ -177,6 +458,27 @@ pub fn publish_main() -> ExitCode {
             ExitCode::from(1)
         }
     }
+}
+
+/// The exit code of a command that stopped with `e`.
+fn stop_exit(e: &Stop) -> u8 {
+    match e {
+        Stop::Refused(_) => 1,
+        Stop::Transient { .. } => EXIT_TRANSIENT,
+    }
+}
+
+/// What `cmd` prints on stderr when it stopped with `e`: the message, and
+/// for a transient stop one more line, the last, that a wrapper matches on
+/// (`TRANSIENT class=<class>`, the class one of [`classes`]).
+fn stop_lines(cmd: &str, e: &Stop) -> String {
+    let mut out = format!("onyx-publish {cmd}: {}\n", e.msg());
+    if let Stop::Transient { class, .. } = e {
+        out.push_str(&format!(
+            "onyx-publish {cmd}: TRANSIENT class={class} (exit {EXIT_TRANSIENT}: nothing is lost, run the same command again)\n"
+        ));
+    }
+    out
 }
 
 struct Opts(BTreeMap<String, String>);
@@ -1334,8 +1636,14 @@ async fn eth_call(rpc: &dyn JsonRpc, to: &[u8; 20], data: &[u8]) -> Res<Vec<u8>>
     hex::decode(r.as_str().unwrap_or_default().trim_start_matches("0x")).map_err(|e| e.to_string())
 }
 
-async fn anchor_cmd(o: &Opts) -> Res<()> {
-    o.only(&["dir", "rpc", "chain-id", "book", "gas-key"])?;
+async fn anchor_cmd(o: &Opts) -> Result<(), Stop> {
+    o.only(
+        &[
+            &["dir", "rpc", "chain-id", "book", "gas-key"],
+            anchor::OPTIONS,
+        ]
+        .concat(),
+    )?;
     let dir = PathBuf::from(o.req("dir")?);
     let m = read_manifest(&dir)?;
     let r = read_report(&dir)?;
@@ -1355,80 +1663,18 @@ async fn anchor_cmd(o: &Opts) -> Res<()> {
     let book = parse_address(o.req("book")?)?;
     let gas = read_key(o.req("gas-key")?)?;
     let rpc = HttpJsonRpc::new(url.to_string(), HyperPost::for_rpc(Duration::from_secs(30)));
-    let id = rpc.call("eth_chainId", json!([])).await?;
+    let id = rpc.call("eth_chainId", json!([])).await.map_err(rpc_stop)?;
     if u64::from_str_radix(id.as_str().unwrap_or("").trim_start_matches("0x"), 16).ok()
         != Some(chain_id)
     {
-        return Err(format!("the node at --rpc is not chain {chain_id}"));
+        return Err(format!("the node at --rpc is not chain {chain_id}").into());
     }
     let conflict = format!(
         "this key already anchored another manifest for version {} of {} (sequence {}): a second one would get the key suspended. Publish the next version instead",
         m.header.version, m.header.dataset, r.payload.sequence
     );
-    post_report(rpc, chain_id, &book, gas, &r, &conflict).await
-}
-
-/// Send `r` to the book with `postReport` unless it is recorded already;
-/// refuse when the key used its sequence for another payload (`conflict`).
-async fn post_report(
-    rpc: HttpJsonRpc<HyperPost>,
-    chain_id: u64,
-    book: &[u8; 20],
-    gas: [u8; 32],
-    r: &SignedReport,
-    conflict: &str,
-) -> Res<()> {
-    let book = *book;
-    let digest = r.payload.digest();
-    // Already recorded (a re-run): nothing to send.
-    let mut d = keccak256(b"report(bytes32)").0[..4].to_vec();
-    d.extend_from_slice(&digest.0);
-    let rec = eth_call(&rpc, &book, &d).await?;
-    if rec.len() >= 32 && rec[..32] != [0u8; 32] {
-        println!("ANCHORED already digest={digest}");
-        return Ok(());
-    }
-    // Never sign two payloads under one sequence: the book would suspend
-    // the key (ADR-0028 equivocation).
-    let mut d = keccak256(b"sequenceOf(bytes32,uint64)").0[..4].to_vec();
-    d.extend_from_slice(&r.payload.key.0);
-    let mut w = [0u8; 32];
-    w[24..].copy_from_slice(&r.payload.sequence.to_be_bytes());
-    d.extend_from_slice(&w);
-    let used = eth_call(&rpc, &book, &d).await?;
-    if used.len() >= 32 && used[..32] != [0u8; 32] && used[..32] != digest.0 {
-        return Err(conflict.to_string());
-    }
-    let payload = borsh::to_vec(&r.payload).map_err(|e| e.to_string())?;
-    let sender = Sender::new(rpc, chain_id, gas).ok_or("--gas-key holds no valid key")?;
-    let t = Instant::now();
-    let mined = sender
-        .send(
-            &book,
-            &post_report_calldata(&payload, &r.signature),
-            0,
-            Duration::from_secs(180),
-        )
-        .await
-        .map_err(|e| format!("postReport: {e}"))?;
-    let rec = eth_call(sender.rpc(), &book, &{
-        let mut d = keccak256(b"report(bytes32)").0[..4].to_vec();
-        d.extend_from_slice(&digest.0);
-        d
-    })
-    .await?;
-    if rec.len() < 64 || rec[..32] == [0u8; 32] {
-        return Err("the transaction mined but the book has no record of the report".into());
-    }
-    println!(
-        "ANCHORED tx={} block={} gas={} secs={:.1} digest={digest} fact={}",
-        mined.hash,
-        mined.block,
-        mined.gas_used,
-        t.elapsed().as_secs_f64(),
-        Hash32(rec[32..64].try_into().map_err(|_| "fact")?)
-    );
-    Ok(())
+    let opts = anchor::AnchorOpts::from_opts(o, dir.join(anchor::TX_RECORD))?;
+    anchor::post_report(rpc, chain_id, &book, gas, &r, &conflict, &opts).await
 }
 
 // ------------------------------------------------------------------ upload
@@ -1551,6 +1797,24 @@ fn next_step(status: u16, v: &Value, elapsed: Duration, wait: Duration, tries: u
     }
 }
 
+/// What an answer [`next_step`] gave up on is, for the exit code: a class
+/// of [`classes`] when a later run may well pass (the anchor not final
+/// within `--wait-secs`, passing answers past their tries, a 5xx with no
+/// refusal of the node's own in it), `None` for a refusal (a 4xx, a full
+/// node).
+fn fail_class(status: u16, v: &Value) -> Option<&'static str> {
+    let code = v["error"]["code"].as_str();
+    match status {
+        409 if code == Some("bulk_not_anchored") => Some(classes::NOT_FINAL),
+        _ if passing(status, v) => Some(classes::NODE_BUSY),
+        // The node names why it refuses with a 503 (`bulk_node_full`): a
+        // 503 without a code is a proxy's.
+        503 if code.is_some() => None,
+        500..=599 => Some(classes::NODE_ERROR),
+        _ => None,
+    }
+}
+
 /// Send `body` until the node takes it: wait for a not-final anchor within
 /// `wait` (every `pause`, at most `wait`), try passing answers again (at
 /// least `pause` apart), and refuse the rest as `"{what} refused ..."`.
@@ -1565,11 +1829,13 @@ async fn send_until(
     wait: Duration,
     pause: Duration,
     what: &str,
-) -> Res<Value> {
+) -> Result<Value, Stop> {
+    // A URL the tool refuses is refused once, not tried again.
+    check_facilitator_url(url).map_err(|e| e.replacen("facilitator", "node", 1))?;
     let t = Instant::now();
     let mut tries = 0;
     loop {
-        let (s, v, after) = match send(c, method.clone(), url, ctype, body.clone()).await {
+        let (s, v, after) = match send_checked(c, method.clone(), url, ctype, body.clone()).await {
             Ok(a) => a,
             Err(e) if tries < TRANSIENT_TRIES => {
                 tries += 1;
@@ -1577,7 +1843,12 @@ async fn send_until(
                 tokio::time::sleep(pause).await;
                 continue;
             }
-            Err(e) => return Err(e),
+            Err(e) => {
+                return Err(Stop::transient(
+                    classes::NODE_UNREACHABLE,
+                    format!("{what}: {e}"),
+                ))
+            }
         };
         match next_step(s, &v, t.elapsed(), wait, tries) {
             Next::Done => return Ok(v),
@@ -1600,7 +1871,13 @@ async fn send_until(
                 );
                 tokio::time::sleep(d).await;
             }
-            Next::Fail => return Err(format!("{what} refused ({s}): {v}")),
+            Next::Fail => {
+                let msg = format!("{what} refused ({s}): {v}");
+                return Err(match fail_class(s, &v) {
+                    Some(class) => Stop::transient(class, msg),
+                    None => Stop::Refused(msg),
+                });
+            }
         }
     }
 }
@@ -1615,7 +1892,7 @@ const MAX_STEPS_BACK: u32 = 64;
 /// version again with the same one).
 const UPLOADED: &str = "uploaded.json";
 
-async fn upload_cmd(o: &Opts) -> Res<()> {
+async fn upload_cmd(o: &Opts) -> Result<(), Stop> {
     o.only(&["dir", "node", "wait-secs", "catalog"])?;
     let dir = PathBuf::from(o.req("dir")?);
     let node = o.req("node")?.trim_end_matches('/').to_string();
@@ -1702,7 +1979,7 @@ async fn upload_dir(
     wait: Duration,
     pause: Duration,
     steps: u32,
-) -> Res<()> {
+) -> Result<(), Stop> {
     let m = read_manifest(dir)?;
     let body = match catalog {
         Some(n) => json!({"manifest": hx(&m.to_bytes()), "catalog": n}),
@@ -1729,7 +2006,7 @@ async fn upload_dir(
     let answer = match post().await {
         // The publisher removed the dataset (ADR-0059 amendment 4): nothing
         // to send, and nothing left to do.
-        Err(e) if e.contains("bulk_dataset_removed") => {
+        Err(e) if e.msg().contains("bulk_dataset_removed") => {
             println!(
                 "REMOVED version={} root={}: the node holds the dataset as removed",
                 m.header.version,
@@ -1737,11 +2014,13 @@ async fn upload_dir(
             );
             return Ok(());
         }
-        Err(e) if e.contains(TAKEN_IN_ORDER) && m.header.version > 1 => {
+        Err(e) if e.msg().contains(TAKEN_IN_ORDER) && m.header.version > 1 => {
             if steps == 0 {
-                return Err(format!(
-                    "{e}: the node lacks more than {MAX_STEPS_BACK} versions before this one"
-                ));
+                return Err(e.map_msg(|e| {
+                    format!(
+                        "{e}: the node lacks more than {MAX_STEPS_BACK} versions before this one"
+                    )
+                }));
             }
             let (prev, prev_catalog) = previous_version(dir, &m)?;
             eprintln!(
@@ -1772,7 +2051,8 @@ async fn upload_dir(
             return Err(format!(
                 "the node still misses {} shard(s) after {rounds} rounds",
                 missing.len()
-            ));
+            )
+            .into());
         }
         rounds += 1;
         for e in &missing {
@@ -2031,8 +2311,14 @@ fn catalog_sign_cmd(o: &Opts) -> Res<()> {
     Ok(())
 }
 
-async fn catalog_anchor_cmd(o: &Opts) -> Res<()> {
-    o.only(&["catalog", "rpc", "chain-id", "book", "gas-key"])?;
+async fn catalog_anchor_cmd(o: &Opts) -> Result<(), Stop> {
+    o.only(
+        &[
+            &["catalog", "rpc", "chain-id", "book", "gas-key"],
+            anchor::OPTIONS,
+        ]
+        .concat(),
+    )?;
     let path = PathBuf::from(o.req("catalog")?);
     let c = read_catalog(&path)?;
     let rp = report_path(&path);
@@ -2056,20 +2342,21 @@ async fn catalog_anchor_cmd(o: &Opts) -> Res<()> {
     let book = parse_address(o.req("book")?)?;
     let gas = read_key(o.req("gas-key")?)?;
     let rpc = HttpJsonRpc::new(url.to_string(), HyperPost::for_rpc(Duration::from_secs(30)));
-    let id = rpc.call("eth_chainId", json!([])).await?;
+    let id = rpc.call("eth_chainId", json!([])).await.map_err(rpc_stop)?;
     if u64::from_str_radix(id.as_str().unwrap_or("").trim_start_matches("0x"), 16).ok()
         != Some(chain_id)
     {
-        return Err(format!("the node at --rpc is not chain {chain_id}"));
+        return Err(format!("the node at --rpc is not chain {chain_id}").into());
     }
     let conflict = format!(
         "this key already anchored another catalog {} (sequence {}): a second one would get the key suspended. Build the next number instead",
         c.header.number, r.payload.sequence
     );
-    post_report(rpc, chain_id, &book, gas, &r, &conflict).await
+    let opts = anchor::AnchorOpts::from_opts(o, anchor::record_path(&path))?;
+    anchor::post_report(rpc, chain_id, &book, gas, &r, &conflict, &opts).await
 }
 
-async fn catalog_upload_cmd(o: &Opts) -> Res<()> {
+async fn catalog_upload_cmd(o: &Opts) -> Result<(), Stop> {
     o.only(&["catalog", "node", "wait-secs"])?;
     let path = PathBuf::from(o.req("catalog")?);
     let c = read_catalog(&path)?;
@@ -2246,7 +2533,7 @@ mod tests {
         (url, seen, bodies)
     }
 
-    async fn post(url: &str, wait: Duration) -> Res<Value> {
+    async fn post(url: &str, wait: Duration) -> Result<Value, Stop> {
         send_until(
             &client(),
             hyper::Method::POST,
@@ -2281,7 +2568,12 @@ mod tests {
         ])
         .await;
         let e = post(&url, Duration::ZERO).await.expect_err("refused");
-        assert!(e.contains("bulk_node_full"), "{e}");
+        assert!(e.msg().contains("bulk_node_full"), "{e:?}");
+        assert_eq!(
+            e.class(),
+            None,
+            "a full node is a refusal, never tried again"
+        );
         assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
         // Seven passing answers, a not-final anchor, seven more, then taken:
         // fourteen in all, but never eight in a row.
@@ -2296,7 +2588,34 @@ mod tests {
         // Eight passing answers in a row: refused.
         let (url, _) = scripted_node(vec![(503, chain); TRANSIENT_TRIES as usize + 1]).await;
         let e = post(&url, Duration::ZERO).await.expect_err("refused");
-        assert!(e.contains("bulk_chain_unavailable"), "{e}");
+        assert!(e.msg().contains("bulk_chain_unavailable"), "{e:?}");
+        assert_eq!(e.class(), Some(classes::NODE_BUSY));
+        // An anchor still not final when --wait-secs is over: transient
+        // (the 2026-11-16 run met it after its anchor mined late).
+        let (url, seen) =
+            scripted_node(vec![(409, r#"{"error":{"code":"bulk_not_anchored"}}"#)]).await;
+        let e = post(&url, Duration::ZERO).await.expect_err("not final");
+        assert_eq!(e.class(), Some(classes::NOT_FINAL), "{e:?}");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 1);
+        // A node that is gone: tried again, then transient.
+        let (url, seen) = scripted_node(vec![]).await;
+        let e = post(&url, Duration::ZERO).await.expect_err("gone");
+        assert_eq!(e.class(), Some(classes::NODE_UNREACHABLE), "{e:?}");
+        assert_eq!(seen.load(std::sync::atomic::Ordering::SeqCst), 0);
+        // A URL the tool refuses is refused once (no try again).
+        let e = send_until(
+            &client(),
+            hyper::Method::POST,
+            "ftp://node.invalid/v1/bulk/catalogs",
+            "application/json",
+            hyper::body::Bytes::new(),
+            Duration::ZERO,
+            Duration::from_millis(1),
+            "catalog",
+        )
+        .await
+        .expect_err("bad URL");
+        assert_eq!(e.class(), None, "{e:?}");
     }
 
     #[test]
@@ -2925,8 +3244,8 @@ mod tests {
         .await
         .expect_err("no previous folder");
         assert!(
-            e.contains("lacks version 1") && e.contains("upload that version first"),
-            "{e}"
+            e.msg().contains("lacks version 1") && e.msg().contains("upload that version first"),
+            "{e:?}"
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

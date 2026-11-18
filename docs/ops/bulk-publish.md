@@ -397,7 +397,23 @@ many datasets:
 3. A source whose values or columns changed for days already published is new data: give it a
    new dataset id (with the whole history) and, if the old one should stop, end it with a tombstone.
 4. Retry the anchor and the upload when a node does not answer: both are safe to repeat (a report
-   already recorded is not sent again).
+   already recorded is not sent again). `anchor`, `catalog-anchor`, `upload` and `catalog-upload`
+   end with exit 75 and a last line `onyx-publish <command>: TRANSIENT class=<class> ...` when the
+   stop passes by itself (the transaction not mined in time, a node unreachable, rate-limited or
+   answering 5xx, the anchor not final within `--wait-secs`): a wrapper retries on exit 75 with a
+   pause, and on nothing else. Exit 1 is a refusal a retry would only repeat (a report the book
+   rejects, a gas key without test ETH, a full node). `anchor` and `catalog-anchor` keep what
+   they sent beside the report (`anchor-tx.json` in the version folder, `FILE.anchor-tx.json`
+   beside a catalog: the nonce, hashes, fees and signed bytes, never a key). Run again, they wait
+   for their own unmined transaction and, once it is 30 minutes old (`--stuck-secs`), replace
+   it at the same nonce and gas with a fee 12.5% higher, under `--max-fee-wei` (10 gwei), at
+   most `--max-bumps` (4) times a node took, then refuse; a pending transaction of the gas key
+   that is not one of their recorded versions is never replaced or sent over, and is refused
+   after the same 30 minutes. The record is owner-only, written before each send, and checked
+   against its own signed bytes when it is read. So use a gas key that
+   nothing else sends from, keep the record file with the folder, and see "A stuck transaction"
+   in [early-record.md](early-record.md) for what a person does after such a refusal (the
+   commands are the same with `anchor --dir`).
 
 ## Many datasets with one anchor (catalogs)
 

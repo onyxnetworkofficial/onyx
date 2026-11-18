@@ -123,8 +123,9 @@ fn no_follow(options: &mut OpenOptions) {
 }
 
 /// Open `path` with `options`, never through a symbolic link, and only when it is a regular
-/// file; owner-only mode is then set on the open file itself, never by name.
-pub(crate) fn open_plain(options: &mut OpenOptions, path: &Path, write: bool) -> io::Result<File> {
+/// file; owner-only mode is then set on the open file itself, never by name. Public for the
+/// publisher tool's transaction record (review RETRY-R2-L2).
+pub fn open_plain(options: &mut OpenOptions, path: &Path, write: bool) -> io::Result<File> {
     no_follow(options);
     let file = options.open(path).map_err(|e| {
         if std::fs::symlink_metadata(path).is_ok_and(|m| m.file_type().is_symlink()) {
