@@ -314,7 +314,8 @@ export async function datasets(browser, base, expect) {
 		const pg3 = await fresh();
 		await pg3.goto(base + '#/datasets?d=onchain-archive%2Feth.gone');
 		await pg3.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
-		expect((await pg3.getByTestId('datasets-missing').count()) === 1 && (await pg3.getByTestId('datasets-detail').count()) === 0, `${at}: a link to a dataset the node does not hold says so`);
+		const missingNote = (await pg3.getByTestId('datasets-missing').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim();
+		expect(missingNote.startsWith('This node holds no dataset onchain-archive/eth.gone.') && (await pg3.getByTestId('datasets-removed').count()) === 0 && (await pg3.getByTestId('datasets-detail').count()) === 0, `${at}: a link to a dataset the node does not hold says so (${missingNote})`);
 		await pg3.close();
 		// R-BULK-17: a link to a dataset that moved says where it went and opens that one.
 		const pg4 = await fresh();
@@ -343,11 +344,19 @@ export async function datasets(browser, base, expect) {
 			expect(want.test(N.note) && !/moved to/.test(N.note) && N.open === 0 && N.missing === 0 && N.asked === 'false', `${at}: ${name}: a successor that is not served is said plainly, nothing opened (${JSON.stringify(N)})`);
 			await p.close();
 		}
-		// A removed dataset with no successor keeps the old sentence.
+		// A removed dataset with no successor: the publisher removed it, in the catalog the node names;
+		// the closest names follow when the search finds any (none here, as for pg3). A plain 404 (pg3
+		// above) keeps "This node holds no dataset".
 		const pg5 = await fresh();
 		await pg5.goto(base + '#/datasets?d=onchain-archive%2Feth.ended');
-		await pg5.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
-		expect((await pg5.getByTestId('datasets-missing').count()) === 1 && (await pg5.getByTestId('datasets-moved').count()) === 0, `${at}: a removed dataset without a successor says the node holds no such dataset`);
+		await pg5.getByTestId('datasets-removed').waitFor({ timeout: 30000 }).catch(() => {});
+		const E = {
+			note: (await pg5.getByTestId('datasets-removed').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(),
+			missing: await pg5.getByTestId('datasets-missing').count(),
+			moved: await pg5.getByTestId('datasets-moved').count(),
+			open: await pg5.getByTestId('datasets-detail').count()
+		};
+		expect(E.note === 'The publisher removed onchain-archive/eth.ended in its catalog 15.' && E.missing === 0 && E.moved === 0 && E.open === 0, `${at}: a removed dataset without a successor says its publisher removed it and in which catalog (${JSON.stringify(E)})`);
 		await pg5.close();
 		busy = true;
 		await pg.getByTestId('datasets-q').fill('btc');

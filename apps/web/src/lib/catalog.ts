@@ -20,8 +20,10 @@ export type Dataset = {
 	noDate?: boolean;
 };
 
-/** One card's "Data as of" (PP11): scripts/gen-freshness.py reads it from the shipped data files. */
-export type Freshness = Record<string, { asOf: string; what: string }>;
+/** One card's "Data as of" (PP11): scripts/gen-freshness.py reads it from the shipped data files.
+ * `nodeAsOf` is there only when the hosted node serves a round of another day than the one this
+ * page ships (two records of one series): the card then says which day is which. */
+export type Freshness = Record<string, { asOf: string; what: string; nodeAsOf?: string }>;
 
 /** `2026-10-08` as `8 Oct 2026`, from the text alone (no time zone can move the day). */
 export function dayText(iso: string): string {
@@ -31,14 +33,19 @@ export function dayText(iso: string): string {
 	return `${+m[3]} ${months[+m[2] - 1]} ${m[1]}`;
 }
 
+const DAY = /^\d{4}-\d{2}-\d{2}$/;
+
 /** The freshness file's entries in their exact shape; anything else is dropped. */
 export function parseFreshness(v: unknown): Freshness {
 	const out: Freshness = {};
 	const ds = v && typeof v === 'object' && (v as { version?: unknown }).version === 1 ? (v as { datasets?: unknown }).datasets : null;
 	if (!ds || typeof ds !== 'object') return out;
 	for (const [id, e] of Object.entries(ds as Record<string, unknown>)) {
-		const r = e as { asOf?: unknown; what?: unknown };
-		if (typeof r?.asOf === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(r.asOf) && typeof r.what === 'string' && r.what.length <= 40) out[id] = { asOf: r.asOf, what: r.what };
+		const r = e as { asOf?: unknown; what?: unknown; nodeAsOf?: unknown };
+		if (typeof r?.asOf !== 'string' || !DAY.test(r.asOf) || typeof r.what !== 'string' || r.what.length > 40) continue;
+		out[id] = { asOf: r.asOf, what: r.what };
+		// The node's day only in shape and only when it is another day; else the entry reads as before.
+		if (typeof r.nodeAsOf === 'string' && DAY.test(r.nodeAsOf) && r.nodeAsOf !== r.asOf) out[id].nodeAsOf = r.nodeAsOf;
 	}
 	return out;
 }

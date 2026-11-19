@@ -2,7 +2,9 @@
 """Write how fresh each website dataset is (pre-public loop PP11): apps/web/static/data/freshness.json.
 
 Each dataset card on Browse data shows "Data as of" from this file, read from the very data files
-the site ships, so the date can never disagree with the values below it. scripts/build-web.sh runs
+the site ships, so the date can never disagree with the values below it. Where the hosted node
+serves a round of another day than the one the page ships, the entry holds both (`nodeAsOf`, from
+level2/ladders-base-sepolia.json) and the card says which day is which. scripts/build-web.sh runs
 it after it assembles static/data (a build folder, not in git), so the file is made fresh with
 every build. `--check` only compares an existing file with what the data files give.
 Usage: python3 -I scripts/gen-freshness.py [--check]
@@ -54,18 +56,29 @@ def build():
         "usgs.earthquakes.la300km_m2_5_count": "day counted",
         "us.treasury.tga_total_deposits": "record date",  # CL3, the first manifest source
     }
+    # Newcomer test 2026-11-18: a dataset can have two records, the recorded round this page ships
+    # and checks (its `asOf` above, for example earthquakes of 2026-07-08) and another round the
+    # hosted node serves (2026-07-19 in the same ladders file). They are different days of one
+    # series, so the entry names the node's day too (`nodeAsOf`) and the card says which is which.
+    node = {}
     for v in load("level2/ladders-base-sepolia.json")["values"]:
+        served = v["subject"].rsplit(":", 1)[1]
         if v["metric"] in ladder_ids:
-            d[v["metric"]] = (v["subject"].rsplit(":", 1)[1], ladder_ids[v["metric"]])
+            d[v["metric"]] = (served, ladder_ids[v["metric"]])
+        elif v["metric"] in d and d[v["metric"]][0] != served:
+            node[v["metric"]] = served
     missing = sorted(set(ladder_ids) - set(d))
     if missing:
         raise SystemExit(f"no ladder for {missing}")
-    for k, (date, _) in d.items():
+    for date in [date for date, _ in d.values()] + list(node.values()):
         datetime.date.fromisoformat(date)  # every date is a real calendar date
     return {
         "version": 1,
         "generated_by": "python3 -I scripts/gen-freshness.py",
-        "datasets": {k: {"asOf": date, "what": what} for k, (date, what) in sorted(d.items())},
+        "datasets": {
+            k: {"asOf": date, "what": what, **({"nodeAsOf": node[k]} if k in node else {})}
+            for k, (date, what) in sorted(d.items())
+        },
     }
 
 

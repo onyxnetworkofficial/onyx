@@ -101,7 +101,9 @@
 					<dt>Rights</dt><dd>{d.rights}</dd>
 					{#if !d.noDate}
 						<dt>Data as of</dt>
-						<dd data-testid="catalog-asof">{#if fresh[d.id]}{dayText(fresh[d.id].asOf)} <span class="what">({fresh[d.id].what})</span>{:else if freshTried}Not given{:else}<span aria-hidden="true">–</span><span class="sr-only">Loading</span>{/if}</dd>
+						<!-- Two records of one series (newcomer test 2026-11-18): the round this page ships and
+						     checks, and the round of another day the hosted test node serves. Each day says which. -->
+						<dd data-testid="catalog-asof">{#if fresh[d.id]}{dayText(fresh[d.id].asOf)} <span class="what">({fresh[d.id].what}{fresh[d.id].nodeAsOf ? ', the round on this page' : ''})</span>{#if fresh[d.id].nodeAsOf}<span class="also" data-testid="catalog-asof-node">{dayText(fresh[d.id].nodeAsOf!)} <span class="what">(the round the hosted test node serves)</span></span>{/if}{:else if freshTried}Not given{:else}<span aria-hidden="true">–</span><span class="sr-only">Loading</span>{/if}</dd>
 					{/if}
 					{#if d.api}<dt>API</dt><dd>Query API{#if d.apiWhere}, {d.apiWhere}{/if}</dd>{/if}
 				</dl>
@@ -184,6 +186,10 @@
 	}
 	.what {
 		color: var(--muted);
+	}
+	/* The node's day on its own line under the page's day. */
+	.also {
+		display: block;
 	}
 	.cards {
 		list-style: none;

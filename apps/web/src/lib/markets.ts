@@ -117,16 +117,18 @@ export function settleMarket(m: MarketInput): MarketResult {
 export type MarketView = { state?: 'open' | 'resolved' | 'void'; trading?: boolean; resolveBy?: number; value?: string | null };
 
 /** True when an open market has no observed value at or after its `resolveBy` (unix seconds, the
- * reader's clock at the read). From then OnyxFutures.resolve voids the market (reason 2), and only
- * after that call does `withdraw` pay each bet back; a value recorded first settles it instead. */
-export function refundDue(m: MarketView, now: number): boolean {
+ * reader's clock at the read). From then anyone may call OnyxFutures.resolve, which voids the
+ * market (reason 2), and only after that call does `withdraw` pay each bet back: nothing is paid
+ * back by itself. A value recorded first settles it instead. */
+export function voidable(m: MarketView, now: number): boolean {
 	return m.state === 'open' && !m.trading && !m.value && !!m.resolveBy && now >= m.resolveBy;
 }
 
-/** A futures market's badge. Past the refund date with no value it no longer says "waiting". */
+/** A futures market's badge. From `resolveBy` on with no value it no longer says "waiting". A void
+ * market pays nothing by itself: each bettor withdraws the whole bet. */
 export function marketStatus(m: MarketView, now: number): string {
 	if (m.state === 'resolved') return 'Settled';
-	if (m.state === 'void') return 'Void, every bet refunded';
+	if (m.state === 'void') return 'Void, bets can be withdrawn';
 	if (m.trading) return 'Trading open';
-	return refundDue(m, now) ? 'No value by the refund date' : 'Trading closed, waiting for the observed value';
+	return voidable(m, now) ? 'No value yet, can be voided' : 'Trading closed, waiting for the observed value';
 }

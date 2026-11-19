@@ -42,6 +42,7 @@
 		keyText,
 		listUrl,
 		moved as readMoved,
+		removed as readRemoved,
 		newestFirst,
 		page as readPage,
 		pythonSnippet,
@@ -89,6 +90,9 @@
 	// R-BULK-17: what the node's 410 says about a linked dataset its publisher removed: the id it
 	// moved to (opened when live) or a successor that is not live (said, nothing opened).
 	let gone = $state<{ from: string } & Moved | null>(null);
+	// A linked dataset its publisher removed with nothing named in its place (the node's 410
+	// without a successor), and the catalog that removed it when the node says which.
+	let ended = $state<{ from: string; catalog: number | null } | null>(null);
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	// The opening list's steps (no search), the step being read and its cursor. `plain`: a node
@@ -238,6 +242,7 @@
 			open = null;
 			missing = null;
 			gone = null;
+			ended = null;
 			remember();
 			load(cleanSearch(query));
 		}, 350);
@@ -253,6 +258,7 @@
 		open = null;
 		missing = null;
 		gone = null;
+		ended = null;
 		remember();
 		load(cleanSearch(query));
 	}
@@ -293,12 +299,14 @@
 
 	// A linked dataset that is not in the list: the node's own answer about it says whether its
 	// publisher removed it and which dataset it named in its place.
-	async function successor(pair: string): Promise<Moved | null> {
+	async function successor(pair: string): Promise<{ moved: Moved | null; removed: { catalog: number | null } | null }> {
 		try {
 			const r = await fetch(infoUrl(pair), { headers: { accept: 'application/json' } });
-			return r.status === 410 && (r.headers.get('content-type') ?? '').includes('json') ? readMoved(r.status, await r.json(), pair) : null;
+			if (r.status !== 410 || !(r.headers.get('content-type') ?? '').includes('json')) return { moved: null, removed: null };
+			const v = await r.json();
+			return { moved: readMoved(r.status, v, pair), removed: readRemoved(r.status, v) };
 		} catch {
-			return null;
+			return { moved: null, removed: null };
 		}
 	}
 
@@ -350,8 +358,8 @@
 				const d = link.d ? found.find((x) => idOf(x) === link.d) : undefined;
 				if (d) return void openLinked(d);
 				if (!link.d || none) return;
-				const m = await successor(link.d);
-				if (!m) return void (missing = link.d);
+				const { moved: m, removed } = await successor(link.d);
+				if (!m) return void (removed ? (ended = { from: link.d, catalog: removed.catalog }) : (missing = link.d));
 				gone = { from: link.d, ...m };
 				if (!m.live || !m.to) return;
 				// The dataset moved: search for the id it moved to and open that one.
@@ -412,6 +420,9 @@
 					The publisher removed <span class="mono">{gone.from}</span>. No dataset that this node serves is named in its place.
 				{/if}
 			</p>
+		{/if}
+		{#if ended}
+			<p class="muted" role="status" data-testid="datasets-removed">The publisher removed <span class="mono">{ended.from}</span>{ended.catalog !== null ? ` in its catalog ${ended.catalog}` : ''}. {total ? 'The closest names are below.' : ''}</p>
 		{/if}
 		{#if missing}
 			<p class="muted" data-testid="datasets-missing">This node holds no dataset <span class="mono">{missing}</span>. {total ? 'The closest names are below.' : ''}</p>

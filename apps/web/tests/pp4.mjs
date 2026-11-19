@@ -70,8 +70,17 @@ export async function pp4(browser, base, expect, FB) {
 			const d = C.DATASETS.find((y) => y.id === x.id);
 			if (d.noDate) return x.asof !== null;
 			const f = fresh[x.id];
-			return !f || x.asof !== `${C.dayText(f.asOf)} (${f.what})`;
+			// Two records of one series: the page's day and the hosted node's, each saying which.
+			const want = f?.nodeAsOf ? `${C.dayText(f.asOf)} (${f.what}, the round on this page)\n${C.dayText(f.nodeAsOf)} (the round the hosted test node serves)` : f && `${C.dayText(f.asOf)} (${f.what})`;
+			return !f || x.asof.replace(/\s*\n\s*/g, '\n') !== want;
 		});
+		// Newcomer test 2026-11-18: the earthquake card said 8 Jul 2026 while the node serves the round
+		// of 19 Jul 2026. Both are true (two rounds), so the card names both; the node's day is the
+		// subject in the shipped ladders, the same one "Show the value" cards and the AI connector use.
+		const nodeDays = C.nodeSubjects(JSON.parse(await readFile(new URL('../static/level2/ladders-base-sepolia.json', import.meta.url), 'utf8')));
+		const QUAKES = 'usgs.earthquakes.m5_count';
+		const two = Object.entries(fresh).filter(([, f]) => f.nodeAsOf);
+		expect(fresh[QUAKES]?.nodeAsOf === nodeDays[QUAKES].split(':').pop() && fresh[QUAKES].nodeAsOf !== fresh[QUAKES].asOf && two.every(([id, f]) => f.nodeAsOf === nodeDays[id]?.split(':').pop()) && (await pg.getByTestId('catalog-asof-node').count()) === two.length, `PP11 ${width}: a card whose node round is of another day names both days (${two.map(([id, f]) => `${id}: ${f.asOf} here, ${f.nodeAsOf} on the node`).join('; ') || 'none'})`);
 		expect(wrongDate.length === 0 && Object.keys(fresh).length === C.DATASETS.filter((d) => !d.noDate).length, `PP11 ${width}: every card but the reserves one shows its data's date (${wrongDate.map((w) => `${w.id}=${w.asof}`).join(', ') || dates.filter((d) => d.asof).length + ' dated'})`);
 		const firstSection = await pg.evaluate(() => document.querySelector('main section.section')?.dataset.testid);
 		expect(firstSection === 'catalog', `PP4 ${width}: the datasets come before the charts (first section: ${firstSection})`);

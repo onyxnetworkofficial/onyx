@@ -77,9 +77,12 @@ test('three read commands against the given origin; the book is the deployment f
 	for (const c of cmds) assert.match(c.cmd, /^curl "?https:\/\/node\.example\/v1\/bulk/);
 	assert.match(cmds[2].cmd, /order=desc&limit=3/);
 	// READINESS A20: the example is a dataset with data up to this month, not one that stopped
-	// (btc.mvrv ended 2026-08-28), and the search command finds it by its own name.
-	assert.deepEqual(Q.EXAMPLE, { publisher: 'onchain-archive', dataset: 'wbtc.mvrv' });
-	assert.match(cmds[0].cmd, /\/v1\/bulk\?q=wbtc\.mvrv&limit=5"$/);
+	// (btc.mvrv ended 2026-08-28), and the search command finds it by its own name. Newcomer test
+	// 2026-11-18: a Bitcoin dataset (btc.*), not Wrapped Bitcoin (wbtc.*).
+	assert.deepEqual(Q.EXAMPLE, { publisher: 'onchain-archive', dataset: 'btc.entity-adjusted-mvrv' });
+	assert.match(cmds[0].cmd, /\/v1\/bulk\?q=btc\.entity-adjusted-mvrv&limit=5"$/);
+	assert.equal(cmds[1].cmd, 'curl https://node.example/v1/bulk/onchain-archive/btc.entity-adjusted-mvrv');
+	assert.equal(cmds[2].cmd, 'curl "https://node.example/v1/bulk/onchain-archive/btc.entity-adjusted-mvrv/rows?order=desc&limit=3"');
 	const contracts = JSON.parse(readFileSync(new URL('../../../deploy/early-record/contracts.json', import.meta.url), 'utf8'));
 	assert.equal(contracts.contracts.find((c) => c.name === 'OnyxSignedBook').address, Q.BOOK);
 });

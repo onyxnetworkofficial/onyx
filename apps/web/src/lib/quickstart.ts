@@ -7,10 +7,11 @@
 // example checks the same newest-first read as the third read command. The second example stays
 // oldest first with whole-number bounds: the form every released onyx-check reads.
 
-/** The dataset the examples read: one the hosted test node lists, with data up to this month
- * (READINESS A20: `btc.mvrv` ended 2026-08-28; this one ran to 2026-11-13 when checked on
- * 2026-11-16, and holds every day of CHECK_RANGE). */
-export const EXAMPLE = { publisher: 'onchain-archive', dataset: 'wbtc.mvrv' };
+/** The dataset the examples read: a Bitcoin one the hosted test node lists, with data up to this
+ * month (READINESS A20: `btc.mvrv` ended 2026-08-28; this one ran to 2026-11-16 when checked on
+ * 2026-11-18, and holds every day of CHECK_RANGE). Newcomer test 2026-11-18: the example was
+ * `wbtc.mvrv`, Wrapped Bitcoin, a different asset from the Bitcoin a newcomer expects. */
+export const EXAMPLE = { publisher: 'onchain-archive', dataset: 'btc.entity-adjusted-mvrv' };
 /** The hosted test node. The commands name it wherever the page is served from: a mirror or a
  * preview of the site is not a node, so the page's own origin must never stand in for it. */
 export const HOSTED_NODE = 'https://onyx.cryptagraph.com';

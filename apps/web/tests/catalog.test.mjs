@@ -72,3 +72,27 @@ test('one wording for the five levels, with what is built and what is planned', 
 		assert.doesNotMatch(src(f), /Bonded claim|Submitter stakes/, f);
 	}
 });
+
+// Newcomer test 2026-11-18: the earthquake card said 8 Jul 2026 while the hosted node serves the
+// round of 19 Jul 2026. Both are true: the page ships one recorded round, the node serves another.
+// The freshness file then holds both days (scripts/gen-freshness.py) and the card names each.
+test('a freshness entry may name the node\'s other day; out of shape or the same day, it is left out', () => {
+	const one = (e) => C.parseFreshness({ version: 1, datasets: { x: e } }).x;
+	assert.deepEqual(one({ asOf: '2026-07-08', what: 'day counted' }), { asOf: '2026-07-08', what: 'day counted' });
+	assert.deepEqual(one({ asOf: '2026-07-08', what: 'day counted', nodeAsOf: '2026-07-19' }), { asOf: '2026-07-08', what: 'day counted', nodeAsOf: '2026-07-19' });
+	for (const nodeAsOf of ['2026-07-08', '19 Jul 2026', '<b>', 20260719, null, {}]) assert.deepEqual(one({ asOf: '2026-07-08', what: 'day counted', nodeAsOf }), { asOf: '2026-07-08', what: 'day counted' }, String(nodeAsOf));
+	// An entry without its own day is still dropped whole.
+	assert.equal(one({ what: 'day counted', nodeAsOf: '2026-07-19' }), undefined);
+	assert.equal(one({ asOf: '2026-07-08', what: 'x'.repeat(41), nodeAsOf: '2026-07-19' }), undefined);
+});
+
+// The generator writes that second day from the shipped ladders, for exactly the cards whose page
+// round is of another day than the round the node serves.
+test('the generator names the node\'s day from the shipped ladders, never by hand', () => {
+	const gen = readFileSync(new URL('../../../scripts/gen-freshness.py', import.meta.url), 'utf8');
+	assert.match(gen, /"nodeAsOf": node\[k\]/);
+	assert.match(gen, /elif v\["metric"\] in d and d\[v\["metric"\]\]\[0\] != served:/);
+	const card = readFileSync(new URL('../src/lib/components/DatasetCatalog.svelte', import.meta.url), 'utf8');
+	assert.match(card, /the round on this page/);
+	assert.match(card, /the round the hosted test node serves/);
+});

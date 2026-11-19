@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { anyGroups, anyValue } from '../src/lib/glossary.ts';
-import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints, staleSince, STALE_DAYS, moved, infoUrl, countUrl } from '../src/lib/datasets.ts';
+import { cleanSearch, dayKeys, item, keyRange, keyText, listUrl, newestUrl, page, sample, size, trimDec, fromLink, toLink, isoDay, detailUrl, chartColumns, chartPoints, staleSince, STALE_DAYS, moved, removed as removedIn, infoUrl, countUrl } from '../src/lib/datasets.ts';
 
 const good = {
 	publisher: 'onchain-archive',
@@ -253,6 +253,28 @@ test('only the node\'s 410 with a successor counts as moved', () => {
 	assert.equal(moved(410, { error: { code: 'bulk_unknown_dataset' }, successor: link() }, OLD), null);
 	assert.equal(moved(410, null, OLD), null);
 	assert.equal(moved(410, 'gone', OLD), null);
+});
+
+// A dataset removed with nothing in its place: the page says the publisher removed it, and in
+// which catalog when the node's answer gives the number.
+test('a removed dataset without a successor is said removed, with its catalog when given', () => {
+	assert.deepEqual(removedIn(410, removed()), { catalog: 15 });
+	assert.deepEqual(removedIn(410, removed(null)), { catalog: 15 });
+	// A successor that is no object is not usable: still removed with nothing in its place.
+	assert.deepEqual(removedIn(410, removed('trx.staking-flows-v2')), { catalog: 15 });
+	for (const catalog of [undefined, null, '15', 1.5, -1, {}, 2 ** 60]) assert.deepEqual(removedIn(410, { ...removed(), catalog }), { catalog: null }, String(catalog));
+	assert.deepEqual(removedIn(410, { ...removed(), catalog: 0 }), { catalog: 0 });
+	// With a successor object `moved` speaks, whatever its state; never both.
+	for (const s of [link(), link({ status: 'removed' }), { status: 'pending' }]) {
+		assert.equal(removedIn(410, removed(s)), null);
+		assert.notEqual(moved(410, removed(s), OLD), null);
+	}
+	// A plain 404 and any other answer keep the old sentence.
+	assert.equal(removedIn(404, { error: { code: 'bulk_unknown_dataset', message: 'no such dataset on this node' } }), null);
+	assert.equal(removedIn(404, removed()), null);
+	assert.equal(removedIn(410, { error: { code: 'bulk_unknown_dataset' } }), null);
+	assert.equal(removedIn(410, null), null);
+	assert.equal(removedIn(410, 'gone'), null);
 });
 
 test('the count is asked as an unfiltered list of one', () => {

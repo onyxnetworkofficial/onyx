@@ -238,7 +238,7 @@ export type Moved = { to: string | null; live: boolean };
 
 /** A removed dataset's successor, from the node's 410 (R-BULK-17): `to` is the chain's last id
  * under the same publisher, `live` only when the node says the chain ends live at another id.
- * Null for any other answer and for a removed dataset without a `successor` (nothing to say).
+ * Null for any other answer and for a removed dataset without a `successor` (`removed` reads it).
  * This is the node's word, not a proof: the proofs are at `…/successor` (`onyx-check --successor`). */
 export function moved(status: number, v: unknown, pair: string): Moved | null {
 	if (status !== 410 || !v || typeof v !== 'object') return null;
@@ -248,6 +248,18 @@ export function moved(status: number, v: unknown, pair: string): Moved | null {
 	const [publisher, dataset] = pair.split('/');
 	const final = typeof s.final === 'string' && ID.test(s.final) && s.final !== dataset ? `${publisher}/${s.final}` : null;
 	return { to: final, live: s.status === 'live' && final !== null };
+}
+
+/** A dataset its publisher removed and named nothing in place of: the node's 410
+ * `bulk_dataset_removed` with no `successor` object. `catalog` is the number of the publisher's
+ * catalog that removed it, when the answer gives a whole number, else null. Null for any other
+ * answer (a plain 404, a removed dataset with a successor: `moved` reads that one). */
+export function removed(status: number, v: unknown): { catalog: number | null } | null {
+	if (status !== 410 || !v || typeof v !== 'object') return null;
+	const o = v as { error?: { code?: unknown }; successor?: unknown; catalog?: unknown };
+	if (o.error?.code !== 'bulk_dataset_removed' || (o.successor && typeof o.successor === 'object')) return null;
+	const n = o.catalog;
+	return { catalog: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null };
 }
 
 /** The node's whole dataset count (`total` of an unfiltered list of one), or null. */

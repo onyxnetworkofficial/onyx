@@ -180,10 +180,14 @@ export async function ns11(browser, base, root, expect) {
 		expect(!stored.includes('sepolia.base.org'), `${NOT_STORED} (${width})`);
 		expect((await pg.getByTestId('live-total-1').innerText()) === '125 tONYX' && (await pg.getByTestId('live-value-1').innerText()) === 'Not on chain yet', `NS11 ${width}: pool 125 tONYX, no value yet`);
 		const state = await pg.getByTestId('live-state-1').innerText();
-		// Past the market's refund date with no value the badge no longer says "waiting", and the card
+		// From the time the market can be voided, with no value, the badge no longer says "waiting", and the card
 		// says what the contract then allows (tests/markets.test.mjs holds the rule on a fixed clock).
-		const refund = await pg.getByTestId('live-refund-1').count();
-		expect(/^(Trading (open|closed, waiting for the observed value)|No value by the refund date)$/.test(state) && (refund === 1) === (state === 'No value by the refund date'), `NS11 ${width}: the state comes from the chain and the reader's clock (${state})`);
+		const voidNote = await pg.getByTestId('live-void-1').count();
+		expect(/^(Trading (open|closed, waiting for the observed value)|No value yet, can be voided)$/.test(state) && (voidNote === 1) === (state === 'No value yet, can be voided'), `NS11 ${width}: the state comes from the chain and the reader's clock (${state})`);
+		// Newcomer test 2026-11-18: the date is when anyone may void the market (OnyxFutures.resolve), not
+		// a refund that happens by itself; no card says "refund".
+		const facts = await pg.getByTestId('live-market-1').innerText();
+		expect(/Can be voided from/i.test(facts) && !/refund/i.test(await pg.getByTestId('live-markets').innerText()), `NS11 ${width}: the card says from when the market can be voided and promises no refund`);
 		expect(off.every((u) => u.startsWith('https://sepolia.base.org')), `NS11 ${width}: the reads go only to the reader's RPC`);
 		const g = await pg.getByTestId('live-market-g1').innerText();
 		expect(/market 2/i.test(g) && g.includes('2026-11-02'), `NL23 ${width}: the guarded market shows as market 2 with its record date`);
@@ -219,7 +223,7 @@ export async function ns11(browser, base, root, expect) {
 		// Resolved, but read at a block before its close: refused.
 		expect(await readShows({ correction: resolvedCorrection(1) }, 'correction-problems-1', 'Refused: settled from a recheck before its close block'), `CL7 ${width}: a correction market settled before its close block is refused`);
 		// Void for no valid recheck: no recheck value, no winner.
-		expect(await readShows({ correction: VOID_CORRECTION }, 'correction-state-1', 'Void, every bet refunded'), `CL7 ${width}: a void market reads as void`);
+		expect(await readShows({ correction: VOID_CORRECTION }, 'correction-state-1', 'Void, bets can be withdrawn'), `CL7 ${width}: a void market reads as void`);
 		expect((await pg.getByTestId('correction-recheck-1').innerText()) === 'None' && (await pg.getByTestId('correction-winner-1').innerText()) === 'None: no valid recheck', `CL7 ${width}: a void market shows no recheck value and no valid recheck`);
 		const over = await pg.evaluate(() => document.documentElement.scrollWidth > innerWidth + 1);
 		expect(!over, `NS11 ${width}: no sideways scroll`);

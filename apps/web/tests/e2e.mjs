@@ -277,6 +277,13 @@ try {
 	expect((await p.getByText(/signed data feeds built, none connected yet/).count()) >= 1, 'overview: level-3 ladder line says no signed feed is connected');
 	// AUD-2-F11: level 2 names the recorded sources from their files.
 	expect(await p.getByText(/recorded rounds on U\.S\. Treasury Fiscal Data and SEC EDGAR/).first().waitFor({ timeout: WAIT_CAP }).then(() => true, () => false), 'overview: level-2 line names both recorded sources');
+	// Newcomer test 2026-11-18: the line said only "observers simulated" while Markets says markets settle from
+	// what observers record. Both are true of different rounds: the page says which is which, and the live
+	// rounds' limit (one machine, one operator), and never claims independent observers.
+	const l2line = (await p.locator('.rung').nth(1).locator('.lstat').innerText()).replace(/\s+/g, ' ').trim();
+	const l2note = (await p.getByTestId('ladder-l2-note').innerText()).replace(/\s+/g, ' ').trim();
+	expect(l2line === 'Built; recorded rounds with simulated observers, live rounds under one operator', `overview: the level-2 line names both kinds of round (${l2line})`);
+	expect(/recorded rounds on U\.S\. Treasury Fiscal Data and SEC EDGAR, shown on Browse data, are rehearsals: their observers are simulated\./.test(l2note) && /live rounds on Base Sepolia, the ones the test markets settle from, ran seven observer processes, each with its own key/.test(l2note) && /All seven ran on one machine under one operator, so they test the round, not independence\./.test(l2note) && !/independent/i.test(l2note + l2line), `overview: the level-2 note says which rounds are simulated and the live rounds' limit (${l2note})`);
 
 	await p.goto(base + '#/explorer');
 	if (PUB) {

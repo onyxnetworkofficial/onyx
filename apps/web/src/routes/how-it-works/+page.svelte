@@ -202,8 +202,12 @@
 	// strongest proof its kind allows. Status is honest: levels 1, 3
 	// (OKX-signed labels), 4 (unsigned company lists, used by the demo market,
 	// LBL-V2R-F2, L2R3-F2) and 5 (Brier) are in use today; level 2 is built
-	// and run as recorded rounds on real open sources (named from their files), with
-	// no live observer network yet.
+	// and run two ways (newcomer test 2026-11-18: this page said "observers simulated" while
+	// Markets says markets settle from what observers record; both are true, of different rounds):
+	// recorded rounds on real open sources (named from their files) whose observer pools are
+	// simulated, and live rounds on Base Sepolia by seven observer processes with their own keys
+	// (docs/ops/demo-testnet.md, ROADMAP B6), all on one machine under one operator (THREATS B6-5).
+	// No independent observer network yet.
 	// Level 2's sources are the recorded rounds the site ships (AUD-2-F11), read from their files.
 	let l2Sources = $state.raw<string[]>([]);
 	const ladder = $derived([
@@ -213,7 +217,8 @@
 			name: LEVELS[1].name,
 			how: LEVELS[1].means,
 			eg: 'Prices, open APIs, filings',
-			status: l2Sources.length ? `Built; recorded rounds on ${l2Sources.join(' and ')}, observers simulated` : 'Built; recorded rounds, observers simulated'
+			// Short (W12: at most three lines); the note under the ladder names the sources and the limit.
+			status: 'Built; recorded rounds with simulated observers, live rounds under one operator'
 		},
 		{ icon: Signature, name: LEVELS[2].name, how: LEVELS[2].means, eg: 'Signed feeds, sensors, keyed APIs', status: 'Live for signed labels; signed data feeds built, none connected yet', live: true },
 		{ icon: Scale, name: LEVELS[3].name, how: LEVELS[3].means, eg: 'Your own data, field reports, lists', status: 'Live for unsigned label lists; bond planned', live: true },
@@ -419,6 +424,12 @@
 				</li>
 			{/each}
 		</ol>
+		<!-- Which level-2 rounds are which, and the limit of the live ones (never "independent"). -->
+		<p class="muted l2note" data-testid="ladder-l2-note">
+			Level 2 has run two ways. The {l2Sources.length ? `recorded rounds on ${l2Sources.join(' and ')}` : 'recorded rounds'}, shown on <a href={resolve('/data')}>Browse data</a>, are rehearsals: their observers are simulated.
+			The live rounds on Base Sepolia, the ones the <a href={resolve('/markets')}>test markets</a> settle from, ran seven observer processes, each
+			with its own key, five drawn per round. All seven ran on one machine under one operator, so they test the round, not independence.
+		</p>
 	</section>
 
 	{#if !FALLBACK}
@@ -1241,6 +1252,13 @@
 		padding: 0;
 		display: grid;
 		gap: var(--sp-2);
+	}
+	/* The note under the ladder: one short paragraph at reading width. */
+	.l2note {
+		margin: var(--sp-4) 0 0;
+		max-width: 72ch;
+		font-size: var(--text-sm);
+		line-height: var(--lh-snug);
 	}
 	/* W12 round 9: each level's name in the display face, like every panel title (it was the last
 	   bold sans title on the page); its examples a quiet tag, so the middle column reads as one
