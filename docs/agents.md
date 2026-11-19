@@ -99,7 +99,9 @@ The order is: the datasets of the asset asked for (the part of the id before the
 that asset: `btc.mvrv` for bitcoin) before those that only hold its id inside another word
 (`wbtc.mvrv` is Wrapped Bitcoin, a different asset); then the dataset whose other id words are
 exactly the other words asked; then fresh before stale. A stale dataset of the asset asked for
-still comes before a fresh one of another asset. When a shown match is of another asset, or the
+still comes before a fresh one of another asset. A search that names no asset ("mvrv") lists
+Bitcoin's datasets first, then Ethereum's, then the other assets' by id; in one asset fresh before
+stale, then the exact metric (the website's order, and the node's by the ids alone). When a shown match is of another asset, or the
 asked asset's dataset is stale, `bulk.assetNote` says so in plain words and `next` starts with
 it, for example: "`btc.mvrv` is the Bitcoin dataset; it has no data after 2026-08-28. The wbtc.*
 datasets are Wrapped Bitcoin, a different asset." Never report another asset's numbers as the

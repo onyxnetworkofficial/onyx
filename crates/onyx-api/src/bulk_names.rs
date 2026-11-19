@@ -5,7 +5,10 @@
 //! known name also finds the datasets of that asset's id, and the datasets
 //! of the asset asked for are listed before those that only hold its id as
 //! a part of another word (`btc.price` before `wbtc.price`: Wrapped Bitcoin
-//! is another asset).
+//! is another asset). A search that names no asset ("mvrv") lists Bitcoin's
+//! datasets first, then Ethereum's, then the other assets' by id
+//! ([`search_order`]): the website and the agent toolkit order such a search
+//! the same way, and fixtures/search/order.json holds all three to it.
 //!
 //! The table is the website's (`ASSETS` in apps/web/src/lib/glossary.ts);
 //! the test below reads that file and fails when the two lists differ. The
@@ -14,10 +17,12 @@
 //!
 //! Cost: a search is at most [`super::MAX_SEARCH_CHARS`] characters, so at
 //! most 32 words; each word start is looked up at most [`MAX_NAME_WORDS`]
-//! times in a map built once. No pattern is built from what a reader sent.
+//! times in a map built once; whether a search names an asset is asked
+//! once a search, of at most 32 words and their parts in a set built once.
+//! No pattern is built from what a reader sent.
 
 use super::{id_words, AnyTerm};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::LazyLock;
 
 /// Asset id and name, as in the website's table and in its order.
@@ -102,6 +107,15 @@ pub const ASSETS: &[(&str, &str)] = &[
 /// apps/agent/src/connect.mjs; the test below compares them).
 pub const EXTRA_NAMES: &[(&str, &str)] = &[("ether", "eth"), ("ripple", "xrp"), ("binance", "bnb")];
 
+/// The assets a search that names none lists first, in this order (the
+/// website's `MAJORS` in apps/web/src/lib/datasets.ts and the agent
+/// toolkit's in apps/agent/src/connect.mjs; a test compares the three).
+pub const MAJORS: &[&str] = &["btc", "eth"];
+
+/// The table's asset ids.
+static IDS: LazyLock<BTreeSet<&'static str>> =
+    LazyLock::new(|| ASSETS.iter().map(|(id, _)| *id).collect());
+
 /// Words of the longest name ("Ondo US Dollar Yield").
 pub const MAX_NAME_WORDS: usize = 4;
 
@@ -178,6 +192,75 @@ pub fn split_names(words: Vec<String>) -> (Vec<Named>, Vec<String>) {
     (names, rest)
 }
 
+/// Whether a search names an asset: by a name (`names`), or by a typed word
+/// that is an asset id of the table, alone (`btc`, `usdt-trx`) or as a part
+/// of a typed id (`btc.mvrv`). The website's rule (`searchAssets`).
+pub fn names_an_asset(names: &[Named], words: &[String]) -> bool {
+    let known = |w: &str| IDS.contains(w) || asset_of(w).is_some();
+    !names.is_empty()
+        || words
+            .iter()
+            .any(|w| IDS.contains(w.as_str()) || id_words(w).into_iter().any(known))
+}
+
+/// A dataset's place in a search, smallest first, in two parts: a list
+/// sorted by the newest key (`sort=newest`) puts that key between them, and
+/// the id comes last.
+pub type SearchOrder<'a> = (OrderHead<'a>, OrderTail);
+/// The part before the newest key: the asked asset or the whole id typed,
+/// the major's place, the asset id, and (a search that names an asset) the
+/// exact metric.
+pub type OrderHead<'a> = (u8, u8, &'a str, bool);
+/// The part after it: the exact metric and the metric's words (a search
+/// that names no asset).
+pub type OrderTail = (bool, usize);
+
+/// The order of a search's matches.
+///
+/// `named` (the search names an asset, [`names_an_asset`]): [`rank`] and
+/// nothing else, as before: the asked asset's datasets, the exact metric
+/// first among them, then the others.
+///
+/// Not `named` ("mvrv"): the dataset whose whole id was typed, then the
+/// datasets of [`MAJORS`] in their order, then the other assets' by asset
+/// id; in one asset the exact metric (`btc.mvrv` before `btc.sth-mvrv`),
+/// then the metric of fewer words.
+pub fn search_order<'a>(
+    names: &[Named],
+    words: &[String],
+    named: bool,
+    publisher: &str,
+    dataset: &'a str,
+) -> SearchOrder<'a> {
+    let (group, inexact) = rank(names, words, publisher, dataset);
+    if named {
+        return ((group, 0, "", inexact), (false, 0));
+    }
+    let (asset, metric) = dataset.split_once('.').unwrap_or((dataset, ""));
+    let major = MAJORS
+        .iter()
+        .position(|m| *m == asset)
+        .unwrap_or(MAJORS.len());
+    let whole = u8::from(!whole_id(words, publisher, dataset));
+    // At most 255 words fit an id of 128 characters.
+    let major = u8::try_from(major).unwrap_or(u8::MAX);
+    (
+        (whole, major, asset, false),
+        (inexact, id_words(metric).len()),
+    )
+}
+
+/// Whether a typed word is the dataset's whole id (`btc.mvrv` or
+/// `publisher/btc.mvrv`).
+fn whole_id(words: &[String], publisher: &str, dataset: &str) -> bool {
+    words.iter().any(|w| {
+        w == dataset
+            || w.strip_prefix(publisher)
+                .and_then(|r| r.strip_prefix('/'))
+                .is_some_and(|d| d == dataset)
+    })
+}
+
 /// Where a dataset stands in a search, smallest first: `(0, _)` its asset
 /// (the part of the dataset id before the first dot) is an asset asked for,
 /// by name or as a typed word, or the whole id was typed; `(1, _)` it only
@@ -185,12 +268,7 @@ pub fn split_names(words: Vec<String>) -> (Vec<Named>, Vec<String>) {
 /// metric) is exactly the other words typed (`btc.price` for "bitcoin
 /// price", before `btc.price-drawdown`).
 pub fn rank(names: &[Named], words: &[String], publisher: &str, dataset: &str) -> (u8, bool) {
-    if words.iter().any(|w| {
-        w == dataset
-            || w.strip_prefix(publisher)
-                .and_then(|r| r.strip_prefix('/'))
-                .is_some_and(|d| d == dataset)
-    }) {
+    if whole_id(words, publisher, dataset) {
         return (0, false);
     }
     let (asset, metric) = dataset.split_once('.').unwrap_or((dataset, ""));
@@ -363,5 +441,106 @@ mod tests {
         assert_eq!(r("btc.mvrv", "btc.mvrv-z-score"), (1, true));
         // A dataset id without a dot is its own asset.
         assert_eq!(r("heights", "heights"), (0, false));
+    }
+
+    #[test]
+    fn a_search_names_an_asset_by_name_id_or_a_part_of_a_typed_id() {
+        let named = |q: &str| {
+            let (names, rest) = split_names(lower(q));
+            names_an_asset(&names, &rest)
+        };
+        for q in [
+            "bitcoin",
+            "bitcoin mvrv",
+            "btc",
+            "btc price",
+            "usdt-trx supply",
+            "btc.mvrv",
+            "example.publisher/eth.price",
+            "tether on tron",
+        ] {
+            assert!(named(q), "{q}");
+        }
+        // A word that only holds an id, or a part of a name, names nothing.
+        for q in ["mvrv", "price", "bitc", "wbtcx", "staking flows", "heights"] {
+            assert!(!named(q), "{q}");
+        }
+        assert!(!names_an_asset(&[], &[]));
+    }
+
+    /// A search that names no asset: Bitcoin, Ethereum, then the other
+    /// assets by id; in one asset the exact metric, then fewer words. A
+    /// search that names one keeps [`rank`]'s order.
+    #[test]
+    fn a_search_without_an_asset_lists_the_majors_first() {
+        let sorted = |q: &str, ids: &[&'static str]| {
+            let (names, rest) = split_names(lower(q));
+            let named = names_an_asset(&names, &rest);
+            let mut v = ids.to_vec();
+            v.sort_by_key(|d| (search_order(&names, &rest, named, "p", d), *d));
+            v
+        };
+        assert_eq!(
+            sorted(
+                "mvrv",
+                &[
+                    "1inch.mvrv",
+                    "aave.mvrv",
+                    "btc.sth-mvrv",
+                    "btc.mvrv",
+                    "eth.mvrv-z-score",
+                    "eth.mvrv",
+                    "wbtc.mvrv"
+                ]
+            ),
+            [
+                "btc.mvrv",
+                "btc.sth-mvrv",
+                "eth.mvrv",
+                "eth.mvrv-z-score",
+                "1inch.mvrv",
+                "aave.mvrv",
+                "wbtc.mvrv"
+            ]
+        );
+        // Fewer metric words before more, then the id.
+        assert_eq!(
+            sorted(
+                "price",
+                &[
+                    "btc.price-floor-levels",
+                    "btc.realized-price",
+                    "btc.price-drawdown"
+                ]
+            ),
+            [
+                "btc.price-drawdown",
+                "btc.realized-price",
+                "btc.price-floor-levels"
+            ]
+        );
+        // A word that is the start of an id is no asset: Bitcoin still first.
+        assert_eq!(
+            sorted("mvrv", &["mvrv.by-height", "btc.mvrv", "wbtc.mvrv"]),
+            ["btc.mvrv", "mvrv.by-height", "wbtc.mvrv"]
+        );
+        // The whole id typed is that dataset first, before the majors.
+        assert_eq!(
+            sorted("heights", &["btc.heights", "heights", "eth.heights"]),
+            ["heights", "btc.heights", "eth.heights"]
+        );
+        // An asset named: the order of `rank`, the majors nowhere in it.
+        assert_eq!(
+            sorted(
+                "aave mvrv",
+                &["btc.aave-mvrv", "aave.mvrv-z-score", "aave.mvrv"]
+            ),
+            ["aave.mvrv", "aave.mvrv-z-score", "btc.aave-mvrv"]
+        );
+        let (names, rest) = split_names(lower("btc price"));
+        assert_eq!(
+            search_order(&names, &rest, true, "p", "wbtc.price"),
+            ((1, 0, "", true), (false, 0))
+        );
     }
 }

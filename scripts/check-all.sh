@@ -103,6 +103,8 @@ node --test apps/web/tests/release.test.mjs
 # The site's shared formatters print what the per-call toLocale* forms printed (W4, L5).
 node --test apps/web/tests/format.test.mjs
 node --test apps/web/tests/datasets.test.mjs
+# One search order on the node, the website and the agent toolkit (fixtures/search/order.json).
+node --test apps/web/tests/search-order.test.mjs
 # Browse data: a card's value from the hosted node is shown only in shape. Markets: a futures
 # market's badge on a fixed clock (past its refund date with no value it does not say "waiting").
 node --test apps/web/tests/catalog.test.mjs

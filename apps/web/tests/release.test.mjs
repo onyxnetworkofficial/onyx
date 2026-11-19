@@ -3,6 +3,7 @@
 // imports the TypeScript file with its types stripped). Run: node --test apps/web/tests/release.test.mjs
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 
 const R = await import(new URL('../src/lib/release.ts', import.meta.url).href);
 
@@ -62,6 +63,55 @@ test('files: every link is a file of the release on the project repository; stab
 	assert.equal(R.SUMS, 'SHA256SUMS');
 	// No version in any desktop or single-file name: the page needs no edit per release but RELEASE.
 	for (const f of [...all, ...R.CLI_FILES]) assert.ok(!/v\d+\.\d+/.test(f), f);
+	// The proof checker, one file per system: stable names with no version, the workflow's own.
+	assert.deepEqual(R.CHECKER.map((c) => c.file), ['onyx-check-linux-x86_64', 'onyx-check-macos-arm64', 'onyx-check-macos-x64', 'onyx-check-windows-x64.exe']);
+	assert.deepEqual(R.CHECKER.map((c) => c.system), ['linux', 'macos', 'macos', 'windows']);
+	for (const c of R.CHECKER) assert.ok(!/v\d+\.\d+/.test(c.file), c.file);
 	const cli = R.programs('v9.9.9-testnet').flatMap((p) => p.files);
 	assert.deepEqual(cli, ['onyx-contrib-v9.9.9-testnet.zip', 'onyx-contrib-v9.9.9-testnet.tar.gz', 'onyx-join-linux-x86_64.tar.gz', 'onyx-publish-linux-x86_64.tar.gz']);
+});
+
+test('hasChecker: the ready-made onyx-check programs are linked from CHECKER_SINCE on, never before', () => {
+	assert.equal(R.CHECKER_SINCE, 'v0.5.1-testnet');
+	for (const before of ['v0.2.0-testnet', 'v0.4.0-testnet', 'v0.5.0-testnet']) {
+		assert.equal(R.hasChecker(before), false, before);
+		assert.deepEqual(R.checkerFiles(before), [], before);
+	}
+	for (const from of ['v0.5.1-testnet', 'v0.5.2-testnet', 'v0.6.0-testnet', 'v1.0.0-testnet']) {
+		assert.equal(R.hasChecker(from), true, from);
+		assert.deepEqual(R.checkerFiles(from), R.CHECKER, from);
+	}
+	for (const bad of ['v0.5.1', '0.5.1-testnet', 'v0.5.1-mainnet', '', 'latest']) assert.equal(R.hasChecker(bad), false, bad);
+	// The release the site links today decides what every page says (v0.5.0-testnet has no such file).
+	assert.equal(R.hasChecker(), R.hasChecker(R.RELEASE));
+	assert.deepEqual(R.checkerFiles(), R.hasChecker(R.RELEASE) ? R.CHECKER : []);
+	assert.equal(R.CHECK_GUIDE, 'https://github.com/onyxnetworkofficial/onyx/blob/main/docs/check-a-proof.md');
+});
+
+test('the checker files: the workflow builds, checks and attaches exactly the names the site links', () => {
+	const read = (p) => readFileSync(new URL(`../../../${p}`, import.meta.url), 'utf8');
+	const flow = read('.github/workflows/desktop.yml');
+	const want = /want="([^"]+)"/.exec(flow)[1].split(' ');
+	const build = read('scripts/checker-build.sh');
+	for (const c of R.CHECKER) {
+		assert.ok(want.includes(c.file), `${c.file} is in the release job's list (so in SHA256SUMS and uploaded)`);
+		assert.ok(flow.includes(`checker/${c.file}`), `${c.file} is copied to the job's files`);
+		assert.ok(build.includes(`name=${c.file};`), `${c.file} is a name scripts/checker-build.sh writes`);
+	}
+	assert.equal(want.filter((f) => f.startsWith('onyx-check-')).length, R.CHECKER.length);
+	// The job refuses a missing or an extra file: its count is the list's length.
+	assert.ok(flow.includes(`[ "$(ls | wc -l)" -eq ${want.length} ]`), `the release job expects ${want.length} files`);
+	assert.match(build, /cargo build -q --locked --release -p onyx-check/);
+	assert.match(build, /RUSTFLAGS="--remap-path-prefix=\$home=\$to_home --remap-path-prefix=\$src=\$to_src\$extra"/);
+	assert.match(build, /grep -qaF -- "\$p" "\$out\/\$name"/, 'a file that holds a build path is refused');
+	// The pages offer the files only through checkerFiles()/hasChecker(), so not before CHECKER_SINCE.
+	const api = read('apps/web/src/routes/api/+page.svelte');
+	assert.match(api, /const CHECKER = checkerFiles\(\);/);
+	assert.match(api, /\{#if CHECKER\.length\}[\s\S]*api-check-guide[\s\S]*\{:else\}[\s\S]*There is no\s+ready-made <code>onyx-check<\/code> for macOS or Windows yet/);
+	assert.match(read('apps/web/src/routes/+layout.svelte'), /CHECKER_READY \? 'one download for Linux, macOS or Windows\.' : 'a Linux download, or a build from source elsewhere\.'/);
+	assert.match(read('apps/web/src/lib/components/Downloads.svelte'), /\{#if CHECKER\.length\}/);
+	// The guide names every file and each system's own SHA-256 tool.
+	const guide = read('docs/check-a-proof.md');
+	for (const c of R.CHECKER) assert.ok(guide.includes(c.file), `the guide names ${c.file}`);
+	assert.ok(guide.includes(R.CHECKER_SINCE) && guide.includes('shasum -a 256') && guide.includes('certutil -hashfile'));
 });

@@ -1617,7 +1617,7 @@
       "get": {
         "operationId": "listBulkDatasets",
         "summary": "Bulk datasets this node holds",
-        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); a word that is a common asset name (bitcoin, ethereum, tron, wrapped bitcoin: the website's table) also finds the datasets with that asset's id as a whole word (`btc`, never the btc in `wbtc`), and the answer's `assets` lists the names read so; `any` matches whole words, any of a group; `fresh` keeps the datasets with data from the last days asked; `limit` pages them in id order, or with `sort=newest` the newest data first; with `q` the datasets whose asset (the part of the dataset id before the first dot) is one asked for come first, among each the dataset whose other id words are exactly the other words asked, then that order (`btc.price` before `btc.price-drawdown` before `wbtc.price` for `q=bitcoin price` or `q=btc price`, whatever their dates); `after` takes the `next` of the page before. `total` counts every match.",
+        "description": "Mounted only with ONYX_BULK_DIR. Free (60 a minute), `no-store`. With no query: every dataset. `q` keeps the datasets whose `publisher/dataset` holds every word (any case); a word that is a common asset name (bitcoin, ethereum, tron, wrapped bitcoin: the website's table) also finds the datasets with that asset's id as a whole word (`btc`, never the btc in `wbtc`), and the answer's `assets` lists the names read so; `any` matches whole words, any of a group; `fresh` keeps the datasets with data from the last days asked; `limit` pages them in id order, or with `sort=newest` the newest data first; with `q` the datasets whose asset (the part of the dataset id before the first dot) is one asked for come first, among each the dataset whose other id words are exactly the other words asked, then that order (`btc.price` before `btc.price-drawdown` before `wbtc.price` for `q=bitcoin price` or `q=btc price`, whatever their dates); a `q` that names no asset (`q=mvrv`) lists the datasets of `btc` first, then those of `eth`, then the other assets' by asset id, and in one asset the exact metric, then the metric of fewer words, then the id; `after` takes the `next` of the page before. `total` counts every match.",
         "tags": [
           "Bulk"
         ],
@@ -1631,7 +1631,7 @@
               "maxLength": 64,
               "pattern": "^[A-Za-z0-9 ./_-]*$"
             },
-            "description": "Search words, separated by spaces; each must be in `publisher/dataset`. A common asset name (one to four words: `bitcoin`, `usd coin`) also matches the datasets of its id. The datasets of the asset asked for are listed first."
+            "description": "Search words, separated by spaces; each must be in `publisher/dataset`. A common asset name (one to four words: `bitcoin`, `usd coin`) also matches the datasets of its id. The datasets of the asset asked for are listed first; when no asset is asked for, Bitcoin's (`btc`), then Ethereum's (`eth`), then the other assets' by id."
           },
           {
             "name": "any",

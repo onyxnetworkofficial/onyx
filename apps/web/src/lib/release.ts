@@ -58,6 +58,33 @@ export function hasOnboarding(release: string = RELEASE): boolean {
 export type System = 'windows' | 'macos' | 'linux' | 'other';
 
 /**
+ * The first release that carries `onyx-check` as one ready-made program per system (Linux, macOS
+ * and Windows; scripts/checker-build.sh, built by .github/workflows/desktop.yml): fixed, never
+ * changes. Every earlier release has `onyx-check` for Linux only, inside the publisher tools'
+ * archive. While RELEASE is an earlier one, no page links these files or says they exist.
+ */
+export const CHECKER_SINCE = 'v0.5.1-testnet';
+/** Whether `release` carries the ready-made `onyx-check` programs (it is CHECKER_SINCE or later). */
+export function hasChecker(release: string = RELEASE): boolean {
+	return atLeast(release, CHECKER_SINCE);
+}
+
+export type CheckerFile = { system: Exclude<System, 'other'>; name: string; file: string };
+/** The ready-made `onyx-check` programs (the workflow's stable names), one file each. */
+export const CHECKER: CheckerFile[] = [
+	{ system: 'linux', name: 'Linux x86-64', file: 'onyx-check-linux-x86_64' },
+	{ system: 'macos', name: 'macOS (Apple silicon)', file: 'onyx-check-macos-arm64' },
+	{ system: 'macos', name: 'macOS (Intel)', file: 'onyx-check-macos-x64' },
+	{ system: 'windows', name: 'Windows x64', file: 'onyx-check-windows-x64.exe' }
+];
+/** The ready-made `onyx-check` programs `release` carries: none before CHECKER_SINCE. */
+export function checkerFiles(release: string = RELEASE): CheckerFile[] {
+	return hasChecker(release) ? CHECKER : [];
+}
+/** The guide to checking a proof on macOS and Windows (download, SHA-256, first start, the command). */
+export const CHECK_GUIDE = `${REPO}/blob/main/docs/check-a-proof.md`;
+
+/**
  * The visitor's computer from what the browser says: `userAgent`, `navigator.platform` and
  * `navigator.userAgentData.platform` (Chromium only). Phones and tablets are 'other': the app is
  * for a computer (an iPad asking for the desktop site says "Macintosh", but has a touch screen,

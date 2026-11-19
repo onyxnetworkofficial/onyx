@@ -1,12 +1,15 @@
 name: desktop
-# CL10 (ADR-0061): the Onyx desktop app's installers and the single-file onyx-contrib programs,
-# built on each system and attached to the test-network release whose tag was pushed. Test network
-# only. The installers are unsigned (code signing is a later owner decision; docs/desktop-app.md
-# tells users how to open them). Stable asset names, so the website's Download page needs only its
+# CL10 (ADR-0061): the Onyx desktop app's installers, the single-file onyx-contrib programs and the
+# proof checker onyx-check as one program per system, built on each system and attached to the
+# test-network release whose tag was pushed. Test network only. Nothing is code-signed (code
+# signing is a later owner decision; docs/desktop-app.md and docs/check-a-proof.md tell users how
+# to open the files). Stable asset names, so the website's Download page needs only its
 # RELEASE constant changed (apps/web/src/lib/release.ts):
 #   onyx-desktop-windows-x64-setup.exe  onyx-desktop-windows-x64.msi   onyx-desktop-macos-universal.dmg
 #   onyx-desktop-linux-x86_64.AppImage  onyx-desktop-linux-amd64.deb
 #   onyx-contrib-linux-x64  onyx-contrib-macos-arm64  onyx-contrib-macos-x64  onyx-contrib-windows-x64.exe
+#   onyx-check-linux-x86_64  onyx-check-macos-arm64  onyx-check-macos-x64  onyx-check-windows-x64.exe
+#     (scripts/checker-build.sh; apps/web/src/lib/release.ts CHECKER_SINCE names their first release)
 #   SHA256SUMS (merged with the release's own SHA256SUMS from scripts/release-build.sh, if any)
 # No secret other than this repository's own GITHUB_TOKEN; every action pinned to a full commit SHA.
 on:
@@ -64,6 +67,13 @@ jobs:
         run: |
           rustup show active-toolchain || rustup toolchain install
           if [ "$RUNNER_OS" = macOS ]; then rustup target add aarch64-apple-darwin x86_64-apple-darwin; fi
+      - name: onyx-check, one ready-made program per system (scripts/checker-build.sh; smoke-tested, no build path inside)
+        run: |
+          case "$RUNNER_OS" in
+            Linux) scripts/checker-build.sh checker linux-x86_64 ;;
+            macOS) scripts/checker-build.sh checker macos-arm64 macos-x64 ;;
+            Windows) scripts/checker-build.sh checker windows-x64 ;;
+          esac
       - name: onyx-contrib tests (the app server, the bundle, keys never leave)
         run: node --test apps/contrib/test/*.test.mjs
       - name: Single-file onyx-contrib programs (scripts/desktop-build.sh; this system's one smoke-tested)
@@ -111,14 +121,14 @@ jobs:
             Linux)
               one "$b/deb/*.deb" onyx-desktop-linux-amd64.deb
               one "$b/appimage/*.AppImage" onyx-desktop-linux-x86_64.AppImage
-              cp sea/onyx-contrib-linux-x64 out/ ;;
+              cp sea/onyx-contrib-linux-x64 checker/onyx-check-linux-x86_64 out/ ;;
             macOS)
               one "apps/desktop/src-tauri/target/universal-apple-darwin/release/bundle/dmg/*.dmg" onyx-desktop-macos-universal.dmg
-              cp sea/onyx-contrib-macos-arm64 sea/onyx-contrib-macos-x64 out/ ;;
+              cp sea/onyx-contrib-macos-arm64 sea/onyx-contrib-macos-x64 checker/onyx-check-macos-arm64 checker/onyx-check-macos-x64 out/ ;;
             Windows)
               one "$b/nsis/*-setup.exe" onyx-desktop-windows-x64-setup.exe
               one "$b/msi/*.msi" onyx-desktop-windows-x64.msi
-              cp sea/onyx-contrib-windows-x64.exe out/ ;;
+              cp sea/onyx-contrib-windows-x64.exe checker/onyx-check-windows-x64.exe out/ ;;
           esac
           ls -l out
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -149,13 +159,13 @@ jobs:
         run: |
           set -euo pipefail
           cd out
-          want="onyx-desktop-windows-x64-setup.exe onyx-desktop-windows-x64.msi onyx-desktop-macos-universal.dmg onyx-desktop-linux-x86_64.AppImage onyx-desktop-linux-amd64.deb onyx-contrib-linux-x64 onyx-contrib-macos-arm64 onyx-contrib-macos-x64 onyx-contrib-windows-x64.exe"
+          want="onyx-desktop-windows-x64-setup.exe onyx-desktop-windows-x64.msi onyx-desktop-macos-universal.dmg onyx-desktop-linux-x86_64.AppImage onyx-desktop-linux-amd64.deb onyx-contrib-linux-x64 onyx-contrib-macos-arm64 onyx-contrib-macos-x64 onyx-contrib-windows-x64.exe onyx-check-linux-x86_64 onyx-check-macos-arm64 onyx-check-macos-x64 onyx-check-windows-x64.exe"
           for f in $want; do [ -s "$f" ] || { echo "missing $f" >&2; exit 1; }; done
-          [ "$(ls | wc -l)" -eq 9 ] || { echo "unexpected files: $(ls)" >&2; exit 1; }
+          [ "$(ls | wc -l)" -eq 13 ] || { echo "unexpected files: $(ls)" >&2; exit 1; }
           if gh release view "$TAG" -R "$REPO" >/dev/null 2>&1; then
             gh release download "$TAG" -R "$REPO" -p SHA256SUMS -D ../old 2>/dev/null || true
           else
-            gh release create "$TAG" -R "$REPO" --prerelease --title "$TAG" --notes "Test network only (Base Sepolia, no real money). The Onyx desktop app for Windows, macOS and Linux, and onyx-contrib as single-file programs. The installers are not code-signed yet: Windows and macOS ask once before opening them (docs/desktop-app.md). Check files against SHA256SUMS."
+            gh release create "$TAG" -R "$REPO" --prerelease --title "$TAG" --notes "Test network only (Base Sepolia, no real money). The Onyx desktop app for Windows, macOS and Linux, onyx-contrib as single-file programs, and the proof checker onyx-check as one program per system (docs/check-a-proof.md). Nothing is code-signed yet: Windows and macOS ask once before opening a file (docs/desktop-app.md). Check files against SHA256SUMS."
           fi
           sha256sum -- $want >../new.sums
           { [ -f ../old/SHA256SUMS ] && awk -v w=" $want " 'index(w, " " $2 " ") == 0' ../old/SHA256SUMS; cat ../new.sums; } | sort -k2 >SHA256SUMS

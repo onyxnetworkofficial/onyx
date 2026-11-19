@@ -4,7 +4,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { createClient, loadSpec } from '../src/client.mjs';
-import { access, FILLER, heldRounds, MAX_MATCHES, parseHeld, rankDatasets, ROUND_KEEP, ROUND_TTL_MS, roundCache, similarNote, ASSETS, assetNote, bulkRank, bulkSearch, exampleCall, EXTRA_NAMES, parseAssets, parseSubjects, SUBJECTS, freshness, freshnessOfKey, futureNote, STALE_DAYS, bulkWords, clean, cleanDeep, findBulk, findDataset, loadCatalog, MAX_BULK_MATCHES, withBulk, MAX_PROPOSALS, parseCatalog, parseFreshness, propose, proposalBody, proposalStatus, FREE_OBSERVED } from '../src/connect.mjs';
+import { access, FILLER, heldRounds, MAX_MATCHES, parseHeld, rankDatasets, ROUND_KEEP, ROUND_TTL_MS, roundCache, similarNote, ASSETS, assetNote, bulkRank, bulkSearch, exampleCall, EXTRA_NAMES, parseAssets, parseSubjects, SUBJECTS, freshness, freshnessOfKey, futureNote, STALE_DAYS, bulkWords, clean, cleanDeep, findBulk, findDataset, loadCatalog, MAJORS, namesAsset, MAX_BULK_MATCHES, withBulk, MAX_PROPOSALS, parseCatalog, parseFreshness, propose, proposalBody, proposalStatus, FREE_OBSERVED } from '../src/connect.mjs';
 import { buildTools, CHECK_SHAPE, checkerPresent, INSTRUCTIONS, INSTRUCTIONS_READ_ONLY, instructionsFor, paymentsOn, PAYMENT_ONLY, runTool } from '../src/mcp.mjs';
 import { operations } from '../src/client.mjs';
 import { BURST, clientAddress, createHttpServer, MAX_BODY, rateKey } from '../src/http.mjs';
@@ -84,6 +84,40 @@ test('find: data Onyx lacks is "not yet", with how to propose it', () => {
 	}
 });
 
+// One search order in three places (fixtures/search/order.json): the node, the website and this
+// toolkit give a search the same order of the same ids. Here: the toolkit sorts the page the node
+// sent, with one request, whatever order it came in.
+test('find: the bulk order is the shared fixture\'s, the node\'s and the website\'s', async () => {
+	const fx = JSON.parse(readFileSync(new URL('../../../fixtures/search/order.json', import.meta.url), 'utf8'));
+	assert.deepEqual(MAJORS, fx.majors);
+	assert.equal(STALE_DAYS, fx.staleDays);
+	assert.ok(fx.cases.length >= 3);
+	const day = (age) => new Date(Date.UTC(2026, 10, 18) - age * 86_400_000).toISOString().slice(0, 10);
+	for (const c of fx.cases) {
+		assert.ok(c.datasets.length <= MAX_BULK_MATCHES, `${c.name}: every match is shown`);
+		assert.equal(namesAsset(bulkWords(c.q)), c.named, c.name);
+		const row = (d, age) => {
+			const [publisher, dataset] = d.id.split('/');
+			return { publisher, dataset, version: 1, rows: 10, key_min: '1279324800', key_max: '1794528000', license: 'CC-BY-4.0', newest: day(age), newest_age_days: age };
+		};
+		for (const [want, age] of [[c.orderByAge, (d) => d.ageDays], [c.order, () => 1]]) {
+			for (const sent of [c.datasets, [...c.datasets].reverse()]) {
+				const f = fakeFetch({ status: 200, body: { total: sent.length, next: null, datasets: sent.map((d) => row(d, age(d))) } });
+				const bulk = await findBulk(createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: f }), c.q);
+				assert.deepEqual(bulk.matches.map((m) => m.id), want, c.name);
+				assert.equal(f.seen.length, 1, `${c.name}: one request`);
+			}
+		}
+	}
+	// The whole id typed is that dataset first; a word that only starts an id names no asset.
+	assert.equal(namesAsset(['mvrv']), false);
+	assert.equal(namesAsset(['btc.mvrv']), true);
+	assert.equal(namesAsset(['constructor']), false, 'only the table\'s own ids');
+	const whole = fakeFetch({ status: 200, body: { total: 3, datasets: [bulkRow('btc.heights'), bulkRow('heights'), bulkRow('eth.heights')] } });
+	const typed = await findBulk(createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: whole }), 'heights');
+	assert.deepEqual(typed.matches.map((m) => m.dataset), ['heights', 'btc.heights', 'eth.heights']);
+});
+
 const bulkRow = (dataset, more = {}) => ({ publisher: 'example-archive', dataset, version: 2, rows: 5887, key_min: '1279324800', key_max: '1794528000', license: 'CC-BY-4.0', ...more });
 
 test('find: the bulk datasets are searched too, common names made short (A13)', async () => {
@@ -120,8 +154,9 @@ test('find: the bulk datasets are searched too, common names made short (A13)', 
 
 test('find: bulk matches say how fresh they are, and fresh ones come first (A20)', async () => {
 	// The node's own words: the newest day and its age in whole days. No asset is asked for, so
-	// among the datasets whose metric is the word asked, the stale one comes after the fresh one
-	// though its id is the shortest. (`mvrv.by-height` is first: the word is the start of its id.)
+	// Bitcoin's dataset comes first though it is stale, then the other assets by id (`mvrv` is
+	// one: the word is the start of that id, and names no asset); in one asset (wbtc) the fresh
+	// ones in their order.
 	const body = {
 		total: 4,
 		next: null,
@@ -135,8 +170,8 @@ test('find: bulk matches say how fresh they are, and fresh ones come first (A20)
 	};
 	const client = createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: fakeFetch({ status: 200, body }) });
 	const bulk = await findBulk(client, 'mvrv');
-	assert.deepEqual(bulk.matches.map((m) => m.dataset), ['mvrv.by-height', 'wbtc.mvrv', 'btc.mvrv', 'wbtc.mvrv-z-score']);
-	const [plain, edge, old] = bulk.matches;
+	assert.deepEqual(bulk.matches.map((m) => m.dataset), ['btc.mvrv', 'mvrv.by-height', 'wbtc.mvrv', 'wbtc.mvrv-z-score']);
+	const [old, plain, edge] = bulk.matches;
 	assert.equal(bulk.assetNote, undefined, 'no asset was asked for: nothing to say about one');
 	// The 30-day edge: 30 whole days behind is not stale.
 	assert.deepEqual([edge.newest, edge.newestAgeDays, edge.stale, edge.staleNote], ['2026-10-17', 30, false, undefined]);
@@ -144,15 +179,15 @@ test('find: bulk matches say how fresh they are, and fresh ones come first (A20)
 	assert.deepEqual([old.newest, old.newestAgeDays, old.stale], ['2026-08-28', 80, true]);
 	// Review FRESH-R1 L2: the sentence says whose word it is.
 	assert.equal(old.staleNote, "Stale by the node's listing, not checked: this dataset has no data after 2026-08-28 (80 days back). Its newest rows are not current values.");
-	// Review FRESH-R1 M1: dates in the future are no news. No day, never fresh, ranked last, even
-	// with the shortest id and even if the node also sends a day.
-	const fut = { total: 3, datasets: [bulkRow('a.mvrv', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 }), body.datasets[1], body.datasets[0]] };
+	// Review FRESH-R1 M1: dates in the future are no news. No day, never fresh, ranked last in its
+	// asset, even as the exact metric with the shortest id and even if the node also sends a day.
+	const fut = { total: 3, datasets: [bulkRow('wbtc.mvrv', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 }), body.datasets[1], body.datasets[0]] };
 	const withFuture = await findBulk(createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: fakeFetch({ status: 200, body: fut }) }), 'mvrv');
-	assert.deepEqual(withFuture.matches.map((m) => m.dataset), ['a.mvrv', 'btc.mvrv', 'wbtc.mvrv-z-score']);
-	const lateOnly = { total: 3, datasets: [fut.datasets[0], bulkRow('b.mvrv', { newest: '2026-11-13', newest_age_days: 3 }), body.datasets[0]] };
+	assert.deepEqual(withFuture.matches.map((m) => m.dataset), ['btc.mvrv', 'wbtc.mvrv-z-score', 'wbtc.mvrv']);
+	const lateOnly = { total: 3, datasets: [bulkRow('eth.mvrv', { newest: '2026-08-28', newest_age_days: 80 }), bulkRow('eth.sth-mvrv', { newest: '2026-11-13', newest_age_days: 3 }), body.datasets[0]] };
 	const ranked = await findBulk(createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: fakeFetch({ status: 200, body: lateOnly }) }), 'mvrv');
-	assert.deepEqual(ranked.matches.map((m) => m.dataset), ['b.mvrv', 'a.mvrv', 'btc.mvrv'], 'the same metric: the fresh one first');
-	const ahead = withFuture.matches[0];
+	assert.deepEqual(ranked.matches.map((m) => m.dataset), ['btc.mvrv', 'eth.sth-mvrv', 'eth.mvrv'], 'Bitcoin, then Ethereum; in one asset the fresh one before the stale exact metric');
+	const ahead = withFuture.matches[2];
 	assert.deepEqual([ahead.newestInFuture, ahead.newest, ahead.newestAgeDays, ahead.stale, ahead.lastKeyAsDay], [true, undefined, undefined, undefined, undefined]);
 	assert.equal(ahead.futureNote, futureNote());
 	assert.match(ahead.futureNote, /^Dates in the future by the node's listing, not checked: .*Do not treat it as fresh\.$/);
@@ -160,7 +195,7 @@ test('find: bulk matches say how fresh they are, and fresh ones come first (A20)
 	assert.deepEqual([plain.newest, plain.stale, plain.staleNote, plain.lastKeyAsDay], [undefined, undefined, undefined, undefined]);
 	const r = withBulk(findDataset('mvrv', catalog), bulk);
 	assert.match(r.next, /1 of the 4 shown is stale \(`stale: true`, no data in the last 30 days; among the datasets of one asset the fresh ones are listed first\)/);
-	assert.equal(r.bulk.matches[2].stale, true);
+	assert.equal(r.bulk.matches[0].stale, true);
 	// Nothing stale: nothing said about it.
 	const allFresh = await findBulk(createClient({ baseUrl: 'http://127.0.0.1:8080', spec, fetch: fakeFetch({ status: 200, body: { total: 1, datasets: [body.datasets[1]] } }) }), 'mvrv');
 	assert.doesNotMatch(withBulk(findDataset('mvrv', catalog), allFresh).next, /stale/);

@@ -44,6 +44,7 @@ DOCS = {
     "contributor-loop.md": "The contributor loop (CL1-CL10): easy data contribution, one system for users",
     "north-star-loop.md": "The north star work loop (NL0-NL5): items, results, log",
     "desktop-app.md": "The Onyx desktop app: download, install (unsigned-installer steps), use, what stays on your computer (CL10)",
+    "check-a-proof.md": "Check a proof on macOS, Windows or Linux with the ready-made onyx-check: download, SHA-256, first start, the command",
     "agents.md": "Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21)",
     "join.md": "Join a round as an independent observer: the join kit, from key to sealed reveal (NL16)",
     "pre-public-loop.md": "The pre-public work loop (PP1-PP7): items, results, log",

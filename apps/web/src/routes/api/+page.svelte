@@ -12,7 +12,9 @@
 	import ApiReference from '#lib/components/ApiReference.svelte';
 	import spec from '../../../static/openapi.json';
 	import { operations } from '#lib/openapi.ts';
-	import { BASE, ORDER_SINCE, PAGE, REPO } from '#lib/release.ts';
+	import { BASE, CHECK_GUIDE, ORDER_SINCE, PAGE, REPO, checkerFiles } from '#lib/release.ts';
+	// The ready-made onyx-check programs of the release the site links: none before CHECKER_SINCE.
+	const CHECKER = checkerFiles();
 	import { CHECK_FILE, HOSTED_NODE, MAX_ROWS, checkCommands, checkRangeCommands, pageCommand, quickCommands } from '#lib/quickstart.ts';
 	import { group } from '#lib/format.ts';
 
@@ -137,13 +139,27 @@
 		</p>
 		<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 		<pre class="code qcmd" tabindex="0" role="region" aria-label="Save an answer and check it" data-testid="api-quick-check">{checkCmd}</pre>
-		<p class="qnote" data-testid="api-quick-get">
-			For Linux (x86-64), <code>onyx-check</code> is in the release file
-			<a href={BASE + CHECK_FILE} data-testid="api-check-file"><code>{CHECK_FILE}</code></a> (unpack it; the program is in its
-			<code>bin</code> folder; all files are on the <a href={PAGE} target="_blank" rel="noopener">release page</a>). There is no
-			ready-made <code>onyx-check</code> for macOS or Windows yet: build it from the
-			<a href={REPO} target="_blank" rel="noopener">source code</a> with <code class="cmd">cargo build --release -p onyx-check</code>.
-		</p>
+		{#if CHECKER.length}
+			<p class="qnote" data-testid="api-quick-get">
+				Download <code>onyx-check</code> for your system, one file with nothing to unpack:
+				{#each CHECKER as c, i (c.file)}{i ? ', ' : ''}<a href={BASE + c.file} rel="noopener" data-testid="api-check-file">{c.name}</a>{/each}.
+				Every file's SHA-256 is in <code>SHA256SUMS</code> on the <a href={PAGE} target="_blank" rel="noopener">release page</a>.
+			</p>
+			<p class="qnote" data-testid="api-check-unsigned">
+				The files are not signed yet, so the first start shows a warning. Windows: if "Windows protected your PC" appears, choose More
+				info, then Run anyway. macOS: after a refused start, System Settings, Privacy &amp; Security, Open Anyway. Each step, and how
+				to check the SHA-256 with your system's own tool, is in
+				<a href={CHECK_GUIDE} target="_blank" rel="noopener" data-testid="api-check-guide">Check a proof on macOS or Windows</a>.
+			</p>
+		{:else}
+			<p class="qnote" data-testid="api-quick-get">
+				For Linux (x86-64), <code>onyx-check</code> is in the release file
+				<a href={BASE + CHECK_FILE} data-testid="api-check-file"><code>{CHECK_FILE}</code></a> (unpack it; the program is in its
+				<code>bin</code> folder; all files are on the <a href={PAGE} target="_blank" rel="noopener">release page</a>). There is no
+				ready-made <code>onyx-check</code> for macOS or Windows yet: build it from the
+				<a href={REPO} target="_blank" rel="noopener">source code</a> with <code class="cmd">cargo build --release -p onyx-check</code>.
+			</p>
+		{/if}
 		<p class="qnote" data-testid="api-quick-range-note">
 			A range, oldest first (January 2026 here): pass the same <code>--from</code> and <code>--to</code> you asked, so a row outside
 			them is refused.

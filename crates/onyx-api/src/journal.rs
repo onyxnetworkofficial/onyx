@@ -105,6 +105,10 @@ pub(crate) fn owner_only(options: &mut OpenOptions) {
         use std::os::unix::fs::OpenOptionsExt;
         options.mode(0o600);
     }
+    // Elsewhere (a Windows build of the checker compiles this crate) the file takes the folder's
+    // own access rules.
+    #[cfg(not(unix))]
+    let _ = options;
 }
 
 /// Never open through a symbolic link at the file's own name (review B2-R1 H1): whoever can

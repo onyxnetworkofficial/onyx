@@ -28,7 +28,6 @@ use onyx_intake::bounty::{
 };
 use serde_json::{json, Value};
 use std::io::Write;
-use std::os::unix::fs::OpenOptionsExt;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
@@ -59,10 +58,10 @@ fn read_salt(dir: &Path) -> Result<[u8; 32], String> {
             std::fs::File::open("/dev/urandom")
                 .and_then(|mut f| std::io::Read::read_exact(&mut f, &mut salt))
                 .map_err(|e| format!("random salt: {e}"))?;
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
+            let mut options = std::fs::OpenOptions::new();
+            options.write(true).create_new(true);
+            crate::journal::owner_only(&mut options);
+            let mut f = options
                 .open(&path)
                 .map_err(|e| format!("{}: {e}", path.display()))?;
             f.write_all(&salt)
@@ -142,12 +141,10 @@ impl WantsStore {
 
     fn append(&self, account: &Hash32, want: &Want, at: u64) -> Result<(), String> {
         let line = json!({"account": account.to_string(), "want": want, "at": at});
-        let mut f = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .mode(0o600)
-            .open(&self.journal)
-            .map_err(|e| e.to_string())?;
+        let mut options = std::fs::OpenOptions::new();
+        options.create(true).append(true);
+        crate::journal::owner_only(&mut options);
+        let mut f = options.open(&self.journal).map_err(|e| e.to_string())?;
         writeln!(f, "{line}")
             .and_then(|()| f.sync_all())
             .map_err(|e| e.to_string())

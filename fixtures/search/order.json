@@ -1,0 +1,97 @@
+{
+  "about": "The order of a dataset search's matches, one rule in three places: the node (GET /v1/bulk?q=, crates/onyx-api/src/bulk_names.rs), the website (rankSearch in apps/web/src/lib/datasets.ts) and the agent toolkit (findBulk in apps/agent/src/connect.mjs). Each reads this file in a test. A search that names no asset lists the datasets of `majors` first, in that order, then the other assets' by asset id; in one asset the exact metric first, then the metric of fewer words, then the id. `order` is that order by the ids alone: the node's, and the website's and the toolkit's when every dataset is fresh. `orderByAge` is the website's and the toolkit's with the ages given: in one asset, data from the last `staleDays` days comes before older data. A search that names an asset lists that asset's datasets first, as before.",
+  "staleDays": 30,
+  "majors": ["btc", "eth"],
+  "cases": [
+    {
+      "name": "no asset named: Bitcoin, Ethereum, then the other assets by id; fresh before stale in one asset",
+      "q": "mvrv",
+      "named": false,
+      "datasets": [
+        { "id": "example.publisher/wbtc.mvrv", "ageDays": 1 },
+        { "id": "example.publisher/aave.mvrv", "ageDays": 45 },
+        { "id": "example.publisher/eth.mvrv-z-score", "ageDays": 90 },
+        { "id": "example.publisher/btc.sth-mvrv", "ageDays": 1 },
+        { "id": "example.publisher/1inch.mvrv", "ageDays": 1 },
+        { "id": "example.publisher/aave.mvrv-z-score", "ageDays": 1 },
+        { "id": "example.publisher/eth.mvrv", "ageDays": 30 },
+        { "id": "example.publisher/btc.mvrv", "ageDays": 82 }
+      ],
+      "order": [
+        "example.publisher/btc.mvrv",
+        "example.publisher/btc.sth-mvrv",
+        "example.publisher/eth.mvrv",
+        "example.publisher/eth.mvrv-z-score",
+        "example.publisher/1inch.mvrv",
+        "example.publisher/aave.mvrv",
+        "example.publisher/aave.mvrv-z-score",
+        "example.publisher/wbtc.mvrv"
+      ],
+      "orderByAge": [
+        "example.publisher/btc.sth-mvrv",
+        "example.publisher/btc.mvrv",
+        "example.publisher/eth.mvrv",
+        "example.publisher/eth.mvrv-z-score",
+        "example.publisher/1inch.mvrv",
+        "example.publisher/aave.mvrv-z-score",
+        "example.publisher/aave.mvrv",
+        "example.publisher/wbtc.mvrv"
+      ]
+    },
+    {
+      "name": "no asset named: in one asset the exact metric, then fewer words, then the id (the publisher's too)",
+      "q": "price",
+      "named": false,
+      "datasets": [
+        { "id": "example.publisher/sol.price", "ageDays": 2 },
+        { "id": "example.publisher/btc.price-floor-levels", "ageDays": 2 },
+        { "id": "example.publisher/wbtc.price", "ageDays": 2 },
+        { "id": "example.publisher/btc.realized-price", "ageDays": 2 },
+        { "id": "other.publisher/btc.price", "ageDays": 2 },
+        { "id": "example.publisher/eth.price", "ageDays": 2 },
+        { "id": "example.publisher/btc.price-drawdown", "ageDays": 2 },
+        { "id": "example.publisher/btc.price", "ageDays": 2 }
+      ],
+      "order": [
+        "example.publisher/btc.price",
+        "other.publisher/btc.price",
+        "example.publisher/btc.price-drawdown",
+        "example.publisher/btc.realized-price",
+        "example.publisher/btc.price-floor-levels",
+        "example.publisher/eth.price",
+        "example.publisher/sol.price",
+        "example.publisher/wbtc.price"
+      ],
+      "orderByAge": [
+        "example.publisher/btc.price",
+        "other.publisher/btc.price",
+        "example.publisher/btc.price-drawdown",
+        "example.publisher/btc.realized-price",
+        "example.publisher/btc.price-floor-levels",
+        "example.publisher/eth.price",
+        "example.publisher/sol.price",
+        "example.publisher/wbtc.price"
+      ]
+    },
+    {
+      "name": "an asset named: its datasets first, though stale, the exact metric first among them (unchanged)",
+      "q": "bitcoin mvrv",
+      "named": true,
+      "datasets": [
+        { "id": "example.publisher/eth.btc-mvrv", "ageDays": 1 },
+        { "id": "example.publisher/btc.sth-mvrv", "ageDays": 82 },
+        { "id": "example.publisher/btc.mvrv", "ageDays": 82 }
+      ],
+      "order": [
+        "example.publisher/btc.mvrv",
+        "example.publisher/btc.sth-mvrv",
+        "example.publisher/eth.btc-mvrv"
+      ],
+      "orderByAge": [
+        "example.publisher/btc.mvrv",
+        "example.publisher/btc.sth-mvrv",
+        "example.publisher/eth.btc-mvrv"
+      ]
+    }
+  ]
+}

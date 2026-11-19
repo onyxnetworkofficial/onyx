@@ -2022,12 +2022,100 @@ async fn a_search_takes_asset_names_and_lists_the_asked_asset_first() {
         ids(&list("q=btc+price&after=example.publisher%2Fbtc.price-a")),
         ["btc.price-drawdown", "eth.btc-price", "wbtc.price"]
     );
+    // A search that names no asset: Bitcoin's datasets first, though they
+    // are stale, then Ethereum's, then the other assets' by id; in one asset
+    // the exact metric first (the website's order for such a search).
+    let price = [
+        "btc.price",
+        "btc.price-drawdown",
+        "eth.price",
+        "eth.btc-price",
+        "wbtc.price",
+    ];
+    assert_eq!(ids(&list("q=price")), price);
+    assert_eq!(list("q=price")["total"], json!(5));
+    assert_eq!(ids(&list("q=mvrv")), ["btc.mvrv", "wbtc.mvrv"]);
+    // sort=newest orders inside an asset, never across assets.
+    assert_eq!(ids(&list("q=price&sort=newest")), price);
+    assert_eq!(
+        ids(&list("q=price&fresh=30d")),
+        ["eth.price", "eth.btc-price", "wbtc.price"]
+    );
+    let (mut seen, mut after) = (Vec::new(), String::new());
+    loop {
+        let page = list(&format!("q=price&limit=2{after}"));
+        assert_eq!(page["total"], json!(5));
+        seen.extend(ids(&page));
+        match page["next"].as_str() {
+            Some(n) => after = format!("&after={}", n.replace('/', "%2F")),
+            None => break,
+        }
+    }
+    assert_eq!(seen, price, "pages follow the order shown, none twice");
     // No search: id order, nothing collected, as before.
     assert_eq!(ids(&list("limit=2")), ["btc.mvrv", "btc.price"]);
     assert_eq!(
         ids(&list("any=price&limit=2")),
         ["btc.price", "btc.price-drawdown"]
     );
+}
+
+/// One search order in three places: fixtures/search/order.json holds the
+/// node, the website (apps/web/tests/search-order.test.mjs) and the agent
+/// toolkit (apps/agent/test/connect.test.mjs) to the same order of the same
+/// ids. Here: the node's order, by the ids alone.
+#[test]
+fn the_search_order_is_the_shared_fixtures() {
+    let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../../");
+    let read = |p: &str| std::fs::read_to_string(format!("{root}{p}")).expect(p);
+    let v: Value = serde_json::from_str(&read("fixtures/search/order.json")).expect("json");
+    let majors: Vec<&str> = v["majors"]
+        .as_array()
+        .expect("majors")
+        .iter()
+        .map(|m| m.as_str().expect("id"))
+        .collect();
+    assert_eq!(majors, names::MAJORS);
+    // The same list in the website's and the toolkit's code.
+    let list = format!("['{}']", majors.join("', '"));
+    assert!(
+        read("apps/web/src/lib/datasets.ts").contains(&format!("export const MAJORS = {list};"))
+    );
+    assert!(read("apps/agent/src/connect.mjs").contains(&format!("export const MAJORS = {list};")));
+    let cases = v["cases"].as_array().expect("cases");
+    assert!(cases.len() >= 3);
+    for c in cases {
+        let name = c["name"].as_str().expect("name");
+        let q = parse_list_query(Some(&format!(
+            "q={}",
+            c["q"].as_str().expect("q").replace(' ', "+")
+        )))
+        .expect(name);
+        let named = names::names_an_asset(&q.names, &q.words);
+        assert_eq!(json!(named), c["named"], "{name}");
+        let want: Vec<&str> = c["order"]
+            .as_array()
+            .expect("order")
+            .iter()
+            .map(|i| i.as_str().expect("id"))
+            .collect();
+        // From the fixture's own (mixed) order and from its reverse.
+        let mut ids: Vec<(&str, &str)> = c["datasets"]
+            .as_array()
+            .expect("datasets")
+            .iter()
+            .map(|d| d["id"].as_str().expect("id").split_once('/').expect("id"))
+            .collect();
+        for _ in 0..2 {
+            ids.reverse();
+            ids.sort_by_key(|(p, d)| {
+                let (first, last) = names::search_order(&q.names, &q.words, named, p, d);
+                (first, last, *p, *d)
+            });
+            let got: Vec<String> = ids.iter().map(|(p, d)| format!("{p}/{d}")).collect();
+            assert_eq!(got, want, "{name}");
+        }
+    }
 }
 
 /// `GET /v1/bulk` search and pages: every word must be in

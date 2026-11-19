@@ -3710,21 +3710,39 @@ impl BulkStore {
         let mut page = Vec::new();
         // A search (`q`) lists the datasets of the asset asked for first,
         // then the exact metric ([`names::rank`]): `btc.price` before
-        // `wbtc.price`, whatever their dates.
+        // `wbtc.price`, whatever their dates. A search that names no asset
+        // ("mvrv") lists Bitcoin's first, then Ethereum's, then the others'
+        // by id ([`names::search_order`]), as the website does.
         let searched = !q.words.is_empty() || !q.names.is_empty();
+        let named = names::names_an_asset(&q.names, &q.words);
         if q.newest_first || searched {
             // `sort=newest`: the newest key first, a key that is not a time
             // (or lies in the future) last, ties in id order. Only these
             // two orders collect every match to sort it (review FRESH-R1
             // L3): references, no more than the count already walks.
-            let rank = |p: &str, d: &str, k: Option<i128>| {
+            type Place<'a> = (
+                names::OrderHead<'a>,
+                bool,
+                std::cmp::Reverse<i128>,
+                names::OrderTail,
+            );
+            fn rank<'a>(
+                q: &ListQuery,
+                named: bool,
+                p: &str,
+                d: &'a str,
+                k: Option<i128>,
+            ) -> Place<'a> {
                 let k = k.filter(|_| q.newest_first);
+                let (first, last) = names::search_order(&q.names, &q.words, named, p, d);
                 (
-                    names::rank(&q.names, &q.words, p, d),
+                    first,
                     q.newest_first && k.is_none(),
                     std::cmp::Reverse(k.unwrap_or(0)),
+                    last,
                 )
-            };
+            }
+            let rank = |p: &str, d, k| rank(q, named, p, d, k);
             let mut found = Vec::new();
             for ((p, d), x) in ds.iter() {
                 let Some(h) = x.latest() else { continue };

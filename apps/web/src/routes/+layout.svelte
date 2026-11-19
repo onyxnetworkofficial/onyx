@@ -15,7 +15,9 @@
 	import { motion } from '#lib/motion.svelte.ts';
 	import { fadeSections } from '#lib/fade.ts';
 	import { FOOTER_NAV, PRIMARY_NAV } from '#lib/nav.ts';
-	import { REPO } from '#lib/release.ts';
+	import { REPO, hasChecker } from '#lib/release.ts';
+	// Whether the linked release has onyx-check as one file per system (release.ts CHECKER_SINCE).
+	const CHECKER_READY = hasChecker();
 	import { searchKey } from '#lib/format.ts';
 	let palette: CommandPalette;
 	let { children } = $props();
@@ -168,7 +170,7 @@
 			<span class="fstate"><span class="dot" aria-hidden="true"></span>Testnet only · {PUBLIC ? 'early preview' : 'private preview'}</span>
 			<!-- Newcomer test 3 (2026-11-18): only the demo checks run in the browser; a dataset's proof
 			     is checked by the onyx-check program on the reader's own machine. -->
-			<span data-testid="footer-checks">The demo checks on How it works run in your browser, on the network's own code. A dataset's proof needs the onyx-check program: a Linux download, or a build from source elsewhere.</span>
+			<span data-testid="footer-checks">The demo checks on How it works run in your browser, on the network's own code. A dataset's proof needs the onyx-check program: {CHECKER_READY ? 'one download for Linux, macOS or Windows.' : 'a Linux download, or a build from source elsewhere.'}</span>
 			<!-- Newcomer test (A14): the public source and how to connect an AI, from every page. -->
 			<span class="fmore" data-testid="footer-more">
 				<a href={REPO} target="_blank" rel="noopener">Source code</a>

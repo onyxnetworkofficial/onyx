@@ -9,7 +9,7 @@
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import PublisherPointer from '#lib/components/PublisherPointer.svelte';
 	import PublisherStatus from '#lib/components/PublisherStatus.svelte';
-	import { ONBOARDING_SINCE, RELEASE, REPO, hasOnboarding } from '#lib/release.ts';
+	import { ONBOARDING_SINCE, RELEASE, REPO, hasChecker, hasOnboarding } from '#lib/release.ts';
 	import { EXAMPLE_ID, EXAMPLE_ORIGIN, ISSUES, ISSUE_TITLE, TOOLS_FILE, TOOLS_URL, UNPACK, WORDS, buildFromSource, steps } from '#lib/publish-steps.ts';
 	import { DECIDE_DAYS } from '#lib/publishers.ts';
 
@@ -118,6 +118,11 @@
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<pre class="code cmd" tabindex="0" role="region" aria-label="Unpack the download" data-testid="publish-unpack">{UNPACK.join('\n')}</pre>
 				<p>On another system, build the same release from the source. It takes about 15 minutes with a Rust toolchain.</p>
+				{#if hasChecker()}
+					<p class="fine" data-testid="publish-checker">
+						<code>onyx-check</code> alone is also one ready-made file for macOS and Windows: the API page has the downloads.
+					</p>
+				{/if}
 				<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 				<pre class="code cmd" tabindex="0" role="region" aria-label="Build the tools from the source" data-testid="publish-build">{BUILD.join('\n')}</pre>
 				<p class="fine">The path line holds for the terminal it is typed in. In a new terminal, type it again from the same folder.</p>

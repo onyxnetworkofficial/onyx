@@ -38,6 +38,7 @@
 | [`agents.md`](agents.md) | Connect an AI agent: find, read, propose and check Onyx data over MCP (NL21) |
 | [`api/`](api/) | The API description (OpenAPI 3.1), checked against the code |
 | [`audit/`](audit/) | Dated audit and review reports |
+| [`check-a-proof.md`](check-a-proof.md) | Check a proof on macOS, Windows or Linux with the ready-made onyx-check: download, SHA-256, first start, the command |
 | [`contributor-loop.md`](contributor-loop.md) | The contributor loop (CL1-CL10): easy data contribution, one system for users |
 | [`desktop-app.md`](desktop-app.md) | The Onyx desktop app: download, install (unsigned-installer steps), use, what stays on your computer (CL10) |
 | [`join.md`](join.md) | Join a round as an independent observer: the join kit, from key to sealed reveal (NL16) |

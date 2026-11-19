@@ -66,7 +66,6 @@ use onyx_track::{
     TrackParams,
 };
 use serde_json::{json, Value};
-use std::os::unix::fs::MetadataExt;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::SystemTime;
@@ -170,6 +169,28 @@ struct Stamp {
     len: u64,
     inode: u64,
     changed: (i64, i64),
+}
+
+/// The file's inode: on Unix, where the node runs. Elsewhere (this crate also compiles into the
+/// Windows build of the checker) the stamp is the file's time and length alone.
+#[cfg(unix)]
+fn file_inode(meta: &std::fs::Metadata) -> u64 {
+    std::os::unix::fs::MetadataExt::ino(meta)
+}
+#[cfg(not(unix))]
+fn file_inode(_meta: &std::fs::Metadata) -> u64 {
+    0
+}
+
+/// The file's change time (seconds, nanoseconds) on Unix; (0, 0) elsewhere.
+#[cfg(unix)]
+fn file_changed(meta: &std::fs::Metadata) -> (i64, i64) {
+    use std::os::unix::fs::MetadataExt;
+    (meta.ctime(), meta.ctime_nsec())
+}
+#[cfg(not(unix))]
+fn file_changed(_meta: &std::fs::Metadata) -> (i64, i64) {
+    (0, 0)
 }
 
 /// The file version last read, and what that read gave.
@@ -603,8 +624,8 @@ impl TrackStore {
                 .modified()
                 .map_err(|e| format!("track publication file: {e}"))?,
             len: meta.len(),
-            inode: meta.ino(),
-            changed: (meta.ctime(), meta.ctime_nsec()),
+            inode: file_inode(&meta),
+            changed: file_changed(&meta),
         };
         if let Some((s, r)) = seen.as_ref() {
             if *s == stamp {

@@ -110,6 +110,9 @@ secret that changes every time it starts; other programs and websites cannot use
 - The window is apps/desktop (Tauri 2). It needs the system web view's development libraries, so
   it is built by `.github/workflows/desktop.yml` on Windows, macOS and Linux runners when a
   `v*-testnet` tag is pushed (or by hand from the Actions tab, without attaching anything).
+- `scripts/checker-build.sh <out dir> [targets]` builds the proof checker `onyx-check` as one
+  program per system (each on its own system) and smoke-tests it; the same workflow attaches the
+  four files. Users: docs/check-a-proof.md.
 - Decisions and alternatives: docs/adr/0061-desktop-app.md. Threats: THREATS.md section CL10.
 - Not done yet: code signing (Windows Authenticode, Apple Developer ID and notarization) is the
   owner's decision; until then users follow section 1's extra click.

@@ -87,3 +87,7 @@ Pinned inputs with checksums. Never edit a fixture in place; add a new one.
   verbatim, sources in `tlock/vectors.json` and `tlock/PROVENANCE.md`), and Onyx's own zero-tail
   vectors (`tlock/onyx-zero-tail.json`; regenerate only with a scheme change:
   `ONYX_BLESS=1 cargo test -p onyx-tlock --test interop`).
+- `search/order.json`: the order of a dataset search's matches (a search that names no asset lists
+  Bitcoin, then Ethereum, then the other assets by id), read by the node's test
+  (`onyx-api`, `the_search_order_is_the_shared_fixtures`), the website's
+  (`apps/web/tests/search-order.test.mjs`) and the agent toolkit's (`apps/agent/test/connect.test.mjs`).

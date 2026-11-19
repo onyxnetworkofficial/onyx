@@ -226,7 +226,11 @@ answer's `assets` says which names were read so; a search lists the datasets who
 part of the dataset id before the first dot, is one asked for by name or typed as an id before
 those that only hold the words, and among each the dataset whose other id words are exactly the
 other words typed, so `q=btc price` lists `btc.price` before `btc.price-drawdown` and both
-before `wbtc.price`, whatever their dates; the names are the website's table, copied in
+before `wbtc.price`, whatever their dates; a search that names no asset, such as `q=mvrv`,
+lists the datasets of `btc` first, then those of `eth`, then the other assets' by asset id, and in
+one asset the exact metric, then the metric of fewer words, then the id (`sort=newest` then orders
+inside an asset: the newest first, before the exact metric), the same order the website and the
+agent toolkit give such a search, held to it by `fixtures/search/order.json`; the names are the website's table, copied in
 `crates/onyx-api/src/bulk_names.rs` with a test that reads the website's file; a dataset whose key reads as unix seconds, by the rule of `key.unit`,
 has `newest`, the UTC day of its newest key, and `newest_age_days`, whole days behind the node's
 clock at the answer (a newest key dated more than a day after that clock gives only

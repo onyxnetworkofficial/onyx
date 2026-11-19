@@ -5,11 +5,13 @@
 	// `app` adds the link to the desktop app's Download page (on Add data); the Download page itself
 	// shows this list under "For developers", without that link and with the single-file programs.
 	import { resolve } from '$app/paths';
-	import { BASE, CLI_FILES, PAGE, hasDesktop, programs } from '#lib/release.ts';
+	import { BASE, CLI_FILES, PAGE, checkerFiles, hasDesktop, programs } from '#lib/release.ts';
 	let { app = true, heading = 'Programs to download' }: { app?: boolean; heading?: string } = $props();
 	const PROGRAMS = programs();
 	// The single-file contributor program (no Node.js) ships with the desktop releases only.
 	const single = $derived(!app && hasDesktop());
+	// The proof checker as one file per system: only from the release that carries it (CHECKER_SINCE).
+	const CHECKER = checkerFiles();
 </script>
 
 <section class="section side" data-testid="downloads">
@@ -29,6 +31,16 @@
 					<span class="muted">Needs: nothing; Linux x86-64, macOS (Apple silicon or Intel) or Windows x64</span>
 					<span class="files">
 						{#each CLI_FILES as f (f)}<a href={BASE + f} rel="noopener" data-testid="download-cli-file">{f}</a>{/each}
+					</span>
+				</li>
+			{/if}
+			{#if CHECKER.length}
+				<li data-testid="download-check">
+					<b>Proof checker, one file</b>
+					<span>Check a saved answer of the API yourself: <code>onyx-check</code> proves every row against the publisher’s signature and the record on the test chain.</span>
+					<span class="muted">Needs: nothing; Linux x86-64, macOS (Apple silicon or Intel) or Windows x64</span>
+					<span class="files">
+						{#each CHECKER as c (c.file)}<a href={BASE + c.file} rel="noopener" data-testid="download-check-file">{c.file}</a>{/each}
 					</span>
 				</li>
 			{/if}

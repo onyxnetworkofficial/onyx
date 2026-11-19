@@ -119,3 +119,16 @@ test('the paging command uses the node\'s limit and page; the check file is the 
 	assert.match(page, /Everything on this page is free to read today: no key, no sign-up/);
 	assert.match(page, /CHECK_FILE/);
 });
+
+// The guide for macOS and Windows (docs/check-a-proof.md) saves and checks the page's own example:
+// the same read and the same arguments, under each system's file name.
+test('the macOS and Windows guide runs the page\'s own check, argument for argument', () => {
+	const guide = readFileSync(new URL('../../../docs/check-a-proof.md', import.meta.url), 'utf8');
+	const [save, check] = Q.checkCommands(Q.HOSTED_NODE).split('\n');
+	const url = /"([^"]+)"/.exec(save)[1];
+	const args = check.replace(/^onyx-check /, '');
+	assert.ok(guide.includes(`\`curl -s "${url}" > rows.json\``), 'macOS saves the same read');
+	assert.ok(guide.includes(`\`curl -s -o rows.json "${url}"\``), 'Windows saves the same read, with curl\'s own -o');
+	assert.ok(guide.includes(`\`./onyx-check-macos-arm64 ${args}\``), 'macOS checks with the same arguments');
+	assert.ok(guide.includes(`\`onyx-check-windows-x64.exe ${args}\``), 'Windows checks with the same arguments');
+});

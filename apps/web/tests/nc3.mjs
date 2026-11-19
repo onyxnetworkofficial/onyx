@@ -74,7 +74,7 @@ export async function nc3(browser, base, expect) {
 		const mk = flat(await pg.locator('.market-preview').innerText());
 		expect((await text('home-markets')) === 'See the test markets' && !/Open markets|Live on/.test(mk) && /Past test markets/.test(mk) && /placed by the project’s own test accounts/.test(mk) && /nothing is traded there/.test(mk), `${at}: Home calls no market open and says who bet ("${mk.slice(0, 90)}")`);
 		const foot = await text('footer-checks');
-		expect(/^The demo checks on How it works run in your browser, on the network's own code\./.test(foot) && /A dataset's proof needs the onyx-check program: a Linux download, or a build from source elsewhere\.$/.test(foot) && !/Every check runs/.test(foot), `${at}: the footer claims only the demo checks for the browser ("${foot}")`);
+		expect(/^The demo checks on How it works run in your browser, on the network's own code\./.test(foot) && (/A dataset's proof needs the onyx-check program: a Linux download, or a build from source elsewhere\.$/.test(foot) || /A dataset's proof needs the onyx-check program: one download for Linux, macOS or Windows\.$/.test(foot)) && !/Every check runs/.test(foot), `${at}: the footer claims only the demo checks for the browser ("${foot}")`);
 		expect(await fits(), `${at}: Home fits the viewport`);
 
 		// 2. The header search: Ctrl K off Apple machines; what is typed goes to the dataset search.
