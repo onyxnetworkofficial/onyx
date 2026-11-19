@@ -17,6 +17,13 @@
 #    lines. So a limits file the node refuses (a grant over the total, a bad field), or any other
 #    setting it refuses, stops the deploy before the old node is stopped. --check-config only
 #    reads, and its lines are shown only when it fails.
+# 3. Whether the new binary keeps a share of its requests in flight per client (THREATS NL5-3):
+#    its --check-config then prints "<number> in flight (ONYX_MAX_INFLIGHT_PER_CLIENT)". Only
+#    then does the gate leave the file STAGE/node-shares-in-flight, and only with that file does
+#    deploy-api.sh load the firewall's connection cap of 128 per address: in front of a node
+#    without the share (an older binary, or the share set to 0) that cap would let one address
+#    hold half the node. Without the line the gate says so in capitals and the deploy goes on
+#    with the firewall as it is.
 #
 # Test hooks (the self-test only): ONYX_GATE_ROOT, a folder standing in for the server's root, and
 # ONYX_GATE_SUDO, the command put before what needs root (default sudo; empty in the self-test).
@@ -33,6 +40,8 @@ gate() {
   for f in node.env onyx-node onyx-node.service; do
     [ -s "$stage/$f" ] || die "the staging folder has no $f"
   done
+  # Never a marker from anywhere else: only this run's check-config may leave it (step 3).
+  rm -f "$stage/node-shares-in-flight"
   # 1. Limits per publisher.
   if [ -e "$stage/publishers.json" ]; then
     [ -s "$stage/publishers.json" ] || die "the staged publishers.json is empty: not a limits file. Nothing was changed"
@@ -84,6 +93,13 @@ PY
     die "the new onyx-node refuses the new settings (--check-config, exit $rc). The running node was not stopped and nothing was changed"
   fi
   echo "check-config: the new binary takes the new settings"
+  # 3. The share of requests in flight per client, in the new binary's own words.
+  if grep -qE '(^|[^0-9a-z])[1-9][0-9]* in flight \(ONYX_MAX_INFLIGHT_PER_CLIENT\)' <<<"$out"; then
+    : >"$stage/node-shares-in-flight"
+    echo "in-flight share: the new binary limits requests in flight per client"
+  else
+    echo "WARNING: THE NEW BINARY DOES NOT LIMIT REQUESTS IN FLIGHT PER CLIENT (no '<number> in flight (ONYX_MAX_INFLIGHT_PER_CLIENT)' line in its --check-config): the connection cap file will NOT be loaded by this deploy"
+  fi
 }
 
 self_test() {
@@ -116,6 +132,7 @@ EOF
 #!/usr/bin/env bash
 { echo "args: \$*"; env | sort; } >"$t/ran.log"
 if [ -e "$t/refuse" ]; then echo "onyx-node: ONYX_BULK_PUBLISHERS: the grants exceed the node's total" >&2; exit 2; fi
+if [ -e "$t/share" ]; then echo "onyx-node: request limits per client: 1200 a minute (ONYX_READS_PER_MINUTE), \$(cat "$t/share") in flight (ONYX_MAX_INFLIGHT_PER_CLIENT) of 256 for all clients" >&2; fi
 echo "onyx-node: config ok"
 EOF
     chmod 755 "$s/onyx-node"
@@ -172,6 +189,23 @@ EOF
   run "$t/paid" ONYX_API_LIMITS_OFF=1
   check "a unit without the key line gets no key path" '[ "$rc" = 0 ] && ! grep -q "^ONYX_OPERATOR_KEY_FILE=" "$t/ran.log"'
 
+  # 3. The share of requests in flight per client decides whether the connection cap is loaded (THREATS NL5-3).
+  local mark=$t/paid/node-shares-in-flight
+  check "a binary that prints no in-flight share leaves no marker and is named in capitals" '[ "$rc" = 0 ] && [ ! -e "$mark" ] && [[ $out == *"WARNING: THE NEW BINARY DOES NOT LIMIT REQUESTS IN FLIGHT PER CLIENT"* ]] && [[ $out == *"will NOT be loaded"* ]]'
+  echo 32 >"$t/share"
+  run "$t/paid" ONYX_API_LIMITS_OFF=1
+  check "a binary that prints its in-flight share leaves the marker" '[ "$rc" = 0 ] && [ -e "$mark" ] && [[ $out == *"in-flight share: the new binary limits requests in flight per client"* ]] && [[ $out != *WARNING* ]]'
+  echo off >"$t/share"
+  run "$t/paid" ONYX_API_LIMITS_OFF=1
+  check "a share that is off is no share: an earlier marker is removed" '[ "$rc" = 0 ] && [ ! -e "$mark" ] && [[ $out == *"WARNING: THE NEW BINARY DOES NOT LIMIT"* ]]'
+  echo 0 >"$t/share"
+  run "$t/paid" ONYX_API_LIMITS_OFF=1
+  check "a share of 0 is no share" '[ "$rc" = 0 ] && [ ! -e "$mark" ]'
+  echo 32 >"$t/share" && : >"$mark" && : >"$t/refuse"
+  run "$t/paid" ONYX_API_LIMITS_OFF=1
+  check "a refused deploy leaves no marker" '[ "$rc" = 1 ] && [ ! -e "$mark" ]'
+  rm "$t/refuse" "$t/share"
+
   rm "$t/plain/onyx-node"
   run "$t/plain" ONYX_API_LIMITS_OFF=1
   check "a staging folder without the binary is refused" '[ "$rc" = 1 ] && [[ $out == *"no onyx-node"* ]]'
@@ -185,6 +219,14 @@ EOF
   check "deploy-api.sh hands the operator's consent to the gate" 'grep -q "ONYX_API_LIMITS_OFF=\${ONYX_API_LIMITS_OFF:-0} bash deploy-node-gate.sh" "$d"'
   check "deploy-api.sh refuses an empty publishers.json in the export before it sends anything" '[[ $empty_line =~ ^[0-9]+$ ]] && [ "$empty_line" -lt "$(awk "/^remote=/ && !n {n = NR} END {print n}" "$d")" ]'
   check "the node's bulk total is written once in deploy-api.sh (LIM-R1 M4)" '[ "$(grep -c "^bulk_max_gib=[0-9][0-9]*$" "$d")" = 1 ] && ! grep -q "ONYX_BULK_MAX_GIB=[0-9]" "$d" && grep -q "ONYX_BULK_MAX_GIB=\$bulk_max_gib" "$d"'
+  # The cap file is loaded only inside the test of the gate's marker and of the installed binary,
+  # and the limits line the gate reads is the one the node prints.
+  local cap_if cap_load cap_else
+  cap_if=$(awk '/if \[ -f node-shares-in-flight \] && sudo cmp -s onyx-node \/usr\/local\/bin\/onyx-node; then/ && !n {n = NR} END {print n}' "$d")
+  cap_load=$(awk '/^[[:space:]]*sudo systemctl restart onyx-conn-cap$/ {n = n " " NR} END {print n}' "$d")
+  cap_else=$(awk '/CONNECTION CAP NOT LOADED/ && !n {n = NR} END {print n}' "$d")
+  check "deploy-api.sh loads the connection cap only for a node that has the in-flight share, and says so when it does not (THREATS NL5-3)" '[[ $cap_if =~ ^[0-9]+$ ]] && [[ $cap_else =~ ^[0-9]+$ ]] && [[ $cap_load =~ ^\ [0-9]+$ ]] && [ "$cap_if" -lt "${cap_load# }" ] && [ "${cap_load# }" -lt "$cap_else" ] && [ "$(grep -c "install -m 0644 onyx-conn-cap.nft" "$d")" = 1 ]'
+  check "the line the gate reads is the line the node prints" 'grep -q "{} in flight (ONYX_MAX_INFLIGHT_PER_CLIENT)" "$repo/crates/onyx-node/src/config.rs"'
   check "the unit still runs --check-config before the node, the call the gate makes" 'grep -qx "ExecStartPre=/usr/local/bin/onyx-node --check-config" "$repo/deploy/systemd/onyx-node.service"'
 
   echo "deploy-node-gate self-test: $pass passed, $failed failed"

@@ -409,11 +409,21 @@ Not in the file, so the host has to provide it:
 - **Per-client connection cap.** onyx-node exempts its trusted proxy from `ONYX_MAX_CONNS_PER_IP`
   (AUD-1R-F1), and stock Caddy has no per-client connection limit. Cap new connections per
   source address in the host firewall, or accept that one client can hold many proxy
-  connections (THREATS TLS-2). The ready file is `deploy/nftables/onyx-conn-cap.nft` (64 open
+  connections (THREATS TLS-2). The ready file is `deploy/nftables/onyx-conn-cap.nft` (128 open
   connections per IPv4 address or IPv6 /64 on 443, its own table, loaded by
-  `deploy/systemd/onyx-conn-cap.service`; tested with `scripts/conn-cap-test.sh`). The file serves
-  HTTP/1.1 only, so that cap also bounds the client's requests in flight; onyx-api still has one
-  global cap of 256 in flight (503 `overloaded`) that 8 such clients could fill.
+  `deploy/systemd/onyx-conn-cap.service`; tested with `scripts/conn-cap-test.sh`). 128 fits 21
+  people behind one address (a browser holds 6 connections); it was 32, then 64. That cap counts
+  every connection, static files and idle keep-alives included, so it no longer decides how much
+  of the node one client holds: onyx-node gives one forwarded client at most
+  `ONYX_MAX_INFLIGHT_PER_CLIENT` (default 32; `scripts/deploy-api.sh` writes it to `node.env`) of
+  its 256 requests in flight and answers 429 `rate_limited` beyond, even to a client with all 128
+  connections open (THREATS NL5-3). Load the 128 file only in front of a node that has the
+  setting: `scripts/deploy-api.sh` checks that in the new binary's `--check-config` and otherwise
+  leaves the firewall as it is, and after a rollback of the node `sudo systemctl restart
+  onyx-conn-cap` loads the previous file again (it came back with `/etc/onyx`). Still accepted:
+  8 clients at their share fill the 256 (503 `overloaded`; 4 of them stay free for the host's own
+  health check), and the share trusts the address the proxy forwards, so `ONYX_TRUSTED_PROXIES`
+  must name the proxy.
 - **Rate limits** stay in onyx-node, keyed on the forwarded client (payments 30/min, free
   exports 6/min, level-2 attempts 30/min).
 - **`includeSubDomains` / preload** for HSTS: only if every subdomain of the domain is HTTPS.
@@ -675,7 +685,10 @@ Self-test (in check-all, offline, a fake snapshot): `scripts/export-from-backup.
 3. Check `onyx-node --check-config` before the restart and `/v1/health` after.
 4. Rollback: run the previous tag or binary with the same state volume. The journal format is
    versioned by its header; a downgrade that cannot read it refuses to start instead of losing
-   entries.
+   entries. A node from before `ONYX_MAX_INFLIGHT_PER_CLIENT` keeps no share of its requests in
+   flight per client, so put the firewall's connection cap back to the one that release ran
+   with as well: on the hosted server `sudo systemctl restart onyx-conn-cap` after `/etc/onyx` is
+   back (THREATS NL5-3; launch-checklist.md "Rollback").
 
 Only one process may own a state directory (lock file, REV-L3-F4); run a second replica with
 its own state dir. Use a local disk, not NFS (REV-L4-F7).

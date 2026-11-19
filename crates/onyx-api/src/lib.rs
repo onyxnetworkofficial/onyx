@@ -31,6 +31,7 @@ pub mod early_chain;
 pub mod evm_tx;
 pub mod gate;
 pub mod indexer;
+mod inflight;
 pub mod intents;
 pub mod journal;
 pub mod labels_serve;
@@ -103,6 +104,7 @@ pub struct ApiConfig {
     /// fit inside it.
     pub request_timeout: Duration,
     /// Requests in flight before new ones get 503 `overloaded`.
+    /// [`local_reserve`] of them are kept for local callers.
     pub max_concurrency: usize,
     /// Deadline of one facilitator `verify` call; a `settle` gets
     /// [`SETTLE_PATIENCE`] times this in its own task.
@@ -154,6 +156,14 @@ pub struct ApiConfig {
     /// such as the agent connector or the health watch) is not counted: such
     /// services keep their own per-client limits. 0 turns the limit off.
     pub reads_per_minute: u32,
+    /// Requests in flight per client on the routes behind the guard (THREATS
+    /// NL5-3): one client key holds at most this many of the
+    /// `max_concurrency` permits, an IPv6 /56 and /48 the wider shares of
+    /// [`inflight_scopes`]; 429 `rate_limited` beyond. A request counts from the
+    /// guard until its body is written or dropped, like the permit it holds.
+    /// The same callers are counted as for `reads_per_minute` (a trusted
+    /// proxy that sent no `X-Forwarded-For` is not). 0 turns the limit off.
+    pub max_inflight_per_client: u32,
     /// Reverse proxies whose `X-Forwarded-For` is believed (M7-L48-F2).
     /// When the peer is in one of these ranges, the client is the
     /// right-most `X-Forwarded-For` address outside them; otherwise the
@@ -187,6 +197,47 @@ pub struct ApiConfig {
 /// burst of a minute's worth, far above a page or an agent session and far
 /// below the 17,000 a second one address reached on the dev box (L5).
 pub const DEFAULT_READS_PER_MINUTE: u32 = 1_200;
+
+/// Default [`ApiConfig::max_inflight_per_client`]: an eighth of the default
+/// `max_concurrency`. A browser sends at most 6 requests at a time to one
+/// host over HTTP/1.1, so 32 is five people behind one address all loading
+/// at the same instant; the sixth gets a 429 with `Retry-After: 1`, not a
+/// reset connection.
+pub const DEFAULT_MAX_INFLIGHT_PER_CLIENT: u32 = 32;
+
+/// Most permits kept for local callers ([`local_reserve`]).
+pub const LOCAL_RESERVE: usize = 4;
+
+/// Of `max_concurrency` permits, those only a caller the per-client limits
+/// do not count may take (no connect info, or a trusted proxy that sent no
+/// `X-Forwarded-For`: a service on the host, such as the health watch), so
+/// a node whose other permits are all held by remote clients still answers
+/// its own health check (THREATS NL5-3). Such a caller takes an ordinary
+/// permit first. [`LOCAL_RESERVE`], and at most an eighth of the permits
+/// (none below 8).
+pub fn local_reserve(max_concurrency: usize) -> usize {
+    LOCAL_RESERVE.min(max_concurrency / 8)
+}
+
+/// The scopes one request in flight counts against, with their caps
+/// (THREATS NL5-3): the client key at `per_client`, and for an IPv6 /64 its
+/// /56 and /48 as [`rate_scopes`] names them. The wider caps are the rate
+/// limiter's multiples, but never more than a quarter (/56) and a half (/48)
+/// of `max_concurrency`, so no single allocation holds the whole server, and
+/// never less than `per_client`. At the defaults: 32, 64 and 128 of 256.
+pub fn inflight_scopes(
+    client: &str,
+    per_client: u32,
+    max_concurrency: usize,
+) -> Vec<(String, u32)> {
+    let all = u32::try_from(max_concurrency).unwrap_or(u32::MAX);
+    let ceilings = [u32::MAX, all / 4, all / 2];
+    rate_scopes(client, per_client)
+        .into_iter()
+        .zip(ceilings)
+        .map(|((key, cap), ceiling)| (key, cap.min(ceiling).max(per_client)))
+        .collect()
+}
 
 /// An address range, `addr/prefix` (M7-L48-F2).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,6 +415,7 @@ impl Default for ApiConfig {
             unsettled_per_hour: 20,
             allow_mainnet: false,
             reads_per_minute: DEFAULT_READS_PER_MINUTE,
+            max_inflight_per_client: DEFAULT_MAX_INFLIGHT_PER_CLIENT,
             trusted_proxies: Vec::new(),
             authorization_slack: Duration::from_secs(300),
             root_miss_ttl: Duration::from_secs(5),
@@ -447,6 +499,11 @@ pub struct ApiState {
     /// OBS-STORAGE-1). Set with [`ApiState::with_storage`].
     pub storage: Option<Arc<storage::StorageNode>>,
     inflight: Arc<Semaphore>,
+    /// The [`local_reserve`] permits, apart from `inflight`; both together
+    /// are `max_concurrency`.
+    local_inflight: Arc<Semaphore>,
+    /// Requests in flight per client ([`ApiConfig::max_inflight_per_client`]).
+    client_inflight: Arc<inflight::ClientInflight>,
     facilitator_slots: Arc<Semaphore>,
     /// Per-client request buckets of [`ApiConfig::reads_per_minute`], apart
     /// from the payment-attempt buckets so a read flood cannot evict those.
@@ -480,7 +537,11 @@ impl ApiState {
             payments,
             clock,
             public_url: public_url.into(),
-            inflight: Arc::new(Semaphore::new(config.max_concurrency)),
+            inflight: Arc::new(Semaphore::new(
+                config.max_concurrency - local_reserve(config.max_concurrency),
+            )),
+            local_inflight: Arc::new(Semaphore::new(local_reserve(config.max_concurrency))),
+            client_inflight: Arc::new(inflight::ClientInflight::default()),
             facilitator_slots: Arc::new(Semaphore::new(config.max_facilitator_calls)),
             reads: Caches::new(1, 1),
             config,
@@ -565,6 +626,13 @@ impl ApiState {
     pub fn with_settle_check(mut self, check: Arc<dyn settle_check::SettleCheck>) -> Self {
         self.settle_check = Some(check);
         self
+    }
+
+    /// Scopes (client keys and wider IPv6 prefixes) with a request in flight
+    /// that the per-client share counts
+    /// ([`ApiConfig::max_inflight_per_client`]): 0 when nothing is in flight.
+    pub fn clients_in_flight(&self) -> usize {
+        self.client_inflight.len()
     }
 
     /// Honour contributor proofs under `policy` (ADR-0025 item 3).
@@ -695,7 +763,10 @@ pub fn rate_scopes(client: &str, per_minute: u32) -> Vec<(String, u32)> {
 /// Set on a request whose client key was computed and counted once, by
 /// [`client_limited`] or by the guard, whichever runs first (THREATS NL20-1).
 #[derive(Clone, Copy, Debug)]
-struct Admitted;
+struct Admitted {
+    /// Whether the per-client limits count this request ([`client_of`]).
+    counted: bool,
+}
 
 /// The client key of `req` and whether the per-client request limit counts it
 /// (THREATS NL20-1). Not counted: no connect info (in-process tests), and a
@@ -746,7 +817,7 @@ fn admit_client(state: &ApiState, req: &mut Request) -> Option<Response> {
         }
     }
     req.extensions_mut().insert(ClientKey(key));
-    req.extensions_mut().insert(Admitted);
+    req.extensions_mut().insert(Admitted { counted });
     None
 }
 
@@ -776,6 +847,15 @@ async fn client_limit(
 /// `X-Forwarded-For`: [`client_ip`]). A middleware rather than tower layers:
 /// `Router::layer` would give every route its own semaphore.
 ///
+/// One client holds at most `max_inflight_per_client` of those permits
+/// (THREATS NL5-3, the `inflight` module): its place is taken with the
+/// permit and given back with it, so it is counted until the body is written
+/// or dropped, whatever ends the request (an answer, an error, the deadline,
+/// a panic, a client that went away). The callers the request limit does not
+/// count ([`client_of`]) are not counted here either, and only they may take
+/// the last [`local_reserve`] permits: a full server answers a remote client
+/// 503 before it looks at that client's share.
+///
 /// A HEAD request never pays (M7-L50-F2): axum answers HEAD with the GET
 /// handler and strips the body, so a settled HEAD would spend the payment
 /// on nothing. With `PAYMENT-SIGNATURE` it is refused before any verify or
@@ -802,11 +882,43 @@ async fn guard(State(state): State<Arc<ApiState>>, mut req: Request, next: Next)
     if let Some(refused) = admit_client(&state, &mut req) {
         return refused;
     }
-    let Ok(permit) = state.inflight.clone().try_acquire_owned() else {
+    let counted = req
+        .extensions()
+        .get::<Admitted>()
+        .is_some_and(|a| a.counted);
+    // A caller that is not counted per client (a service on the host) may
+    // also take a reserved permit, so remote clients cannot shut it out.
+    let permit = state.inflight.clone().try_acquire_owned().or_else(|full| {
+        if counted {
+            Err(full)
+        } else {
+            state.local_inflight.clone().try_acquire_owned()
+        }
+    });
+    let Ok(permit) = permit else {
         return ApiError::new(
             StatusCode::SERVICE_UNAVAILABLE,
             "overloaded",
             "too many requests in flight",
+        )
+        .with_header("retry-after", "1".into())
+        .into_response();
+    };
+    // The permit first, so every place in the per-client table sits next to
+    // a permit (the table is bounded by `max_concurrency`); a refusal gives
+    // the permit straight back.
+    let cap = state.config.max_inflight_per_client;
+    let scopes = match req.extensions().get::<ClientKey>() {
+        Some(ClientKey(key)) if counted && cap > 0 => {
+            inflight_scopes(key, cap, state.config.max_concurrency)
+        }
+        _ => Vec::new(),
+    };
+    let Ok(permit) = state.client_inflight.hold(permit, scopes) else {
+        return ApiError::new(
+            StatusCode::TOO_MANY_REQUESTS,
+            "rate_limited",
+            "too many requests in flight from this address",
         )
         .with_header("retry-after", "1".into())
         .into_response();

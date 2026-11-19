@@ -9,9 +9,18 @@
 #
 # CAP: browsers open at most 6 HTTP/1.1 connections per host and Caddy keeps an idle one for 60 s,
 # so each person behind one address holds 6. With 32 the sixth person behind one address was reset
-# (seen 2026-11-18: 6 browsers, 36 connections); 64 fits 10 people.
-# One source then holds at most 64 of the node's 256 slots (a quarter; four sources can fill it). IPv6 sources count per /64 (one
-# customer's prefix), so stepping through addresses in one prefix does not get past the cap.
+# (seen 2026-11-18: 6 browsers, 36 connections), with 64 the eleventh; 128 fits 21 people.
+# The cap counts every connection, most of them static files and idle keep-alives, so it is a
+# coarse limit on the node's slots. Since 2026-11-18 the node keeps the fine one itself: one
+# forwarded client holds at most ONYX_MAX_INFLIGHT_PER_CLIENT (32) of its 256 requests in flight
+# and gets a 429 beyond (THREATS NL5-3), however many connections it opens here. That is why
+# this cap could go from 64 to 128 without one source holding more of the node: it now bounds
+# Caddy's sockets per source (THREATS TLS-2), and the node's slots only for a node older than
+# that setting (128 of 256: do not load this file in front of such a node; scripts/deploy-api.sh
+# loads it only when the node's --check-config shows the share, and after a rollback of the node
+# "systemctl restart onyx-conn-cap" loads the file that came back with /etc/onyx). IPv6 sources count
+# per /64 (one customer's prefix), so stepping through addresses in one prefix does not get past
+# the cap.
 #
 # This is its own table: it never touches ufw's rules, and loading it again replaces only this
 # table (the empty declaration makes the delete safe on the first load). Do not put it in
@@ -36,7 +45,7 @@ table inet onyx_conn_cap {
     # Before ufw's filter chains (priority filter = 0), and policy accept: this table only ever
     # rejects over-cap connections; everything else goes on to ufw unchanged.
     type filter hook input priority filter - 1; policy accept;
-    tcp dport 443 ct state new add @https_v4 { ip saddr ct count over 64 } counter reject with tcp reset
-    tcp dport 443 ct state new add @https_v6 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over 64 } counter reject with tcp reset
+    tcp dport 443 ct state new add @https_v4 { ip saddr ct count over 128 } counter reject with tcp reset
+    tcp dport 443 ct state new add @https_v6 { ip6 saddr & ffff:ffff:ffff:ffff:: ct count over 128 } counter reject with tcp reset
   }
 }

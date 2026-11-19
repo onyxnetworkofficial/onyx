@@ -856,6 +856,7 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
             allow_mainnet: c.allow_mainnet,
             trusted_proxies: c.trusted_proxies.clone(),
             reads_per_minute: c.reads_per_minute,
+            max_inflight_per_client: c.max_inflight_per_client,
             ..ApiConfig::default()
         },
     )
@@ -1359,6 +1360,7 @@ async fn serve(l: Loaded, gates: Vec<Arc<dyn ServingGate>>) -> Res<()> {
         c.payments,
         shards
     );
+    eprintln!("{}", c.request_limits_line());
     if let Some(w) = c.plain_http_public_warning() {
         eprintln!("{w}");
     }
@@ -1571,6 +1573,7 @@ pub fn main_with(gates: Vec<Arc<dyn ServingGate>>) -> ExitCode {
         return ExitCode::from(2);
     }
     if check_only {
+        eprintln!("{}", loaded.config.request_limits_line());
         if let Some(w) = loaded.config.plain_http_public_warning() {
             eprintln!("{w}");
         }

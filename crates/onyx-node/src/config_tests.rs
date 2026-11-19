@@ -464,22 +464,49 @@ fn fee_gas_and_per_client_limits_are_settable_and_bounded() {
     let c = load(&base()).expect("config");
     assert_eq!(c.max_per_client, crate::serve::DEFAULT_MAX_PER_CLIENT);
     assert_eq!(c.reads_per_minute, onyx_api::DEFAULT_READS_PER_MINUTE);
+    assert_eq!(c.max_inflight_per_client, 32);
+    assert_eq!(
+        c.request_limits_line(),
+        "onyx-node: request limits per client: 1200 a minute (ONYX_READS_PER_MINUTE), 32 in flight (ONYX_MAX_INFLIGHT_PER_CLIENT) of 256 for all clients"
+    );
     assert_eq!(c.max_fee_per_gas, onyx_api::evm_tx::DEFAULT_MAX_FEE_PER_GAS);
     assert_eq!(c.max_gas, onyx_api::evm_tx::DEFAULT_MAX_GAS);
     let mut m = base();
     m.insert("ONYX_MAX_CONNS_PER_IP", "8");
     m.insert("ONYX_READS_PER_MINUTE", "0");
+    m.insert("ONYX_MAX_INFLIGHT_PER_CLIENT", "0");
     m.insert("ONYX_MAX_FEE_GWEI", "50");
     m.insert("ONYX_MAX_GAS", "2000000");
     let c = load(&m).expect("config");
     assert_eq!(c.max_per_client, 8);
     assert_eq!(c.reads_per_minute, 0);
+    assert_eq!(c.max_inflight_per_client, 0);
+    let mut m = base();
+    m.insert("ONYX_MAX_INFLIGHT_PER_CLIENT", " 48 ");
+    assert_eq!(load(&m).expect("config").max_inflight_per_client, 48);
+    m.insert("ONYX_MAX_INFLIGHT_PER_CLIENT", "255");
+    assert_eq!(load(&m).expect("config").max_inflight_per_client, 255);
+    m.insert("ONYX_MAX_INFLIGHT_PER_CLIENT", "300");
+    let refused = load(&m).expect_err("a share above the whole");
+    assert!(
+        refused.contains("0..=255") && refused.contains("256 requests at once"),
+        "{refused}"
+    );
+    assert!(c
+        .request_limits_line()
+        .contains("off a minute (ONYX_READS_PER_MINUTE), off in flight"));
     assert_eq!(c.max_fee_per_gas, 50_000_000_000);
     assert_eq!(c.max_gas, 2_000_000);
     for (k, v) in [
         ("ONYX_MAX_CONNS_PER_IP", "0"),
         ("ONYX_READS_PER_MINUTE", "1000001"),
         ("ONYX_READS_PER_MINUTE", "-1"),
+        // At or above the 256 for all clients the share would limit nothing.
+        ("ONYX_MAX_INFLIGHT_PER_CLIENT", "256"),
+        ("ONYX_MAX_INFLIGHT_PER_CLIENT", "300"),
+        ("ONYX_MAX_INFLIGHT_PER_CLIENT", "65536"),
+        ("ONYX_MAX_INFLIGHT_PER_CLIENT", "-1"),
+        ("ONYX_MAX_INFLIGHT_PER_CLIENT", "many"),
         ("ONYX_MAX_FEE_GWEI", "0"),
         ("ONYX_MAX_FEE_GWEI", "10001"),
         ("ONYX_MAX_FEE_GWEI", "1.5"),

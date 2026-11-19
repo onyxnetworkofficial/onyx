@@ -7270,7 +7270,7 @@
     },
     "rate_limited": {
       "status": 429,
-      "description": "Too many requests from this client; see Retry-After."
+      "description": "Too many requests from this client, in the last minute or in flight at once; see Retry-After."
     },
     "receipt_log_unavailable": {
       "status": 503,

@@ -766,7 +766,22 @@ class StorageLoop(Base):
 
 
 class NodeThresholds(Base):
+    def test_one_stale_finalized_head_of_the_rpc_does_not_page(self):
+        # 2026-11-19: one server of the watch's public RPC answered with a finalized head a few
+        # minutes old, so the cursor looked 1,644 blocks ahead for one run. It waits 3 runs.
+        n = self.cfg["after"]["node.indexer.lag"]
+        self.assertEqual(n, 3)
+        self.fake.health["indexer"].update(finalizedHead=1000, nextBlock=1000 + 1644 + 1)
+        self.fake.final = 900
+        for _ in range(n - 1):
+            _, st, by = self.status("node.indexer.lag")
+            self.assertEqual(st, "warn", by["node.indexer.lag"])
+        self.fake.health["indexer"].update(finalizedHead=1000, nextBlock=1001)
+        self.fake.final = 1000
+        self.assert_ok("node.indexer.lag")
+
     def test_indexer_lag_edge(self):
+        self.cfg["after"]["node.indexer.lag"] = 1
         lim = self.cfg["node"]["indexer_lag_max_blocks"]
         base = 5 * lim  # well above the limit, so the cursor never goes negative
         self.fake.final = base
@@ -776,6 +791,7 @@ class NodeThresholds(Base):
         self.edge("node.indexer.lag", s, lim)
 
     def test_indexer_lag_counts_the_rpc_finalized_head_when_the_node_is_stuck(self):
+        self.cfg["after"]["node.indexer.lag"] = 1
         lim = self.cfg["node"]["indexer_lag_max_blocks"]
         # The node's own finalizedHead stopped moving with its cursor; the watch's RPC moved on.
         self.fake.health["indexer"].update(finalizedHead=1000, nextBlock=1001)
@@ -1513,6 +1529,7 @@ class Bounds(Base):
     """Review L12-R1 #9: impossible values alert instead of clamping to 0."""
 
     def test_indexer_cursor_ahead_of_finalized_head_edge(self):
+        self.cfg["after"]["node.indexer.lag"] = 1
         lim = self.cfg["node"]["indexer_ahead_max_blocks"]
         def s(v):
             self.fake.health["indexer"].update(finalizedHead=1000, nextBlock=1000 + v + 1)

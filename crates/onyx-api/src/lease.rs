@@ -1,5 +1,6 @@
 //! A response body that holds its in-flight permit until it is written
-//! (M7-L47-F2).
+//! (M7-L47-F2), and with it the client's place among the requests in flight
+//! per client ([`crate::inflight`], THREATS NL5-3).
 //!
 //! Without it, the permit is released when the handler returns, and a slow
 //! client then holds a whole export in memory outside every limit. The body
@@ -12,13 +13,14 @@
 //! keeps its unsent bytes until the server's write stall timeout closes it
 //! (`onyx_node::serve`, `ONYX_WRITE_STALL_SECS`; THREATS SERVE-WRITE-1).
 
+use crate::inflight::Held;
 use axum::body::{Body, Bytes};
 use http_body::{Frame, SizeHint};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
 use std::task::{Context, Poll};
 use std::time::Duration;
-use tokio::sync::{oneshot, OwnedSemaphorePermit};
+use tokio::sync::oneshot;
 use tokio::time::Instant;
 
 /// Largest frame handed to the connection.
@@ -31,7 +33,7 @@ pub struct SendTimeout;
 
 /// `inner`, written in frames of at most [`CHUNK`] bytes, holding `permit`
 /// until the end of the body, its drop, or `send_timeout`, whichever is first.
-pub fn leased(inner: Body, permit: OwnedSemaphorePermit, send_timeout: Duration) -> Body {
+pub(crate) fn leased(inner: Body, permit: Held, send_timeout: Duration) -> Body {
     let slot = Arc::new(Mutex::new(Some(permit)));
     let (done, wait) = oneshot::channel::<()>();
     let watchdog = slot.clone();
@@ -51,7 +53,7 @@ pub fn leased(inner: Body, permit: OwnedSemaphorePermit, send_timeout: Duration)
     })
 }
 
-fn release(slot: &Mutex<Option<OwnedSemaphorePermit>>) {
+fn release(slot: &Mutex<Option<Held>>) {
     // A poisoned lock still gives the permit back.
     let permit = match slot.lock() {
         Ok(mut g) => g.take(),
@@ -64,7 +66,7 @@ struct Leased {
     inner: Body,
     pending: Bytes,
     deadline: Instant,
-    slot: Arc<Mutex<Option<OwnedSemaphorePermit>>>,
+    slot: Arc<Mutex<Option<Held>>>,
     done: Option<oneshot::Sender<()>>,
 }
 

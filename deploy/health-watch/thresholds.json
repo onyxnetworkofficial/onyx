@@ -85,9 +85,10 @@
     "failed_in_a_row_max": 2
   },
   "after": {
-    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures. bulk.catalog_age and storage.up wait 3 too, so a node restart does not page; storage.answers waits 3: a shard just placed and still fetching, or one send that a later tick of the epoch repeats, does not page.",
+    "_about": "Consecutive failed runs before a check alerts (default 1); earlier runs print status warn. The checklist asks node up: alert after 3 failures. bulk.catalog_age and storage.up wait 3 too, so a node restart does not page; node.indexer.lag waits 3: the watch's public RPC is several servers, and one of them answering with a finalized head a few minutes old made the cursor look ahead for one run (seen twice on 2026-11-19, 1,644 and 1,713 blocks, gone a minute later); a wrong chain or a lying node stays wrong and alerts on the third run. storage.answers waits 3: a shard just placed and still fetching, or one send that a later tick of the epoch repeats, does not page.",
     "node.up": 3,
     "rpc.up": 2,
+    "node.indexer.lag": 3,
     "node.indexer.failing": 3,
     "node.reporter.last_error": 3,
     "node.level3.retrying": 3,

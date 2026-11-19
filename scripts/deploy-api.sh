@@ -62,8 +62,15 @@
 #                      contacts no origin and keeps no client address; docs/ops/publisher-review.md
 #                      "Pointers sent to the node"); default 0, and the route then answers 404. Written
 #                      anew by each deploy: pass it each time to keep it on
-#   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (64 connections per address on 443),
-#                      checked with nft -c first, loaded by deploy/systemd/onyx-conn-cap.service
+#   ONYX_API_CONN_CAP  deploy/nftables/onyx-conn-cap.nft (128 connections per address on 443: 21
+#                      people behind one address at 6 connections each), checked with nft -c first,
+#                      loaded by deploy/systemd/onyx-conn-cap.service. 128 is safe for the node's 256
+#                      slots only because the node itself gives one forwarded client at most
+#                      ONYX_MAX_INFLIGHT_PER_CLIENT of them (32, written to node.env below; THREATS NL5-3).
+#                      So the file is loaded only when the new binary's --check-config shows that
+#                      share (scripts/deploy-node-gate.sh step 3); otherwise the firewall stays as it
+#                      is and the deploy says so in capitals. After a rollback of the node:
+#                      sudo systemctl restart onyx-conn-cap (docs/ops/launch-checklist.md "Rollback")
 # Env: ONYX_SITE_HOST (onyx-web), ONYX_SITE_DOMAIN (onyx.cryptagraph.com).
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -91,14 +98,17 @@ fi
 mkdir -p "${HOME}/.cache"
 stage=$(mktemp -d "${HOME}/.cache/onyx-deploy-api.XXXXXX")
 trap 'rm -rf "$stage"' EXIT
-# The export's settings, with this host's public URL, node URL, proxy, health and payment settings.
-grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=|ONYX_USAGE=|ONYX_PUBLISHER_POINTERS=|ONYX_BULK_[A-Z_]*=)' \
+# The export's settings, with this host's public URL, node URL, proxy, health and payment settings,
+# and the share of the node's requests in flight one forwarded client may hold (THREATS NL5-3: the
+# firewall cap of 128 connections per address below counts on it; the gate's --check-config reads it).
+grep -vE '^(#|ONYX_PUBLIC_URL=|ONYX_RPC_URL=|ONYX_LISTEN=|ONYX_TRUSTED_PROXIES=|ONYX_MAX_INFLIGHT_PER_CLIENT=|ONYX_INDEX_HEALTH=|ONYX_PAYMENTS=|ONYX_OBSERVATIONS=|ONYX_OBSERVATION_TEMPLATES=|ONYX_TRACK_PUBLICATIONS=|ONYX_USAGE=|ONYX_PUBLISHER_POINTERS=|ONYX_BULK_[A-Z_]*=)' \
   "$export_dir/node.service.env" > "$stage/node.env"
 cat >> "$stage/node.env" <<EOF
 ONYX_LISTEN=127.0.0.1:8080
 ONYX_PUBLIC_URL=https://$domain
 ONYX_RPC_URL=https://sepolia.base.org
 ONYX_TRUSTED_PROXIES=127.0.0.1
+ONYX_MAX_INFLIGHT_PER_CLIENT=32
 ONYX_INDEX_HEALTH=summary
 ONYX_PAYMENTS=$payments
 EOF
@@ -296,8 +306,13 @@ ssh "$host" "set -euo pipefail
   done
   [ \"\$n\" -ge 1 ] || { echo 'the node serves no shard after 240 s (journalctl -u onyx-node)' >&2; exit 1; }
   echo \"servable shards: \$n\"
-  # 4. The connection cap on 443 (THREATS NS17-4, TLS-2): checked before it is loaded.
+  # 4. The connection cap on 443 (THREATS NS17-4, TLS-2): checked before it is loaded. Its 128 per
+  # address is safe only in front of a node that keeps a share of its requests in flight per
+  # client (THREATS NL5-3), so it is loaded only when step 0 read that share in the new binary's
+  # --check-config (the gate's marker) and that binary is the one installed. Otherwise the
+  # firewall stays as it is.
   if [ -f onyx-conn-cap.nft ]; then
+   if [ -f node-shares-in-flight ] && sudo cmp -s onyx-node /usr/local/bin/onyx-node; then
     sudo nft -c -f onyx-conn-cap.nft
     sudo install -m 0644 onyx-conn-cap.nft /etc/onyx/onyx-conn-cap.nft
     sudo install -m 0644 onyx-conn-cap.service /etc/systemd/system/onyx-conn-cap.service
@@ -306,6 +321,9 @@ ssh "$host" "set -euo pipefail
     sudo systemctl restart onyx-conn-cap
     sudo nft list table inet onyx_conn_cap >/dev/null
     echo 'connection cap: loaded'
+   else
+    echo 'WARNING: CONNECTION CAP NOT LOADED: the installed onyx-node does not limit requests in flight per client (ONYX_MAX_INFLIGHT_PER_CLIENT), so the cap file of this commit would let one address hold half the node. The firewall is as it was before this deploy (sudo nft list table inet onyx_conn_cap). Deploy a node that has the setting, or set ONYX_API_CONN_CAP=0 to say this is meant' >&2
+   fi
   fi
   # 5. The agent connector (NL21), when the host has Node 20 or later.
   if [ -d mcp ]; then

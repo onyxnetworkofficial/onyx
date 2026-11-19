@@ -183,6 +183,12 @@ pub struct NodeConfig {
     /// requests per client per minute on every API route (THREATS NL20-1);
     /// 429 `rate_limited` beyond.
     pub reads_per_minute: u32,
+    /// `ONYX_MAX_INFLIGHT_PER_CLIENT` (default
+    /// [`onyx_api::DEFAULT_MAX_INFLIGHT_PER_CLIENT`]; 0 is off, else below
+    /// the 256 requests in flight for all clients): requests in flight per
+    /// client on the API routes behind the guard (THREATS NL5-3); 429
+    /// `rate_limited` beyond.
+    pub max_inflight_per_client: u32,
     /// `ONYX_MAX_FEE_GWEI` (default 10, 1..=10000): the fee cap of every
     /// transaction the node signs, sends and replacements alike (AUD-1R-F3).
     pub max_fee_per_gas: u128,
@@ -532,6 +538,23 @@ impl NodeConfig {
                 .filter(|n| *n <= 1_000_000)
                 .ok_or("ONYX_READS_PER_MINUTE must be 0..=1000000 (0 is off)")?,
         };
+        let all_in_flight = onyx_api::ApiConfig::default().max_concurrency;
+        let max_inflight_per_client = match get("ONYX_MAX_INFLIGHT_PER_CLIENT") {
+            None => onyx_api::DEFAULT_MAX_INFLIGHT_PER_CLIENT,
+            Some(s) => s
+                .trim()
+                .parse::<u32>()
+                .ok()
+                // At or above the limit for all clients it would never
+                // bind: a share that large is a mistake, not a setting.
+                .filter(|n| (*n as usize) < all_in_flight)
+                .ok_or_else(|| {
+                    format!(
+                        "ONYX_MAX_INFLIGHT_PER_CLIENT must be 0..={} (0 is off): the node works on {all_in_flight} requests at once for all clients, so a larger share would limit nothing",
+                        all_in_flight - 1
+                    )
+                })?,
+        };
         let max_fee_per_gas = match get("ONYX_MAX_FEE_GWEI") {
             None => onyx_api::evm_tx::DEFAULT_MAX_FEE_PER_GAS,
             Some(s) => {
@@ -722,6 +745,7 @@ impl NodeConfig {
             max_connections,
             max_per_client,
             reads_per_minute,
+            max_inflight_per_client,
             max_fee_per_gas,
             max_gas,
             indexer,
@@ -762,6 +786,24 @@ pub fn fd_soft_limit() -> Option<u64> {
 }
 
 impl NodeConfig {
+    /// One line with the per-client request limits in force, printed at
+    /// start and by `--check-config` (THREATS NL20-1, NL5-3).
+    pub fn request_limits_line(&self) -> String {
+        let or_off = |n: u32| {
+            if n == 0 {
+                "off".to_string()
+            } else {
+                n.to_string()
+            }
+        };
+        format!(
+            "onyx-node: request limits per client: {} a minute (ONYX_READS_PER_MINUTE), {} in flight (ONYX_MAX_INFLIGHT_PER_CLIENT) of {} for all clients",
+            or_off(self.reads_per_minute),
+            or_off(self.max_inflight_per_client),
+            onyx_api::ApiConfig::default().max_concurrency
+        )
+    }
+
     /// The start-up warning for a plain-HTTP listen address that is not
     /// loopback (allowed only with `ONYX_ALLOW_PLAIN_HTTP_PUBLIC=1`, M7-7);
     /// `None` on loopback.

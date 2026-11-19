@@ -72,7 +72,9 @@ the API's paths then answer 502, other `/v1/` paths 404).
 
 Per-address connection cap (THREATS NS17-4, NL5-3; ROADMAP L19): Caddy is a trusted proxy, so the
 node's own per-address cap does not apply to clients behind it. `deploy/nftables/onyx-conn-cap.nft`
-resets a new connection on 443 from a source (IPv4 address or IPv6 /64) that already holds 32; it is
+resets a new connection on 443 from a source (IPv4 address or IPv6 /64) that already holds 128
+(21 people behind one address; the node itself gives one forwarded client at most 32 of its 256
+requests in flight, `ONYX_MAX_INFLIGHT_PER_CLIENT`); it is
 its own nftables table next to ufw, loaded by `deploy/systemd/onyx-conn-cap.service` (install steps
 in the unit's header) and tested with `scripts/conn-cap-test.sh`. `scripts/deploy-api.sh` installs
 and loads it (after `nft -c -f`) unless `ONYX_API_CONN_CAP=0`; on the server from the next deploy. The health watch alerts on the operator's gas once payments are on

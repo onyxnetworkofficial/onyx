@@ -4483,6 +4483,10 @@ mod money_loop;
 
 mod level2;
 
+// ------------------------------------------------ requests in flight per client (THREATS NL5-3)
+
+mod inflight;
+
 /// AUD-1-F4: unauthenticated lookups of shards with no final root do not
 /// reach the node once per request: a miss is cached, concurrent lookups of
 /// one shard share one node call, and each client has a budget of uncached

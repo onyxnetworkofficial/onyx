@@ -244,6 +244,17 @@ wrong, every client shares the proxy's bucket, so check it after an install: two
 get separate 429s. The intake, payment, export and credits routes keep their own, lower limits
 on top.
 
+Requests in flight are shared out as well (THREATS NL5-3): of the 256 requests the API works on
+at once (503 `overloaded` beyond), one client holds at most `ONYX_MAX_INFLIGHT_PER_CLIENT`
+(default 32; 0 is off), and its next request gets 429 `rate_limited` with `Retry-After: 1` while
+other clients are served. A request counts from its arrival until its answer is written or
+dropped. The client is the same one the request limit counts (the forwarded address behind a
+trusted proxy, an IPv6 /64 as one client; a /56 holds at most 64 and a /48 at most 128 at the
+defaults, a quarter and a half of the node), and the same local callers are not counted. 4 of the
+256 are kept for those local callers, so neither a client at its share nor a node full of remote
+clients keeps the health watch out. A share of 256 or more is refused at start. The bulk upload and storage peer routes are outside those 256 and keep their own caps. The
+node prints both per-client limits at start and in `--check-config`.
+
 ## Usage counts (`ONYX_USAGE`, READINESS A9)
 
 The node writes no access log. With `ONYX_USAGE=on` it counts requests instead: per UTC day, per

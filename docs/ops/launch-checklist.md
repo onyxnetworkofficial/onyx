@@ -637,7 +637,11 @@ Rollback, fastest first:
   /usr/local/bin/onyx-node`, `sudo rsync -a /var/backups/onyx-prev/etc-onyx/ /etc/onyx/` (the
   operator key is not in the copy and stays as it is), `sudo install -m 0644
   /var/backups/onyx-prev/onyx-node.service /etc/systemd/system/`, `sudo systemctl daemon-reload
-  && sudo systemctl restart onyx-node`, then step 7. Caddy: `deploy-api.sh` keeps
+  && sudo systemctl restart onyx-node`, then `sudo systemctl restart onyx-conn-cap` and step 7.
+  The last restart loads the connection cap file that came back with `/etc/onyx`: the kernel
+  otherwise keeps the newer release's cap (128 per address), which is safe only in front of a
+  node that shares out its requests in flight per client (THREATS NL5-3); check with `sudo nft
+  list table inet onyx_conn_cap` that `ct count over` shows the previous number. Caddy: `deploy-api.sh` keeps
   `/etc/caddy/Caddyfile.bak-<UTC>`; put it back and `sudo systemctl restart caddy`. A release
   deployed before 2026-10-28's NL20 change has no `/var/backups/onyx-prev`: roll back by building
   and deploying the previous commit (steps 2 and 6).

@@ -16,7 +16,7 @@
 #   publishers.json                 the limits per publisher (ADR-0066 item 10), when the server
 #                                   had them: a redeploy from the rebuilt export keeps them
 #   node.service.env                the server's node.env without the lines deploy-api.sh writes for
-#                                   the host (listen address, public URL, node URL, proxy, health,
+#                                   the host (listen address, public URL, node URL, proxy, in-flight share, health,
 #                                   intake journal, bulk store, level-2 and track paths). The
 #                                   payment mode is kept as the server had it: an export deployed
 #                                   with payments off has lost its own mode (the script says so).
@@ -200,6 +200,7 @@ ONYX_LISTEN=127.0.0.1:8080
 ONYX_PUBLIC_URL=https://onyx.example
 ONYX_RPC_URL=https://sepolia.base.org
 ONYX_TRUSTED_PROXIES=127.0.0.1
+ONYX_MAX_INFLIGHT_PER_CLIENT=32
 ONYX_INDEX_HEALTH=summary
 ONYX_PAYMENTS=off
 ONYX_SUBMISSIONS=/var/lib/onyx/state/submissions.journal

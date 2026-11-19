@@ -729,6 +729,14 @@ Body: `{"error":{"code","message"}}`. Codes are stable; messages are not. The ma
   with no `X-Forwarded-For` header at all is not counted (a local service on the host); one whose
   forwarded header names no client is counted under the proxy's own key. A refused request adds
   no bucket for a key not yet tracked (review L19-R1 M2). The limits below come on top.
+- Requests in flight per client (THREATS NL5-3): of the `max_concurrency` requests in flight (256;
+  503 `overloaded` beyond) one client key holds at most `max_inflight_per_client` (default 32,
+  `ONYX_MAX_INFLIGHT_PER_CLIENT`, 0 is off; a /56 4 times that but at most a quarter of
+  `max_concurrency`, a /48 16 times but at most a half: 64 and 128), else 429 `rate_limited` with
+  `Retry-After: 1`. A request counts until its answer is written or dropped, like the permit it
+  holds. The callers the request limit does not count are not counted here, and 4 of the permits
+  (at most an eighth) are kept for them: a full node answers a forwarded client 503 `overloaded`
+  (before its share is looked at) and still serves a service on its own host.
 - Limits: payment attempts per client (IPv4 address or IPv6 /64; token bucket, default 30 per
   minute; at most 65,536 clients tracked, least recent dropped). An IPv6 /64 also draws from its
   /56 (4 times the budget) and its /48 (16 times); an attempt takes from all three or from none,

@@ -175,7 +175,10 @@ results, what was fixed, what stays open with a THREATS row).
       minute, every route; THREATS NL20-1 FIXED), with a token-bucket refill fix found on the way
       (L19-1), then review L19-R1's fixes and the agent connector forwarding its users' addresses.
       Deployed with release `3b9de28e`: live 1,695 answers and 1,305 429s out of a 3,000-request
-      burst; the rollback from `/var/backups/onyx-prev` rehearsed and rolled forward (NL20-4))
+      burst; the rollback from `/var/backups/onyx-prev` rehearsed and rolled forward (NL20-4).
+      2026-11-18: a share of the requests in flight per forwarded client is built in the node
+      (`ONYX_MAX_INFLIGHT_PER_CLIENT`, default 32 of 256; THREATS NL5-3), and with it the
+      firewall cap goes from 64 to 128 connections per address; live from the next API deploy)
 - [x] L18 TLS front leftovers that need no domain (LC-7, from P7): with Caddy on `tls internal`
       and a local anvil, the paid x402 flow through the proxy (402 with `payment-required`, a settled
       200 with `payment-response`, a 503 `payment_pending` retry), a server-side TLS 1.1 refusal
