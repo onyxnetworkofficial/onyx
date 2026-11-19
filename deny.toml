@@ -10,8 +10,17 @@ all-features = true
 unmaintained = "all"
 yanked = "deny"
 # Every exception needs the advisory id, why it does not apply and a review date.
-# None today (2026-10-13 audit: 0 advisories).
-ignore = []
+# 2026-11-19: wasmi 2.0.0 and wasmi_core 2.0.0 were yanked by their authors when 2.0.1 came out
+# (2026-11-17; no RustSec advisory). They are the canonical engine, pinned exactly (ADR-0014):
+# 2.0.1 changes fuel metering (it charges for zeroing locals) and fixes translation bugs, so a
+# bump changes what a recipe run costs and is a protocol change, not a dependency update
+# (docs/READINESS.md A35, THREATS T-ENGINE-2). Until that upgrade is done the yanked pin stays:
+# the engine runs only the repository's own recipes, each checked against its vectors and against
+# wasmtime. Reviewed 2026-11-19; decide again by 2026-12-03.
+ignore = [
+    { crate = "wasmi@2.0.0", reason = "canonical engine pinned by ADR-0014; the upgrade is a protocol change (READINESS A35); re-check by 2026-12-03" },
+    { crate = "wasmi_core@2.0.0", reason = "same pin as wasmi 2.0.0 (READINESS A35); re-check by 2026-12-03" },
+]
 
 [licenses]
 # Only the licenses the dependency graph uses on 2026-10-13, all permissive.
