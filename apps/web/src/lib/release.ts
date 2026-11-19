@@ -4,7 +4,7 @@
 // Pure (no Svelte, no DOM), so `node --test tests/release.test.mjs` imports it as is.
 
 /** The release the Add data and Download pages link. */
-export const RELEASE = 'v0.5.0-testnet';
+export const RELEASE = 'v0.5.1-testnet';
 /**
  * The first release that carries the desktop installers (fixed: never changes). v0.3.0-testnet ran
  * the workflow first, but its macOS and Windows jobs failed, so it has the command-line files only.

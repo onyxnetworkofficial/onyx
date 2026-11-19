@@ -51,7 +51,7 @@ test('files: every link is a file of the release on the project repository; stab
 	assert.equal(R.baseFor('v0.3.0-testnet'), 'https://github.com/onyxnetworkofficial/onyx/releases/download/v0.3.0-testnet/');
 	assert.match(R.RELEASE, /^v\d+\.\d+\.\d+-testnet$/);
 	// READINESS A21: the release whose onyx-check reads a newest-first page (quickstart.ts).
-	assert.equal(R.RELEASE, 'v0.5.0-testnet');
+	assert.equal(R.RELEASE, 'v0.5.1-testnet');
 	// The API page names the first release with --order, not the current one.
 	assert.equal(R.ORDER_SINCE, 'v0.4.0-testnet');
 	assert.match(R.DESKTOP_SINCE, /^v\d+\.\d+\.\d+-testnet$/);
