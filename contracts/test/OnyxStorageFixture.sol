@@ -15,6 +15,9 @@ contract StorageFixture is Test {
     string internal constant PUBLISHER = "synthetic.publisher";
     string internal constant DATASET = "synthetic.storage";
     uint64 internal constant T0 = 1_700_000_000;
+    /// When the fixture's catalog was made (`_anchorCatalog`): a time of its own, so its report
+    /// is a fact of its own in the book.
+    uint64 internal constant CATALOG_T = T0 + 7;
     uint64 internal constant EPOCH = 10;
     uint128 internal constant PRICE = 1e15;
     uint128 internal constant BOND_PER_GIB = 1e15;
@@ -41,6 +44,11 @@ contract StorageFixture is Test {
     bytes[2] internal entries;
     bytes internal header;
     bytes internal payload;
+    /// Set by `_anchorCatalog`: a catalog header that lists the dataset at leaf 0 of 2, the
+    /// leaf hash next to it, and the catalog's signed payload.
+    bytes internal catalogHeader;
+    bytes32 internal catalogSibling;
+    bytes internal catalogPayload;
 
     function _le(uint256 v, uint256 n) internal pure returns (bytes memory out) {
         out = new bytes(n);
@@ -100,6 +108,14 @@ contract StorageFixture is Test {
     }
 
     function _payloadFor(bytes32 root, uint64 seq) internal view returns (bytes memory) {
+        return _payloadAt(root, T0, seq);
+    }
+
+    function _payloadAt(bytes32 root, uint64 time, uint64 seq)
+        internal
+        view
+        returns (bytes memory)
+    {
         bytes32 key = book.keyId(PUBLISHER, vm.addr(signerKey));
         return abi.encodePacked(
             _str(bytes(PUBLISHER)),
@@ -110,16 +126,73 @@ contract StorageFixture is Test {
             uint8(4),
             _le(32, 4),
             root,
-            _le(T0, 8),
+            _le(time, 8),
             _le(seq, 8)
         );
     }
 
     function _sign(bytes memory p) internal view returns (bytes memory) {
+        return _signWith(signerKey, p);
+    }
+
+    function _signWith(uint256 key, bytes memory p) internal pure returns (bytes memory) {
         bytes32 digest = keccak256(abi.encodePacked("onyx-signed-source-v1", p));
         bytes memory message = abi.encodePacked("onyx-signed-source-v1:", OnyxSig.hex32(digest));
-        (uint8 v, bytes32 r, bytes32 s) = vm.sign(signerKey, OnyxSig.eip191Digest(message));
+        (uint8 v, bytes32 r, bytes32 s) = vm.sign(key, OnyxSig.eip191Digest(message));
         return abi.encodePacked(r, s, v);
+    }
+
+    /// A catalog of two leaves over the dataset above (ADR-0067), built here like the header:
+    /// leaf 0 is the dataset's leaf, leaf 1 another dataset's. Its anchor goes to the book. The
+    /// tests of the money paths use it; the bytes a publisher really signs are checked with the
+    /// vectors of `crates/onyx-storage` (OnyxStorageCatalog.t.sol, OnyxStorageVectors.t.sol).
+    function _anchorCatalog() internal {
+        bytes memory other = abi.encodePacked(
+            "onyx-bulk-catalog-leaf-v1",
+            _str(bytes(PUBLISHER)),
+            _str("synthetic.zz-other"),
+            _le(1, 4),
+            bytes32(0),
+            keccak256("another manifest")
+        );
+        catalogSibling = _leaf(other);
+        catalogHeader = abi.encodePacked(
+            uint8(1),
+            _str(bytes(PUBLISHER)),
+            _le(0, 8),
+            bytes32(0),
+            _le(CATALOG_T, 8),
+            _le(2, 4),
+            _root2(_leafRow(), other)
+        );
+        bytes32 root = keccak256(abi.encodePacked("onyx-bulk-catalog-v1", catalogHeader));
+        uint64 seq =
+            uint64(bytes8(keccak256(abi.encodePacked("onyx-bulk-catalog-sequence-v1", _le(0, 8)))));
+        catalogPayload = abi.encodePacked(
+            _str(bytes(PUBLISHER)),
+            book.keyId(PUBLISHER, vm.addr(signerKey)),
+            _str("bulk.catalog"),
+            uint8(3),
+            _str("catalog"),
+            uint8(4),
+            _le(32, 4),
+            root,
+            _le(CATALOG_T, 8),
+            _le(seq, 8)
+        );
+        book.postReport(catalogPayload, _sign(catalogPayload));
+    }
+
+    /// The catalog leaf row of the dataset above: version 1, no previous root.
+    function _leafRow() internal view returns (bytes memory) {
+        return abi.encodePacked(
+            "onyx-bulk-catalog-leaf-v1",
+            _str(bytes(PUBLISHER)),
+            _str(bytes(DATASET)),
+            _le(1, 4),
+            bytes32(0),
+            _manifestRoot()
+        );
     }
 
     function _deploy() internal {

@@ -47,3 +47,22 @@ assumption is the one our reproducer breaks, and Stylus needed a native-overflow
   Pinned exactly; upgrades are a new `HOST_ID` and need the golden test to pass unchanged.
 - Root and rows of the golden run were identical on wasmtime and wasmi; only the shard id changed
   (it hashes the runtime profile, which names the engine).
+
+## Amendment (planned, 2026-11-19): the move off wasmi 2.0.0
+Not decided yet; decide again by 2026-12-03 (READINESS A35).
+- Why: 2.0.0 was yanked when 2.0.1 came out (2026-11-17). The pin stays as a dated exception (THREATS DEP-6).
+- Measured (trial, this repository at `cd37ca61` with `wasmi` and `wasmi_core` at `=2.0.1`, every workspace test,
+  `HOST_ID` left as it is): everything passes but three golden tests in `adapters/source-btc`
+  (`golden_chain`, `golden_reserve`, `golden_series`). In each one only the `fuel` number differs
+  (123974 to 124782, 755434559 to 758375753, 738953128 to 741868661: 0.4 % to 0.7 % more); every root and
+  every row is the same. The cause is the 2.0.1 rule that charges 1 fuel per 8 zero-initialised locals.
+- So the move is a protocol change, but a small one: a new `HOST_ID` (which changes every shard id, as the
+  first move to wasmi did), new fuel numbers in the golden files and vectors, and the recorded runs made again.
+  No result changes.
+- Upstream lists three translation fixes as not released yet (multi-value `br_table`, `if` blocks with
+  parameters, `loop` blocks with parameters). Plan: move once, to the release that holds them, so that the
+  host id changes one time and not two.
+- Steps then: (1) pin the new version in `crates/onyx-recipe-host` and both lock files; (2) new `HOST_ID`;
+  (3) bless the golden files and the fuel vectors, with the diff showing fuel and shard ids only;
+  (4) differential run against wasmtime; (5) record the published windows again under the new host id and
+  keep the old ones readable; (6) remove the two `deny.toml` exceptions and close DEP-6.

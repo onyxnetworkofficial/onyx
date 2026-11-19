@@ -5,7 +5,8 @@ import {Test} from "forge-std/Test.sol";
 import {StdInvariant} from "forge-std/StdInvariant.sol";
 import {StorageFixture} from "../OnyxStorageFixture.sol";
 
-/// Handler for the storage network's money invariants (ADR-0060, R-STOR-11): deals, extensions,
+/// Handler for the storage network's money invariants (ADR-0060, R-STOR-11): deals (on a
+/// manifest's own report and through a catalog, ADR-0067), extensions,
 /// time, seeds, honest and forged answers, missed answers settled (by a rewarded reporter or by
 /// the node's own operator, amendment 1 item 3), registrations that pay the 2% fee and are then
 /// activated or cancelled (item 2), declines (one shard or a whole deal), exits, bond and earnings
@@ -25,6 +26,7 @@ contract StorageHandler is StorageFixture {
     uint256 public cancels;
     uint256 public rewardedSettles;
     uint256 public selfSettles;
+    uint256 public catalogDeals;
     /// Ghost: rewards credited to a slashed node's own operator (must stay 0; an assertion inside
     /// a handler call is swallowed in invariant runs, so it is counted here and checked below).
     uint256 public ownRewarded;
@@ -46,6 +48,7 @@ contract StorageHandler is StorageFixture {
 
     constructor() {
         _deploy();
+        _anchorCatalog();
         for (uint256 i = 0; i < 6; i++) {
             _addNode(i, 50);
         }
@@ -88,6 +91,20 @@ contract StorageHandler is StorageFixture {
         vm.prank(publisher);
         try st.createDeal(header, payload, r, epochs, "") {
             tokensIn += _bal() - b;
+        } catch {}
+    }
+
+    /// A deal on the same dataset through the fixture's catalog (ADR-0067).
+    function createCatalogDeal(uint8 r, uint8 epochs) external {
+        r = uint8(bound(r, 1, 3));
+        epochs = uint8(bound(epochs, 1, 5));
+        uint256 b = _bal();
+        vm.prank(publisher);
+        try st.createDealInCatalog(
+            header, catalogHeader, 0, _one(catalogSibling), catalogPayload, r, epochs, ""
+        ) {
+            tokensIn += _bal() - b;
+            catalogDeals++;
         } catch {}
     }
 
@@ -326,7 +343,7 @@ contract StorageInvariants is StdInvariant, Test {
     function setUp() public {
         h = new StorageHandler();
         targetContract(address(h));
-        bytes4[] memory sel = new bytes4[](16);
+        bytes4[] memory sel = new bytes4[](17);
         sel[0] = StorageHandler.createDeal.selector;
         sel[1] = StorageHandler.extend.selector;
         sel[2] = StorageHandler.advance.selector;
@@ -343,6 +360,7 @@ contract StorageInvariants is StdInvariant, Test {
         sel[13] = StorageHandler.activateOrCancel.selector;
         sel[14] = StorageHandler.withdrawReward.selector;
         sel[15] = StorageHandler.missAndSettle.selector;
+        sel[16] = StorageHandler.createCatalogDeal.selector;
         targetSelector(FuzzSelector({addr: address(h), selectors: sel}));
     }
 
@@ -434,6 +452,42 @@ contract StorageHandlerCoverage is Test {
         assertEq(h.activations(), 1, "activations");
         assertEq(h.cancels(), 1, "cancels");
         assertGt(h.st().rewarded(), 0);
+        assertTrue(h.st().conserved());
+        assertEq(h.tokensIn(), h.tokensOut() + h.tok().balanceOf(address(h.st())));
+    }
+
+    /// ADR-0067: the catalog path is in the action set. A catalog deal goes through the same
+    /// answers, misses, close and withdrawals as an own-report deal, and the books balance.
+    function test_handlerReachesTheCatalogPath() public {
+        StorageHandler h = new StorageHandler();
+        h.createCatalogDeal(3, 4);
+        h.createDeal(2, 3);
+        h.createCatalogDeal(2, 2);
+        assertEq(h.catalogDeals(), 2, "catalog deals");
+        assertEq(h.st().dealCount(), 3);
+        for (uint256 round = 0; round < 6; round++) {
+            h.advance(uint16(10));
+            h.seed();
+            for (uint256 i = 0; i < 6; i++) {
+                h.answer(i, uint32(i % 2), i, i % 4 == 0);
+            }
+            h.advance(uint16(10));
+            h.seed();
+            for (uint256 i = 0; i < 18; i++) {
+                h.settle(i % 3, uint32(i / 3 % 2), i / 6, uint8(1), uint8(i + round));
+            }
+        }
+        h.advance(uint16(30));
+        for (uint256 d = 0; d < 3; d++) {
+            h.close(d);
+        }
+        for (uint256 i = 0; i < 6; i++) {
+            h.withdrawEarnings(i);
+        }
+        assertGt(h.passes(), 0, "no passed answer");
+        assertGt(h.fails(), 0, "no failed answer");
+        assertGt(h.settles(), 0, "no settled miss");
+        assertEq(h.closes(), 3, "closes");
         assertTrue(h.st().conserved());
         assertEq(h.tokensIn(), h.tokensOut() + h.tok().balanceOf(address(h.st())));
     }

@@ -9,10 +9,13 @@
 //! the deal's (the contract bound that root to the publisher's anchor), and
 //! every shard byte is checked against that manifest's entry by
 //! [`BulkStore::put_shard`] (the same checks as a publisher's upload).
+//! A manifest comes with its own signed report, or with the proof that a
+//! catalog the publisher signed lists it ([`ManifestAnchor`], ADR-0067).
 
 use crate::bulk_serve::{BulkStore, RemovalsMode};
 use crate::roots::JsonRpc;
 use crate::x402::BoxFuture;
+use onyx_bulk::catalog::{CatalogHeader, LeafProof};
 use onyx_bulk::manifest::Manifest;
 use onyx_bulk::wire::{hex0x, hex_field};
 use onyx_core::{Hash32, SignedReport};
@@ -32,8 +35,11 @@ use std::time::Duration;
 
 /// Most shard fetches one tick starts (repair is paced, THREATS STORAGE-9).
 pub const DEFAULT_FETCHES_PER_TICK: usize = 8;
-/// Largest manifest answer a peer may send (hex doubles the 8 MiB manifest).
-pub const MAX_MANIFEST_ANSWER: usize = crate::bulk_serve::MAX_MANIFEST_BODY;
+/// Largest manifest answer a peer may send: the hex of the manifest (twice
+/// its 8 MiB at most), the hex of its header again (`header`, part of the
+/// manifest, so at most as much), and 64 KiB for the root, the report and a
+/// catalog proof (a few KiB at most: three leaves with paths of 16 levels).
+pub const MAX_MANIFEST_ANSWER: usize = 4 * onyx_bulk::manifest::MAX_MANIFEST_BYTES + 64 * 1024;
 /// Blocks per `eth_getLogs` call: sepolia.base.org answers HTTP 413 above
 /// 200 (the indexer's default span; ROADMAP S15, found on the first live
 /// deploy 2026-11-01).
@@ -198,6 +204,98 @@ pub struct StorageChain {
     /// JSON-RPC calls that got no answer (HTTP 429, a timeout): a pass that
     /// failed only for that keeps its logs (THREATS STORAGE-S15-4).
     rpc_errors: AtomicUsize,
+    /// Blocks per `eth_getLogs` call ([`LOG_RANGE`] unless
+    /// [`StorageChain::with_log_span`]).
+    span: u64,
+    /// Where a long read says how far it is ([`StorageChain::with_progress`]).
+    progress: Option<Progress>,
+}
+
+/// Takes the progress lines of a long chain read (the tool prints them on
+/// stderr).
+pub type Progress = Arc<dyn Fn(&str) + Send + Sync>;
+
+/// `eth_getLogs` or `eth_call` calls between two progress lines.
+pub const PROGRESS_EVERY: u64 = 50;
+
+/// Most epochs one [`StorageChain::view_snapshot`] covers.
+pub const MAX_VIEW_EPOCHS: u64 = 64;
+
+/// The epochs a [`StorageChain::view_snapshot`] must be right for.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Epochs {
+    /// The current epoch, the one before and the next (placement now).
+    Now,
+    /// These epochs, first and last included.
+    Span(u64, u64),
+}
+
+/// What a [`StorageChain::view_snapshot`] reads.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ViewOpts {
+    /// The epochs whose node lists, deals and exclusions are read.
+    pub epochs: Epochs,
+    /// The lowest block a log scan may read (`--since-block`); none: the
+    /// deploy block.
+    pub since: Option<u64>,
+    /// Also read the node URLs and each deal's publisher, dataset and source
+    /// URL from the `Registered` and `DealCreated` logs of blocks
+    /// `since..=head` (the contract has no view for them).
+    pub texts: bool,
+    /// Which exclusions are read.
+    pub exclusions: ExclScope,
+}
+
+/// The exclusions a [`StorageChain::view_snapshot`] reads. Each is an
+/// `exclusionFrom` call, one after the other, so reading them for every shard
+/// of a deal of 65,536 shards would take hours: a command reads only the
+/// shards it asks about.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ExclScope {
+    /// None: the snapshot's `excl` is empty. Add what is needed with
+    /// [`StorageChain::fill_exclusions`].
+    None,
+    /// The shards the challenge slots of each epoch read pick, for the deals
+    /// that run in it (`challengesPerDeal` shards a deal and epoch, whatever
+    /// the deal's shard count): what the epoch report and the settling of an
+    /// epoch need. An epoch without a seed has no challenges and reads none.
+    Slots,
+}
+
+/// The first block of epoch `e` (`OnyxStorage.epochStart`); `u64::MAX` when
+/// it does not fit.
+pub fn epoch_first_block(p: &ChainParams, e: u64) -> u64 {
+    e.checked_mul(p.epoch_blocks)
+        .and_then(|b| b.checked_add(p.genesis))
+        .unwrap_or(u64::MAX)
+}
+
+/// The blocks that can hold the `Answered` and `Slashed` events of epoch
+/// `e`: an answer is sent in its epoch, a miss is settled in the
+/// [`onyx_storage::SETTLE_EPOCHS`] epochs after it. So from the first block
+/// of `e` to the last block of epoch `e + SETTLE_EPOCHS`, never below
+/// `floor` (the deploy block or `--since-block`) and never above `head`.
+/// `None`: no such block yet.
+pub fn epoch_event_blocks(p: &ChainParams, e: u64, floor: u64, head: u64) -> Option<(u64, u64)> {
+    let from = epoch_first_block(p, e).max(floor);
+    let after = e
+        .checked_add(onyx_storage::SETTLE_EPOCHS + 1)
+        .map_or(u64::MAX, |x| epoch_first_block(p, x));
+    let to = after.saturating_sub(1).min(head);
+    (from <= to).then_some((from, to))
+}
+
+/// Blocks `lo..=hi` cut into ranges of at most `span` blocks, the newest
+/// range first (a search that walks back from `hi` and may stop early).
+pub fn ranges_back(lo: u64, hi: u64, span: u64) -> impl Iterator<Item = (u64, u64)> {
+    let span = span.max(1);
+    let mut top = (lo <= hi).then_some(hi);
+    std::iter::from_fn(move || {
+        let end = top?;
+        let start = end.saturating_sub(span - 1).max(lo);
+        top = (start > lo).then(|| start - 1);
+        Some((start, end))
+    })
 }
 
 /// Logs of safe blocks, read once (review STORAGE-R1-8): the snapshot
@@ -688,10 +786,15 @@ fn ok_word(r: Result<u128, abi::AbiError>) -> Result<u128, String> {
     r.map_err(|e| e.to_string())
 }
 
-/// The rules this node follows (`OnyxStorage.RULES_VERSION`): 3 is ADR-0060
-/// amendment 2 item 2 (the decline notice, `Answered` with the shard) on top
-/// of amendment 1 (a row for each holder, then `ROW_VERSION` 2).
-pub const RULES_VERSION: u8 = 3;
+/// The rules this node follows (`OnyxStorage.RULES_VERSION`): 4 is ADR-0067
+/// (deals on catalog-anchored manifests, format-2 headers, the `DealAnchor`
+/// event) on top of 3, ADR-0060 amendment 2 item 2 (the decline notice,
+/// `Answered` with the shard) and amendment 1 (a row for each holder, then
+/// `ROW_VERSION` 2). Only 4 is accepted: challenges and pay are the same
+/// under 3, but a rules-3 contract reads format-1 headers only and knows no
+/// catalog, and ADR-0067 section 5 moves every node off it before this
+/// build runs.
+pub const RULES_VERSION: u8 = 4;
 
 /// `books()`'s nine words. A contract from before ADR-0060 amendment 1 (the
 /// S15 deployment) returns eight: no rewards, so `rewarded` is 0.
@@ -717,7 +820,35 @@ impl StorageChain {
             cache: Arc::new(Mutex::new(ChainCache::default())),
             file: None,
             rpc_errors: AtomicUsize::new(0),
+            span: LOG_RANGE,
+            progress: None,
         }
+    }
+
+    /// Ask for `span` blocks per `eth_getLogs` call instead of [`LOG_RANGE`]
+    /// (the tool's `--log-span`: an endpoint that takes more blocks a call
+    /// reads a long range in fewer calls). 0 counts as 1.
+    pub fn with_log_span(mut self, span: u64) -> Self {
+        self.span = span.max(1);
+        self
+    }
+
+    /// Send a line to `progress` every [`PROGRESS_EVERY`] calls of a long
+    /// read (log ranges, exclusion views).
+    pub fn with_progress(mut self, progress: Progress) -> Self {
+        self.progress = Some(progress);
+        self
+    }
+
+    fn say(&self, line: impl FnOnce() -> String) {
+        if let Some(p) = &self.progress {
+            p(&line());
+        }
+    }
+
+    /// The deploy block (the first block any log is read from).
+    pub fn from_block(&self) -> u64 {
+        self.from_block
     }
 
     /// Keep the logs of safe blocks in `path` too, so a restart reads only
@@ -999,6 +1130,18 @@ impl StorageChain {
         .map_err(|e| e.to_string())
     }
 
+    /// `RULES_VERSION()` of the contract; 0 when it has no such view (a
+    /// contract from before ADR-0060 amendment 2: the call reverts).
+    pub async fn rules_version(&self) -> Result<u64, String> {
+        match self.call(&abi::rules_version()).await {
+            Ok(d) => abi::word_u64(&d, 0).map_err(|e| e.to_string()),
+            Err(e) if e.contains("revert") => Ok(0),
+            Err(e) => Err(format!(
+                "could not read the contract's RULES_VERSION(): {e}"
+            )),
+        }
+    }
+
     /// Refuse a contract whose rules are not this node's: an S15 contract
     /// draws the row without the node id, an amendment 1 contract has no
     /// decline notice and another `Answered` event, and neither has
@@ -1011,7 +1154,7 @@ impl StorageChain {
             Ok(d) => d,
             Err(e) if e.contains("revert") => {
                 return Err(format!(
-                    "this node follows rules v{RULES_VERSION} (ADR-0060 amendment 2) and the \
+                    "this node follows rules v{RULES_VERSION} (ADR-0067) and the \
                      contract has no RULES_VERSION(), so it is older: exit its node, then \
                      run the node release that matches it ({e})"
                 ))
@@ -1048,8 +1191,11 @@ impl StorageChain {
 
     /// `params()`.
     pub async fn params(&self) -> Result<ChainParams, String> {
-        let d = self.call(&abi::params()).await?;
-        let u = |i| ok_word(abi::word_uint(&d, i));
+        Self::decode_params(&self.call(&abi::params()).await?)
+    }
+
+    fn decode_params(d: &[u8]) -> Result<ChainParams, String> {
+        let u = |i| ok_word(abi::word_uint(d, i));
         Ok(ChainParams {
             epoch_blocks: u(0)? as u64,
             money: onyx_storage::ledger::Params {
@@ -1067,6 +1213,17 @@ impl StorageChain {
     /// Every log of `event` from the deploy block to `to`.
     pub async fn logs(&self, event: &str, to: u64) -> Result<Vec<Log>, String> {
         self.logs_range(&[event], self.from_block, to).await
+    }
+
+    /// Every log of any of `events` from block `from` (never before the
+    /// deploy block) to `to`, in chain order.
+    pub async fn logs_between(
+        &self,
+        events: &[&str],
+        from: u64,
+        to: u64,
+    ) -> Result<Vec<Log>, String> {
+        self.logs_range(events, from.max(self.from_block), to).await
     }
 
     /// Every log of `event` from block `from` (never before the deploy
@@ -1310,7 +1467,7 @@ impl StorageChain {
     }
 
     /// The logs of any of `events` in blocks `from..=to`, one call per
-    /// [`LOG_RANGE`] blocks.
+    /// [`LOG_RANGE`] blocks (or [`Self::with_log_span`]'s).
     async fn logs_range(
         &self,
         events: &[&str],
@@ -1320,8 +1477,16 @@ impl StorageChain {
         let wanted: Vec<Hash32> = events.iter().map(|e| abi::topic(e)).collect();
         let any: Vec<String> = wanted.iter().map(|t| t.to_string()).collect();
         let mut out = Vec::new();
+        let (first, mut calls) = (from, 0u64);
+        let total = (to.saturating_sub(from) / self.span).saturating_add(1);
         while from <= to {
-            let end = (from + LOG_RANGE - 1).min(to);
+            let end = from.saturating_add(self.span - 1).min(to);
+            calls += 1;
+            if calls.is_multiple_of(PROGRESS_EVERY) {
+                self.say(|| {
+                    format!("logs: blocks {first}..{to}, at block {from} (call {calls} of {total})")
+                });
+            }
             let r = self
                 .rpc_call(
                     "eth_getLogs",
@@ -1558,6 +1723,409 @@ impl StorageChain {
             registrations,
         })
     }
+
+    /// `eth_call` to the contract at block `block`.
+    async fn view(&self, data: &[u8], block: u64) -> Result<Vec<u8>, String> {
+        self.call_to_at(&self.contract, data, block).await
+    }
+
+    /// `exclusionFrom` for one shard of a deal, down its ranking under each
+    /// of `lists` until `r` nodes are found that are not excluded by epoch
+    /// `last`; what is found goes into `excl` as one record a node.
+    async fn read_shard_exclusions(
+        &self,
+        excl: &mut Exclusions,
+        lists: &[(u64, Vec<NodeId>)],
+        (id, info, index): (u64, &DealInfo, u32),
+        (last, head): (u64, u64),
+        calls: &mut u64,
+    ) -> Result<(), String> {
+        let key = shard_key(&info.salt, index);
+        let mut asked: BTreeSet<NodeId> = BTreeSet::new();
+        for (_, list) in lists {
+            let mut sure = 0u8;
+            for n in ranked(&key, list) {
+                if sure >= info.r {
+                    break;
+                }
+                let from = match excl.from(id, index, &n) {
+                    Some(f) => f,
+                    None if asked.contains(&n) => 0,
+                    None => {
+                        *calls += 1;
+                        if calls.is_multiple_of(PROGRESS_EVERY) {
+                            let done = *calls;
+                            self.say(|| {
+                                format!(
+                                    "exclusions: deal {id} shard {index} of {} (call {done})",
+                                    info.shard_count
+                                )
+                            });
+                        }
+                        asked.insert(n);
+                        let f = abi::word_u64(
+                            &self.view(&abi::exclusion_from(id, index, &n), head).await?,
+                            0,
+                        )
+                        .map_err(|e| e.to_string())?;
+                        if f != 0 {
+                            excl.slash(id, index, n, f);
+                        }
+                        f
+                    }
+                };
+                if from == 0 || from > last {
+                    sure += 1;
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Read into a [`Self::view_snapshot`] the exclusions of `shards` of open
+    /// deal `deal` (`None`: every shard of it), at the snapshot's block: what
+    /// a placement question about those shards needs (`status --node`, a
+    /// client read of some shards). About `r` calls a shard.
+    pub async fn fill_exclusions(
+        &self,
+        s: &mut Snapshot,
+        deal: u64,
+        shards: Option<&[u32]>,
+    ) -> Result<(), String> {
+        let Some(info) = s.deal(deal).map(|d| d.info.clone()) else {
+            return Ok(());
+        };
+        let all: Vec<u32>;
+        let shards = match shards {
+            Some(x) => x,
+            None => {
+                all = (0..info.shard_count).collect();
+                &all
+            }
+        };
+        let last = s.lists.last().map_or(s.epoch, |l| l.0).max(s.epoch + 1);
+        let mut calls = 0u64;
+        for index in shards.iter().filter(|i| **i < info.shard_count) {
+            self.read_shard_exclusions(
+                &mut s.excl,
+                &s.lists,
+                (deal, &info, *index),
+                (last, s.block),
+                &mut calls,
+            )
+            .await?;
+        }
+        Ok(())
+    }
+
+    /// The signed book this contract reads (`book()`).
+    pub async fn book(&self) -> Result<[u8; 20], String> {
+        abi::word_addr(&self.call(&abi::call("book()", &[])).await?, 0).map_err(|e| e.to_string())
+    }
+
+    /// Where the report `digest` stands in `book` now, as
+    /// `OnyxStorage._standing` reads it.
+    pub async fn book_standing(
+        &self,
+        book: &[u8; 20],
+        digest: &Hash32,
+    ) -> Result<BookStanding, String> {
+        let err = |e: abi::AbiError| e.to_string();
+        let word = |d: &[u8], i| abi::word(d, i).map(Hash32).map_err(err);
+        let ask = |sig: &str, h: &Hash32| abi::call(sig, &[abi::b32(h)]);
+        // report(digest): key, fact, value hash, report hash, observed time.
+        let rep = self.call_to(book, &ask("report(bytes32)", digest)).await?;
+        let key = word(&rep, 0)?;
+        if key == Hash32::ZERO {
+            return Ok(BookStanding::Unrecorded);
+        }
+        let (fact, report_hash) = (word(&rep, 1)?, word(&rep, 3)?);
+        // factView(fact): state (1 accepted), the accepted report.
+        let f = self.call_to(book, &ask("factView(bytes32)", &fact)).await?;
+        if abi::word_u64(&f, 0).map_err(err)? != 1 || word(&f, 1)? != report_hash {
+            return Ok(BookStanding::NotAccepted);
+        }
+        // keyState(key): life (0 none), suspended.
+        let k = self.call_to(book, &ask("keyState(bytes32)", &key)).await?;
+        if abi::word_u64(&k, 0).map_err(err)? == 0 {
+            return Ok(BookStanding::NotAccepted);
+        }
+        Ok(if abi::word_u64(&k, 1).map_err(err)? != 0 {
+            BookStanding::Suspended
+        } else {
+            BookStanding::Holds
+        })
+    }
+
+    /// Ask the book what the contract will ask it when a deal with `anchor`
+    /// is created ([`deal_opens_in_book`]), before any transaction: the
+    /// anchor's report holds, and for a catalog no report holds under the
+    /// same key for the next catalog number.
+    pub async fn check_deal_in_book(&self, anchor: &ManifestAnchor) -> Result<(), String> {
+        let book = self.book().await?;
+        match anchor {
+            ManifestAnchor::Own(bytes) => {
+                let r: SignedReport = borsh::from_slice(bytes).map_err(|_| "report")?;
+                let own = self.book_standing(&book, &r.payload.digest()).await?;
+                deal_opens_in_book(own, None, None)
+            }
+            ManifestAnchor::Catalog(a) => {
+                let p = &a.report.payload;
+                let own = self.book_standing(&book, &p.digest()).await?;
+                let next = match onyx_storage::deal::next_catalog_sequence(a.header.number) {
+                    None => None,
+                    Some(seq) => {
+                        let d = self
+                            .call_to(
+                                &book,
+                                &abi::call(
+                                    "sequenceOf(bytes32,uint64)",
+                                    &[abi::b32(&p.key), abi::uint(seq.into())],
+                                ),
+                            )
+                            .await?;
+                        let d = Hash32(abi::word(&d, 0).map_err(|e| e.to_string())?);
+                        if d == Hash32::ZERO {
+                            None
+                        } else {
+                            Some(self.book_standing(&book, &d).await?)
+                        }
+                    }
+                };
+                deal_opens_in_book(own, next, Some(a.header.number))
+            }
+        }
+    }
+
+    /// A [`Snapshot`] for the tool, read from the contract's view functions
+    /// at the head block instead of from every log since the deploy block
+    /// (which takes hours on a contract a few weeks old: 5 calls a second
+    /// over 35,000 ranges of 200 blocks). Right for the epochs of
+    /// `o.epochs`: their node lists, the deals that run in them and who
+    /// holds or is asked for each shard.
+    ///
+    /// What is read, and what bounds it:
+    /// - the epoch, the parameters, `dealCount()` and `dealInfo` of every
+    ///   deal: views;
+    /// - the node list of each epoch: `setHashAt(e)` against the hash of
+    ///   `activeNodes()` (or of no nodes). Only when another list was in
+    ///   force, `NodeSet` logs are read backwards from the epoch's first
+    ///   block, a range at a time, until a list with that hash is found (not
+    ///   below `o.since` or the deploy block);
+    /// - `nodeInfo` of the nodes of those lists (their jail epochs);
+    /// - exclusions, by `o.exclusions` ([`ExclScope`]): none, or those of the
+    ///   shards the challenge slots of the epochs pick. For a shard,
+    ///   `exclusionFrom(deal, shard, node)` is asked down the shard's ranking
+    ///   until `r` nodes are found that are not excluded in any of the epochs
+    ///   (no node ranked below them can hold the shard). Each is kept as one
+    ///   record in `excl`, which gives the same [`Exclusions::from`] and so
+    ///   the same holders and challenges for the shards read;
+    ///   `excl.decline_report()` needs the raw events and is not right on
+    ///   this snapshot. A shard that was not read counts as having no
+    ///   exclusion: ask only about shards that were read
+    ///   ([`Self::fill_exclusions`] reads more);
+    /// - with `o.texts`, the node URLs and each deal's publisher, dataset and
+    ///   source URL, from the `Registered` and `DealCreated` logs of blocks
+    ///   `o.since..=head`. Without it they are empty.
+    ///
+    /// `deals` holds every deal that is not closed, as [`Self::snapshot`]
+    /// does; `deal_logs` and `registrations` are the contract's counts.
+    pub async fn view_snapshot(&self, o: ViewOpts) -> Result<Snapshot, String> {
+        let err = |e: abi::AbiError| e.to_string();
+        let head = self.block_number().await?;
+        let epoch =
+            abi::word_u64(&self.view(&abi::current_epoch(), head).await?, 0).map_err(err)?;
+        let params = Self::decode_params(&self.view(&abi::params(), head).await?)?;
+        let (first, last) = match o.epochs {
+            Epochs::Now => (epoch.saturating_sub(1), epoch.saturating_add(1)),
+            Epochs::Span(a, b) => (a, b),
+        };
+        if first > last || last - first >= MAX_VIEW_EPOCHS {
+            return Err(format!(
+                "epochs {first}..={last}: at most {MAX_VIEW_EPOCHS} epochs in one read"
+            ));
+        }
+        let floor = o.since.unwrap_or(0).max(self.from_block);
+        // Node lists, by hash.
+        let active: Vec<NodeId> = abi::dyn_words(&self.view(&abi::active_nodes(), head).await?, 0)
+            .map_err(err)?
+            .into_iter()
+            .map(NodeId)
+            .collect();
+        let mut known: BTreeMap<Hash32, Vec<NodeId>> = BTreeMap::new();
+        known.insert(set_hash(&[]), Vec::new());
+        known.insert(set_hash(&active), active);
+        let mut hashes = Vec::new();
+        for e in first..=last {
+            let h = abi::word(&self.view(&abi::set_hash_at(e), head).await?, 0).map_err(err)?;
+            hashes.push((e, Hash32(h)));
+        }
+        let unknown = |known: &BTreeMap<Hash32, Vec<NodeId>>| {
+            hashes
+                .iter()
+                .rev()
+                .find(|(_, h)| !known.contains_key(h))
+                .map(|(e, _)| *e)
+        };
+        if let Some(e) = unknown(&known) {
+            // The list of epoch e was set by a `NodeSet` event before e began.
+            let top = head.min(epoch_first_block(&params, e).saturating_sub(1));
+            let mut calls = 0u64;
+            for (lo, hi) in ranges_back(floor, top, self.span) {
+                if unknown(&known).is_none() {
+                    break;
+                }
+                calls += 1;
+                if calls.is_multiple_of(PROGRESS_EVERY) {
+                    self.say(|| {
+                        format!("node lists: NodeSet logs back from block {top}, at block {lo} (not below {floor})")
+                    });
+                }
+                for l in self.logs_range(&[events::NODE_SET], lo, hi).await? {
+                    let nodes: Vec<NodeId> = abi::dyn_words(&l.data, 1)
+                        .map_err(err)?
+                        .into_iter()
+                        .map(NodeId)
+                        .collect();
+                    known.entry(set_hash(&nodes)).or_insert(nodes);
+                }
+            }
+            if let Some(e) = unknown(&known) {
+                return Err(format!(
+                    "the node list of epoch {e} is not the newest one, and no NodeSet event in blocks {floor}..={top} gives it: give a lower --since-block"
+                ));
+            }
+        }
+        let mut lists: Vec<(u64, Vec<NodeId>)> = Vec::new();
+        for (e, h) in &hashes {
+            let l = known.get(h).cloned().unwrap_or_default();
+            if lists.last().map(|x| &x.1) != Some(&l) {
+                lists.push((*e, l));
+            }
+        }
+        let ids: BTreeSet<NodeId> = lists.iter().flat_map(|l| l.1.iter().copied()).collect();
+        let mut nodes = BTreeMap::new();
+        let mut jailed = Jailed::new();
+        for id in &ids {
+            let info =
+                abi::decode_node(&self.view(&abi::node_info(id), head).await?).map_err(err)?;
+            if info.jailed_from != 0 {
+                jailed.insert(*id, info.jailed_from);
+            }
+            nodes.insert(
+                *id,
+                NodeEntry {
+                    info,
+                    url: String::new(),
+                },
+            );
+        }
+        let word = |r: Vec<u8>| abi::word_u64(&r, 0).map_err(|e| e.to_string());
+        let deal_logs = word(self.view(&abi::deal_count(), head).await?)?;
+        let registrations = word(
+            self.view(abi::selector("registrationCount()").as_ref(), head)
+                .await?,
+        )?;
+        let mut deals = Vec::new();
+        let mut running: Vec<DealInfo> = Vec::new();
+        let mut running_ids = Vec::new();
+        for id in 0..deal_logs {
+            let info =
+                abi::decode_deal(&self.view(&abi::deal_info(id), head).await?).map_err(err)?;
+            // A deal no node can serve is never placed or asked (review
+            // STORAGE-R1-7).
+            if info.shard_count > onyx_bulk::manifest::MAX_SHARDS {
+                continue;
+            }
+            // A deal is created two epochs before it starts and may be
+            // declined from then on.
+            if info.start_epoch <= last.saturating_add(2) && info.end_epoch > first {
+                running.push(info.clone());
+                running_ids.push(id);
+            }
+            if !info.closed {
+                deals.push(DealEntry {
+                    id,
+                    info,
+                    publisher: String::new(),
+                    dataset: String::new(),
+                    source_url: String::new(),
+                });
+            }
+        }
+        // Exclusions: only for the shards the epochs' challenge slots pick.
+        let mut excl = Exclusions::new();
+        if o.exclusions == ExclScope::Slots {
+            let mut calls = 0u64;
+            let mut seen: BTreeSet<(u64, u32)> = BTreeSet::new();
+            for e in first..=last {
+                let seed =
+                    Hash32(abi::word(&self.view(&abi::seed_of(e), head).await?, 0).map_err(err)?);
+                if seed == Hash32::ZERO {
+                    continue;
+                }
+                for (id, info) in running_ids.iter().zip(&running) {
+                    if info.start_epoch > e || e >= info.end_epoch {
+                        continue;
+                    }
+                    for slot in 0..params.money.challenges_per_deal {
+                        let index = slot_shard(&seed, *id, slot, info.shard_count);
+                        if seen.insert((*id, index)) {
+                            self.read_shard_exclusions(
+                                &mut excl,
+                                &lists,
+                                (*id, info, index),
+                                (last, head),
+                                &mut calls,
+                            )
+                            .await?;
+                        }
+                    }
+                }
+            }
+        }
+        if o.texts {
+            let registered = abi::topic(events::REGISTERED);
+            let mut url_of_index = BTreeMap::new();
+            let mut texts = BTreeMap::new();
+            let logs = self
+                .logs_range(&[events::REGISTERED, events::DEAL_CREATED], floor, head)
+                .await?;
+            for l in &logs {
+                let text = |i| text_or_empty(abi::dyn_bytes(&l.data, i).unwrap_or_default());
+                if l.topics.first() == Some(&registered) {
+                    url_of_index.insert(topic_u64(l, 1, "Registered topic")?, text(2));
+                } else {
+                    let id = topic_u64(l, 1, "DealCreated topic")?;
+                    texts.insert(id, (text(9), text(10), text(11)));
+                }
+            }
+            for n in nodes.values_mut() {
+                if let Some(u) = url_of_index.get(&n.info.index) {
+                    n.url.clone_from(u);
+                }
+            }
+            for d in &mut deals {
+                if let Some((p, ds, u)) = texts.remove(&d.id) {
+                    d.publisher = p;
+                    d.dataset = ds;
+                    d.source_url = u;
+                }
+            }
+        }
+        Ok(Snapshot {
+            block: head,
+            epoch,
+            params,
+            lists,
+            nodes,
+            deals,
+            excl,
+            jailed,
+            deal_logs,
+            registrations,
+        })
+    }
 }
 
 /// Printable ASCII text of at most 256 bytes, or empty (a URL or id from a
@@ -1632,6 +2200,16 @@ pub struct Snapshot {
 }
 
 impl Snapshot {
+    /// The shards of the deals that are open and not past their end, added
+    /// up.
+    pub fn open_shards(&self) -> u64 {
+        self.deals
+            .iter()
+            .filter(|d| !d.info.closed && d.info.end_epoch > self.epoch)
+            .map(|d| u64::from(d.info.shard_count))
+            .sum()
+    }
+
     /// The node list in force at epoch `e`.
     pub fn list_at(&self, e: u64) -> Vec<NodeId> {
         self.lists
@@ -1833,15 +2411,214 @@ fn join(base: &str, path: &str) -> String {
     format!("{}{}", base.trim_end_matches('/'), path)
 }
 
-/// A deal's manifest, if this node backs a deal on it: format 1 only. The
-/// deployed `OnyxStorage` reads format-1 headers only (it refuses any other
-/// format byte), so a deal on a widened dataset waits for one that accepts
-/// format 2; the node refuses it here rather than fail its checks later
-/// (ADR-0059 amendment 5 item 1).
-fn deal_format(m: &Manifest) -> Result<(), String> {
+/// What anchors a fetched manifest ([`fetch_manifest`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ManifestAnchor {
+    /// The manifest's own signed report (Borsh bytes), checked with
+    /// `onyx_bulk::anchor::verify`.
+    Own(Vec<u8>),
+    /// A catalog of the publisher lists the manifest (ADR-0067): the
+    /// catalog's header, the manifest's leaf with its path and neighbours,
+    /// and the catalog's signed report, checked with [`check_catalog_proof`].
+    Catalog(Box<CatalogAnchor>),
+}
+
+/// A catalog's proof for one manifest ([`ManifestAnchor::Catalog`]).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CatalogAnchor {
+    /// The catalog's header.
+    pub header: CatalogHeader,
+    /// The manifest's leaf with its path and neighbours.
+    pub leaf: LeafProof,
+    /// The catalog's signed report.
+    pub report: SignedReport,
+}
+
+/// Check that a signed catalog lists a manifest, with the checks of
+/// `OnyxStorage.createDealInCatalog` (ADR-0067 checks 1 to 5, the mirror
+/// `onyx_storage::deal::check_deal_in_catalog`; no third copy of them here):
+/// `header` is the manifest's Borsh header (format 1 or 2), `catalog` the
+/// catalog's Borsh header of exact length and the same publisher, the leaf
+/// row built from the header is leaf `leaf_index` of the catalog's tree, and
+/// the report's payload is the catalog's (metric, subject, root, creation
+/// time, the one sequence of its number). Then the signature: the signer's
+/// key id is the payload's key. Returns the signer; whether the book holds
+/// the report is the caller's chain read.
+pub fn check_catalog_proof(
+    header: &[u8],
+    catalog: &[u8],
+    leaf_index: u64,
+    siblings: &[Hash32],
+    report: &SignedReport,
+) -> Result<[u8; 20], String> {
+    let payload = borsh::to_vec(&report.payload).map_err(|e| e.to_string())?;
+    onyx_storage::deal::check_deal_in_catalog(header, catalog, leaf_index, siblings, &payload)
+        .map_err(|e| e.to_string())?;
+    let c: CatalogHeader = borsh::from_slice(catalog).map_err(|_| "catalog header")?;
+    onyx_bulk::catalog::verify(&c, report).map_err(|e| format!("catalog report: {e}"))
+}
+
+/// The manifest and its anchor in one answer of `GET /v1/bulk/manifests/
+/// {root}`, checked offline: the manifest has root `root`, and either its
+/// own report signs it or the answer's `catalog` proves that the reported
+/// catalog lists it ([`check_catalog_proof`], then the whole leaf proof with
+/// its neighbours, as a reader of this node's rows will check it).
+pub fn manifest_from_answer(
+    body: &[u8],
+    root: &Hash32,
+) -> Result<(Manifest, ManifestAnchor), String> {
+    let v: Value = serde_json::from_slice(body).map_err(|_| "not JSON")?;
+    let m = hex_field(&v["manifest"], "manifest").map_err(|e| e.to_string())?;
+    let rep = hex_field(&v["report"], "report").map_err(|e| e.to_string())?;
+    let m = Manifest::from_bytes(&m).map_err(|e| e.to_string())?;
+    if m.header.root() != *root {
+        return Err("another manifest root".into());
+    }
+    let r: SignedReport = borsh::from_slice(&rep).map_err(|_| "report")?;
+    let Some(c) = v.get("catalog").filter(|c| !c.is_null()) else {
+        onyx_bulk::anchor::verify(&m.header, &r).map_err(|e| e.to_string())?;
+        return Ok((m, ManifestAnchor::Own(rep)));
+    };
+    let cb = hex_field(&c["header"], "catalog.header").map_err(|e| e.to_string())?;
+    let lb = hex_field(&c["leaf"], "catalog.leaf").map_err(|e| e.to_string())?;
+    let lp: LeafProof = borsh::from_slice(&lb).map_err(|_| "catalog.leaf")?;
+    check_catalog_proof(
+        &m.header.to_bytes(),
+        &cb,
+        lp.proof.index,
+        &lp.proof.siblings,
+        &r,
+    )?;
+    let header: CatalogHeader = borsh::from_slice(&cb).map_err(|_| "catalog.header")?;
+    header.proves(&lp).map_err(|e| e.to_string())?;
+    if !lp.leaf.names(&m.header) {
+        return Err("the catalog leaf names another manifest".into());
+    }
+    Ok((
+        m,
+        ManifestAnchor::Catalog(Box::new(CatalogAnchor {
+            header,
+            leaf: lp,
+            report: r,
+        })),
+    ))
+}
+
+/// The anchor of manifest `m` from a publisher's own catalog and its signed
+/// report (`onyx-storage deal --catalog`): the leaf of `m`'s dataset, when
+/// it names exactly this manifest, with its proof. A catalog that does not
+/// list the manifest (another version, a tombstone, another publisher's
+/// catalog) is refused.
+pub fn anchor_in_catalog(
+    m: &Manifest,
+    catalog: &onyx_bulk::Catalog,
+    report: SignedReport,
+) -> Result<ManifestAnchor, String> {
+    let h = &m.header;
+    let leaf = catalog
+        .find(&h.dataset)
+        .filter(|i| catalog.leaves[*i].names(h))
+        .and_then(|i| catalog.leaf_proof(i))
+        .ok_or_else(|| {
+            format!(
+                "catalog {} of {} does not list manifest {} ({} version {})",
+                catalog.header.number,
+                catalog.header.publisher.0,
+                h.root(),
+                h.dataset,
+                h.version
+            )
+        })?;
+    Ok(ManifestAnchor::Catalog(Box::new(CatalogAnchor {
+        header: catalog.header.clone(),
+        leaf,
+        report,
+    })))
+}
+
+/// Most shards of open deals whose exclusions `onyx-storage status --node`
+/// reads without being asked (`--shards yes`): about `r` calls a shard.
+pub const STATUS_SHARDS: u64 = 1_024;
+
+/// Whether `status --node` reads the node's shards: `--shards yes` always,
+/// `--shards no` never, and without the option only when the open deals have
+/// at most [`STATUS_SHARDS`] shards together (`open_shards`).
+pub fn status_reads_shards(choice: Option<&str>, open_shards: u64) -> Result<bool, String> {
+    match choice {
+        Some("yes") => Ok(true),
+        Some("no") => Ok(false),
+        None => Ok(open_shards <= STATUS_SHARDS),
+        Some(_) => Err("--shards must be yes or no".into()),
+    }
+}
+
+/// Where a report stands in the signed book, as `OnyxStorage` reads it
+/// before it opens a deal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BookStanding {
+    /// The book has no report under the digest.
+    Unrecorded,
+    /// Recorded, but its fact is not accepted on exactly this report, or its
+    /// key is not registered.
+    NotAccepted,
+    /// Accepted, with its key suspended.
+    Suspended,
+    /// Accepted, its key registered and not suspended.
+    Holds,
+}
+
+/// Whether the contract opens a deal whose anchor report stands at `own` in
+/// the book; for a deal through catalog `catalog`, `next` is where the report
+/// under the same key for the next catalog number stands (`None`: there is
+/// none). The refusals are the contract's, in its order: `CatalogSuperseded`
+/// (the next catalog's report holds), `NotAnchored`, `KeySuspended`. The tool
+/// asks this before it sends the token approval, so a deal that must revert
+/// costs no gas.
+pub fn deal_opens_in_book(
+    own: BookStanding,
+    next: Option<BookStanding>,
+    catalog: Option<u64>,
+) -> Result<(), String> {
+    if let (Some(n), Some(BookStanding::Holds)) = (catalog, next) {
+        return Err(format!(
+            "the contract would refuse this deal (CatalogSuperseded): the signed book holds the publisher's catalog {} under the same key, so catalog {n} is an old one. A deal must use the publisher's newest catalog: take the proof from a node that holds it (deal --root 0x… --node URL) or name the newest catalog file; nothing sent",
+            n.saturating_add(1)
+        ));
+    }
+    match own {
+        BookStanding::Holds => Ok(()),
+        BookStanding::Suspended => Err(
+            "the contract would refuse this deal (KeySuspended): the publisher's key is suspended in the signed book; nothing sent"
+                .into(),
+        ),
+        BookStanding::Unrecorded => Err(
+            "the contract would refuse this deal (NotAnchored): the signed book has no such report yet (anchor it first, or wait until it is mined); nothing sent"
+                .into(),
+        ),
+        BookStanding::NotAccepted => Err(
+            "the contract would refuse this deal (NotAnchored): the signed book recorded the report but does not accept its fact on it, or its key is not registered; nothing sent"
+                .into(),
+        ),
+    }
+}
+
+/// Whether a contract that checks rules `rules` (`RULES_VERSION()`, 0 for a
+/// contract without that view) can open a deal on `m` with `anchor`: a
+/// contract below rules 4 reads format-1 headers only and has no
+/// `createDealInCatalog` (ADR-0067). The tool asks before it sends the
+/// approval, so no gas is spent on a deal that must revert.
+pub fn deal_fits_rules(rules: u64, m: &Manifest, anchor: &ManifestAnchor) -> Result<(), String> {
+    if rules >= 4 {
+        return Ok(());
+    }
+    if matches!(anchor, ManifestAnchor::Catalog(_)) {
+        return Err(format!(
+            "the contract checks rules v{rules}: a deal on a manifest that a catalog anchors needs rules v4 (createDealInCatalog, ADR-0067)"
+        ));
+    }
     if m.header.format != onyx_bulk::manifest::FORMAT {
         return Err(format!(
-            "manifest {} is format {} (a widened dataset): no deal on it until an OnyxStorage that reads format 2 is deployed",
+            "the contract checks rules v{rules} and reads format-1 headers only: manifest {} is format {} (a widened dataset), which needs rules v4",
             m.header.root(),
             m.header.format
         ));
@@ -1849,13 +2626,49 @@ fn deal_format(m: &Manifest) -> Result<(), String> {
     Ok(())
 }
 
+/// The calldata that opens a deal on `m` (`createDeal` for an own report,
+/// `createDealInCatalog` for a catalog proof, ADR-0067), after the checks
+/// the contract will run on it (`onyx_storage::deal`), so a call that would
+/// revert is refused before any transaction. Returns what the contract reads
+/// from the header too.
+pub fn deal_call(
+    m: &Manifest,
+    anchor: &ManifestAnchor,
+    r: u8,
+    epochs: u32,
+    source_url: &str,
+) -> Result<(onyx_storage::deal::HeaderTail, Vec<u8>), String> {
+    let header = m.header.to_bytes();
+    let t = onyx_storage::deal::read_header(&header).map_err(|e| e.to_string())?;
+    match anchor {
+        ManifestAnchor::Own(report) => {
+            let rep: SignedReport = borsh::from_slice(report).map_err(|_| "report")?;
+            onyx_bulk::anchor::verify(&m.header, &rep).map_err(|e| e.to_string())?;
+            let payload = borsh::to_vec(&rep.payload).map_err(|e| e.to_string())?;
+            onyx_storage::deal::check_payload(&t, &payload).map_err(|e| e.to_string())?;
+            let call = abi::create_deal(&header, &payload, r, epochs, source_url);
+            Ok((t, call))
+        }
+        ManifestAnchor::Catalog(a) => {
+            let catalog = borsh::to_vec(&a.header).map_err(|e| e.to_string())?;
+            let (index, siblings) = (a.leaf.proof.index, &a.leaf.proof.siblings);
+            check_catalog_proof(&header, &catalog, index, siblings, &a.report)?;
+            let payload = borsh::to_vec(&a.report.payload).map_err(|e| e.to_string())?;
+            let call = abi::create_deal_in_catalog(
+                &header, &catalog, index, siblings, &payload, r, epochs, source_url,
+            );
+            Ok((t, call))
+        }
+    }
+}
+
 /// Fetch the manifest with `root` from the first of `urls` that serves one
-/// with exactly that root. Returns the manifest and its signed report bytes.
+/// with exactly that root and an anchor that checks ([`manifest_from_answer`]).
 pub async fn fetch_manifest(
     get: &dyn HttpGet,
     urls: &[String],
     root: &Hash32,
-) -> Result<(Manifest, Vec<u8>), String> {
+) -> Result<(Manifest, ManifestAnchor), String> {
     fetch_manifest_until(get, urls, root, None).await
 }
 
@@ -1865,7 +2678,7 @@ async fn fetch_manifest_until(
     urls: &[String],
     root: &Hash32,
     deadline: Option<tokio::time::Instant>,
-) -> Result<(Manifest, Vec<u8>), String> {
+) -> Result<(Manifest, ManifestAnchor), String> {
     let mut why = Vec::new();
     for u in urls {
         if past(deadline) {
@@ -1889,19 +2702,7 @@ async fn fetch_manifest_until(
                 continue;
             }
         };
-        let parsed = (|| -> Result<(Manifest, Vec<u8>), String> {
-            let v: Value = serde_json::from_slice(&body).map_err(|_| "not JSON")?;
-            let m = hex_field(&v["manifest"], "manifest").map_err(|e| e.to_string())?;
-            let rep = hex_field(&v["report"], "report").map_err(|e| e.to_string())?;
-            let m = Manifest::from_bytes(&m).map_err(|e| e.to_string())?;
-            if m.header.root() != *root {
-                return Err("another manifest root".into());
-            }
-            let r: SignedReport = borsh::from_slice(&rep).map_err(|_| "report")?;
-            onyx_bulk::anchor::verify(&m.header, &r).map_err(|e| e.to_string())?;
-            Ok((m, rep))
-        })();
-        match parsed {
+        match manifest_from_answer(&body, root) {
             Ok(x) => return Ok(x),
             Err(e) => why.push(format!("{u}: {e}")),
         }
@@ -2191,7 +2992,6 @@ impl StorageNode {
         deadline: Option<tokio::time::Instant>,
     ) -> Result<Manifest, String> {
         if let Some((m, _)) = self.store.manifest_record(&d.info.manifest_root) {
-            deal_format(&m)?;
             return Ok(m);
         }
         let urls = manifest_sources(s, d, Some(&self.cfg.node));
@@ -2205,22 +3005,28 @@ impl StorageNode {
             if past(deadline) {
                 return Err("fetch time budget used up".into());
             }
-            let (m, rep) = fetch_manifest_until(self.get.as_ref(), &urls, &root, deadline).await?;
-            if root == d.info.manifest_root {
-                deal_format(&m)?;
-            }
+            let (m, anchor) =
+                fetch_manifest_until(self.get.as_ref(), &urls, &root, deadline).await?;
             let prev = m.header.prev;
-            chain.push((m, rep));
+            chain.push((m, anchor));
             if prev == Hash32::ZERO {
                 break;
             }
             root = prev;
         }
-        for (m, rep) in chain.iter().rev() {
-            self.store
-                .accept_manifest(&m.to_bytes(), rep)
-                .await
-                .map_err(|e| format!("manifest {}: {}", m.header.root(), e.message))?;
+        for (m, anchor) in chain.into_iter().rev() {
+            let root = m.header.root();
+            // An own report, or a carried catalog proof (ADR-0067): the store
+            // reads the book for either before it keeps the version.
+            match anchor {
+                ManifestAnchor::Own(rep) => self.store.accept_manifest(&m.to_bytes(), &rep).await,
+                ManifestAnchor::Catalog(a) => {
+                    self.store
+                        .accept_manifest_with_proof(&m.to_bytes(), a.header, a.leaf, a.report)
+                        .await
+                }
+            }
+            .map_err(|e| format!("manifest {root}: {}", e.message))?;
         }
         self.store
             .manifest_record(&d.info.manifest_root)
@@ -3193,28 +3999,39 @@ pub async fn epoch_report(chain: &StorageChain, s: &Snapshot, e: u64) -> Result<
     );
     let mut acc = EpochAccounts::new(&asks);
     let mut paid: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();
-    // Answers and slashes of epoch e are sent from its first block on: the
-    // report reads from there, not from the deploy block (THREATS STORAGE-S15-1).
-    let start = s.params.genesis + e * s.params.epoch_blocks;
-    for l in chain.logs_from(events::ANSWERED, start, s.block).await? {
-        let epoch = l
-            .topics
-            .get(2)
-            .map(|t| u64::from_be_bytes(t.0[24..].try_into().unwrap_or([0; 8])));
-        if epoch != Some(e) {
+    // Answers of epoch e are sent in e and its misses are settled in the two
+    // epochs after: the report reads only those blocks, in one pass for both
+    // events, never from the deploy block and never on to the head (THREATS
+    // STORAGE-S15-1, [`epoch_event_blocks`]).
+    let mut slashed: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();
+    let answered = abi::topic(events::ANSWERED);
+    let logs = match epoch_event_blocks(&s.params, e, chain.from_block(), s.block) {
+        Some((from, to)) => {
+            chain
+                .logs_between(&[events::ANSWERED, events::SLASHED], from, to)
+                .await?
+        }
+        None => Vec::new(),
+    };
+    for l in logs {
+        if l.topics.first() == Some(&answered) {
+            let epoch = l
+                .topics
+                .get(2)
+                .map(|t| u64::from_be_bytes(t.0[24..].try_into().unwrap_or([0; 8])));
+            if epoch != Some(e) {
+                continue;
+            }
+            let deal = l.topics.get(1).map_or(0, |t| {
+                u64::from_be_bytes(t.0[24..].try_into().unwrap_or([0; 8]))
+            });
+            let node = NodeId(l.topics.get(3).copied().unwrap_or(Hash32::ZERO));
+            // Data: slot, shard index, passed, paid.
+            let slot = abi::word_u64(&l.data, 0).map_err(|x| x.to_string())? as u32;
+            let amount = abi::word_uint(&l.data, 3).map_err(|x| x.to_string())?;
+            paid.insert((deal, slot, node), amount);
             continue;
         }
-        let deal = l.topics.get(1).map_or(0, |t| {
-            u64::from_be_bytes(t.0[24..].try_into().unwrap_or([0; 8]))
-        });
-        let node = NodeId(l.topics.get(3).copied().unwrap_or(Hash32::ZERO));
-        // Data: slot, shard index, passed, paid.
-        let slot = abi::word_u64(&l.data, 0).map_err(|x| x.to_string())? as u32;
-        let amount = abi::word_uint(&l.data, 3).map_err(|x| x.to_string())?;
-        paid.insert((deal, slot, node), amount);
-    }
-    let mut slashed: BTreeMap<(u64, u32, NodeId), u128> = BTreeMap::new();
-    for l in chain.logs_from(events::SLASHED, start, s.block).await? {
         if abi::word_u64(&l.data, 0).map_err(|x| x.to_string())? != e {
             continue;
         }
@@ -3332,15 +4149,44 @@ pub async fn read_rows(
     from: i128,
     to: i128,
 ) -> Result<ReadResult, ReadError> {
-    let s = chain.snapshot().await.map_err(ReadError::Chain)?;
+    let mut s = chain.snapshot().await.map_err(ReadError::Chain)?;
+    read_rows_in(None, &mut s, get, deal_id, from, to).await
+}
+
+/// [`read_rows`] on a chain view already read. With `fill` (the tool's
+/// [`StorageChain::view_snapshot`], read without exclusions and with its
+/// texts), the exclusions of the shards the key range needs are read first
+/// ([`StorageChain::fill_exclusions`]): only those, not every shard of the
+/// deal.
+pub async fn read_rows_in(
+    fill: Option<&StorageChain>,
+    s: &mut Snapshot,
+    get: &dyn HttpGet,
+    deal_id: u64,
+    from: i128,
+    to: i128,
+) -> Result<ReadResult, ReadError> {
     let d = s.deal(deal_id).ok_or(ReadError::NoDeal(deal_id))?.clone();
-    let all = manifest_sources(&s, &d, None);
+    let all = manifest_sources(s, &d, None);
     let (m, _) = fetch_manifest(get, &all, &d.info.manifest_root)
         .await
         .map_err(|why| ReadError::Unavailable {
             shard: u32::MAX,
             why,
         })?;
+    if let Some(chain) = fill {
+        let needed: Vec<u32> = m
+            .shards
+            .iter()
+            .filter(|e| e.key_max >= from && e.key_min <= to)
+            .map(|e| e.index)
+            .collect();
+        chain
+            .fill_exclusions(s, deal_id, Some(&needed))
+            .await
+            .map_err(ReadError::Chain)?;
+    }
+    let s = &*s;
     let mut out = ReadResult::default();
     for e in m
         .shards
@@ -3352,7 +4198,7 @@ pub async fn read_rows(
         let schema = m.header.schema_of(e.index);
         let mut why = Vec::new();
         let mut done = false;
-        for u in sources(&s, &d, e.index, None) {
+        for u in sources(s, &d, e.index, None) {
             let url = join(&u, &format!("/v1/bulk/shards/{}", e.root));
             let checked = match get.get(&url, e.bytes as usize).await {
                 Ok((200, body)) => onyx_bulk::shard::check_shard(schema, &body)

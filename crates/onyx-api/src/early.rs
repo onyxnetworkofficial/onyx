@@ -2426,23 +2426,23 @@ pub const ANVIL_ACCOUNTS: [&str; 10] = [
 pub const PLACEHOLDERS: [(&str, &str); 6] = [
     (
         "0x0000000000000000000000000000000000000001",
-        "scripts/storage-sepolia-tests.sh:76",
+        "scripts/storage-sepolia-tests.sh:123",
     ),
     (
         "0x0000000000000000000000000000000000000002",
-        "scripts/storage-sepolia-tests.sh:77",
+        "scripts/storage-sepolia-tests.sh:124",
     ),
     (
         "0x0000000000000000000000000000000000000003",
-        "scripts/storage-sepolia-tests.sh:78",
+        "scripts/storage-sepolia-tests.sh:125",
     ),
     (
         "0x00000000000000000000000000000000000000aa",
-        "scripts/storage-sepolia-tests.sh:79",
+        "scripts/storage-sepolia-tests.sh:126",
     ),
     (
         "0x000000000000000000000000000000000000c0de",
-        "scripts/storage-sepolia-tests.sh:55",
+        "scripts/storage-sepolia-tests.sh:71",
     ),
     (
         "0x00000000000000000000000000000000000c0de1",

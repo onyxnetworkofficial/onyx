@@ -4,6 +4,7 @@ pragma solidity ^0.8.24;
 import {Test} from "forge-std/Test.sol";
 import {OnyxStorageLib as L} from "../src/OnyxStorageLib.sol";
 import {OnyxStorage, IStorageToken} from "../src/OnyxStorage.sol";
+import {OnyxStorageAnchor} from "../src/OnyxStorageAnchor.sol";
 import {OnyxSignedBook} from "../src/OnyxSignedBook.sol";
 import {OnyxTestToken} from "../src/OnyxTestToken.sol";
 
@@ -17,8 +18,24 @@ contract LibHarness {
         return L.readHeader(h);
     }
 
+    function checkCatalogPayload(bytes calldata c, bytes32 root, bytes calldata p)
+        external
+        pure
+        returns (bytes32)
+    {
+        return L.checkCatalogPayload(c, root, p);
+    }
+
     function checkPayload(bytes calldata h, bytes calldata p) external pure returns (bytes32) {
         return L.checkPayload(h, L.readHeader(h), p);
+    }
+
+    function nextCatalogSequence(bytes calldata c) external pure returns (uint64) {
+        return L.nextCatalogSequence(c);
+    }
+
+    function leafRow(bytes calldata h) external pure returns (bytes memory) {
+        return L.leafRow(h, L.readHeader(h));
     }
 
     function verifyProof(
@@ -169,8 +186,12 @@ contract OnyxStorageVectorsTest is Test {
         p2[p2.length - 20] = bytes1(uint8(p2[p2.length - 20]) ^ 1); // inside the root
         vm.expectRevert(L.BadPayload.selector);
         lib.checkPayload(h, p2);
+        // Formats 1 and 2 read (ADR-0067); any other format byte is refused.
         bytes memory h2 = bytes.concat(h);
-        h2[0] = 0x02;
+        h2[0] = 0x03;
+        vm.expectRevert(L.BadHeader.selector);
+        lib.readHeader(h2);
+        h2[0] = 0x00;
         vm.expectRevert(L.BadHeader.selector);
         lib.readHeader(h2);
         // Review STORAGE-R1-7: more shards than a manifest may hold (65,537, little-endian).
@@ -325,6 +346,111 @@ contract OnyxStorageVectorsTest is Test {
         for (uint256 i = 0; i < 3; i++) {
             _amount(i, price, k);
         }
+    }
+
+    /// ADR-0067: the good catalog cases, read by the contract `OnyxStorage` calls
+    /// (`OnyxStorageAnchor`). Rust and Solidity build the same leaf row, catalog root and
+    /// payload digest, and read the same manifest fields.
+    function test_catalogDeals() public {
+        OnyxStorageAnchor a = new OnyxStorageAnchor();
+        // The count is written in the file: a case lost on either side shows.
+        uint256 deals = _u(".catalog.dealCount");
+        assertEq(deals, 5);
+        assertFalse(vm.keyExistsJson(json, ".catalog.deals[5]"));
+        for (uint256 i = 0; i < deals; i++) {
+            string memory p = string.concat(".catalog.deals[", vm.toString(i), "]");
+            bytes memory h = vm.parseJsonBytes(json, _k(p, ".header"));
+            bytes memory c = vm.parseJsonBytes(json, _k(p, ".catalog"));
+            assertEq(lib.leafRow(h), vm.parseJsonBytes(json, _k(p, ".leafRow")));
+            assertEq(
+                keccak256(abi.encodePacked("onyx-bulk-catalog-v1", c)), _b(_k(p, ".catalogRoot"))
+            );
+            (L.Header memory r, bytes32 digest, uint64 next) = a.inCatalog(
+                h,
+                c,
+                uint64(_u(_k(p, ".leafIndex"))),
+                vm.parseJsonBytes32Array(json, _k(p, ".siblings")),
+                vm.parseJsonBytes(json, _k(p, ".payload"))
+            );
+            assertEq(digest, _b(_k(p, ".digest")));
+            assertEq(next, lib.nextCatalogSequence(c));
+            assertEq(r.root, _b(_k(p, ".manifestRoot")));
+            assertEq(r.shardCount, _u(_k(p, ".shardCount")));
+            assertEq(r.byteCount, _u(_k(p, ".byteCount")));
+            assertEq(r.shardsRoot, _b(_k(p, ".shardsRoot")));
+            assertEq(uint8(h[0]), _u(_k(p, ".format")));
+        }
+        // The last deal's catalog has one leaf and an empty path.
+        assertEq(vm.parseJsonBytes32Array(json, ".catalog.deals[4].siblings").length, 0);
+        assertEq(_u(".catalog.deals[4].leafCount"), 1);
+        // The catalogs: the root, the digest of the signed payload, and the sequence the
+        // contract asks the book about (the next catalog's).
+        for (uint256 i = 0; i < 3; i++) {
+            string memory p = string.concat(".catalog.catalogs[", vm.toString(i), "]");
+            bytes memory c = vm.parseJsonBytes(json, _k(p, ".header"));
+            assertEq(keccak256(abi.encodePacked("onyx-bulk-catalog-v1", c)), _b(_k(p, ".root")));
+            bytes memory pl = vm.parseJsonBytes(json, _k(p, ".payload"));
+            assertEq(lib.checkCatalogPayload(c, _b(_k(p, ".root")), pl), _b(_k(p, ".digest")));
+            assertEq(lib.nextCatalogSequence(c), _u(_k(p, ".nextSequence")));
+            if (i > 0) {
+                // The sequence after catalog i - 1 is catalog i's own.
+                string memory before = string.concat(".catalog.catalogs[", vm.toString(i - 1), "]");
+                assertEq(_u(_k(before, ".nextSequence")), _u(_k(p, ".sequence")));
+            }
+        }
+        // The largest catalog number: no overflow, the reserved sequence.
+        assertEq(
+            lib.nextCatalogSequence(vm.parseJsonBytes(json, ".catalog.lastCatalog.header")),
+            type(uint64).max
+        );
+        assertEq(_u(".catalog.lastCatalog.nextSequence"), type(uint64).max);
+        // The own-report read goes through the same contract.
+        bytes memory mh = vm.parseJsonBytes(json, ".manifest.header");
+        (L.Header memory mr, bytes32 md) = a.own(mh, vm.parseJsonBytes(json, ".manifest.payload"));
+        assertEq(mr.root, _b(".manifest.root"));
+        assertEq(md, _b(".manifest.digest"));
+    }
+
+    /// ADR-0067: every refused catalog case is refused with the error the Rust mirror names.
+    function test_catalogRefusals() public {
+        OnyxStorageAnchor a = new OnyxStorageAnchor();
+        uint256 n;
+        while (vm.keyExistsJson(json, string.concat(".catalog.refused[", vm.toString(n), "]"))) {
+            string memory p = string.concat(".catalog.refused[", vm.toString(n), "]");
+            bytes32 kind = keccak256(bytes(vm.parseJsonString(json, _k(p, ".error"))));
+            bytes4 err = L.BadPayload.selector;
+            if (kind == keccak256("header")) err = L.BadHeader.selector;
+            else if (kind == keccak256("catalog")) err = L.BadCatalog.selector;
+            else if (kind == keccak256("leaf")) err = L.NotInCatalog.selector;
+            else assertEq(kind, keccak256("payload"));
+            bytes memory h = vm.parseJsonBytes(json, _k(p, ".header"));
+            bytes memory c = vm.parseJsonBytes(json, _k(p, ".catalog"));
+            uint64 index = uint64(_u(_k(p, ".leafIndex")));
+            bytes32[] memory sib = vm.parseJsonBytes32Array(json, _k(p, ".siblings"));
+            bytes memory pl = vm.parseJsonBytes(json, _k(p, ".payload"));
+            vm.expectRevert(err);
+            a.inCatalog(h, c, index, sib, pl);
+            n++;
+        }
+        assertEq(n, _u(".catalog.refusedCount"));
+        assertEq(n, 37);
+    }
+
+    /// ADR-0067: the new function and event, by signature, as `onyx_storage::abi` writes them.
+    function test_catalogSelectorAndEvent() public view {
+        assertEq(
+            keccak256(bytes(vm.parseJsonString(json, ".anchorEvent.signature"))),
+            OnyxStorage.DealAnchor.selector
+        );
+        assertEq(_b(".anchorEvent.topic"), OnyxStorage.DealAnchor.selector);
+        assertEq(
+            bytes4(keccak256(bytes(vm.parseJsonString(json, ".createDealInCatalog.signature")))),
+            OnyxStorage.createDealInCatalog.selector
+        );
+        assertEq(
+            bytes4(vm.parseJsonBytes(json, ".createDealInCatalog.selector")),
+            OnyxStorage.createDealInCatalog.selector
+        );
     }
 
     /// ADR-0060 amendment 1: the registration fee and the reporter's reward as Rust computes

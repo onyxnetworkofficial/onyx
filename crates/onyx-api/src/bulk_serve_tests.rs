@@ -18,9 +18,9 @@ const BOOK: [u8; 20] = [0xB0; 20];
 const CHAIN: u64 = 31_337;
 const SECRET: [u8; 32] = [0x42; 32];
 /// The publisher's next key, after a theft of the first (THREATS CAT-5).
-const SECRET2: [u8; 32] = [0x43; 32];
+pub(crate) const SECRET2: [u8; 32] = [0x43; 32];
 const FIN: [u8; 32] = [0xF1; 32];
-const T0: u64 = 1_800_000_000;
+pub(crate) const T0: u64 = 1_800_000_000;
 
 fn pin() -> BulkBook {
     BulkBook {
@@ -1362,7 +1362,7 @@ fn publisher() -> SourceId {
     SourceId("example.publisher".into())
 }
 
-fn other_leaf(dataset: &str) -> CatalogLeaf {
+pub(crate) fn other_leaf(dataset: &str) -> CatalogLeaf {
     CatalogLeaf {
         publisher: publisher(),
         dataset: dataset.into(),
@@ -1372,16 +1372,20 @@ fn other_leaf(dataset: &str) -> CatalogLeaf {
     }
 }
 
-fn catalog_of(prev: Option<&Catalog>, created: u64, leaves: Vec<CatalogLeaf>) -> Catalog {
+pub(crate) fn catalog_of(
+    prev: Option<&Catalog>,
+    created: u64,
+    leaves: Vec<CatalogLeaf>,
+) -> Catalog {
     Catalog::build(publisher(), prev, created, leaves).expect("catalog")
 }
 
-fn sign_catalog(c: &Catalog) -> SignedReport {
+pub(crate) fn sign_catalog(c: &Catalog) -> SignedReport {
     cat::sign(&SECRET, &c.header).expect("ok")
 }
 
 impl World {
-    async fn post_catalog(
+    pub(crate) async fn post_catalog(
         &self,
         c: &Catalog,
         r: &SignedReport,
@@ -1394,13 +1398,17 @@ impl World {
             .await
     }
 
-    async fn post_in(&self, m: &Manifest, n: u64) -> Result<(StatusCode, Value), ApiError> {
+    pub(crate) async fn post_in(
+        &self,
+        m: &Manifest,
+        n: u64,
+    ) -> Result<(StatusCode, Value), ApiError> {
         self.store
             .accept_manifest_in_catalog(&m.to_bytes(), n)
             .await
     }
 
-    async fn upload_all(&self, m: &Manifest, files: &[Vec<u8>]) {
+    pub(crate) async fn upload_all(&self, m: &Manifest, files: &[Vec<u8>]) {
         for (f, e) in files.iter().zip(&m.shards) {
             if !self.store.holds_shard(&e.root) {
                 assert_eq!(
@@ -3577,7 +3585,7 @@ impl World {
         self.dir.join("catalogs").join(&publisher().0)
     }
 
-    fn reopen(&self) -> Result<BulkStore, String> {
+    pub(crate) fn reopen(&self) -> Result<BulkStore, String> {
         BulkStore::open(
             pin(),
             self.node.clone(),
@@ -4130,7 +4138,7 @@ async fn serve_write_2_a_shared_answer_goes_out_in_slices_of_one_copy() {
 // ---------------------------------------------------------------- history (CAT-1)
 
 /// A node reached through its peer routes (the history check's GETs).
-struct RouterGet(Router);
+pub(crate) struct RouterGet(pub(crate) Router);
 
 impl crate::storage::HttpGet for RouterGet {
     fn get<'a>(

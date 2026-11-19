@@ -1,6 +1,7 @@
 //! The shared Rust/Solidity vectors (`fixtures/storage/vectors.json`, read
 //! by `contracts/test/OnyxStorageVectors.t.sol`). Regenerate only with an
-//! ADR-0060 change: `ONYX_BLESS=1 cargo test -p onyx-storage vectors`.
+//! ADR-0060 or ADR-0067 change: `ONYX_BLESS=1 cargo test -p onyx-storage
+//! vectors`. The catalog cases (ADR-0067) are built in `catalog_vectors.rs`.
 
 use crate::challenge::{answer, entry_bytes, tests::dataset};
 use crate::deal::{check_payload, read_header};
@@ -174,7 +175,12 @@ fn build() -> Value {
         .map(|e| json!({"signature": e, "topic": crate::abi::topic(e).to_string()}))
         .collect();
     json!({
-        "comment": "Shared Rust/Solidity vectors of the storage network (ADR-0060). Regenerate only with an ADR change: ONYX_BLESS=1 cargo test -p onyx-storage vectors.",
+        "comment": "Shared Rust/Solidity vectors of the storage network (ADR-0060, ADR-0067). Regenerate only with an ADR change: ONYX_BLESS=1 cargo test -p onyx-storage vectors.",
+        "catalog": crate::catalog_vectors::build(),
+        "anchorEvent": {"signature": crate::abi::events::DEAL_ANCHOR,
+                        "topic": crate::abi::topic(crate::abi::events::DEAL_ANCHOR).to_string()},
+        "createDealInCatalog": {"signature": "createDealInCatalog(bytes,bytes,uint64,bytes32[],bytes,uint8,uint32,string)",
+                                "selector": hx(&crate::abi::create_deal_in_catalog(&[], &[], 0, &[], &[], 0, 0, "")[..4])},
         "nodeIds": node_ids,
         "dealSalt": {"prevHash": h(40).to_string(), "dealId": 7, "salt": salt.to_string()},
         "shardKeys": keys,
@@ -219,6 +225,6 @@ fn vectors() {
     let on_disk = std::fs::read_to_string(path).expect("fixtures/storage/vectors.json");
     assert_eq!(
         on_disk, text,
-        "vectors changed: bless only with an ADR-0060 change"
+        "vectors changed: bless only with an ADR-0060 or ADR-0067 change"
     );
 }

@@ -130,9 +130,9 @@ contract OnyxStorageTest is StorageFixture {
         // A truncated payload.
         vm.expectRevert(OnyxStorageLib.BadPayload.selector);
         st.createDeal(header, bytes.concat(payload, hex"00"), 3, 4, "");
-        // A broken header.
+        // A broken header (formats 1 and 2 read, ADR-0067).
         bytes memory h3 = bytes.concat(header);
-        h3[0] = 0x02;
+        h3[0] = 0x03;
         vm.expectRevert(OnyxStorageLib.BadHeader.selector);
         st.createDeal(h3, payload, 3, 4, "");
         vm.stopPrank();
@@ -858,7 +858,7 @@ contract OnyxStorageTest is StorageFixture {
         assertTrue(st.conserved());
         assertEq(st.startBondOf(ids[0]), MIN_BOND - _fee(MIN_BOND));
         assertEq(st.startBondOf(bytes32(uint256(1))), 0);
-        assertEq(st.RULES_VERSION(), 3);
+        assertEq(st.RULES_VERSION(), 4);
     }
 
     /// THREATS STORAGE-S16-R2-3: whoever settles a miss earns 10% of the slash, withdrawn like

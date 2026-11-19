@@ -21,8 +21,8 @@ use onyx_merkle::MerkleTree;
 
 /// Domain tag of [`ManifestHeader::root`].
 pub const MANIFEST_DOMAIN: &[u8] = b"onyx-bulk-manifest-v1";
-/// Format 1: one schema for every shard (the only format `OnyxStorage`
-/// reads).
+/// Format 1: one schema for every shard. `OnyxStorage` reads formats 1 and
+/// 2 from rules version 4 on (ADR-0067); rules version 3 read only this one.
 pub const FORMAT: u8 = 1;
 /// Format 2 (ADR-0059 amendment 5): a widened schema, with the
 /// [`EarlierSchema`]s older shards keep.

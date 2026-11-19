@@ -7,9 +7,10 @@ import {OnyxMerkle} from "./OnyxMerkle.sol";
 /// @notice The hashes and parsers of the storage network (ADR-0060, docs/spec/storage-network.md),
 /// byte for byte the twins of `crates/onyx-storage` (`ids.rs`, `deal.rs`, `challenge.rs`);
 /// fixtures/storage/vectors.json is checked by both sides. Every hash is Keccak-256 over the
-/// fixed packing of ADR-0011 (an ASCII tag, then fixed-width big-endian fields), except the two
-/// ADR-0059 hashes read as they are: the manifest root over the Borsh header and the Borsh shard
-/// entry leaf (fixed-width, little-endian).
+/// fixed packing of ADR-0011 (an ASCII tag, then fixed-width big-endian fields), except the
+/// ADR-0059 hashes read as they are: the manifest root over the Borsh header, the Borsh shard
+/// entry leaf (fixed-width, little-endian), and the catalog root and catalog leaf row of
+/// ADR-0067.
 library OnyxStorageLib {
     /// Bytes of the fixed tail of a Borsh `ManifestHeader`: shard_count u32, row_count u64,
     /// byte_count u64, key_min i128, key_max i128, shards_root [32].
@@ -33,8 +34,19 @@ library OnyxStorageLib {
     /// The anchor's metric (`onyx_bulk::ANCHOR_METRIC`).
     bytes internal constant METRIC = "bulk.manifest";
 
+    /// The catalog anchor's metric and subject (`onyx_bulk::catalog::CATALOG_METRIC`,
+    /// `CATALOG_SUBJECT`), each with its Borsh length in front, the subject after its kind byte
+    /// (3: `Subject::Aggregate`).
+    bytes internal constant CATALOG_NAMES =
+        hex"0c00000062756c6b2e636174616c6f670307000000636174616c6f67";
+    /// Bytes of a Borsh `CatalogHeader` after its publisher: number u64, prev [32],
+    /// created_unix u64, leaf_count u32, leaves_root [32].
+    uint256 internal constant CATALOG_FIXED = 84;
+
     error BadHeader();
     error BadPayload();
+    error BadCatalog();
+    error NotInCatalog();
 
     struct Header {
         bytes32 root;
@@ -123,11 +135,12 @@ library OnyxStorageLib {
         );
     }
 
-    /// `onyx_storage::deal::read_header`: format 1, the dataset and publisher strings (1..=255
-    /// bytes each), the tail; a zero shard count or byte count is refused.
+    /// `onyx_storage::deal::read_header`: format 1 or 2 (both have the same first fields and the
+    /// same tail; ADR-0067), the dataset and publisher strings (1..=255 bytes each), the tail; a
+    /// zero shard count or byte count is refused.
     function readHeader(bytes calldata h) internal pure returns (Header memory r) {
         uint256 n = h.length;
-        if (n < 9 + TAIL_BYTES || uint8(h[0]) != 1) revert BadHeader();
+        if (n < 9 + TAIL_BYTES || (uint8(h[0]) != 1 && uint8(h[0]) != 2)) revert BadHeader();
         uint256 dl = readU32(h, 1);
         if (dl == 0 || dl > 255) revert BadHeader();
         r.dStart = 5;
@@ -178,6 +191,89 @@ library OnyxStorageLib {
         );
         if (keccak256(p[o:p.length - 16]) != keccak256(mid)) revert BadPayload();
         return keccak256(abi.encodePacked("onyx-signed-source-v1", p));
+    }
+
+    /// `onyx_storage::deal::leaf_row`: the catalog leaf row of the manifest header `h`, the bytes
+    /// of `onyx_bulk::CatalogLeaf::row`: the leaf tag, the publisher and dataset strings (each
+    /// with its Borsh length), the version (4 bytes) and the previous root (32 bytes), which sit
+    /// right after the publisher in the header, and the manifest root.
+    function leafRow(bytes calldata h, Header memory r) internal pure returns (bytes memory) {
+        if (r.pEnd + 36 + TAIL_BYTES > h.length) revert BadHeader();
+        return abi.encodePacked(
+            "onyx-bulk-catalog-leaf-v1",
+            h[r.pStart - 4:r.pEnd],
+            h[1:r.dEnd],
+            h[r.pEnd:r.pEnd + 36],
+            r.root
+        );
+    }
+
+    /// `onyx_storage::deal::check_in_catalog` (ADR-0067 checks 1 to 4): `c` is a Borsh catalog
+    /// header of exact length (format 1, the publisher of the manifest header `h`, 84 fixed
+    /// bytes), and the leaf row of `h` (publisher, dataset, version, previous root, manifest
+    /// root) is leaf `leafIndex` of its tree. Returns the catalog root.
+    function checkCatalog(
+        bytes calldata h,
+        Header memory r,
+        bytes calldata c,
+        uint64 leafIndex,
+        bytes32[] calldata siblings
+    ) internal pure returns (bytes32) {
+        bytes memory row = leafRow(h, r);
+        // `o`: where the fixed part of the catalog header starts.
+        uint256 o = 1 + r.pEnd - (r.pStart - 4);
+        if (c.length != o + CATALOG_FIXED || uint8(c[0]) != 1) revert BadCatalog();
+        // The same Borsh string (length, then bytes) names the publisher in both headers.
+        if (keccak256(c[1:o]) != keccak256(h[r.pStart - 4:r.pEnd])) revert BadCatalog();
+        if (!OnyxMerkle.verify(
+                bytes32(c[o + 52:o + 84]), row, leafIndex, uint64(readU32(c, o + 48)), siblings
+            )) revert NotInCatalog();
+        return keccak256(abi.encodePacked("onyx-bulk-catalog-v1", c));
+    }
+
+    /// `onyx_storage::deal::check_catalog_payload` (ADR-0067 check 5): `p` is exactly the anchor
+    /// of the catalog header `c` with root `root` (its publisher, any key, metric
+    /// "bulk.catalog", subject Aggregate("catalog"), value Bytes(root), the catalog's creation
+    /// time, the one sequence of its number). Returns its digest in the book. Call it after
+    /// `checkCatalog`, which checks the length of `c`.
+    function checkCatalogPayload(bytes calldata c, bytes32 root, bytes calldata p)
+        internal
+        pure
+        returns (bytes32)
+    {
+        uint256 o = c.length - CATALOG_FIXED;
+        // Publisher string and key, then the names, the value (1 + 4 + 32 bytes), the time and
+        // the sequence (8 bytes each).
+        uint256 k = o - 1 + 32;
+        if (p.length != k + CATALOG_NAMES.length + 53) revert BadPayload();
+        if (keccak256(p[0:o - 1]) != keccak256(c[1:o])) revert BadPayload();
+        bytes memory rest =
+            abi.encodePacked(CATALOG_NAMES, uint8(4), le32(32), root, c[o + 40:o + 48]);
+        if (keccak256(p[k:p.length - 8]) != keccak256(rest)) revert BadPayload();
+        // `onyx_bulk::catalog::sequence_for_catalog`: never the reserved largest value.
+        uint64 s = uint64(
+            bytes8(keccak256(abi.encodePacked("onyx-bulk-catalog-sequence-v1", c[o:o + 8])))
+        );
+        if (s == type(uint64).max) s--;
+        if (readU64(p, p.length - 8) != s) revert BadPayload();
+        return keccak256(abi.encodePacked("onyx-signed-source-v1", p));
+    }
+
+    /// `onyx_storage::deal::next_catalog_sequence`: the sequence the catalog after the catalog
+    /// header `c` is signed under (the sequence of its number plus one), or the reserved largest
+    /// value, which no report can use, when the number is the largest there is. Call it after
+    /// `checkCatalog`, which checks the length of `c`.
+    function nextCatalogSequence(bytes calldata c) internal pure returns (uint64 s) {
+        uint256 n = readU64(c, c.length - CATALOG_FIXED);
+        if (n == type(uint64).max) return type(uint64).max;
+        n += 1;
+        // Borsh writes the number with its lowest byte first.
+        bytes memory le = new bytes(8);
+        for (uint256 i = 0; i < 8; i++) {
+            le[i] = bytes1(uint8(n >> (8 * i)));
+        }
+        s = uint64(bytes8(keccak256(abi.encodePacked("onyx-bulk-catalog-sequence-v1", le))));
+        if (s == type(uint64).max) s--;
     }
 
     /// `onyx_storage::challenge::verify`: the entry is the challenged shard and proves to

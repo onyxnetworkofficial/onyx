@@ -32,6 +32,8 @@ contract DeployStorageTest is Test {
         assertEq(s.challengesPerDeal(), d.CHALLENGES_PER_DEAL());
         assertEq(s.maxMisses(), d.MAX_MISSES());
         assertEq(s.genesis(), block.number);
+        // The deployment also creates the stateless anchor reader (ADR-0067).
+        assertGt(address(s.anchor()).code.length, 0);
     }
 
     function test_refusesAddressesWithoutCodeAndOtherChains() public {

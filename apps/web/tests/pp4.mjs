@@ -125,6 +125,8 @@ export async function pp4(browser, base, expect, FB) {
 		await pg.getByTestId('catalog-q').fill('  ETH   Supply ');
 		await pg.getByTestId('catalog-q').press('Enter');
 		await pg.getByTestId('datasets-q').waitFor({ timeout: 30000 }).catch(() => {});
+		// The page fills the box from the address after the box is drawn: wait for the words.
+		await pg.waitForFunction(() => (document.querySelector('[data-testid="datasets-q"]')?.value ?? '') !== '', null, { timeout: 15000 }).catch(() => {});
 		const G = { hash: await pg.evaluate(() => location.hash), q: await pg.getByTestId('datasets-q').inputValue().catch(() => null) };
 		expect(G.hash === '#/datasets?q=eth+supply' && G.q === 'eth supply', `PP4 ${width}: the search opens All datasets with the words searched (${JSON.stringify(G)})`);
 		await ctx.close();

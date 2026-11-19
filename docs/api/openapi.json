@@ -2311,7 +2311,7 @@
       "get": {
         "operationId": "getBulkManifest",
         "summary": "A held manifest by its root (storage network peers)",
-        "description": "The manifest and the publisher's signed report this node holds under `root`, as the body `POST /v1/bulk/manifests` takes. Storage nodes and readers fetch it from each other (ADR-0060) and check its root and signature themselves; the deal on chain names the root. Free; rate-limited like the other bulk reads.",
+        "description": "The manifest and the publisher's signed report this node holds under `root`, as the body `POST /v1/bulk/manifests` takes. For a version that a catalog anchors (it has no report of its own), `report` is a catalog's report and `catalog` carries that catalog's header and the manifest's leaf proof (ADR-0067): the publisher's newest catalog this node holds when it lists exactly this manifest (a storage deal opens only through the newest catalog), else the catalog the version was taken under. Storage nodes and readers fetch it from each other (ADR-0060) and check its root, its signature and that proof themselves; the deal on chain names the root. Free; rate-limited like the other bulk reads.",
         "tags": [
           "Bulk"
         ],
@@ -5654,9 +5654,25 @@
             "description": "0x hex of the Borsh SignedReport whose value is the manifest root."
           },
           "catalog": {
-            "type": "integer",
-            "minimum": 0,
-            "description": "The number of a catalog this node holds whose leaf names exactly this manifest."
+            "description": "The number of a catalog this node holds whose leaf names exactly this manifest; or the `catalog` object of a manifest answer (`GET /v1/bulk/manifests/{root}`), of which only `number` is read: the catalog itself must be held here either way.",
+            "oneOf": [
+              {
+                "type": "integer",
+                "minimum": 0
+              },
+              {
+                "type": "object",
+                "required": [
+                  "number"
+                ],
+                "properties": {
+                  "number": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
+              }
+            ]
           }
         }
       },
@@ -6090,7 +6106,36 @@
           },
           "report": {
             "type": "string",
-            "description": "0x hex of the Borsh SignedReport whose value is the manifest root."
+            "description": "0x hex of the Borsh SignedReport whose value is the manifest root; with `catalog`, the catalog's report, whose value is the catalog root."
+          },
+          "catalog": {
+            "type": "object",
+            "description": "Only for a version that a catalog anchors (ADR-0067): a catalog's header and the manifest's leaf with its Merkle path and its neighbours, in the shape of `anchor.catalog` of a rows answer. It is the publisher's newest catalog this node holds when that catalog lists exactly this manifest; when it does not (a later version, a removal, or a node that holds no catalog), it is the catalog the version was taken under, which may be older than the one a new deal needs. A storage node takes the manifest from this proof without holding the catalog.",
+            "required": [
+              "number",
+              "root",
+              "header",
+              "leaf"
+            ],
+            "properties": {
+              "number": {
+                "type": "integer",
+                "minimum": 0,
+                "description": "The catalog's number."
+              },
+              "root": {
+                "type": "string",
+                "description": "The catalog root (the value of `report`)."
+              },
+              "header": {
+                "type": "string",
+                "description": "0x hex of the Borsh CatalogHeader."
+              },
+              "leaf": {
+                "type": "string",
+                "description": "0x hex of the Borsh LeafProof: the leaf, its path, and the leaves next to it with their paths."
+              }
+            }
           }
         }
       },

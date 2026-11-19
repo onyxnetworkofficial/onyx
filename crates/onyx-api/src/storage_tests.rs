@@ -28,6 +28,7 @@ async fn a_short_outage_declines_nothing() {
             .into_iter()
             .collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let tx = Arc::new(Sent::default());
     let cfg = StorageNodeConfig {
@@ -88,6 +89,20 @@ struct Fake {
     quirks: Quirks,
     /// `eth_chainId`.
     chain_id: u64,
+    /// `RULES_VERSION()`.
+    rules: u8,
+    /// The node list in force before epoch `.0` (its `NodeSet` log names
+    /// epoch 1; the list of `nodes` then takes over from epoch `.0`).
+    old_list: Option<(u64, Vec<NodeId>)>,
+    /// The first epoch the `NodeSet` log of `nodes` names (1 unless a test
+    /// needs the list in force at epoch 0 too).
+    list_from: u64,
+    /// The signed book: digest -> (key, fact accepted on this report).
+    book_reports: BTreeMap<Hash32, (Hash32, bool)>,
+    /// The book's keys: key -> (registered, suspended).
+    book_keys: BTreeMap<Hash32, (bool, bool)>,
+    /// The book's `sequenceOf`.
+    book_seqs: BTreeMap<(Hash32, u64), Hash32>,
 }
 
 /// How the fake RPC misbehaves.
@@ -137,6 +152,10 @@ struct Calls {
     deal_infos: usize,
     /// (deal, epoch, slot) of every `challengedHolders` call.
     holders_asked: Vec<(u64, u64, u32)>,
+    /// `exclusionFrom` calls.
+    exclusions: usize,
+    /// Every `eth_call`.
+    calls: usize,
 }
 
 fn log(event: &str, topics: Vec<Hash32>, data: Vec<u8>) -> Value {
@@ -212,9 +231,19 @@ impl JsonRpc for FakeChain {
                     let mut out = Vec::new();
                     for topic in &asked {
                         if *topic == abi::topic(events::NODE_SET).to_string() {
+                            if let Some((_, old)) = &f.old_list {
+                                out.push(log(
+                                    events::NODE_SET,
+                                    vec![topic_u64(1)],
+                                    encode(&[
+                                        word_tok(&set_hash(old)),
+                                        Tok::Words(old.iter().map(|n| n.0 .0).collect()),
+                                    ]),
+                                ));
+                            }
                             out.push(log(
                                 events::NODE_SET,
-                                vec![topic_u64(1)],
+                                vec![topic_u64(f.list_from)],
                                 encode(&[
                                     word_tok(&set_hash(&ids)),
                                     Tok::Words(ids.iter().map(|n| n.0 .0).collect()),
@@ -308,11 +337,16 @@ impl JsonRpc for FakeChain {
                     };
                     let u =
                         |i: usize| u64::from_be_bytes(arg(i)[24..].try_into().unwrap_or([0; 8]));
+                    if let Ok(mut c) = self.1.lock() {
+                        c.calls += 1;
+                    }
                     let out = if sel == abi::selector("RULES_VERSION()") {
                         if f.quirks.v0 {
                             return Err("execution reverted".into());
                         }
-                        encode(&[uint(3)])
+                        encode(&[uint(f.rules.into())])
+                    } else if sel == abi::selector("activeNodes()") {
+                        encode(&[Tok::Words(f.nodes.iter().map(|n| n.0 .0 .0).collect())])
                     } else if sel
                         == abi::selector("challengedHolders(uint64,uint64,uint32,bytes32[])")
                     {
@@ -341,6 +375,8 @@ impl JsonRpc for FakeChain {
                             uint(0),
                         ])
                     } else if sel == abi::selector("nodeInfo(bytes32)") {
+                        let id = NodeId(Hash32(arg(0)));
+                        let index = f.nodes.iter().position(|n| n.0 == id).unwrap_or(0);
                         encode(&[
                             uint(1),
                             uint(1),
@@ -349,7 +385,7 @@ impl JsonRpc for FakeChain {
                             uint(0),
                             uint(0),
                             uint(0),
-                            uint(0),
+                            uint(index as u128),
                         ])
                     } else if sel == abi::selector("dealInfo(uint64)") {
                         if let Ok(mut c) = self.1.lock() {
@@ -379,11 +415,52 @@ impl JsonRpc for FakeChain {
                             &f.seeds.get(&u(0)).copied().unwrap_or(Hash32::ZERO),
                         )])
                     } else if sel == abi::selector("setHashAt(uint64)") {
-                        let ids: Vec<NodeId> = f.nodes.iter().map(|n| n.0).collect();
+                        let ids: Vec<NodeId> = match &f.old_list {
+                            Some((until, old)) if u(0) < *until => old.clone(),
+                            _ => f.nodes.iter().map(|n| n.0).collect(),
+                        };
                         encode(&[word_tok(&set_hash(&ids))])
                     } else if sel == abi::selector("epochStart(uint64)") {
                         encode(&[uint((u(0) * 10).into())])
+                    } else if sel == abi::selector("book()") {
+                        encode(&[abi::addr(&[0xB0; 20])])
+                    } else if sel == abi::selector("report(bytes32)") {
+                        // key, fact (the digest itself), value hash, report
+                        // hash (the digest itself), observed time.
+                        let d = Hash32(arg(0));
+                        let key = f.book_reports.get(&d).map_or(Hash32::ZERO, |r| r.0);
+                        encode(&[
+                            word_tok(&key),
+                            word_tok(&d),
+                            word_tok(&Hash32::ZERO),
+                            word_tok(&d),
+                            uint(1),
+                        ])
+                    } else if sel == abi::selector("factView(bytes32)") {
+                        let d = Hash32(arg(0));
+                        let accepted = f.book_reports.get(&d).is_some_and(|r| r.1);
+                        encode(&[
+                            uint(if accepted { 1 } else { 2 }),
+                            word_tok(&d),
+                            uint(0),
+                            uint(0),
+                        ])
+                    } else if sel == abi::selector("keyState(bytes32)") {
+                        let (life, suspended) = f
+                            .book_keys
+                            .get(&Hash32(arg(0)))
+                            .copied()
+                            .unwrap_or((false, false));
+                        encode(&[uint(life.into()), uint(suspended.into())])
+                    } else if sel == abi::selector("sequenceOf(bytes32,uint64)") {
+                        let k = (Hash32(arg(0)), u(1));
+                        encode(&[word_tok(
+                            &f.book_seqs.get(&k).copied().unwrap_or(Hash32::ZERO),
+                        )])
                     } else if sel == abi::selector("exclusionFrom(uint64,uint32,bytes32)") {
+                        if let Ok(mut c) = self.1.lock() {
+                            c.exclusions += 1;
+                        }
                         // From the same records the fake's logs carry, as of
                         // the asked block (every log is at `LOG_BLOCK`).
                         let mut x = Exclusions::new();
@@ -441,11 +518,16 @@ enum Peer {
     Other,
 }
 
+/// A change a lying source makes to a manifest answer.
+type Edit = Box<dyn Fn(&mut Value) + Send + Sync>;
+
 struct Net {
     publisher: Arc<BulkStore>,
     manifest_root: Hash32,
     peers: BTreeMap<String, Peer>,
     calls: Mutex<Vec<String>>,
+    /// Changes every manifest answer before it is served (a lying source).
+    edit: Option<Edit>,
 }
 
 impl HttpGet for Net {
@@ -470,10 +552,13 @@ impl HttpGet for Net {
             }
             if let Some(root) = path.strip_prefix("/v1/bulk/manifests/") {
                 let root = crate::parse_hash(root, "root").map_err(|e| e.message)?.0;
-                let Some((m, r)) = self.publisher.manifest_record(&root) else {
+                // The body of the real route (`BulkStore::manifest_answer`).
+                let Some((mut v, _)) = self.publisher.manifest_answer(&root) else {
                     return Ok((404, vec![]));
                 };
-                let v = json!({"manifest": hex0x(&m.to_bytes()), "report": hex0x(&borsh::to_vec(&r).unwrap_or_default())});
+                if let Some(edit) = &self.edit {
+                    edit(&mut v);
+                }
                 return Ok((200, serde_json::to_vec(&v).unwrap_or_default()));
             }
             if let Some(root) = path.strip_prefix("/v1/bulk/shards/") {
@@ -596,6 +681,12 @@ fn setup_with(n: usize, publisher: World, m: Manifest) -> Setup {
             junk_url: None,
             quirks: Quirks::default(),
             chain_id: 84_532,
+            rules: RULES_VERSION,
+            old_list: None,
+            list_from: 1,
+            book_reports: BTreeMap::new(),
+            book_keys: BTreeMap::new(),
+            book_seqs: BTreeMap::new(),
         }),
         Mutex::new(Calls::default()),
     ));
@@ -660,6 +751,7 @@ fn net(s: &Setup, peers: &[(&str, Peer)]) -> Arc<Net> {
         manifest_root: s.manifest.header.root(),
         peers: peers.iter().map(|(u, b)| (u.to_string(), *b)).collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     })
 }
 
@@ -824,6 +916,7 @@ async fn a_forged_shard_from_a_peer_is_refused_and_another_source_used() {
         manifest_root: s.manifest.header.root(),
         peers: peers.into_iter().collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let node = StorageNode::new(
         reader(&s),
@@ -861,6 +954,7 @@ async fn a_forged_shard_from_a_peer_is_refused_and_another_source_used() {
             .map(|u| (u, Peer::Forged))
             .collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let node2 = StorageNode::new(
         reader(&s),
@@ -914,6 +1008,7 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
         manifest_root: s.manifest.header.root(),
         peers: peers.iter().cloned().collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let r = read_rows(&reader(&s), n.as_ref(), 0, 12, 15)
         .await
@@ -939,6 +1034,7 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
             .into_iter()
             .collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     // The manifest is still found at the publisher, but rows only from forgers fail.
     let forgers = Arc::new(Net {
@@ -946,6 +1042,7 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
         manifest_root: s.manifest.header.root(),
         peers: src.iter().map(|u| (u.clone(), Peer::Forged)).collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let e = read_rows(&reader(&s), forgers.as_ref(), 0, 12, 15)
         .await
@@ -958,6 +1055,7 @@ async fn a_client_read_fails_over_past_down_missing_and_forging_replicas() {
         manifest_root: s.manifest.header.root(),
         peers: src.iter().map(|u| (u.clone(), Peer::Other)).collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let e = read_rows(&reader(&s), other.as_ref(), 0, 12, 15)
         .await
@@ -995,7 +1093,7 @@ async fn a_node_sends_nothing_to_an_older_contract() {
     );
     let err = node.tick().await.expect_err("an older contract is refused");
     assert!(
-        err.contains("rules v3") && err.contains("exit its node"),
+        err.contains("rules v4") && err.contains("exit its node"),
         "{err}"
     );
     assert!(tx.0.lock().expect("lock").is_empty(), "nothing sent");
@@ -1026,6 +1124,7 @@ async fn a_node_declines_shards_nobody_serves() {
         manifest_root: s.manifest.header.root(),
         peers: peers.into_iter().collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     });
     let tx = Arc::new(Sent::default());
     let node = StorageNode::new(
@@ -1205,6 +1304,7 @@ fn withholding(s: &Setup) -> Arc<Net> {
         manifest_root: s.manifest.header.root(),
         peers: peers.into_iter().collect(),
         calls: Mutex::new(Vec::new()),
+        edit: None,
     })
 }
 
@@ -3525,8 +3625,10 @@ async fn storage_restart_r1_a_save_racing_forget_logs_leaves_no_stale_file() {
 
 /// ADR-0059 amendment 5 item 4: a client read of a deal on a widened
 /// manifest checks every shard under the schema its index was built under;
-/// item 1: a storage node refuses a deal on a format-2 manifest (the deployed
-/// `OnyxStorage` reads format 1 only) rather than fail its checks.
+/// ADR-0067 (slice 3): `OnyxStorage` v4 reads format-2 headers, so a storage
+/// node takes a deal on a format-2 manifest, fetches its shards and answers
+/// its challenges with proofs the contract's rule accepts (the format gate
+/// of amendment 5 item 1 is gone).
 #[tokio::test]
 async fn widen_storage_read_rows_checks_each_shard_under_its_schema() {
     let publisher = world_format2();
@@ -3547,14 +3649,120 @@ async fn widen_storage_read_rows_checks_each_shard_under_its_schema() {
     // A row of shard 0 fits schema 0 only; one of shard 3 the newest only.
     let first = &r.rows[0].3;
     assert!(onyx_bulk::row::decode_row(&v2.header.schema, first).is_err());
-    // The storage node: no manifest taken, no shard fetched.
+    // The storage node: both versions taken, every placed shard fetched.
     let own = world_format2();
     own.node.anchor(&sign(&v1));
     own.node.anchor(&sign(&v2));
+    let me = s.nodes[0];
+    let tx = Arc::new(Sent::default());
     let node = StorageNode::new(
         reader(&s),
-        Arc::new(Sent::default()),
+        tx.clone(),
         only.clone(),
+        own.store.clone(),
+        StorageNodeConfig {
+            contract: CONTRACT,
+            node: me,
+            fetch: true,
+            keeper: false,
+            fetches_per_tick: 8,
+        },
+    );
+    // What the contract reads from the format-2 header (the mirror).
+    let t = onyx_storage::deal::read_header(&v2.header.to_bytes()).expect("format 2 reads");
+    assert_eq!(t.manifest_root, v2.header.root());
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let mine = snap.wanted(&me);
+    let rep = node.tick().await.expect("tick");
+    assert_eq!((rep.fetched, rep.fetch_failed), (mine.len(), 0), "{rep:?}");
+    assert!(own.store.manifest_record(&v2.header.root()).is_some());
+    // Every slot of an epoch this node is asked in: a proof that verifies.
+    let seed = Hash32([0x44; 32]);
+    s.chain.0.lock().expect("lock").seeds.insert(3, seed);
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let want = (0..2)
+        .filter(|slot| snap.challenged(&d, 3, &seed, *slot).1.contains(&me))
+        .count();
+    let rep = node.tick().await.expect("tick");
+    assert_eq!(rep.answered, want);
+    for (slot, p) in answers_of(&tx) {
+        challenge::verify(
+            &d.info.shards_root,
+            d.info.shard_count,
+            &seed,
+            0,
+            slot,
+            &me,
+            &p,
+        )
+        .expect("a format-2 answer the contract's rule accepts");
+    }
+    let _ = std::fs::remove_dir_all(&own.dir);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+// --- ADR-0067: deals on catalog-anchored manifests (slices 3 and 4) -------------------------
+
+use crate::bulk_serve::tests::{
+    catalog_of, manifest, other_leaf, shard_files, sign_catalog, RouterGet, SECRET2, T0,
+};
+use onyx_bulk::catalog::{self as cat, Catalog, CatalogLeaf};
+
+const ANSWER_SIG: &str =
+    "answer(uint64,uint64,uint32,bytes32,bytes32[],bytes,bytes32[],bytes,bytes32[])";
+
+/// Every `answer` sent: its slot and its proof.
+fn answers_of(tx: &Sent) -> Vec<(u32, onyx_storage::StorageProof)> {
+    tx.0.lock()
+        .expect("lock")
+        .iter()
+        .filter(|d| d[..4] == abi::selector(ANSWER_SIG))
+        .map(|a| {
+            let b = &a[4..];
+            let entry =
+                challenge::parse_entry(&abi::dyn_bytes(b, 5).expect("entry")).expect("entry");
+            (
+                abi::word_u64(b, 2).expect("slot") as u32,
+                onyx_storage::StorageProof {
+                    entry,
+                    entry_siblings: abi::dyn_words(b, 6).expect("es"),
+                    row: abi::dyn_bytes(b, 7).expect("row"),
+                    row_siblings: abi::dyn_words(b, 8).expect("rs"),
+                },
+            )
+        })
+        .collect()
+}
+
+/// A publisher whose dataset has no report of its own: catalog 0 lists it
+/// between two other leaves, the book holds the catalog's report, and the
+/// publisher's node holds the catalog, the manifest and every shard.
+async fn catalog_published(w: &World) -> (Manifest, Catalog, SignedReport) {
+    let files = shard_files(0..30, 10);
+    let m = manifest(&files, None, T0);
+    let c0 = catalog_of(
+        None,
+        T0 + 10,
+        vec![
+            other_leaf("synthetic.aaa"),
+            CatalogLeaf::of(&m.header),
+            other_leaf("synthetic.other"),
+        ],
+    );
+    let r0 = sign_catalog(&c0);
+    w.node.anchor(&r0);
+    w.post_catalog(&c0, &r0).await.expect("catalog");
+    w.post_in(&m, 0).await.expect("manifest in catalog 0");
+    w.upload_all(&m, &files).await;
+    (m, c0, r0)
+}
+
+fn storage_node(s: &Setup, own: &World, net: Arc<Net>, tx: Arc<Sent>) -> StorageNode {
+    StorageNode::new(
+        reader(s),
+        tx,
+        net,
         own.store.clone(),
         StorageNodeConfig {
             contract: CONTRACT,
@@ -3563,18 +3771,1364 @@ async fn widen_storage_read_rows_checks_each_shard_under_its_schema() {
             keeper: false,
             fetches_per_tick: 8,
         },
+    )
+}
+
+/// A source that changes every manifest answer with `edit`.
+fn lying(s: &Setup, edit: impl Fn(&mut Value) + Send + Sync + 'static) -> Arc<Net> {
+    Arc::new(Net {
+        publisher: s.publisher.store.clone(),
+        manifest_root: s.manifest.header.root(),
+        peers: [("http://publisher".to_string(), Peer::Good)]
+            .into_iter()
+            .collect(),
+        calls: Mutex::new(Vec::new()),
+        edit: Some(Box::new(edit)),
+    })
+}
+
+fn hex_of<T: borsh::BorshSerialize>(x: &T) -> Value {
+    json!(hex0x(&borsh::to_vec(x).expect("borsh")))
+}
+
+fn tidy(ws: &[&World]) {
+    for w in ws {
+        let _ = std::fs::remove_dir_all(&w.dir);
+    }
+}
+
+/// Slice 3: `GET /v1/bulk/manifests/{root}` of a catalog-anchored version
+/// carries the catalog header and the leaf proof next to the catalog's
+/// report, and the answer checks offline; a version with its own report
+/// answers as before, with no `catalog`.
+#[tokio::test]
+async fn adr_0067_the_manifest_answer_of_a_catalog_version_carries_a_proof_that_checks() {
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let root = m.header.root();
+    let get = RouterGet(crate::bulk_serve::peer_routes(w.store.clone()));
+    let (status, body) = get
+        .get(&format!("http://node/v1/bulk/manifests/{root}"), 1 << 20)
+        .await
+        .expect("get");
+    assert_eq!(status, 200);
+    let v: Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(v["root"], json!(root.to_string()));
+    assert_eq!(v["report"], hex_of(&r0));
+    assert_eq!(v["catalog"]["number"], json!(0));
+    assert_eq!(v["catalog"]["root"], json!(c0.header.root().to_string()));
+    assert_eq!(v["catalog"]["header"], hex_of(&c0.header));
+    let i = c0.find("synthetic.metrics").expect("listed");
+    assert_eq!(
+        v["catalog"]["leaf"],
+        hex_of(&c0.leaf_proof(i).expect("proof"))
     );
+    // The same object as `anchor.catalog` of a rows answer.
+    let rows = w
+        .store
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some("from=0&to=3")).expect("query"),
+        )
+        .await
+        .expect("rows");
+    assert_eq!(v["catalog"], rows["anchor"]["catalog"]);
+    let (got, anchor) = manifest_from_answer(&body, &root).expect("the answer checks");
+    assert_eq!(got, m);
+    match anchor {
+        ManifestAnchor::Catalog(a) => {
+            assert_eq!(a.header, c0.header);
+            assert!(a.leaf.leaf.names(&m.header));
+            assert_eq!(a.report, r0);
+        }
+        ManifestAnchor::Own(_) => panic!("a catalog version answered as an own report"),
+    }
+    // A version with its own report: no `catalog`, the own report checks.
+    let w2 = world();
+    let (m2, _) = published(&w2).await;
+    let (v2, _) = w2.store.manifest_answer(&m2.header.root()).expect("held");
+    assert!(v2.get("catalog").is_none());
+    let (_, a2) = manifest_from_answer(&serde_json::to_vec(&v2).expect("json"), &m2.header.root())
+        .expect("checks");
+    assert_eq!(
+        a2,
+        ManifestAnchor::Own(borsh::to_vec(&sign(&m2)).expect("borsh"))
+    );
+    tidy(&[&w, &w2]);
+}
+
+/// Slice 3: a storage node that holds no catalog takes a deal's manifest
+/// from the carried proof, reads the catalog's anchor in the book, fetches
+/// its shards, serves rows a client check accepts with the catalog in the
+/// anchor, and answers its challenges with proofs the contract's rule
+/// accepts.
+#[tokio::test]
+async fn adr_0067_a_storage_node_takes_a_catalog_manifest_from_a_carried_proof() {
+    let publisher = world();
+    let (m, c0, r0) = catalog_published(&publisher).await;
+    let s = setup_with(5, publisher, m.clone());
+    let me = s.nodes[0];
+    let own = world();
+    // The node's book knows the catalog's report; the node holds no catalog.
+    own.node.anchor(&r0);
+    let tx = Arc::new(Sent::default());
+    let node = storage_node(
+        &s,
+        &own,
+        net(&s, &[("http://publisher", Peer::Good)]),
+        tx.clone(),
+    );
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let d = snap.deal(0).expect("deal").clone();
+    let mine = snap.wanted(&me);
+    assert!(!mine.is_empty());
+    let rep = node.tick().await.expect("tick");
+    assert_eq!((rep.fetched, rep.fetch_failed), (mine.len(), 0), "{rep:?}");
+    assert!(own
+        .store
+        .catalog_record("example.publisher", 0)
+        .expect("read")
+        .is_none());
+    let (held, report) = own.store.manifest_record(&m.header.root()).expect("held");
+    assert_eq!((held, report), (m.clone(), r0.clone()));
+    // It serves the manifest on with the same proof (the next node's source).
+    let (v, _) = own.store.manifest_answer(&m.header.root()).expect("answer");
+    assert_eq!(v["catalog"]["root"], json!(c0.header.root().to_string()));
+    // Rows of a shard it holds pass the client's check, catalog and all.
+    let i = i128::from(mine[0].1);
+    let q = format!("from={}&to={}", i * 10, i * 10 + 3);
+    let a = own
+        .store
+        .rows(
+            "example.publisher",
+            "synthetic.metrics",
+            &parse_rows_query(Some(&q)).expect("query"),
+        )
+        .await
+        .expect("rows");
+    let ck = onyx_bulk::wire::check_rows_answer(&a, Some(i * 10), Some(i * 10 + 3))
+        .expect("client check");
+    assert_eq!(
+        ck.catalog.as_ref().map(cat::CatalogHeader::root),
+        Some(c0.header.root())
+    );
+    assert_eq!(ck.digest, r0.payload.digest());
+    // Challenges: unchanged after creation.
+    let seed = Hash32([0x55; 32]);
+    s.chain.0.lock().expect("lock").seeds.insert(3, seed);
+    let snap = reader(&s).snapshot().await.expect("snapshot");
+    let want = (0..2)
+        .filter(|slot| snap.challenged(&d, 3, &seed, *slot).1.contains(&me))
+        .count();
+    let rep = node.tick().await.expect("tick");
+    assert_eq!(rep.answered, want);
+    let answers = answers_of(&tx);
+    assert_eq!(answers.len(), want);
+    for (slot, p) in answers {
+        challenge::verify(
+            &d.info.shards_root,
+            d.info.shard_count,
+            &seed,
+            0,
+            slot,
+            &me,
+            &p,
+        )
+        .expect("valid");
+    }
+    tidy(&[&own, &s.publisher]);
+}
+
+/// Slice 3, the refusals offline: an answer whose proof is for another
+/// leaf, another catalog, another publisher's catalog, a catalog report by
+/// another key, a proof without its neighbours, or whose manifest is format
+/// 3, never checks.
+#[tokio::test]
+async fn adr_0067_a_wrong_catalog_proof_never_checks() {
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let root = m.header.root();
+    let (good, _) = w.store.manifest_answer(&root).expect("held");
+    let check = |v: &Value| manifest_from_answer(&serde_json::to_vec(v).expect("json"), &root);
+    check(&good).expect("the honest answer checks");
+    let refused = |v: &Value, want: &str| {
+        let e = check(v).expect_err(want);
+        assert!(e.contains(want), "{want}: {e}");
+    };
+    // Wrong leaf: the proof of the leaf next to it.
+    let mut v = good.clone();
+    v["catalog"]["leaf"] = hex_of(&c0.leaf_proof(0).expect("proof"));
+    refused(&v, "catalog leaf");
+    // Wrong catalog: another catalog of the same publisher (header and
+    // report), with the leaf proof of catalog 0.
+    let c_other = catalog_of(
+        None,
+        T0 + 20,
+        vec![other_leaf("synthetic.other"), other_leaf("synthetic.zzz")],
+    );
+    let mut v = good.clone();
+    v["catalog"]["header"] = hex_of(&c_other.header);
+    v["report"] = hex_of(&sign_catalog(&c_other));
+    refused(&v, "catalog leaf");
+    // Catalog 0's header and proof under the other catalog's report.
+    let mut v = good.clone();
+    v["report"] = hex_of(&sign_catalog(&c_other));
+    refused(&v, "anchor payload");
+    // The catalog of another publisher that lists the same root.
+    let stranger = onyx_core::SourceId("another.publisher".into());
+    let mut leaf = CatalogLeaf::of(&m.header);
+    leaf.publisher = stranger.clone();
+    let theirs = Catalog::build(stranger, None, T0 + 10, vec![leaf]).expect("catalog");
+    let mut v = good.clone();
+    v["catalog"]["header"] = hex_of(&theirs.header);
+    v["catalog"]["leaf"] = hex_of(&theirs.leaf_proof(0).expect("proof"));
+    v["report"] = hex_of(&sign_catalog(&theirs));
+    refused(&v, "catalog header");
+    // The catalog's payload signed by a key that is not the payload's.
+    let forged = SignedReport {
+        payload: r0.payload.clone(),
+        signature: cat::sign(&SECRET2, &c0.header).expect("sign").signature,
+    };
+    let mut v = good.clone();
+    v["report"] = hex_of(&forged);
+    refused(&v, "catalog report");
+    // The leaf without its neighbours: a reader of this node's rows could
+    // not tell that it is the only leaf of its dataset.
+    let i = c0.find("synthetic.metrics").expect("listed");
+    let mut alone = c0.leaf_proof(i).expect("proof");
+    alone.left = None;
+    let mut v = good.clone();
+    v["catalog"]["leaf"] = hex_of(&alone);
+    refused(&v, "neighbour");
+    // The catalog's report passed off as the manifest's own.
+    let mut v = good.clone();
+    v.as_object_mut().expect("object").remove("catalog");
+    check(&v).expect_err("a catalog report is no own report");
+    // A manifest whose format byte is 3: no manifest at all.
+    let mut bytes = m.to_bytes();
+    bytes[0] = 3;
+    let mut v = good.clone();
+    v["manifest"] = json!(hex0x(&bytes));
+    check(&v).expect_err("format 3");
+    // And at the proof check itself, as the contract refuses it.
+    let lp = c0.leaf_proof(i).expect("proof");
+    let catalog = borsh::to_vec(&c0.header).expect("borsh");
+    let header = m.header.to_bytes();
+    check_catalog_proof(&header, &catalog, lp.proof.index, &lp.proof.siblings, &r0)
+        .expect("the honest proof");
+    let mut h3 = header.clone();
+    h3[0] = 3;
+    let e = check_catalog_proof(&h3, &catalog, lp.proof.index, &lp.proof.siblings, &r0)
+        .expect_err("format 3");
+    assert!(e.contains("manifest header: format"), "{e}");
+    tidy(&[&w]);
+}
+
+/// Slice 3, the refusals on the node: a proof that does not check, and a
+/// proof that checks for a catalog the book does not hold, store nothing and
+/// fetch nothing.
+#[tokio::test]
+async fn adr_0067_a_storage_node_refuses_a_wrong_or_unanchored_catalog_proof() {
+    let publisher = world();
+    let (m, c0, r0) = catalog_published(&publisher).await;
+    let s = setup_with(5, publisher, m.clone());
+    let root = m.header.root();
+    let nothing_taken = |own: &World, rep: &TickReport| {
+        assert!(rep.fetched == 0 && rep.fetch_failed >= 1, "{rep:?}");
+        assert!(own.store.manifest_record(&root).is_none());
+        assert!(m.shards.iter().all(|e| !own.store.holds_shard(&e.root)));
+    };
+    // A lying source: the proof of another leaf.
+    let own = world();
+    own.node.anchor(&r0);
+    let wrong = c0.leaf_proof(0).expect("proof");
+    let liar = lying(&s, move |v| v["catalog"]["leaf"] = hex_of(&wrong));
+    let node = storage_node(&s, &own, liar, Arc::new(Sent::default()));
     let snap = reader(&s).snapshot().await.expect("snapshot");
     let d = snap.deal(0).expect("deal").clone();
     let e = node
         .ensure_manifest(&snap, &d, None)
         .await
         .expect_err("refused");
-    assert!(e.contains("format 2") && e.contains("OnyxStorage"), "{e}");
-    let rep = node.tick().await.expect("tick");
-    assert!(rep.fetch_failed >= 1 && rep.fetched == 0, "{rep:?}");
-    assert!(own.store.manifest_record(&v2.header.root()).is_none());
-    assert!(v2.shards.iter().all(|e| !own.store.holds_shard(&e.root)));
-    let _ = std::fs::remove_dir_all(&own.dir);
+    assert!(e.contains("catalog leaf"), "{e}");
+    nothing_taken(&own, &node.tick().await.expect("tick"));
+    // An honest source, but the book this node reads holds no such catalog.
+    let own2 = world();
+    let honest = net(&s, &[("http://publisher", Peer::Good)]);
+    let node2 = storage_node(&s, &own2, honest.clone(), Arc::new(Sent::default()));
+    let e = node2
+        .ensure_manifest(&snap, &d, None)
+        .await
+        .expect_err("not anchored");
+    assert!(
+        e.contains("not recorded and accepted in the signed book"),
+        "{e}"
+    );
+    nothing_taken(&own2, &node2.tick().await.expect("tick"));
+    // The book withdrew the catalog: the same.
+    let own3 = world();
+    own3.node.anchor(&r0);
+    own3.node.withdraw(&r0);
+    let node3 = storage_node(&s, &own3, honest, Arc::new(Sent::default()));
+    nothing_taken(&own3, &node3.tick().await.expect("tick"));
+    tidy(&[&own, &own2, &own3, &s.publisher]);
+}
+
+/// Slice 3, the store entry by itself: what `accept_manifest_with_proof`
+/// refuses whatever the caller checked before.
+#[tokio::test]
+async fn adr_0067_the_store_checks_a_carried_proof_itself() {
+    let publisher = world();
+    let (m, c0, r0) = catalog_published(&publisher).await;
+    let i = c0.find("synthetic.metrics").expect("listed");
+    let lp = c0.leaf_proof(i).expect("proof");
+    let own = world();
+    own.node.anchor(&r0);
+    let take = |h: cat::CatalogHeader, l: cat::LeafProof, r: SignedReport| {
+        let (store, bytes) = (own.store.clone(), m.to_bytes());
+        async move {
+            store
+                .accept_manifest_with_proof(&bytes, h, l, r)
+                .await
+                .map(|x| x.0)
+                .map_err(|e| e.code)
+        }
+    };
+    // Another leaf of the catalog (a real leaf, not this manifest's).
+    assert_eq!(
+        take(
+            c0.header.clone(),
+            c0.leaf_proof(0).expect("proof"),
+            r0.clone()
+        )
+        .await,
+        Err("bulk_not_in_catalog")
+    );
+    // A report that does not sign this catalog header.
+    let mut more = c0.leaves.clone();
+    more.push(other_leaf("synthetic.new"));
+    more.sort_by(|a, b| a.dataset.cmp(&b.dataset));
+    let c1 = catalog_of(Some(&c0), T0 + 30, more);
+    assert_eq!(
+        take(c0.header.clone(), lp.clone(), sign_catalog(&c1)).await,
+        Err("bulk_bad_catalog")
+    );
+    // A leaf proof that is not in this catalog's tree.
+    assert_eq!(
+        take(c1.header.clone(), lp.clone(), sign_catalog(&c1)).await,
+        Err("bulk_bad_catalog")
+    );
+    // The honest proof: taken, and the same again changes nothing.
+    assert_eq!(
+        take(c0.header.clone(), lp.clone(), r0.clone()).await,
+        Ok(axum::http::StatusCode::CREATED)
+    );
+    assert_eq!(
+        take(c0.header.clone(), lp.clone(), r0.clone()).await,
+        Ok(axum::http::StatusCode::OK)
+    );
+    // It outlives a restart with its proof.
+    let again = own.reopen().expect("reopen");
+    let (v, _) = again.manifest_answer(&m.header.root()).expect("held");
+    assert_eq!(v["catalog"]["leaf"], hex_of(&lp));
+    // A node whose book has no such report takes nothing.
+    let bare = world();
+    assert_eq!(
+        bare.store
+            .accept_manifest_with_proof(&m.to_bytes(), c0.header.clone(), lp, r0)
+            .await
+            .map_err(|e| e.code)
+            .expect_err("not anchored"),
+        "bulk_not_anchored"
+    );
+    tidy(&[&own, &bare, &publisher]);
+}
+
+/// The shared Rust/Solidity vectors (`fixtures/storage/vectors.json`, the
+/// cases `OnyxStorage.createDealInCatalog` is tested with): the node's proof
+/// check accepts every good deal and refuses every refused case for the
+/// reason the contract gives (STOR-CAT-2: one set of rules on both sides).
+#[test]
+fn adr_0067_the_nodes_proof_check_passes_the_shared_vectors() {
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../../fixtures/storage/vectors.json"
+    );
+    let v: Value =
+        serde_json::from_slice(&std::fs::read(path).expect("vectors.json")).expect("json");
+    let c = &v["catalog"];
+    let bytes = |x: &Value| hex_field(x, "hex").expect("hex");
+    let siblings = |x: &Value| -> Vec<Hash32> {
+        x.as_array()
+            .expect("siblings")
+            .iter()
+            .map(|h| h32(h).expect("hash"))
+            .collect()
+    };
+    let signature_of = |payload: &[u8]| -> [u8; 65] {
+        let hit = c["catalogs"]
+            .as_array()
+            .expect("catalogs")
+            .iter()
+            .find(|k| bytes(&k["payload"]) == payload);
+        let k = hit.unwrap_or(&c["catalogs"][0]);
+        bytes(&k["signature"]).try_into().expect("65 bytes")
+    };
+    let signer: [u8; 20] = bytes(&c["signer"]).try_into().expect("address");
+    let run = |case: &Value| -> Result<[u8; 20], String> {
+        let payload = bytes(&case["payload"]);
+        let report = SignedReport {
+            payload: borsh::from_slice(&payload)
+                .map_err(|_| "anchor payload: does not decode".to_string())?,
+            signature: signature_of(&payload),
+        };
+        check_catalog_proof(
+            &bytes(&case["header"]),
+            &bytes(&case["catalog"]),
+            case["leafIndex"].as_u64().expect("index"),
+            &siblings(&case["siblings"]),
+            &report,
+        )
+    };
+    let deals = c["deals"].as_array().expect("deals");
+    assert_eq!(deals.len() as u64, c["dealCount"].as_u64().expect("count"));
+    assert_eq!(deals.len(), 5);
+    for d in deals {
+        assert_eq!(run(d), Ok(signer), "{}", d["name"]);
+    }
+    let refused = c["refused"].as_array().expect("refused");
+    assert_eq!(
+        refused.len() as u64,
+        c["refusedCount"].as_u64().expect("count")
+    );
+    assert_eq!(refused.len(), 37);
+    for r in refused {
+        let want = match r["error"].as_str().expect("error") {
+            "header" => "manifest header",
+            "catalog" => "catalog header",
+            "leaf" => "catalog leaf",
+            "payload" => "anchor payload",
+            other => panic!("unknown error kind {other}"),
+        };
+        let e = run(r).expect_err(r["name"].as_str().unwrap_or_default());
+        assert!(e.starts_with(want), "{}: {e}", r["name"]);
+    }
+}
+
+/// Slice 3: only rules 4. A rules-3 contract (the one before ADR-0067) is
+/// refused with the versions named, and nothing is sent to it.
+#[tokio::test]
+async fn adr_0067_a_rules_3_contract_is_refused() {
+    let s = setup(5).await;
+    s.chain.0.lock().expect("lock").rules = 3;
+    let own = world();
+    let tx = Arc::new(Sent::default());
+    let node = storage_node(&s, &own, net(&s, &[]), tx.clone());
+    let e = node.tick().await.expect_err("refused");
+    assert!(
+        e.contains("the contract checks rules v3, this node follows rules v4"),
+        "{e}"
+    );
+    assert_eq!(error_class(&e), "contract_version");
+    assert!(tx.0.lock().expect("lock").is_empty(), "nothing sent");
+    s.chain.0.lock().expect("lock").rules = 4;
+    node.tick().await.expect("rules 4");
+    tidy(&[&own, &s.publisher]);
+}
+
+/// Slice 4: the deal call. An own report gives `createDeal`; a catalog and
+/// its report give `createDealInCatalog` with the header, the catalog
+/// header, the leaf's position and path and the catalog's payload; a catalog
+/// that does not list the manifest is refused before any call exists.
+#[tokio::test]
+async fn adr_0067_the_deal_call_is_built_from_a_catalog_or_refused() {
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let anchor = anchor_in_catalog(&m, &c0, r0.clone()).expect("listed");
+    let (t, call) = deal_call(&m, &anchor, 3, 14, "https://source.example/").expect("call");
+    assert_eq!(t.manifest_root, m.header.root());
+    let sig = "createDealInCatalog(bytes,bytes,uint64,bytes32[],bytes,uint8,uint32,string)";
+    assert_eq!(call[..4], abi::selector(sig));
+    let b = &call[4..];
+    let lp = c0
+        .leaf_proof(c0.find("synthetic.metrics").expect("listed"))
+        .expect("proof");
+    assert_eq!(abi::dyn_bytes(b, 0).expect("header"), m.header.to_bytes());
+    assert_eq!(
+        abi::dyn_bytes(b, 1).expect("catalog"),
+        borsh::to_vec(&c0.header).expect("borsh")
+    );
+    assert_eq!(abi::word_u64(b, 2).expect("index"), lp.proof.index);
+    assert_eq!(abi::dyn_words(b, 3).expect("siblings"), lp.proof.siblings);
+    assert_eq!(
+        abi::dyn_bytes(b, 4).expect("payload"),
+        borsh::to_vec(&r0.payload).expect("borsh")
+    );
+    assert_eq!(
+        (
+            abi::word_u64(b, 5).expect("r"),
+            abi::word_u64(b, 6).expect("epochs")
+        ),
+        (3, 14)
+    );
+    assert_eq!(
+        abi::dyn_bytes(b, 7).expect("url"),
+        b"https://source.example/"
+    );
+    // The same call from the node's manifest answer.
+    let (v, _) = w.store.manifest_answer(&m.header.root()).expect("held");
+    let (m2, a2) = manifest_from_answer(&serde_json::to_vec(&v).expect("json"), &m.header.root())
+        .expect("checks");
+    assert_eq!(
+        deal_call(&m2, &a2, 3, 14, "https://source.example/")
+            .expect("call")
+            .1,
+        call
+    );
+    // A later version the catalog does not list; a catalog that removed it.
+    let next = manifest(&shard_files(30..40, 10), Some(&m), T0 + 20);
+    let e = anchor_in_catalog(&next, &c0, r0.clone()).expect_err("not listed");
+    assert!(e.contains("does not list manifest"), "{e}");
+    let other = catalog_of(None, T0 + 40, vec![other_leaf("synthetic.other")]);
+    let e = anchor_in_catalog(&m, &other, sign_catalog(&other)).expect_err("not listed");
+    assert!(e.contains("does not list manifest"), "{e}");
+    // A catalog proof under a report that does not sign the catalog.
+    let bad = anchor_in_catalog(&m, &c0, sign_catalog(&other)).expect("listed");
+    let e = deal_call(&m, &bad, 3, 14, "https://source.example/").expect_err("refused");
+    assert!(e.contains("anchor payload"), "{e}");
+    // An own report: `createDeal`, as before.
+    let w2 = world();
+    let (own_m, _) = published(&w2).await;
+    let own = ManifestAnchor::Own(borsh::to_vec(&sign(&own_m)).expect("borsh"));
+    let (_, call) = deal_call(&own_m, &own, 3, 14, "https://source.example/").expect("call");
+    assert_eq!(
+        call[..4],
+        abi::selector("createDeal(bytes,bytes,uint8,uint32,string)")
+    );
+    // The catalog's report is no own report of the manifest.
+    let e = deal_call(
+        &m,
+        &ManifestAnchor::Own(borsh::to_vec(&r0).expect("borsh")),
+        3,
+        14,
+        "u",
+    )
+    .expect_err("refused");
+    assert!(!e.is_empty());
+    tidy(&[&w, &w2]);
+}
+
+/// Review of slice 2 (low): the tool reads the contract's rules before it
+/// sends the approval. Below rules 4 a catalog deal and a format-2 manifest
+/// are refused; a format-1 manifest with its own report still goes.
+#[tokio::test]
+async fn adr_0067_the_tool_refuses_what_an_older_contract_cannot_open() {
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let in_catalog = anchor_in_catalog(&m, &c0, r0).expect("listed");
+    let w2 = world_format2();
+    let (v1, _) = published(&w2).await;
+    let (v2, _) = widened(&w2, &v1).await;
+    let own = |m: &Manifest| ManifestAnchor::Own(borsh::to_vec(&sign(m)).expect("borsh"));
+    for rules in [0, 2, 3] {
+        let e = deal_fits_rules(rules, &m, &in_catalog).expect_err("no catalog deal");
+        assert!(
+            e.contains(&format!("rules v{rules}")) && e.contains("createDealInCatalog"),
+            "{e}"
+        );
+        let e = deal_fits_rules(rules, &v2, &own(&v2)).expect_err("no format 2");
+        assert!(e.contains("format 2") && e.contains("rules v4"), "{e}");
+        deal_fits_rules(rules, &v1, &own(&v1)).expect("format 1 with its own report");
+    }
+    for rules in [4, 5] {
+        deal_fits_rules(rules, &m, &in_catalog).expect("catalog deal");
+        deal_fits_rules(rules, &v2, &own(&v2)).expect("format 2");
+        deal_fits_rules(rules, &v1, &own(&v1)).expect("format 1");
+    }
+    // The read itself: the version, and 0 for a contract without the view.
+    let s = setup_with(5, w2, v1);
+    assert_eq!(
+        reader(&s).rules_version().await,
+        Ok(u64::from(RULES_VERSION))
+    );
+    s.chain.0.lock().expect("lock").rules = 3;
+    assert_eq!(reader(&s).rules_version().await, Ok(3));
+    s.chain.0.lock().expect("lock").quirks.v0 = true;
+    assert_eq!(reader(&s).rules_version().await, Ok(0));
+    tidy(&[&w, &s.publisher]);
+}
+
+// --- The tool's bounded chain reads (`view_snapshot`, the epoch report's block range) --------
+
+fn params_of(genesis: u64, epoch_blocks: u64) -> ChainParams {
+    ChainParams {
+        epoch_blocks,
+        money: onyx_storage::ledger::Params {
+            price_per_gib_epoch: 1,
+            bond_per_gib: 1,
+            min_bond: 1,
+            slash_ppm: 1,
+            challenges_per_deal: 2,
+            max_misses: 3,
+        },
+        genesis,
+    }
+}
+
+/// The blocks an epoch's `Answered` and `Slashed` events can be in: the
+/// epoch and the two settle epochs after it, cut at the floor and the head.
+#[test]
+fn an_epochs_events_are_in_three_epochs_of_blocks() {
+    let p = params_of(1_000, 7_200);
+    assert_eq!(epoch_first_block(&p, 0), 1_000);
+    assert_eq!(epoch_first_block(&p, 3), 22_600);
+    // Epoch 3 of a chain far ahead: its 3 epochs of blocks, nothing after.
+    assert_eq!(
+        epoch_event_blocks(&p, 3, 1_000, 7_000_000),
+        Some((22_600, 22_600 + 3 * 7_200 - 1))
+    );
+    // The running epoch: up to the head.
+    assert_eq!(
+        epoch_event_blocks(&p, 3, 1_000, 22_700),
+        Some((22_600, 22_700))
+    );
+    // A floor above the epoch's start (--since-block) cuts the front.
+    assert_eq!(
+        epoch_event_blocks(&p, 3, 30_000, 7_000_000),
+        Some((30_000, 44_199))
+    );
+    // An epoch that has not begun, and a floor above everything: nothing.
+    assert_eq!(epoch_event_blocks(&p, 3, 1_000, 22_599), None);
+    assert_eq!(epoch_event_blocks(&p, 3, 50_000, 7_000_000), None);
+    // Numbers that do not fit never wrap.
+    assert_eq!(epoch_first_block(&p, u64::MAX), u64::MAX);
+    assert_eq!(epoch_event_blocks(&p, u64::MAX, 0, u64::MAX - 1), None);
+    assert_eq!(
+        epoch_event_blocks(&p, u64::MAX / 7_200 - 1, 0, u64::MAX).map(|r| r.1),
+        Some(u64::MAX - 1)
+    );
+}
+
+/// A backwards search walks ranges of at most `span` blocks from the top,
+/// each block once, and stops at the floor.
+#[test]
+fn a_backwards_search_walks_each_block_once_from_the_top() {
+    assert_eq!(
+        ranges_back(10, 35, 10).collect::<Vec<_>>(),
+        vec![(26, 35), (16, 25), (10, 15)]
+    );
+    assert_eq!(
+        ranges_back(0, 19, 10).collect::<Vec<_>>(),
+        vec![(10, 19), (0, 9)]
+    );
+    assert_eq!(ranges_back(7, 7, 200).collect::<Vec<_>>(), vec![(7, 7)]);
+    assert_eq!(ranges_back(8, 7, 200).count(), 0);
+    // A span of 0 counts as 1; the ends of the number range do not wrap.
+    assert_eq!(
+        ranges_back(0, 2, 0).collect::<Vec<_>>(),
+        vec![(2, 2), (1, 1), (0, 0)]
+    );
+    assert_eq!(
+        ranges_back(u64::MAX - 1, u64::MAX, 5).collect::<Vec<_>>(),
+        vec![(u64::MAX - 1, u64::MAX)]
+    );
+    let all: u64 = ranges_back(3, 7_000_003, 200).map(|(a, b)| b - a + 1).sum();
+    assert_eq!(all, 7_000_001);
+    assert_eq!(ranges_back(3, 7_000_003, 200).count(), 35_001);
+}
+
+fn view(epochs: Epochs) -> ViewOpts {
+    ViewOpts {
+        epochs,
+        since: None,
+        texts: false,
+        exclusions: ExclScope::Slots,
+    }
+}
+
+fn take_log_calls(s: &Setup) -> Vec<(u64, u64)> {
+    std::mem::take(&mut s.chain.1.lock().expect("lock").log_ranges)
+}
+
+/// The live fault: `status` on a contract about 7 million blocks old read
+/// 35,000 log ranges. The view snapshot reads no log at all there, and gives
+/// the same placement, challenges and exclusions as the snapshot built from
+/// every log.
+#[tokio::test]
+async fn a_view_snapshot_reads_no_logs_and_places_as_the_log_snapshot() {
+    let s = setup(5).await;
+    // The first node of a shard's ranking (a holder), and the second.
+    let salt = s.chain.0.lock().expect("lock").deal.salt;
+    let top = |i: u32, k: usize| ranked(&shard_key(&salt, i), &s.nodes)[k];
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.slashed.push((top(1, 0), 0, 1, 3));
+        f.declined.push((top(0, 1), 0, WHOLE_DEAL, 4));
+        // A decline of a shard the node passed a check on: under notice.
+        f.answered.push((0, 2, top(2, 0), 0, 2, true));
+        f.declined.push((top(2, 0), 0, 2, 3));
+    }
+    let full = reader(&s).snapshot().await.expect("snapshot");
+    take_log_calls(&s);
+    s.chain.0.lock().expect("lock").block = 7_000_031;
+    let chain = reader(&s);
+    let mut v = chain.view_snapshot(view(Epochs::Now)).await.expect("view");
+    // No seed in these epochs: no challenge, so no exclusion was read. A
+    // placement question reads the exclusions of the shards it asks about.
+    assert_eq!(s.chain.1.lock().expect("lock").exclusions, 0);
+    assert_eq!(v.excl, Exclusions::new());
+    chain
+        .fill_exclusions(&mut v, 0, None)
+        .await
+        .expect("exclusions");
+    assert_eq!(take_log_calls(&s), Vec::<(u64, u64)>::new(), "no log read");
+    assert_eq!((v.block, v.epoch), (7_000_031, 3));
+    assert_eq!((v.deal_logs, v.registrations), (1, 5));
+    assert_eq!(v.params, full.params);
+    let (d, fd) = (v.deal(0).expect("deal"), full.deal(0).expect("deal"));
+    assert_eq!(d.info, fd.info);
+    let seed = Hash32([0x66; 32]);
+    for e in 2..=4 {
+        assert_eq!(v.list_at(e), full.list_at(e), "list of epoch {e}");
+        for i in 0..d.info.shard_count {
+            assert_eq!(
+                v.holders(d, i, e),
+                full.holders(fd, i, e),
+                "epoch {e} shard {i}"
+            );
+        }
+        // The challenges of epoch e come from the list of e - 1: read for
+        // the current epoch and the next.
+        for slot in (0..2).filter(|_| e > 2) {
+            assert_eq!(
+                v.challenged(d, e, &seed, slot),
+                full.challenged(fd, e, &seed, slot),
+                "epoch {e} slot {slot}"
+            );
+        }
+    }
+    // The slash, the whole-deal decline and the noticed decline, as the
+    // contract's `exclusionFrom` gives them.
+    assert_eq!(v.excl.from(0, 1, &top(1, 0)), Some(3));
+    assert_eq!(
+        v.excl.from(0, 0, &top(0, 1)),
+        full.excl.from(0, 0, &top(0, 1))
+    );
+    assert_eq!(v.excl.from(0, 2, &top(2, 0)), Some(4));
+    for n in &s.nodes {
+        assert_eq!(v.wanted(n), full.wanted(n));
+    }
+    // Without texts the URLs and the deal's source are not known.
+    assert_eq!(v.url(&s.nodes[0]), None);
+    assert_eq!(d.source_url, "");
     let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// With texts the URLs and each deal's publisher, dataset and source come
+/// from the `Registered` and `DealCreated` logs, read only from
+/// `--since-block` on; below it nothing is asked.
+#[tokio::test]
+async fn a_view_snapshot_reads_texts_only_since_the_given_block() {
+    let s = setup(5).await;
+    s.chain.0.lock().expect("lock").block = 1_031;
+    let with = |since| ViewOpts {
+        epochs: Epochs::Now,
+        since,
+        texts: true,
+        exclusions: ExclScope::None,
+    };
+    let v = reader(&s).view_snapshot(with(None)).await.expect("view");
+    assert_eq!(v.url(&s.nodes[4]), Some("http://node4"));
+    let d = v.deal(0).expect("deal");
+    assert_eq!(
+        (
+            d.publisher.as_str(),
+            d.dataset.as_str(),
+            d.source_url.as_str()
+        ),
+        ("example.publisher", "synthetic.metrics", "http://publisher")
+    );
+    let calls = take_log_calls(&s);
+    assert_eq!(calls.first().map(|c| c.0), Some(0));
+    assert_eq!(calls.last().map(|c| c.1), Some(1_031));
+    assert_eq!(calls.len(), 6, "0..=1031 in ranges of 200");
+    // Since block 900: one range, and the logs of block 16 are not seen.
+    let v = reader(&s)
+        .view_snapshot(with(Some(900)))
+        .await
+        .expect("view");
+    assert_eq!(take_log_calls(&s), vec![(900, 1_031)]);
+    assert_eq!(v.url(&s.nodes[4]), None);
+    // Never below the deploy block, whatever --since-block says.
+    let late = StorageChain::new(s.chain.clone(), CONTRACT, 1_000);
+    late.view_snapshot(with(Some(5))).await.expect("view");
+    assert_eq!(take_log_calls(&s), vec![(1_000, 1_031)]);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// A node list that is no longer the newest (a node joined or left since) is
+/// found in the `NodeSet` logs, read backwards from the first block of the
+/// epoch asked for, and only until it is found.
+#[tokio::test]
+async fn an_older_node_list_is_searched_backwards_from_its_epoch() {
+    let s = setup(5).await;
+    let old: Vec<NodeId> = s.nodes[..4].to_vec();
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        // Epochs up to 399 ran under the old list; block 16 holds its log.
+        f.old_list = Some((400, old.clone()));
+        f.epoch = 500;
+        f.block = 5_005;
+    }
+    // Now (epochs 499..=501): the newest list holds, no log is read.
+    let v = reader(&s)
+        .view_snapshot(view(Epochs::Now))
+        .await
+        .expect("view");
+    assert_eq!(v.list_at(500), s.nodes);
+    assert!(take_log_calls(&s).is_empty());
+    // Epochs 2..=3: the old list, searched back from epoch 3's first block
+    // (30), never above it, and no further than the range that holds it.
+    let v = reader(&s)
+        .view_snapshot(view(Epochs::Span(2, 3)))
+        .await
+        .expect("view");
+    assert_eq!((v.list_at(2), v.list_at(3)), (old.clone(), old.clone()));
+    assert_eq!(v.nodes.len(), 4);
+    assert_eq!(take_log_calls(&s), vec![(0, 29)]);
+    // Epochs 399..=400 with ranges of 1,000 blocks: epoch 400 is the newest
+    // list; the old one is searched back from block 3989 (the last block
+    // before epoch 399) down to the range that holds block 16.
+    let wide = reader(&s).with_log_span(1_000);
+    let v = wide
+        .view_snapshot(view(Epochs::Span(399, 400)))
+        .await
+        .expect("view");
+    assert_eq!((v.list_at(399), v.list_at(400)), (old, s.nodes.clone()));
+    assert_eq!(
+        take_log_calls(&s),
+        vec![(2_990, 3_989), (1_990, 2_989), (990, 1_989), (0, 989)]
+    );
+    // A floor above the log: the search stops there and says what to do.
+    let e = wide
+        .view_snapshot(ViewOpts {
+            epochs: Epochs::Span(399, 400),
+            since: Some(2_500),
+            texts: false,
+            exclusions: ExclScope::None,
+        })
+        .await
+        .expect_err("not found");
+    assert!(
+        e.contains("epoch 399") && e.contains("--since-block"),
+        "{e}"
+    );
+    assert_eq!(take_log_calls(&s), vec![(2_990, 3_989), (2_500, 2_989)]);
+    // More epochs than one read covers.
+    let e = wide
+        .view_snapshot(view(Epochs::Span(0, MAX_VIEW_EPOCHS)))
+        .await
+        .expect_err("too many");
+    assert!(e.contains("at most"), "{e}");
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// The epoch report of an old epoch reads the logs of that epoch and the two
+/// settle epochs after it in one pass, not every block up to the head, and
+/// reports the same asks and amounts as on the snapshot built from every log.
+#[tokio::test]
+async fn an_epoch_report_reads_only_its_epochs_blocks() {
+    let s = setup(5).await;
+    let seed = Hash32([0x77; 32]);
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.deal.start_epoch = 1;
+        f.list_from = 0;
+        f.seeds.insert(1, seed);
+    }
+    let full = reader(&s).snapshot().await.expect("snapshot");
+    let d = full.deal(0).expect("deal").clone();
+    let asked: Vec<(u32, NodeId)> = (0..2)
+        .flat_map(|slot| {
+            let (_, who) = full.challenged(&d, 1, &seed, slot);
+            who.into_iter().map(move |n| (slot, n))
+        })
+        .collect();
+    assert!(!asked.is_empty());
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        for (slot, n) in &asked {
+            let shard = slot_shard(&seed, 0, *slot, d.info.shard_count);
+            f.answered.push((0, 1, *n, *slot, shard, true));
+            f.status.insert((0, 1, *slot, *n), 1);
+        }
+        // About 7 million blocks later.
+        f.block = 7_000_005;
+        f.epoch = 700_000;
+    }
+    let chain = reader(&s);
+    take_log_calls(&s);
+    let v = chain
+        .view_snapshot(view(Epochs::Span(0, 1)))
+        .await
+        .expect("view");
+    assert!(take_log_calls(&s).is_empty());
+    let r = epoch_report(&chain, &v, 1).await.expect("report");
+    // Epoch 1 is blocks 10..=19; its events end with epoch 3 (block 39).
+    assert_eq!(take_log_calls(&s), vec![(10, 39)]);
+    assert_eq!(r["asks"].as_array().map(Vec::len), Some(asked.len()));
+    assert_eq!(r["open"], json!(0));
+    let earned: u128 = r["lines"]
+        .as_array()
+        .expect("lines")
+        .iter()
+        .map(|l| {
+            l["earned"]
+                .as_str()
+                .expect("earned")
+                .parse::<u128>()
+                .expect("number")
+        })
+        .sum();
+    assert_eq!(earned, 7 * asked.len() as u128);
+    // The same report on the snapshot built from every log.
+    let full = chain.snapshot().await.expect("snapshot");
+    take_log_calls(&s);
+    assert_eq!(epoch_report(&chain, &full, 1).await.expect("report"), r);
+    assert_eq!(take_log_calls(&s), vec![(10, 39)]);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// A long log read asks `--log-span` blocks a call and says how far it is
+/// every [`PROGRESS_EVERY`] calls.
+#[tokio::test]
+async fn a_long_log_read_is_chunked_by_the_span_and_reports_progress() {
+    let s = setup(5).await;
+    let lines = Arc::new(Mutex::new(Vec::<String>::new()));
+    let sink = lines.clone();
+    let chain = reader(&s).with_progress(Arc::new(move |l: &str| {
+        sink.lock().expect("lock").push(l.to_string());
+    }));
+    chain
+        .logs_between(&[events::REGISTERED], 0, 19_999)
+        .await
+        .expect("logs");
+    let calls = take_log_calls(&s);
+    assert_eq!(calls.len(), 100);
+    assert!(calls.iter().all(|(a, b)| b - a + 1 == LOG_RANGE));
+    let said = std::mem::take(&mut *lines.lock().expect("lock"));
+    assert_eq!(said.len(), 2, "{said:?}");
+    assert!(
+        said[0].contains("blocks 0..19999") && said[0].contains("call 50 of 100"),
+        "{said:?}"
+    );
+    // A wider span: fewer calls, each block still once, no line under 50.
+    let wide = reader(&s).with_log_span(5_000);
+    let got = wide
+        .logs_between(&[events::REGISTERED], 0, 19_999)
+        .await
+        .expect("logs");
+    assert_eq!(got.len(), 5);
+    assert_eq!(
+        take_log_calls(&s),
+        vec![
+            (0, 4_999),
+            (5_000, 9_999),
+            (10_000, 14_999),
+            (15_000, 19_999)
+        ]
+    );
+    assert!(lines.lock().expect("lock").is_empty());
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review of slices 3 and 4 (medium): reading `exclusionFrom` for every
+/// shard of a deal on each `epoch`, `settle` or `prove` took hours for a big
+/// deal, and settling has a window of two epochs. The epoch view reads them
+/// only for the shards the epoch's slots pick: the same few calls for a deal
+/// of 3 shards and one of 65,536, and none without a seed or when not asked.
+#[tokio::test]
+async fn an_epoch_view_reads_exclusions_only_for_its_slots() {
+    let seed = Hash32([0x88; 32]);
+    let mut counts = Vec::new();
+    for shards in [3u32, 65_536] {
+        let s = setup(5).await;
+        {
+            let mut f = s.chain.0.lock().expect("lock");
+            f.deal.shard_count = shards;
+            f.seeds.insert(3, seed);
+        }
+        let chain = reader(&s);
+        let v = chain
+            .view_snapshot(view(Epochs::Span(2, 3)))
+            .await
+            .expect("view");
+        let (excl, calls) = {
+            let c = s.chain.1.lock().expect("lock");
+            (c.exclusions, c.calls)
+        };
+        // 2 slots a deal and epoch, down a ranking of 5 nodes until 3 hold.
+        assert!((1..=2 * 5).contains(&excl), "{shards} shards: {excl} calls");
+        assert!(calls < 40, "{shards} shards: {calls} eth_calls in all");
+        // The open challenges of the epoch are found on it, and every node
+        // they ask is a node of the list.
+        let asks = open_asks(&chain, &v, 3).await.expect("asks");
+        assert!(!asks.is_empty());
+        assert!(asks.iter().all(|(_, _, n)| s.nodes.contains(n)));
+        counts.push((excl, calls));
+        // Without a seed (no challenge yet) and for `prove` and `status`:
+        // no exclusion is read at all.
+        let before = s.chain.1.lock().expect("lock").exclusions;
+        chain
+            .view_snapshot(view(Epochs::Span(5, 6)))
+            .await
+            .expect("view");
+        chain
+            .view_snapshot(ViewOpts {
+                exclusions: ExclScope::None,
+                ..view(Epochs::Span(2, 3))
+            })
+            .await
+            .expect("view");
+        assert_eq!(s.chain.1.lock().expect("lock").exclusions, before);
+        let _ = std::fs::remove_dir_all(&s.publisher.dir);
+    }
+    // 2 slots pick at most 2 shards whatever the deal's size.
+    assert!(
+        counts[1].0 <= 10 && counts[1].1 <= counts[0].1 + 10,
+        "{counts:?}"
+    );
+}
+
+/// `status --node` reads every shard's exclusions only for small sets of
+/// open deals, or when asked; a client read only for the shards it needs.
+#[tokio::test]
+async fn status_and_read_bound_their_exclusion_reads() {
+    assert_eq!(status_reads_shards(None, 0), Ok(true));
+    assert_eq!(status_reads_shards(None, STATUS_SHARDS), Ok(true));
+    assert_eq!(status_reads_shards(None, STATUS_SHARDS + 1), Ok(false));
+    assert_eq!(status_reads_shards(Some("yes"), 65_536), Ok(true));
+    assert_eq!(status_reads_shards(Some("no"), 1), Ok(false));
+    assert!(status_reads_shards(Some("maybe"), 1).is_err());
+    let s = setup(5).await;
+    let chain = reader(&s);
+    let none = ViewOpts {
+        epochs: Epochs::Now,
+        since: None,
+        texts: true,
+        exclusions: ExclScope::None,
+    };
+    let mut v = chain.view_snapshot(none).await.expect("view");
+    assert_eq!(v.open_shards(), 3);
+    assert_eq!(s.chain.1.lock().expect("lock").exclusions, 0);
+    // A read of keys 12..=15 needs shard 1 only: its ranking, nothing else.
+    let only = net(&s, &[("http://publisher", Peer::Good)]);
+    let r = read_rows_in(Some(&chain), &mut v, only.as_ref(), 0, 12, 15)
+        .await
+        .expect("read");
+    assert_eq!(r.rows.len(), 4);
+    let one = s.chain.1.lock().expect("lock").exclusions;
+    assert!((3..=5).contains(&one), "{one}");
+    // The whole deal (what `status --node` reads when it is small).
+    chain.fill_exclusions(&mut v, 0, None).await.expect("fill");
+    let all = s.chain.1.lock().expect("lock").exclusions;
+    assert!((one + 6..=15).contains(&all), "{all}");
+    // A deal that is not open, a shard past the count: nothing read.
+    chain
+        .fill_exclusions(&mut v, 9, None)
+        .await
+        .expect("no such deal");
+    chain
+        .fill_exclusions(&mut v, 0, Some(&[3, 70_000]))
+        .await
+        .expect("no such shard");
+    assert_eq!(s.chain.1.lock().expect("lock").exclusions, all);
+    let _ = std::fs::remove_dir_all(&s.publisher.dir);
+}
+
+/// Review of slices 3 and 4 (medium): the tool asks the book what the
+/// contract will ask it, before the token approval. The refusals are the
+/// contract's, in its order.
+#[tokio::test]
+async fn adr_0067_the_tool_asks_the_book_before_it_approves() {
+    use BookStanding::{Holds, NotAccepted, Suspended, Unrecorded};
+    // The decision.
+    assert_eq!(deal_opens_in_book(Holds, None, None), Ok(()));
+    assert_eq!(deal_opens_in_book(Holds, None, Some(4)), Ok(()));
+    for next in [Unrecorded, NotAccepted, Suspended] {
+        assert_eq!(deal_opens_in_book(Holds, Some(next), Some(4)), Ok(()));
+    }
+    let e = deal_opens_in_book(Holds, Some(Holds), Some(4)).expect_err("old catalog");
+    assert!(
+        e.contains("CatalogSuperseded") && e.contains("catalog 5") && e.contains("nothing sent"),
+        "{e}"
+    );
+    // The contract checks the next catalog first.
+    let e = deal_opens_in_book(Unrecorded, Some(Holds), Some(4)).expect_err("old catalog");
+    assert!(e.contains("CatalogSuperseded"), "{e}");
+    let e = deal_opens_in_book(Unrecorded, None, Some(4)).expect_err("not anchored");
+    assert!(
+        e.contains("NotAnchored") && e.contains("no such report"),
+        "{e}"
+    );
+    let e = deal_opens_in_book(NotAccepted, None, None).expect_err("not accepted");
+    assert!(e.contains("NotAnchored"), "{e}");
+    let e = deal_opens_in_book(Suspended, None, None).expect_err("suspended");
+    assert!(e.contains("KeySuspended"), "{e}");
+    // An own report never has a next catalog.
+    assert_eq!(deal_opens_in_book(Holds, Some(Holds), None), Ok(()));
+
+    // The reads, against a book that holds catalog 0 and then catalog 1.
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let mut more = c0.leaves.clone();
+    more.push(other_leaf("synthetic.new"));
+    more.sort_by(|a, b| a.dataset.cmp(&b.dataset));
+    let c1 = catalog_of(Some(&c0), T0 + 30, more);
+    let r1 = sign_catalog(&c1);
+    let s = setup_with(5, w, m.clone());
+    let chain = reader(&s);
+    let old = anchor_in_catalog(&m, &c0, r0.clone()).expect("listed");
+    let new = anchor_in_catalog(&m, &c1, r1.clone()).expect("listed");
+    let key = r0.payload.key;
+    let e = chain
+        .check_deal_in_book(&old)
+        .await
+        .expect_err("unrecorded");
+    assert!(e.contains("NotAnchored"), "{e}");
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.book_keys.insert(key, (true, false));
+        f.book_reports.insert(r0.payload.digest(), (key, true));
+        f.book_seqs
+            .insert((key, r0.payload.sequence), r0.payload.digest());
+    }
+    chain
+        .check_deal_in_book(&old)
+        .await
+        .expect("catalog 0 is the newest");
+    // Catalog 1 is recorded under its sequence but not accepted yet: no bar.
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.book_reports.insert(r1.payload.digest(), (key, false));
+        f.book_seqs
+            .insert((key, r1.payload.sequence), r1.payload.digest());
+    }
+    chain
+        .check_deal_in_book(&old)
+        .await
+        .expect("catalog 1 does not hold");
+    let e = chain
+        .check_deal_in_book(&new)
+        .await
+        .expect_err("not accepted");
+    assert!(e.contains("NotAnchored"), "{e}");
+    // Catalog 1 holds: a deal through catalog 0 is refused, through 1 it goes.
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .book_reports
+        .insert(r1.payload.digest(), (key, true));
+    let e = chain
+        .check_deal_in_book(&old)
+        .await
+        .expect_err("superseded");
+    assert!(
+        e.contains("CatalogSuperseded") && e.contains("catalog 1"),
+        "{e}"
+    );
+    chain
+        .check_deal_in_book(&new)
+        .await
+        .expect("the newest catalog");
+    // A suspended key.
+    s.chain
+        .0
+        .lock()
+        .expect("lock")
+        .book_keys
+        .insert(key, (true, true));
+    let e = chain.check_deal_in_book(&new).await.expect_err("suspended");
+    assert!(e.contains("KeySuspended"), "{e}");
+    // An own report: recorded and accepted, or refused.
+    let own_report = sign(&m);
+    let own = ManifestAnchor::Own(borsh::to_vec(&own_report).expect("borsh"));
+    let e = chain
+        .check_deal_in_book(&own)
+        .await
+        .expect_err("unrecorded");
+    assert!(e.contains("NotAnchored"), "{e}");
+    {
+        let mut f = s.chain.0.lock().expect("lock");
+        f.book_keys.insert(own_report.payload.key, (true, false));
+        f.book_reports
+            .insert(own_report.payload.digest(), (own_report.payload.key, true));
+    }
+    chain
+        .check_deal_in_book(&own)
+        .await
+        .expect("its own report holds");
+    tidy(&[&s.publisher]);
+}
+
+/// Review of slices 3 and 4 (high): the manifest answer carries the proof of
+/// the publisher's NEWEST held catalog that lists the manifest, because the
+/// contract opens a deal only through the newest catalog. A rows answer
+/// keeps the catalog the version is held under.
+#[tokio::test]
+async fn adr_0067_the_manifest_answer_proves_from_the_newest_catalog() {
+    let w = world();
+    let (m, c0, r0) = catalog_published(&w).await;
+    let root = m.header.root();
+    let get = RouterGet(crate::bulk_serve::peer_routes(w.store.clone()));
+    let url = |r: &Hash32| format!("http://node/v1/bulk/manifests/{r}");
+    let answer = |body: Vec<u8>, r: Hash32| {
+        let (_, anchor) = manifest_from_answer(&body, &r).expect("the answer checks");
+        match anchor {
+            ManifestAnchor::Catalog(a) => *a,
+            ManifestAnchor::Own(_) => panic!("an own report"),
+        }
+    };
+    let held_under = |v: Value| v["anchor"]["catalog"]["number"].as_u64();
+    let info = || w.store.info("example.publisher", "synthetic.metrics");
+    let (_, body) = get.get(&url(&root), 1 << 20).await.expect("get");
+    assert_eq!(answer(body, root).header, c0.header);
+
+    // Catalog 1 lists the manifest unchanged (and one more dataset).
+    let with = |base: &Catalog, change: &dyn Fn(&mut Vec<CatalogLeaf>)| {
+        let mut leaves = base.leaves.clone();
+        change(&mut leaves);
+        leaves.sort_by(|a, b| a.dataset.cmp(&b.dataset));
+        leaves
+    };
+    let c1 = catalog_of(
+        Some(&c0),
+        T0 + 30,
+        with(&c0, &|l| l.push(other_leaf("synthetic.new"))),
+    );
+    let r1 = sign_catalog(&c1);
+    w.node.anchor(&r1);
+    w.post_catalog(&c1, &r1).await.expect("catalog 1");
+    let (_, body) = get.get(&url(&root), 1 << 20).await.expect("get");
+    let a = answer(body.clone(), root);
+    assert_eq!(
+        (a.header.clone(), a.report.clone()),
+        (c1.header.clone(), r1.clone())
+    );
+    // It verifies with the contract's rules (the mirror) for catalog 1, and
+    // the deal call built from it names catalog 1.
+    let catalog = borsh::to_vec(&c1.header).expect("borsh");
+    check_catalog_proof(
+        &m.header.to_bytes(),
+        &catalog,
+        a.leaf.proof.index,
+        &a.leaf.proof.siblings,
+        &r1,
+    )
+    .expect("the mirror");
+    let (m2, anchor) = manifest_from_answer(&body, &root).expect("checks");
+    let (_, call) = deal_call(&m2, &anchor, 3, 4, "https://source.example/").expect("call");
+    assert_eq!(abi::dyn_bytes(&call[4..], 1).expect("catalog"), catalog);
+    // The version is still held under catalog 0, and a rows answer says so.
+    assert_eq!(held_under(info().expect("info")), Some(0));
+    assert_eq!(w.store.manifest_record(&root).expect("held").1, r0);
+    // A storage node (no catalog) takes it under catalog 1 and serves that on.
+    let own = world();
+    own.node.anchor(&r1);
+    own.store
+        .accept_manifest_with_proof(&m.to_bytes(), a.header, a.leaf, a.report)
+        .await
+        .expect("taken");
+    let (v, _) = own.store.manifest_answer(&root).expect("held");
+    assert_eq!(v["catalog"]["number"], json!(1));
+
+    // Catalog 2 moves the dataset to version 2.
+    let next = manifest(&shard_files(30..40, 10), Some(&m), T0 + 40);
+    let c2 = catalog_of(
+        Some(&c1),
+        T0 + 50,
+        with(&c1, &|l| {
+            l.retain(|x| x.dataset != "synthetic.metrics");
+            l.push(CatalogLeaf::of(&next.header));
+        }),
+    );
+    let r2 = sign_catalog(&c2);
+    w.node.anchor(&r2);
+    w.post_catalog(&c2, &r2).await.expect("catalog 2");
+    w.post_in(&next, 2).await.expect("version 2");
+    // Version 1 is no longer in the newest catalog: the proof it was taken
+    // under is served (still a proof that the publisher signed the root, for
+    // a deal that exists; no new deal opens through it).
+    let (_, body) = get.get(&url(&root), 1 << 20).await.expect("get");
+    assert_eq!(answer(body, root).header, c0.header);
+    // Version 2: the newest catalog.
+    let root2 = next.header.root();
+    let (_, body) = get.get(&url(&root2), 1 << 20).await.expect("get");
+    assert_eq!(answer(body, root2).header, c2.header);
+
+    // Catalog 3 removes the dataset: no newest proof for any version. The
+    // answers keep the catalogs the versions were taken under.
+    let c3 = catalog_of(
+        Some(&c2),
+        T0 + 60,
+        with(&c2, &|l| {
+            let i = l
+                .iter()
+                .position(|x| x.dataset == "synthetic.metrics")
+                .expect("listed");
+            l[i] = l[i].tombstone().expect("tombstone");
+        }),
+    );
+    let r3 = sign_catalog(&c3);
+    w.node.anchor(&r3);
+    w.post_catalog(&c3, &r3).await.expect("catalog 3");
+    let (_, body) = get.get(&url(&root2), 1 << 20).await.expect("get");
+    assert_eq!(answer(body, root2).header, c2.header);
+    let (_, body) = get.get(&url(&root), 1 << 20).await.expect("get");
+    assert_eq!(answer(body, root).header, c0.header);
+    tidy(&[&w, &own]);
+}
+
+/// The answer's cap covers a manifest of the largest size with its header
+/// again and the largest catalog proof: three leaves with ids of 255 bytes
+/// and paths of 16 levels fit in the 64 KiB kept for it, with the report.
+#[test]
+fn adr_0067_the_largest_catalog_proof_fits_the_answer_cap() {
+    let id = "a".repeat(255);
+    let leaf = CatalogLeaf {
+        publisher: onyx_core::SourceId(id.clone()),
+        dataset: id.clone(),
+        version: u32::MAX,
+        prev: Hash32([0xff; 32]),
+        root: Hash32([0xff; 32]),
+    };
+    let path = onyx_merkle::Proof {
+        index: u64::MAX,
+        leaf_count: u64::MAX,
+        siblings: vec![Hash32([0xff; 32]); 16],
+    };
+    let lp = cat::LeafProof {
+        leaf: leaf.clone(),
+        proof: path.clone(),
+        left: Some((leaf.clone(), path.clone())),
+        right: Some((leaf, path)),
+    };
+    let header = cat::CatalogHeader {
+        format: 1,
+        publisher: onyx_core::SourceId(id),
+        number: u64::MAX,
+        prev: Hash32([0xff; 32]),
+        created_unix: u64::MAX,
+        leaf_count: u32::MAX,
+        leaves_root: Hash32([0xff; 32]),
+    };
+    let proof = serde_json::to_vec(&onyx_bulk::wire::catalog_json(&header, &lp)).expect("json");
+    // A signed report with ids of that length is under 2 KiB of hex.
+    assert!(proof.len() + 4 * 1024 < 64 * 1024, "{}", proof.len());
+    assert_eq!(
+        MAX_MANIFEST_ANSWER,
+        4 * onyx_bulk::manifest::MAX_MANIFEST_BYTES + 64 * 1024
+    );
 }

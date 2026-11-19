@@ -21,9 +21,14 @@
 //! the two ADR-0059 hashes the contract reads as they are: the manifest root
 //! over the Borsh header and the shard entry leaf (fixed-width Borsh, little
 //! endian, [`deal::HeaderTail`], [`challenge::parse_entry`]).
+//! A deal may also name a manifest that a catalog anchors (ADR-0067): the
+//! contract then checks the manifest's leaf in the catalog's tree and the
+//! catalog's signed payload ([`deal::check_deal_in_catalog`]).
 //! `fixtures/storage/vectors.json` holds the vectors both sides check.
 
 pub mod abi;
+#[cfg(test)]
+mod catalog_vectors;
 pub mod challenge;
 pub mod deal;
 pub mod epoch;

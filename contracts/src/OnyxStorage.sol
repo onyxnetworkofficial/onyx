@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {OnyxSignedBook} from "./OnyxSignedBook.sol";
 import {OnyxStorageLib as L} from "./OnyxStorageLib.sol";
+import {OnyxStorageAnchor} from "./OnyxStorageAnchor.sol";
 
 /// @notice The token calls the storage network makes (tONYX, `OnyxTestToken`).
 interface IStorageToken {
@@ -14,8 +15,9 @@ interface IStorageToken {
 /// @title OnyxStorage
 /// @notice TESTNET ONLY. The storage network (ADR-0060, docs/spec/storage-network.md,
 /// docs/STORAGE-NETWORK.md): storage nodes bond tONYX and declare capacity; a publisher buys
-/// storage for an anchored bulk manifest (ADR-0059) with a deposit per GiB per epoch for R
-/// replicas; each shard is placed on R nodes by rendezvous hashing over the node list; every
+/// storage for an anchored bulk manifest (ADR-0059; anchored by its own report or as a leaf of an
+/// anchored catalog, ADR-0067) with a deposit per GiB per epoch for R replicas; each shard is
+/// placed on R nodes by rendezvous hashing over the node list; every
 /// epoch a seed from a past block hash picks challenge slots per deal, and the challenged holders
 /// answer here with the picked row and its two Merkle paths, checked with Keccak. A passed answer
 /// earns a share of the deal's epoch pay; a wrong or missed one slashes part of the bond to the
@@ -50,8 +52,9 @@ contract OnyxStorage {
     /// other value, so a node built for other rules neither fails every answer nor computes other
     /// holders than the contract (review STORAGE-S16-R6 H1). The S15 contract has no such view;
     /// ADR-0060 amendment 1 (a row for each holder) had `ROW_VERSION` 2 instead; 3 adds amendment
-    /// 2 item 2 (a decline notice on shards the node passed; `Answered` names the shard).
-    uint8 public constant RULES_VERSION = 3;
+    /// 2 item 2 (a decline notice on shards the node passed; `Answered` names the shard); 4 adds
+    /// ADR-0067 (`createDealInCatalog`, `DealAnchor`, manifest headers of format 2).
+    uint8 public constant RULES_VERSION = 4;
     /// The window K of amendment 2 item 2: a decline of a shard the node passed a check on in the
     /// `NOTICE_EPOCHS` epochs before the decline takes effect one epoch later.
     uint64 public constant NOTICE_EPOCHS = 7;
@@ -81,6 +84,8 @@ contract OnyxStorage {
     error TooEarly();
     error NotAnchored();
     error KeySuspended();
+    /// The book holds the publisher's next catalog under the same key (ADR-0067).
+    error CatalogSuperseded();
     error NotEnoughNodes();
     error OverCapacity();
     error NoDeal();
@@ -123,6 +128,9 @@ contract OnyxStorage {
         string dataset,
         string sourceUrl
     );
+    /// The report in the book that backs a deal: the manifest's own report, or with `inCatalog`
+    /// the report of the catalog that lists the manifest (ADR-0067).
+    event DealAnchor(uint64 indexed dealId, bytes32 digest, bool inCatalog);
     event DealExtended(uint64 indexed dealId, uint64 endEpoch, uint256 added);
     event DealClosed(uint64 indexed dealId, uint256 refund);
     event SeedRecorded(uint64 indexed epoch, bytes32 seed);
@@ -209,6 +217,9 @@ contract OnyxStorage {
 
     IStorageToken public immutable token;
     OnyxSignedBook public immutable book;
+    /// The stateless reader of manifest headers and anchors (ADR-0067), deployed by the
+    /// constructor.
+    OnyxStorageAnchor public immutable anchor;
     address public immutable treasury;
     uint256 public immutable genesis;
     uint64 public immutable epochBlocks;
@@ -281,6 +292,7 @@ contract OnyxStorage {
         }
         token = token_;
         book = book_;
+        anchor = new OnyxStorageAnchor();
         treasury = treasury_;
         genesis = block.number;
         epochBlocks = epochBlocks_;
@@ -528,12 +540,56 @@ contract OnyxStorage {
         uint32 epochs,
         string calldata sourceUrl
     ) external nonReentrant returns (uint64 id) {
+        _checkParams(r, epochs, sourceUrl);
+        (L.Header memory h, bytes32 digest) = anchor.own(header, payload);
+        return _open(header, h, digest, false, r, epochs, sourceUrl);
+    }
+
+    /// Buy storage for a manifest that a catalog anchors (ADR-0067): `catalog` is the Borsh
+    /// header of a catalog of the same publisher, `siblings` the Merkle path of the manifest's
+    /// leaf at `leafIndex`, and `payload` the catalog's signed payload as posted to the book.
+    /// The catalog is only the proof that the publisher signed this manifest root: the deal
+    /// stores what `createDeal` stores and runs the same way.
+    function createDealInCatalog(
+        bytes calldata header,
+        bytes calldata catalog,
+        uint64 leafIndex,
+        bytes32[] calldata siblings,
+        bytes calldata payload,
+        uint8 r,
+        uint32 epochs,
+        string calldata sourceUrl
+    ) external nonReentrant returns (uint64 id) {
+        _checkParams(r, epochs, sourceUrl);
+        (L.Header memory h, bytes32 digest, uint64 next) =
+            anchor.inCatalog(header, catalog, leafIndex, siblings, payload);
+        // Not through an old catalog: the same key has no report that holds for the next
+        // catalog number (each number has one sequence). An unrecorded `digest` has no key and
+        // finds nothing here; `_open` refuses it.
+        bytes32 later = book.sequenceOf(book.report(digest).key, next);
+        if (later != bytes32(0) && _standing(later) == 1) revert CatalogSuperseded();
+        return _open(header, h, digest, true, r, epochs, sourceUrl);
+    }
+
+    function _checkParams(uint8 r, uint32 epochs, string calldata sourceUrl) internal pure {
         if (r == 0 || r > MAX_R || epochs == 0 || epochs > MAX_DEAL_EPOCHS) {
             revert BadParams();
         }
         if (bytes(sourceUrl).length > 256) revert BadParams();
-        L.Header memory h = L.readHeader(header);
-        _checkAnchor(header, h, payload);
+    }
+
+    /// Open a deal on the manifest of `header` once the book backs the report `digest` (the
+    /// manifest's own report, or with `inCatalog` the report of a catalog that lists it).
+    function _open(
+        bytes calldata header,
+        L.Header memory h,
+        bytes32 digest,
+        bool inCatalog,
+        uint8 r,
+        uint32 epochs,
+        string calldata sourceUrl
+    ) internal returns (uint64 id) {
+        _checkAnchor(digest);
         if (_active.length < r) revert NotEnoughNodes();
         uint64 gib = L.billableGiB(h.byteCount, h.shardCount);
         if (uint256(committedGiB) + uint256(gib) * r > totalCapacityGiB) revert OverCapacity();
@@ -578,22 +634,28 @@ contract OnyxStorage {
             string(header[h.dStart:h.dEnd]),
             sourceUrl
         );
+        emit DealAnchor(id, digest, inCatalog);
     }
 
-    /// The book recorded this payload, accepted its fact on exactly this report, and the key is
-    /// registered and not suspended (R-STOR-3).
-    function _checkAnchor(bytes calldata header, L.Header memory h, bytes calldata payload)
-        internal
-        view
-    {
-        bytes32 digest = L.checkPayload(header, h, payload);
+    /// The book recorded the report `digest`, accepted its fact on exactly this report, and the
+    /// key is registered and not suspended (R-STOR-3).
+    function _checkAnchor(bytes32 digest) internal view {
+        uint8 s = _standing(digest);
+        if (s == 0) revert NotAnchored();
+        if (s == 2) revert KeySuspended();
+    }
+
+    /// Where the report `digest` stands in the book: 1 it holds (recorded, its fact accepted on
+    /// exactly this report, its key registered and not suspended), 2 the same with the key
+    /// suspended, 0 anything else.
+    function _standing(bytes32 digest) internal view returns (uint8) {
         OnyxSignedBook.Rep memory rep = book.report(digest);
-        if (rep.key == bytes32(0)) revert NotAnchored();
+        if (rep.key == bytes32(0)) return 0;
         (OnyxSignedBook.FactState st, bytes32 acc,,) = book.factView(rep.fact);
-        if (st != OnyxSignedBook.FactState.Accepted || acc != rep.reportHash) revert NotAnchored();
+        if (st != OnyxSignedBook.FactState.Accepted || acc != rep.reportHash) return 0;
         (OnyxSignedBook.Life life, bool suspended,,,,) = book.keyState(rep.key);
-        if (life == OnyxSignedBook.Life.None) revert NotAnchored();
-        if (suspended) revert KeySuspended();
+        if (life == OnyxSignedBook.Life.None) return 0;
+        return suspended ? 2 : 1;
     }
 
     /// Pay for more epochs of a running deal (anyone may pay; the remainder still returns to the

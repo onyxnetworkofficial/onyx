@@ -195,9 +195,11 @@ on chain. Out of scope here: pricing, store on first use, deposits and availabil
   `manifest.schemas` (each schema with the index it ends at, the newest ending at `shard_count`),
   `manifest.schema` the newest; each row decoded under its shard's schema and its `values` shown
   under the newest (R-BULK-8), with `schema` (the shard's schema index) in format 2. Storage
-  `read_rows` checks each shard under its own schema; storage nodes refuse a deal on a format-2
-  manifest (the deployed OnyxStorage reads format 1 only). `GET /v1/bulk/manifests/{root}` also
-  carries the header's own bytes (`header`). The history walk (R-BULK-12) leaves an own-report
+  `read_rows` checks each shard under its own schema; a storage node of rules version 4 takes a
+  deal on a format-2 manifest (OnyxStorage v4 reads formats 1 and 2, ADR-0067; rules version 3
+  read format 1 only). `GET /v1/bulk/manifests/{root}` also carries the header's own bytes
+  (`header`) and, for a version that a catalog anchors, the catalog's header and the leaf proof
+  (`catalog`, ADR-0067). The history walk (R-BULK-12) leaves an own-report
   manifest in a format it does not read undecided when that header hashes to the root the walk
   followed, the manifest starts with it and the report is the publisher's for that root and
   version; else the node's fault. At most 8 schemas per dataset.

@@ -214,6 +214,35 @@ pub fn create_deal(header: &[u8], payload: &[u8], r: u8, epochs: u32, source_url
     )
 }
 
+/// `createDealInCatalog(bytes header, bytes catalog, uint64 leafIndex,
+/// bytes32[] siblings, bytes payload, uint8 r, uint32 epochs, string
+/// sourceUrl)` (ADR-0067): a deal on a manifest that a catalog anchors.
+#[allow(clippy::too_many_arguments)]
+pub fn create_deal_in_catalog(
+    header: &[u8],
+    catalog: &[u8],
+    leaf_index: u64,
+    siblings: &[Hash32],
+    payload: &[u8],
+    r: u8,
+    epochs: u32,
+    source_url: &str,
+) -> Vec<u8> {
+    call(
+        "createDealInCatalog(bytes,bytes,uint64,bytes32[],bytes,uint8,uint32,string)",
+        &[
+            Tok::Bytes(header.to_vec()),
+            Tok::Bytes(catalog.to_vec()),
+            uint(leaf_index.into()),
+            words(siblings),
+            Tok::Bytes(payload.to_vec()),
+            uint(r.into()),
+            uint(epochs.into()),
+            Tok::Bytes(source_url.as_bytes().to_vec()),
+        ],
+    )
+}
+
 /// `decline(uint64 dealId, uint32 index, bytes32 nodeId)` (`index` =
 /// [`crate::placement::WHOLE_DEAL`] for the whole deal).
 pub fn decline(deal: u64, index: u32, node: &NodeId) -> Vec<u8> {
@@ -351,7 +380,8 @@ pub fn books() -> Vec<u8> {
 }
 
 /// `RULES_VERSION()`: the rules the contract checks (3: ADR-0060 amendment
-/// 2 item 2, the decline notice and `Answered` with the shard). Older
+/// 2 item 2, the decline notice and `Answered` with the shard; 4: ADR-0067,
+/// deals on catalog-anchored manifests and format-2 headers). Older
 /// contracts have none (amendment 1 had `ROW_VERSION()` = 2).
 pub fn rules_version() -> Vec<u8> {
     call("RULES_VERSION()", &[])
@@ -487,6 +517,9 @@ pub mod events {
     /// A deal.
     pub const DEAL_CREATED: &str =
         "DealCreated(uint64,address,bytes32,bytes32,uint32,uint64,uint8,uint64,uint64,bytes32,uint256,string,string,string)";
+    /// The report that backs a deal (data: digest, in a catalog or not;
+    /// ADR-0067). It moves no money: [`MONEY`] does not list it.
+    pub const DEAL_ANCHOR: &str = "DealAnchor(uint64,bytes32,bool)";
     /// An epoch's seed.
     pub const SEED: &str = "SeedRecorded(uint64,bytes32)";
     /// An answer (data: slot, shard index, passed, paid; ADR-0060 amendment 2

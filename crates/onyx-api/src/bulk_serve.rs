@@ -2306,12 +2306,24 @@ impl BulkStore {
     }
 
     /// The report hash of held manifest `root`, without copying it.
+    /// (the report [`Self::manifest_answer`] serves: the newest held
+    /// catalog's when it lists the manifest).
     fn manifest_check(&self, root: &Hash32) -> Option<(Hash32, Hash32)> {
-        let ds = self.datasets.read().ok()?;
-        ds.values()
-            .flat_map(|d| d.versions.iter())
-            .find(|h| h.manifest.header.root() == *root)
-            .map(|h| (*root, h.report.hash()))
+        let (header, report_hash) = {
+            let ds = self.datasets.read().ok()?;
+            let h = ds
+                .values()
+                .flat_map(|d| d.versions.iter())
+                .find(|h| h.manifest.header.root() == *root)?;
+            if h.catalog.is_none() {
+                return Some((*root, h.report.hash()));
+            }
+            (h.manifest.header.clone(), h.report.hash())
+        };
+        let hash = self
+            .newest_listing(&header)
+            .map_or(report_hash, |(_, r, _)| r.hash());
+        Some((*root, hash))
     }
 
     /// Held catalog `n` without a rebuild (shared, not copied): the newest,
@@ -2808,6 +2820,72 @@ impl BulkStore {
             fresh.then_some(anchor),
         )
         .await
+    }
+
+    /// Take a manifest with a carried catalog proof (ADR-0067: a storage
+    /// node's fetch of a deal's manifest that a catalog anchors). This node
+    /// need not hold the catalog: `header` is the catalog's header, `lp` the
+    /// manifest's leaf with its path and neighbours, `report` the catalog's
+    /// signed report. Checked here: the report signs exactly this catalog
+    /// header, the catalog is the manifest's publisher's, the leaf is in the
+    /// catalog's tree as the only one of its dataset and names exactly this
+    /// manifest, no report of another root uses the manifest's own sequence
+    /// (ADR-0059 amendment 1 item 4), and the book holds the catalog's report
+    /// at a final block. A catalog fork is not seen here (THREATS CAT-6):
+    /// that check stays with the nodes that hold whole catalogs.
+    pub async fn accept_manifest_with_proof(
+        &self,
+        manifest: &[u8],
+        header: CatalogHeader,
+        lp: LeafProof,
+        report: SignedReport,
+    ) -> Result<(StatusCode, Value), ApiError> {
+        let bad =
+            |why: String| ApiError::new(StatusCode::UNPROCESSABLE_ENTITY, "bulk_bad_catalog", why);
+        let m = decode_manifest(manifest)?;
+        let h = &m.header;
+        let signer = cat::verify(&header, &report).map_err(|e| bad(format!("signature: {e}")))?;
+        if header.publisher != h.publisher {
+            return Err(bad("the catalog is another publisher's".into()));
+        }
+        header.proves(&lp).map_err(|e| bad(e.to_string()))?;
+        if !lp.leaf.names(h) {
+            return Err(ApiError::new(
+                StatusCode::UNPROCESSABLE_ENTITY,
+                "bulk_not_in_catalog",
+                format!(
+                    "the leaf of catalog {} does not name this manifest",
+                    header.number
+                ),
+            ));
+        }
+        // Before any lock or chain read (ADR-0066 item 10).
+        self.refuse_new_data(h)?;
+        // The erase lock first, then the publisher's (review CAT-ERASE-R1 H1).
+        let _no_erase = self.erase_lock.read().await;
+        let _one = self.publisher_lock(&h.publisher.0).read().await;
+        // No version of a removed dataset comes back through an older
+        // catalog (ADR-0059 amendment 4 item 3).
+        if let Some(n) = self.removed(&h.publisher.0, &h.dataset)? {
+            return Err(dataset_removed(n));
+        }
+        if let Some(e) = self.learned_gone(&h.publisher.0, &h.dataset)? {
+            return Err(e);
+        }
+        if let Some(f) = self.fork_stands(&h.publisher.0).await? {
+            return Err(publisher_forked(&f));
+        }
+        let own = onyx_bulk::anchor::payload(h, &signer);
+        let used = self.sequence_used(&own.key, own.sequence).await?;
+        if used != Hash32::ZERO && used != own.digest() {
+            return Err(ApiError::new(
+                StatusCode::CONFLICT,
+                "bulk_conflicting_anchor",
+                "the signed book holds another report under this manifest's own sequence (another root for this version)",
+            ));
+        }
+        self.accept_held(m, report, signer, Some(Box::new((header, lp))), None)
+            .await
     }
 
     /// The digest the book holds under `(key, sequence)` at the finalized
@@ -3352,6 +3430,77 @@ impl BulkStore {
             .flat_map(|d| d.versions.iter())
             .find(|h| h.manifest.header.root() == *root)
             .map(|h| (h.manifest.clone(), h.report.clone()))
+    }
+
+    /// The newest held catalog of `h`'s publisher, when it is held whole and
+    /// its leaf names exactly `h`: its header, its report and the position of
+    /// the leaf. `None` when the publisher has no held catalog, or the newest
+    /// one lists another version, a tombstone or nothing for the dataset.
+    fn newest_listing(
+        &self,
+        h: &onyx_bulk::ManifestHeader,
+    ) -> Option<(Arc<CatalogBody>, SignedReport, usize)> {
+        let cs = self.catalogs.read().ok()?;
+        let (_, held) = cs.get(&h.publisher.0)?.last_key_value()?;
+        let body = held.body.clone()?;
+        let i = body
+            .catalog
+            .find(&h.dataset)
+            .filter(|i| body.catalog.leaves[*i].names(h))?;
+        Some((body, held.report.clone(), i))
+    }
+
+    /// The body of `GET /v1/bulk/manifests/{root}` for held manifest `root`,
+    /// and the hash of its report: `{root, manifest, header, report}` (Borsh
+    /// hex; `header` the manifest's header alone). For a version a catalog
+    /// anchors, `report` is a catalog's report and `catalog` is `{number,
+    /// root, header, leaf}`: that catalog's header and the manifest's leaf
+    /// proof (ADR-0067).
+    ///
+    /// Which catalog: the publisher's **newest** catalog this node holds,
+    /// when it lists exactly this manifest, because `OnyxStorage` opens a
+    /// deal only through the newest catalog (`CatalogSuperseded`). When the
+    /// newest held catalog does not list it (a later version took its place,
+    /// the dataset was removed, or this node holds no catalog, as a storage
+    /// node), the proof the version was taken under is served: it still
+    /// shows that the publisher signed this root, which is what a storage
+    /// node needs for a deal that exists, but no new deal opens through it.
+    /// A rows answer is not changed by this: its `anchor.catalog` stays the
+    /// catalog the version is held under.
+    pub fn manifest_answer(&self, root: &Hash32) -> Option<(Value, Hash32)> {
+        // Copied under the lock, encoded after it (the hex of a manifest is
+        // up to 16 MiB).
+        let (manifest, report, held) = {
+            let ds = self.datasets.read().ok()?;
+            let h = ds
+                .values()
+                .flat_map(|d| d.versions.iter())
+                .find(|h| h.manifest.header.root() == *root)?;
+            (h.manifest.clone(), h.report.clone(), h.catalog.clone())
+        };
+        let (report, catalog) = match held {
+            None => (report, None),
+            Some(taken) => match self.newest_listing(&manifest.header) {
+                Some((body, r, i)) => match body.catalog.leaf_proof_in(&body.tree, i) {
+                    Some(lp) => (r, Some((body.catalog.header.clone(), lp))),
+                    None => (report, Some(*taken)),
+                },
+                None => (report, Some(*taken)),
+            },
+        };
+        // `header`: the header's own bytes, so a reader that cannot decode a
+        // header format still ties the manifest bytes to the root (ADR-0059
+        // amendment 5 item 8, review BULK-WIDEN-R2 finding 2).
+        let mut v = json!({
+            "root": root.to_string(),
+            "manifest": hex0x(&manifest.to_bytes()),
+            "header": hex0x(&manifest.header.to_bytes()),
+            "report": hex0x(&borsh::to_vec(&report).unwrap_or_default()),
+        });
+        if let Some((header, lp)) = &catalog {
+            v["catalog"] = catalog_json(header, lp);
+        }
+        Some((v, report.hash()))
     }
 
     /// Whether a shard with this root is held (hot or warm).
@@ -4935,8 +5084,11 @@ async fn post_manifest(State(store): State<Arc<BulkStore>>, body: Body) -> Respo
             return Err(e);
         }
         if let Some(n) = v.get("catalog").filter(|c| !c.is_null()) {
+            // A number, or the object a manifest answer carries (its
+            // `number`): the catalog itself must be held here either way.
             let n = n
                 .as_u64()
+                .or_else(|| n.get("number").and_then(Value::as_u64))
                 .ok_or_else(|| bad_request("catalog: the number of a held catalog"))?;
             return s.accept_manifest_in_catalog(&m, n).await;
         }
@@ -5161,9 +5313,11 @@ fn root_of(p: Result<Path<String>, PathRejection>) -> Result<Hash32, ApiError> {
 }
 
 /// `GET /v1/bulk/manifests/{root}`: `{root, manifest, header, report}`
-/// (Borsh hex; `header` the manifest's header alone), the body
-/// `POST /v1/bulk/manifests` takes. Encoded once and shared while
-/// the held report stays the same (SERVE-WRITE-2).
+/// (Borsh hex; `header` the manifest's header alone), and for a version a
+/// catalog anchors also `catalog` (`{number, root, header, leaf}`, with
+/// `report` the catalog's report): see [`BulkStore::manifest_answer`].
+/// `POST /v1/bulk/manifests` takes the same body. Encoded once and shared
+/// while the held report stays the same (SERVE-WRITE-2).
 async fn get_manifest(
     State(store): State<Arc<BulkStore>>,
     client: Option<Extension<ClientKey>>,
@@ -5190,18 +5344,9 @@ async fn get_manifest(
         if let Some(a) = store.answer(&key, check) {
             return Ok(a);
         }
-        let (m, rep) = store.manifest_record(&root).ok_or_else(not_held)?;
-        // `header`: the header's own bytes, so a reader that cannot decode a
-        // header format still ties the manifest bytes to the root (ADR-0059
-        // amendment 5 item 8, review BULK-WIDEN-R2 finding 2).
-        let v = json!({
-            "root": root.to_string(),
-            "manifest": hex0x(&m.to_bytes()),
-            "header": hex0x(&m.header.to_bytes()),
-            "report": hex0x(&borsh::to_vec(&rep).unwrap_or_default()),
-        });
+        let (v, report_hash) = store.manifest_answer(&root).ok_or_else(not_held)?;
         let body = json_bytes(&v)?;
-        Ok::<_, ApiError>(store.keep_answer(key, (root, rep.hash()), body))
+        Ok::<_, ApiError>(store.keep_answer(key, (root, report_hash), body))
     }
     .await;
     match r {

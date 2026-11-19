@@ -57,18 +57,32 @@ refunded, bonds out, earnings out, swept, rewarded), `conserved`, `params`. Even
 Immutable parameters: token, book, treasury, `epochBlocks`, `pricePerGiBEpoch`, `bondPerGiB`,
 `minBond`, `slashPpm`, `challengesPerDeal`, `maxMisses`. Constants: `MAX_NODES` 128, `MAX_R` 8,
 `SETTLE_EPOCHS` 2, `SEED_WINDOW` 256 blocks, `MAX_DEAL_EPOCHS` 100,000, `MAX_CAPACITY_GIB` 2^30,
-`REGISTRATION_FEE_PPM` 20,000, `REPORTER_PPM` 100,000, `NOTICE_EPOCHS` 7, `RULES_VERSION` 3
-(the node refuses any other). `Answered` carries `(slot, shardIndex, passed, paid)`; `Declined`
+`REGISTRATION_FEE_PPM` 20,000, `REPORTER_PPM` 100,000, `NOTICE_EPOCHS` 7, `RULES_VERSION` 4
+(ADR-0067; the node refuses any other, also 3). `Answered` carries `(slot, shardIndex, passed, paid)`; `Declined`
 and `Slashed` carry the raw epoch of R-STOR-14.
 
 ### Node routes (peers; outside the 12 s request deadline)
-`GET /v1/bulk/manifests/{root}` → `{root, manifest, report}` (Borsh hex, the body
-`POST /v1/bulk/manifests` takes); `GET /v1/bulk/shards/{root}` → the shard file's bytes. Rows are
+`GET /v1/bulk/manifests/{root}` → `{root, manifest, header, report}` (Borsh hex, the body
+`POST /v1/bulk/manifests` takes). For a version that a catalog anchors (ADR-0067) `report` is a
+catalog's report and the answer also has `catalog`: `{number, root, header, leaf}`, that catalog's
+header and the manifest's leaf proof (the shape of `anchor.catalog` of a rows answer). It is the
+publisher's newest catalog the node holds when that catalog lists exactly this manifest, because a
+deal opens only through the newest catalog; else (a later version, a removal, a node that holds
+no catalog) the catalog the version was taken under. A
+storage node checks that proof with the rules of `createDealInCatalog`
+(`onyx_storage::deal::check_deal_in_catalog`), then the signature and the leaf's neighbours, reads
+the catalog's report in the book at a final block, and keeps the version without holding the
+catalog. `GET /v1/bulk/shards/{root}` → the shard file's bytes. Rows are
 served by the existing `GET /v1/bulk/{publisher}/{dataset}/rows`.
 
 ### Tools
 `onyx-storage register | status | deal | seed | settle | withdraw | exit | withdraw-bond | close |
-sweep | books | epoch | read | prove`; onyx-node `ONYX_STORAGE_*` (docs/ops/config.md). `books
+sweep | books | epoch | read | prove`; onyx-node `ONYX_STORAGE_*` (docs/ops/config.md). `deal`
+opens a deal with the manifest's own report (`createDeal`) or, with `--catalog FILE` or `--root 0x…
+--node URL`, through a catalog (`createDealInCatalog`, ADR-0067: refused with `CatalogSuperseded`
+when the book holds the publisher's next catalog under the same key). `status`, `epoch`, `settle`
+and `prove` read the contract's view functions and only the logs of the epochs asked for
+(docs/ops/storage-node.md). `books
 --replay yes` also rebuilds the totals from the money events (`onyx_storage::ledger::replay`) and
 fails when they differ from `books()` at the same block.
 

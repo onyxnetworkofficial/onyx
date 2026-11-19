@@ -102,7 +102,7 @@ contract OnyxStorageNoticeTest is StorageFixture {
     }
 
     function test_rulesVersionAndWindow() public view {
-        assertEq(st.RULES_VERSION(), 3);
+        assertEq(st.RULES_VERSION(), 4);
         assertEq(st.NOTICE_EPOCHS(), 7);
     }
 

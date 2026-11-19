@@ -15,19 +15,62 @@ proof. Test network only. Overview: docs/STORAGE-NETWORK.md; rules: docs/spec/st
 | Command | What it does |
 |---|---|
 | `register --capacity-gib N --url URL` | Approves and posts the bond, registers, activates in a later block; prints `NODE_ID`. On a contract with ADR-0060 amendment 1, 2% of the bond is a registration fee, never returned |
-| `status --node ID` | Epoch, the node's bond, misses, status, shards now and next epoch, earnings |
+| `status --node ID [--since-block N] [--shards yes\|no]` | Epoch, the node's bond, misses, status, shards now and next epoch, earnings. `url` is filled only with `--since-block`; the shards are read without asking only while the open deals have at most 1,024 shards (see "What the commands read") |
 | `epoch [--epoch E]` | Every challenge of the epoch: who, which shard, passed, failed, missed, paid, slashed |
 | `withdraw` | Earnings to the operator |
 | `exit --node ID` | Leave the list from the next epoch (still asked in that epoch) |
-| `withdraw-bond --node ID` | The bond back, two epochs after leaving |
+| `withdraw-bond --node ID` | The bond back, once the epoch is more than two past the one the node left the list in: three to four epochs after `exit` |
 | `settle [--epoch E]` | Report the misses of an ended epoch (any keeper may; with amendment 1 the reporter earns 10% of each slash, unless it reports its own node) |
 | `books [--replay yes]` | Every flow of the contract and the conservation check; `--replay yes` also rebuilds the totals from the contract's events (one log call per 200 blocks: for a local chain or a short history) |
 | `declines` | Every node and every deal with its declines (`shard_declines` and `whole_deal_declines`, one per shard or deal and node), the declines whose one-epoch notice set when the node leaves, and its `slashes`, from the contract's events (ADR-0060 amendment 2 item 1): a node that declines much more than others with the same deals stands out |
-| `read --deal N --from K --to K` | Read rows from the replicas, every row checked, with fail-over |
-| `deal --dir DIR --r 3 --epochs N --source-url URL` | (publisher) pay for storage of an anchored manifest |
+| `read --deal N --from K --to K [--since-block N]` | Read rows from the replicas, every row checked, with fail-over |
+| `deal --dir DIR --r 3 --epochs N --source-url URL` | (publisher) pay for storage of a manifest that has its own report (`DIR/report.bin`) |
+| `deal --dir DIR --catalog FILE --r 3 --epochs N --source-url URL` | (publisher) the same for a manifest that a catalog anchors (ADR-0067): `FILE` is the catalog from `onyx-publish catalog-build`, its report is `FILE.report` |
+| `deal --root 0x… --node URL --r 3 --epochs N --source-url URL` | (anyone) the same from a node's answer to `GET /v1/bulk/manifests/{root}`: its own report, or the catalog header, leaf proof and catalog report |
 
-Every command takes `--rpc URL --contract 0x… [--from-block N]`; sending ones also
+Every command takes `--rpc URL --contract 0x… [--from-block N] [--log-span N]`; sending ones also
 `--chain-id N --key FILE` (it refuses any chain but 31337 and 84532).
+
+**A deal through a catalog.** The tool checks the proof with the contract's own rules before it
+sends anything, and refuses a catalog that does not list the manifest. It reads the contract's
+`RULES_VERSION()` first: below 4 it refuses a catalog deal and a format-2 manifest. The contract
+refuses a catalog that the publisher has replaced (`CatalogSuperseded`: the book holds a report
+for the next catalog number under the same key). So a deal must use the publisher's newest
+catalog. A node that holds the catalogs serves that proof: its manifest answer proves the
+manifest from the newest catalog it holds that lists it (`--root 0x… --node URL`). Before the
+token approval the tool asks the book what the contract will ask: does the anchor's report hold,
+and is there a newer catalog. It stops with `CatalogSuperseded`, `NotAnchored` or `KeySuspended`
+and sends nothing. If a new catalog lands while the deal is on its way, the contract refuses it:
+send the deal again once the node has the new catalog. Other refusals (too few nodes, no
+capacity, too few tokens) are still found only by the transaction itself, after the approval.
+
+**What the commands read.** `status`, `epoch`, `settle`, `prove`, `seed` and `books` read the
+contract's view functions at the head block (`currentEpoch`, `dealInfo`, `nodeInfo`,
+`activeNodes`, `setHashAt`, `exclusionFrom`, `books`, `conserved`). Their cost no longer grows
+with the contract's age: before, they read every log since the deploy block, about 35,000 calls
+on a contract 7 million blocks old. What it grows with now: one `dealInfo` call for every deal
+ever made, one `nodeInfo` call a listed node, and `exclusionFrom` calls. `epoch` and `settle`
+read `exclusionFrom` only for the shards that epoch's challenge slots pick (2 shards a deal and
+epoch, about 3 calls each, whatever the deal's size). `prove` reads none. `status --node` needs
+them for every shard of the open deals (about 3 calls a shard): it reads them when those deals
+have at most 1,024 shards together or with `--shards yes`; else `shards_now` and
+`shards_next_epoch` are null and `shards_note` says why. `read` reads them for the shards its
+key range needs. `register` reads the `Activated` logs since its own registration block only. Logs are now read only where no view has the answer, `--log-span`
+blocks a call (default 200, the limit of sepolia.base.org), with a progress line on stderr every
+50 calls:
+
+- `epoch`: the `Answered` and `Slashed` logs of the blocks of that epoch and the two epochs after
+  it (the amounts paid and slashed).
+- A node list that is no longer the newest (a node joined or left since the epoch asked for):
+  `NodeSet` logs, backwards from that epoch's first block until the list is found. `--since-block
+  N` stops the search at block N; the command then says so if the list was not found.
+- `status --since-block N`: the node's URL, from the `Registered` logs of blocks N and later.
+  Without it `url` is null.
+- `read`: the nodes' URLs and the deal's source, from the `Registered` and `DealCreated` logs
+  since `--since-block` (default: the deploy block). Give the block before the deal was made, or
+  the nodes' registration, to keep it short; a node whose URL was not read is not asked.
+- `declines` and `books --replay yes` read every log since the deploy block: they report the
+  whole history.
 
 ## onyx-node settings
 See docs/ops/config.md "Storage network". The node fetches at most `ONYX_STORAGE_FETCHES_PER_TICK`
@@ -46,11 +89,14 @@ no transaction; declining such deals is slice 2b.
 
 **Match the node to the contract.** From ADR-0060 amendment 1 each holder proves its own row;
 amendment 2 adds a notice on declines and names the shard in `Answered`. A node of this release
-reads the contract's `RULES_VERSION()` (3) first and sends nothing (no seed, answer, settle or
-decline) to any other contract, such as the S15 deployment `0x2423…9419` or an amendment 1
-deployment: its log says "this node follows rules v3". Sending nothing does not avoid penalties: the node then misses that contract's
+reads the contract's `RULES_VERSION()` (4, ADR-0067: deals through a catalog, format-2 manifests)
+first and sends nothing (no seed, answer, settle or decline) to any other contract, such as the
+S15 deployment `0x2423…9419`, an amendment 1 deployment or a rules-3 deployment: its log says
+"this node follows rules v4". Sending nothing does not avoid penalties: the node then misses that contract's
 checks and keepers slash and jail it. So exit the node from the old contract first (`exit`, then
-`withdraw-bond` two epochs later), then upgrade and register on the new deployment.
+`withdraw-bond` three to four epochs later), then upgrade and register on the new deployment. On the
+web host the storage units start the same binary as the API, so the nodes exit before the new API
+is deployed: docs/ops/runbooks/deploy-storage.md "Move from v3 to v4".
 
 ## Health
 

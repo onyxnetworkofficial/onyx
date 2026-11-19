@@ -88,11 +88,203 @@ before mainnet, ROADMAP H1). Each storage node operator uses its own fresh key.
 4. `plan`, `deploy --yes`, `register`, `install`, `deal`. Run `fund --yes` only when a key is
    short. Done this way on 2026-11-02 (S16).
 5. The old contract keeps each node's bond until that node runs `onyx-storage exit --node ID`
-   and, two epochs later, `onyx-storage withdraw-bond --node ID` against it (node gas). On
+   and, three to four epochs later, `onyx-storage withdraw-bond --node ID` against it (node gas). On
    2026-11-02 the five v0 bonds (10 tONYX each, no value) were left there to save test ETH.
+   From v3 on, take the bonds back first: "Move from v3 to v4" below.
+
+## Move from v3 to v4 (ADR-0067 slice 5; prepared 2026-11-19, not yet run live)
+
+**What moves.** The five nodes leave `OnyxStorage` v3 (`0x9244…ee43`, rules 3) and join a new
+`OnyxStorage` v4 (rules 4: deals on catalog-anchored datasets, format-2 manifests). v4 is two
+contracts from one deployment: `OnyxStorage` and the stateless reader `OnyxStorageAnchor` that
+its constructor creates. Every step below is one command of `scripts/storage-sepolia.sh`. Each
+step can be run again: it reads the chain first and sends only what is still missing. A step
+that sends needs `--yes`; without it, it prints what it would send and sends nothing. All of it
+is tested with fake tools (`scripts/storage-sepolia-tests.sh`), none of it against the live
+chain.
+
+**The rule behind the order.** A node must never be on a contract's list, with a deal to answer
+for, while no process can answer. A node of the new build follows rules 4 only: pointed at v3 it
+sends nothing, and then misses v3's checks. `scripts/deploy-api.sh` replaces the one `onyx-node`
+binary on the host that the storage units also start. A running unit keeps the old program until
+it restarts, but a crash or a reboot would start the new one. So:
+
+- the nodes leave v3 (step 2) **before** the new API is deployed (step 5);
+- on v4, `install` (step 9) follows `register` (step 8) at once, and the first deal (step 11)
+  comes only after every node's health shows the new node id.
+
+**Why leaving v3 is safe.** v3 has two deals. Both ran for epochs 2 to 10 and were closed on
+2026-11-02 (docs/STORAGE-NETWORK.md "Second live run"); v3 was at epoch 1032 on 2026-11-19. So
+no node holds a shard that is still checked. The script does not trust this note: `exit-old`
+reads `dealCount()` and every `dealInfo` and refuses to send while any deal on the contract is
+not closed and not past its end. It does not work out which node holds which deal: with 3 copies
+on 5 nodes every node holds shards of every deal, so one running deal blocks every exit. A node
+that asks to leave is still on the list, and still asked, until the current epoch ends.
+
+**Before you start.**
+
+- A decision on v4's epoch length. It is fixed for the contract's life. The script's default is
+  `STORAGE_EPOCH_BLOCKS=7200` (24 minutes). ADR-0067 open question 4 recommends 432,000 (one
+  day): then set `STORAGE_EPOCH_BLOCKS=432000` for `plan` and `deploy --yes`, and choose
+  `STORAGE_DEAL_EPOCHS` to match (the default 42 is then 42 days). `plan` prints the length.
+- `onyx-node`, `onyx-storage` and `onyx-publish` built from the commit to deploy, with
+  `scripts/check-all.sh` green.
+- Test ETH: see "Gas" below. Top up with `scripts/testnet-faucet.py` if a key is short.
+- `RPC=https://sepolia.base.org` in the shell for the `cast call` checks below (they read only).
+  `V3=0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`.
+
+### Steps
+
+| # | Command | Sends | Check after it |
+|---|---|---|---|
+| 1 | `scripts/storage-sepolia.sh close` | Only for a deal not yet closed or earnings not yet withdrawn | Every deal line says `already closed`; every node line says `nothing to withdraw` on a second run; the last line is `conserved: true` |
+| 2 | `scripts/storage-sepolia.sh exit-old --yes` | One `requestExit` per node, from the node's key | `cast call $V3 'nodeInfo(bytes32)(address,uint8,uint64,uint256,uint32,uint64,uint64,uint64)' <node id> --rpc-url $RPC`: the 2nd value is 2 (exiting), the 6th is the epoch the node is off the list from. `cast call $V3 'activeNodes()(bytes32[])' --rpc-url $RPC` is empty |
+| 3 | Wait 72 to 96 minutes (see "Waiting") | Nothing | `scripts/storage-sepolia.sh withdraw-old` (no `--yes`) says for each node how many epochs, blocks and minutes are left, and sends nothing |
+| 4 | `scripts/storage-sepolia.sh withdraw-old --yes` | One `withdrawBond` per node | `nodeInfo`: the 2nd value is 4 (withdrawn), the 4th (bond) is 0. The last line: `conserved: true` and what v3 still holds. Expect about 5.2 to 5.7 tONYX (5.2e18 to 5.7e18 units): the treasury's part, that is the five registration fees and the slashes, less the reporters' rewards. Each node's tONYX is back in its own address |
+| 5 | `scripts/storage-sepolia.sh archive-old` | Nothing (it changes the state file only) | It prints `archived N entries of 0x9244… under old_v3`. A second run says `already archived` |
+| 6 | Deploy the API from this commit: `scripts/deploy-api.sh <export dir> <onyx-node binary>` (docs/ops/deployment.md) | Nothing on chain | The public node is healthy. `GET https://<domain>/v1/bulk/manifests/<root>` of a catalog dataset has a `catalog` field. The storage units still run the old program; `storage.tick_failing` may alert if one restarts before step 9 (it then refuses v3: `lastErrorClass` is `contract_version`). That is harmless: the nodes have left v3 |
+| 7 | `scripts/storage-sepolia.sh plan`, then `scripts/storage-sepolia.sh deploy --yes` | One deployment from the deployer (both contracts) | It prints `OnyxStorage <address> at block <N> (23098 bytes); conserved: true; RULES_VERSION: 4` and `OnyxStorageAnchor <address> (4646 bytes)`. Check: `cast call <v4> 'RULES_VERSION()(uint8)' --rpc-url $RPC` is 4; `cast call <v4> 'anchor()(address)' --rpc-url $RPC` is the printed reader; `cast call <v4> 'params()(uint64,uint128,uint128,uint128,uint32,uint32,uint32,uint256)' --rpc-url $RPC` starts with the epoch length you chose |
+| 8 | `scripts/storage-sepolia.sh fund --yes` | From the deployer: test ETH up to the target and tONYX up to 20 per node, 100 for the payer | Each printed node line has `tONYX=20000000000000000000`. The step fails if a node is still below the bond |
+| 9 | `scripts/storage-sepolia.sh register`, then at once `scripts/storage-sepolia.sh install` | Per node: approve, `register`, `activate`. `install` sends nothing on chain: it writes each unit's settings (contract, node id, deploy block) and restarts the five units | `register` prints `NODE_ID=0x…` for each node. `cast call <v4> 'activeNodes()(bytes32[])' --rpc-url $RPC` lists five ids; `nodeInfo` gives status 1 and a bond of 9.8 tONYX (10 less the 2% fee). `install` ends with `nN answers at …` for each node. Then `GET https://<domain>/storage/nN/v1/health`: `storage.node` is the new id, `storage.lastTickOk` is true, `storage.lastErrorClass` is null, `storage.logsReadThrough` climbs |
+| 10 | Record the deployment (see "After the deployment") | Nothing | `bash scripts/check-docs.sh` passes |
+| 11 | `scripts/storage-sepolia.sh deal-catalog --yes <root>` (see "The first catalog deal") | From the payer: one approval, one `createDealInCatalog` | It prints `DEAL_ID=0 … anchor=catalog-<number> … epochs=<start>..<end>`. `cast call <v4> 'dealInfo(uint64)(address,bytes32,bytes32,bytes32,uint32,uint8,uint64,uint64,uint64,uint256,uint256,bool)' 0 --rpc-url $RPC`: the 2nd value is the root |
+| 12 | Watch three epochs from the deal's start (see "What to watch") | The nodes' answers | Every check passed, nothing slashed, `conserved()` true on v4 and on v3 |
+
+### Waiting (blocks of 0.2 s)
+
+- **Step 3, the bond.** v3 has epochs of 7,200 blocks (24 minutes). A node that asks to leave in
+  epoch E is off the list from E + 1, and `withdrawBond` needs an epoch above E + 1 +
+  `SETTLE_EPOCHS` (2), so E + 4 at the earliest: three whole epochs plus the rest of epoch E.
+  That is 72 to 96 minutes. (ADR-0067 section 5 said 48 minutes; the contract says otherwise.)
+  `withdraw-old` reads `SETTLE_EPOCHS()`, `params()` and the head block, so it gives the exact
+  figure.
+- **Step 7.** One transaction: under a minute.
+- **Step 9.** Three transactions and one block's wait per node: about a minute per node through
+  the public endpoint. `install` waits up to 2 minutes per node for its health.
+- **Step 11.** `deal-catalog` reads the contract's logs from the deploy block, 200 blocks a call:
+  90 calls for each hour since step 7. Do it on the same day.
+- **Step 12.** A deal made in epoch E is first checked in epoch E + 2. With 7,200-block epochs:
+  24 to 48 minutes to the first checks, then three epochs, so about 2 hours in all. With
+  432,000-block epochs: 1 to 2 days, then 3 days.
+
+### Gas (rough; price about 0.006 gwei, as seen on 2026-11-03)
+
+| Step | Paid by | Transactions | Gas | Test ETH |
+|---|---|---|---|---|
+| 1 `close` | payer, nodes | 0 when all is closed | 0 | 0 |
+| 2 `exit-old` | each node | 5 | about 600,000 (not measured: an estimate of 120,000 each) | 0.0000036 |
+| 4 `withdraw-old` | each node | 5 | about 350,000 (not measured: an estimate of 70,000 each) | 0.0000021 |
+| 7 `deploy --yes` | deployer | 1 | 6,111,928 (measured on a local chain) | 0.000037 |
+| 8 `fund --yes` | deployer | up to 12 | about 450,000 | 0.0000027, plus the test ETH it hands out |
+| 9 `register` | each node | 15 | about 1,670,000 (approve 46,000, `register` 106,000, `activate` 181,000, times 5) | 0.00001 |
+| 11 `deal-catalog` | payer | 2 | about 433,000 (approve 46,000, the deal 386,800) | 0.0000026 |
+| 12 each epoch | nodes | about 7 | about 1,070,000 (one seed, six answers) | 0.0000064 |
+
+The move without the watching is about 9.6 million gas: about 0.00006 test ETH at this price,
+ten times that if the price is ten times higher. Each node pays about 520,000 gas of it (about
+0.0000031 test ETH); on 2026-11-19 each node held enough. `fund --yes` also **hands out** test
+ETH: it tops each node up to 0.00012 and the payer up to 0.00003, so up to 0.00063 from the
+deployer if the keys were empty. Set `STORAGE_FUND_NODE_WEI=0 STORAGE_FUND_PAYER_WEI=0` to hand
+out none and top up tONYX only. Budget as in ADR-0067: 0.0003 test ETH, more if `fund` tops up
+ETH.
+
+### The bond on v4
+
+`onyx-storage register` reads `bondFor(capacity)` from the contract and approves exactly that:
+0.01 tONYX per GiB, at least 10 tONYX, so 10 tONYX for a node of 6 GiB. 2% of it is the
+registration fee. The bond comes from the node's own address. The nodes were slashed on v3, so
+three of them get less than 10 tONYX back in step 4 (8.82, 7.938 and 7.938). `fund --yes`
+covers the gap: the deployer mints each node up to 20 tONYX, whatever it holds. `fund` refuses
+to run if its target were below the bond, and fails if a node is still short after it.
+`register` checks each node's tONYX against the bond before it sends that node's approval.
+
+### The first catalog deal
+
+1. List small datasets on the public node: `GET https://<domain>/v1/bulk?limit=100`. Each row
+   has `publisher`, `dataset`, `version`, `root`, `bytes` and `shards`.
+2. Pick a row with a low `version` (well under 64: say under 30), few `shards` and `stored_shards`
+   equal to `shards`. A storage node takes versions in order: it fetches the deal's version and
+   every earlier one back to version 1, at most 64 steps (ADR-0067 open question 6). A dataset
+   that changes every day passes 64 in about two months, so prefer one that changes seldom.
+3. Check that a catalog anchors it and that the node proves it:
+   `GET https://<domain>/v1/bulk/manifests/<root>` must have a `catalog` field (`number`, `root`,
+   `header`, `leaf`). A dataset with its own report has none; use `deal` with its folder for
+   that.
+4. `scripts/storage-sepolia.sh deal-catalog --yes <root>`. The root is `0x` and 64 lowercase hex
+   digits. The tool checks the proof with the contract's rules and asks the book before the
+   approval. If it stops with `CatalogSuperseded`, the publisher's next daily catalog landed and
+   the node does not hold it yet: wait until the node has it, then run the same command again.
+   Nothing was sent.
+5. The deposit is 0.001 tONYX per GiB (at least one), per copy, per epoch: 0.126 tONYX for 3
+   copies and 42 epochs of a dataset under 1 GiB.
+
+### What to watch (three epochs from the deal's start epoch)
+
+- `scripts/storage-sepolia.sh status`: every node active, its bond unchanged, no misses; the
+  epoch section lists this epoch's checks.
+- `onyx-storage epoch --rpc $RPC --contract <v4> --from-block <deploy block> --epoch <E>` for each
+  of the three epochs, once it has ended: 6 checks (2 a deal, 3 copies), all passed, nothing
+  slashed.
+- Each holder's `GET https://<domain>/storage/nN/v1/health`, object `storage`: in the first epoch
+  `wanted` equals `held` (the node fetched its shards; `fetchFailed` is 0); in each epoch
+  `answered` is above 0 on a node that was asked; `answerFailed` and `unanswerable` stay 0;
+  `lastTickOk` is true. One node records the seed in the first 51 seconds of each epoch
+  (`seeds`): an epoch without a seed has no checks and no pay.
+- The health watch stays quiet: `storage.up`, `storage.tick_age`, `storage.tick_failing`,
+  `storage.answers` (docs/ops/runbooks/health-watch.md).
+- Rows from a storage node check: fetch rows of the dataset from
+  `https://<domain>/storage/nN/` and run `onyx-check --bulk` on them (docs/ops/bulk-publish.md).
+- `cast call <v4> 'conserved()(bool)' --rpc-url $RPC` and the same on `$V3`: both true.
+- When the deal ends: `scripts/storage-sepolia.sh close`.
+
+### After the deployment (step 10)
+
+1. **docs/STORAGE-NETWORK.md, section 13.** Add the v4 line in the same form as the v3 one:
+   `` `OnyxStorage` `0x<v4 address>` at block <deploy block> `` with the date, the commit,
+   `RULES_VERSION` 4, both code sizes, the reader's address, the parameters and the deploy cost.
+   Mark v3 retired there and at the top of this runbook.
+2. **The early record's contract list** is `deploy/early-record/contracts.json` in this
+   repository (ADR-0065). The entry to add, after the v3 entry, which stays:
+   ```json
+   {"name": "OnyxStorage (v4)", "abi": "storage-v4", "address": "0x<v4 address>", "doc": "docs/STORAGE-NETWORK.md", "scan_from": <deploy block>, "scan_from_is": "deploy", "block_doc": "docs/STORAGE-NETWORK.md", "block_quote": "`OnyxStorage` `0x<v4 address>` at block <deploy block>", "why": "The deploy block, stated with the address."}
+   ```
+   **This needs code first.** The reader of that file (`onyx_api::early`, `Contracts::parse`)
+   refuses a second contract with an ABI whose events count, and it knows `storage-v3` only. So
+   the entry above is refused today. Before it can be added: a `storage-v4` ABI in
+   `crates/onyx-api/src/early.rs` that counts the same five events (`Activated`, `DealCreated`,
+   `Answered`, `Slashed`, `MissReward`: their shapes did not change in v4), its tests, and a
+   decision on what a changed list means for days already published (every `day_close` names
+   the file's hash). `OnyxStorageAnchor` needs no entry: it has no events, no state and no roles.
+   Until then the early record does not count work on v4.
+3. **Source verification.** The script does not verify source. By hand, from `contracts/`, with
+   an explorer that takes it (not tried): `forge verify-contract <v4 address>
+   src/OnyxStorage.sol:OnyxStorage --chain 84532 --constructor-args $(cast abi-encode
+   'c(address,address,address,uint64,uint128,uint128,uint128,uint32,uint32,uint32)' <the ten
+   values in the order of params()>)` and `forge verify-contract <reader address>
+   src/OnyxStorageAnchor.sol:OnyxStorageAnchor --chain 84532` (no constructor arguments).
+4. The node's settings need no hand edit: `install` wrote the new contract, node id and block.
+   The node's saved log file is named by contract address, so v3's and v4's do not mix. The v3
+   shard files stay on disk: never delete shard files by hand.
+
+### Going back
+
+| You are after | What is changed | How to go back |
+|---|---|---|
+| Step 1 | Ended deals are closed, earnings are paid out | Nothing to undo: both only pay out what was owed |
+| Step 2 (`exit-old`) | The nodes are off v3's list. **This cannot be undone**: a node id that left cannot rejoin | No deal is open on v3, so nothing is lost by being off it. To serve v3 again a node must register again (a new id, a new 2% fee): take the bond back (step 4), then `onyx-storage register` against v3 by hand, set the new id in the unit's settings, and keep the old program on the host. The script will not do this: it holds the old ids |
+| Steps 3 and 4 | The bonds are back in the nodes' addresses | As after step 2 |
+| Step 5 (`archive-old`) | The state file: v3's entries sit under `old_v3` | Move them back to the top level by hand. Nothing is deleted, nothing was sent |
+| Step 6 (new API) | The public node and the program the storage units start | The API's own rollback (docs/ops/launch-checklist.md "Rollback"). The storage units need nothing while they are on no contract |
+| Step 7 (`deploy --yes`) | A v4 contract exists; no node, no deal | A contract cannot be removed, and an unused one costs nothing. A wrong one (for example the wrong epoch length): `STORAGE_OLD_RULES_MAX=4 scripts/storage-sepolia.sh archive-old` moves it under `old_v4`, then `plan` and `deploy --yes` again |
+| Step 9 (`register`, `install`) | The nodes are on v4's list (bond 9.8 tONYX each, fee paid) | Leave v4 the same way: `STORAGE_OLD_RULES_MAX=4` with `exit-old --yes`, then `withdraw-old --yes` after the wait, then `archive-old`. Without that variable the three steps refuse a rules-4 contract, so they never empty the live one by mistake |
+| Step 11 (the deal) | A deal runs until its end epoch; its deposit is in the contract | A deal cannot be stopped. Keep the nodes answering until it ends, then `close` returns what was not paid out. `exit-old` refuses while it runs |
+
+If a step fails half way (a send that was not mined, a read that failed), run the same command
+again. It reads each node's state from the contract, skips what is done and sends the rest. If
+it says a transaction is `not yet mined`, wait for it and run again.
 
 ## Rollback
 
-There is no admin path. To stop: no new deals; nodes `exit` (bonds back after two epochs); running
+There is no admin path. To stop: no new deals; nodes `exit` (bonds back three to four epochs later); running
 deals end at their last epoch and `close` refunds the rest. A broken contract is replaced by a new
 deployment, never upgraded.
