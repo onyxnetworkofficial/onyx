@@ -174,7 +174,7 @@ export const MEANINGS: Record<string, string> = {
 	cvdd: 'CVDD (cumulative value-days destroyed): a long-run price-floor model built from value days destroyed.',
 	thermocap: 'Thermocap: the total value of all coins ever issued, at the price on the day they were issued.',
 	'investor-cap': 'Investor cap: realized cap minus thermocap, the part paid by buyers rather than by issuance.',
-	'hodl-waves': 'HODL waves: the share of supply in each age band (how long coins have been held).',
+	'hodl-waves': 'HODL waves: supply split into age bands (how long coins have been held).',
 	'reserve-risk': 'Reserve risk: price measured against how firmly long-term holders hold; low values mean firm holders and a low price.',
 	nvt: 'NVT: market value divided by the value moved on chain, like a price-to-earnings ratio.',
 	liveliness: 'Liveliness: coin days destroyed divided by coin days created; it rises when old coins move.',
@@ -186,11 +186,11 @@ export const MEANINGS: Record<string, string> = {
 	'z-score': 'Z-score: how far the value is from its average, in standard deviations.',
 	zscore: 'Z-score: how far the value is from its average, in standard deviations.',
 	momentum: 'Momentum: how fast the value is changing.',
-	heatmap: 'Heatmap: values over time, split into bands (by price or by age).',
+	heatmap: 'Heatmap: values over time made to be drawn as colours, often split into bands (by price or by age).',
 	'by-age': 'By age: split by how long coins have been held.',
 	'age-bands': 'Age bands: supply split by how long coins have been held.',
 	'entity-adjusted': 'Entity-adjusted: addresses are grouped into owners first, so moves between one owner’s own addresses are left out.',
-	exchange: 'Exchange: coins on known exchange addresses.',
+	exchange: 'Exchange: measured on addresses the publisher labels as exchanges.',
 	'balance-distribution': 'Balance distribution: addresses grouped by how much they hold.',
 	'in-profit': 'In profit: coins worth more today than the price they last moved at.',
 	'in-loss': 'In loss: coins worth less today than the price they last moved at.',
@@ -226,8 +226,34 @@ export const MEANINGS: Record<string, string> = {
 /** Meanings of whole metrics, where one word alone would mislead ("price" in "price-floor-levels"). */
 const WHOLE: Record<string, string> = {
 	price: 'The daily price in US dollars.',
-	'spot-price': 'The daily price in US dollars.'
+	'spot-price': 'The daily price in US dollars.',
+	// Newcomer test 3 (2026-11-18), checked against the live columns of every chain's copy: active
+	// addresses, transaction count, average transaction value, and on some chains transfer volume
+	// or coins burned. None has a gas column, so the word "gas" in the id is not explained here.
+	'gas-analytics': 'Network activity by day: active addresses, transactions and the value they moved; on some chains also the coins burned. Despite its id, it has no gas column.',
+	// Its columns are percentiles (p25 to p95), not one coefficient.
+	gini: 'Named after the Gini coefficient (how unequal holdings are), but its columns are percentiles (p25 to p95), not one coefficient.'
 };
+
+/** Titles of whole metrics whose id words would mislead ("gas-analytics" holds no gas figure). The
+ * id itself never changes: the card prints it under the title. */
+const WHOLE_TITLE: Record<string, string> = {
+	'gas-analytics': 'Network activity'
+};
+
+/** What the unit hint at the end of a column name means, in the order shown. */
+const UNIT_HINTS: [RegExp, string, string][] = [
+	[/_usd$/, '_usd', 'in US dollars'],
+	[/_native$/, '_native', 'in the asset’s own coin or token, not in dollars'],
+	[/_count$/, '_count', 'a count (a whole number)'],
+	[/_(pct|percent)$/, '_pct', 'a percentage (50 means 50%)']
+];
+
+/** The legend lines for the unit hints the columns end in ("_usd: in US dollars"); empty when no
+ * column carries one. */
+export function unitLegend(columns: string[]): string[] {
+	return UNIT_HINTS.filter(([re]) => columns.some((c) => re.test(c))).map(([, hint, means]) => `${hint}: ${means}`);
+}
 
 /** Words a reader may type for a concept, by the id words that carry it. */
 const SEARCH: Record<string, string[]> = {
@@ -296,6 +322,8 @@ function duration(w: string): string | null {
 
 /** A metric's words as a title ("sth-net-position" -> "Short-term holder net position"). */
 export function metricTitle(words: string[]): string {
+	const whole = WHOLE_TITLE[words.join('-')];
+	if (whole) return whole;
 	const out: string[] = [];
 	for (let i = 0; i < words.length; i++) {
 		const w = words[i];
@@ -394,3 +422,75 @@ export function anyGroups(typed: string): string[][] {
 
 /** The `any` query value for the groups ("btc*,btc;sth*,sth,lth"). */
 export const anyValue = (groups: string[][]): string => groups.map((g) => g.join(',')).join(';');
+
+// ---- "Did you mean" (newcomer test 3, 2026-11-18: "bitcon" and "etherium gas price" found nothing). ----
+
+/** Plain id words that are in many dataset ids and in none of the tables above. */
+const COMMON = ['active', 'addresses', 'analytics', 'balance', 'bands', 'basis', 'blocks', 'burn', 'cap', 'change', 'circulating', 'concentration', 'cost', 'count', 'daily', 'difficulty', 'distribution', 'fees', 'flow', 'flows', 'holder', 'holders', 'loss', 'market', 'median', 'net', 'network', 'position', 'price', 'profit', 'ratio', 'realized', 'reserves', 'revenue', 'rewards', 'risk', 'supply', 'transaction', 'transfer', 'unrealized', 'velocity', 'volatility', 'volume', 'wealth'];
+
+/** Every word the search knows, each once: asset ids and the words of asset names first (a typo
+ * is most often an asset), then metric words. Lower case, letters and digits only. */
+export const KNOWN_WORDS: string[] = (() => {
+	const parts = (x: string) => x.toLowerCase().split(/[^a-z0-9]+/).filter((w) => w.length >= 3);
+	const out = new Set<string>();
+	for (const [id, a] of Object.entries(ASSETS)) for (const w of [...parts(id), ...parts(a.name)]) out.add(w);
+	for (const k of Object.keys(KINDS)) out.add(k);
+	for (const [k, v] of Object.entries(SEARCH)) for (const w of [...parts(k), ...v.flatMap(parts)]) out.add(w);
+	for (const k of [...Object.keys(WORDS), ...Object.keys(MEANINGS)]) for (const w of parts(k)) out.add(w);
+	for (const w of COMMON) out.add(w);
+	return [...out];
+})();
+
+/** Edits between two words: a letter added, dropped or changed, or two neighbours swapped
+ * (optimal string alignment). Stops counting above `max` (returns max + 1). */
+export function editDistance(a: string, b: string, max = 2): number {
+	if (Math.abs(a.length - b.length) > max) return max + 1;
+	let prev2: number[] = [];
+	let prev = Array.from({ length: b.length + 1 }, (_, j) => j);
+	for (let i = 1; i <= a.length; i++) {
+		const cur = [i];
+		for (let j = 1; j <= b.length; j++) {
+			const cost = a[i - 1] === b[j - 1] ? 0 : 1;
+			let v = Math.min(prev[j] + 1, cur[j - 1] + 1, prev[j - 1] + cost);
+			if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1]) v = Math.min(v, prev2[j - 2] + 1);
+			cur.push(v);
+		}
+		prev2 = prev;
+		prev = cur;
+	}
+	return Math.min(prev[b.length], max + 1);
+}
+
+/** The known word nearest to a typed one: the word itself when it is known (or starts a known
+ * word, as the node's search matches word starts), else the closest within 1 edit (words of up
+ * to 5 letters) or 2 (longer), the first in KNOWN_WORDS on a tie; null when nothing is close.
+ * Words under 4 letters and durations ("30d") are never corrected. */
+export function nearestWord(w: string): string | null {
+	if (w.length < 4 || DURATION.test(w) || /^[0-9]+$/.test(w)) return w;
+	if (KNOWN_WORDS.some((k) => k.startsWith(w))) return w;
+	const max = w.length <= 5 ? 1 : 2;
+	let best: string | null = null;
+	let bestD = max + 1;
+	for (const k of KNOWN_WORDS) {
+		if (k.length < 4) continue;
+		const d = editDistance(w, k, max);
+		if (d < bestD) [best, bestD] = [k, d];
+	}
+	return best;
+}
+
+/** Searches to offer when one found nothing, best first, at most 4: the search with each
+ * misspelt word replaced by the nearest known one ("bitcon" -> "bitcoin"), then that search with
+ * words dropped from the end ("ethereum gas price" -> "ethereum gas" -> "ethereum"). A word with
+ * no near known word is dropped. Never the typed search itself; empty when nothing is left. */
+export function suggestSearches(typed: string): string[] {
+	const words = typed.toLowerCase().split(/[^a-z0-9]+/).filter(Boolean).slice(0, 8);
+	const typedText = words.join(' ');
+	const fixed = words.map(nearestWord).filter((w): w is string => w !== null);
+	const out: string[] = [];
+	for (let n = fixed.length; n >= 1 && out.length < 4; n--) {
+		const text = fixed.slice(0, n).join(' ');
+		if (text !== typedText && !out.includes(text)) out.push(text);
+	}
+	return out;
+}

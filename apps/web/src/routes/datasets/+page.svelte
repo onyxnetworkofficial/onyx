@@ -6,12 +6,12 @@
 	// with its proofs), a chart, a CSV download and the commands that check the rows against Base
 	// Sepolia. Every value comes through #lib/datasets.ts, which drops anything out of shape.
 	import { onMount, tick } from 'svelte';
-	import { replaceState } from '$app/navigation';
+	import { afterNavigate, pushState, replaceState } from '$app/navigation';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
 	import DatasetChart from '#lib/components/DatasetChart.svelte';
 	import { group } from '#lib/format.ts';
-	import { datasetTitle, meanings, split } from '#lib/glossary.ts';
+	import { datasetTitle, meanings, split, suggestSearches, unitLegend } from '#lib/glossary.ts';
 	import {
 		HISTORY_CAP,
 		LIST_MAX,
@@ -41,6 +41,11 @@
 		keyRange,
 		keyText,
 		listUrl,
+		mainPublisher,
+		pageTitle,
+		publisherCounts,
+		sourceNote,
+		textColumns,
 		moved as readMoved,
 		removed as readRemoved,
 		newestFirst,
@@ -93,6 +98,16 @@
 	// A linked dataset its publisher removed with nothing named in its place (the node's 410
 	// without a successor), and the catalog that removed it when the node says which.
 	let ended = $state<{ from: string; catalog: number | null } | null>(null);
+	// Newcomer test 3 (2026-11-18): a search that found nothing offers the nearest known words that
+	// do find something ("bitcon": did you mean bitcoin?), with the node's own count.
+	let suggest = $state<{ q: string; total: number } | null>(null);
+	// Each publisher's dataset count, from the node's count answer (its catalogs).
+	let publishers = $state.raw<{ publisher: string; datasets: number }[]>([]);
+	const main = $derived(mainPublisher(publishers, all));
+	// The open dataset has a history entry of its own (Back closes it).
+	let pushed = false;
+	// The link the page is loading now (a second signal for the same address is dropped).
+	let arriving: string | null = null;
 	let seq = 0;
 	let timer: ReturnType<typeof setTimeout> | undefined;
 	// The opening list's steps (no search), the step being read and its cursor. `plain`: a node
@@ -171,6 +186,27 @@
 		found = rankSearch(got, q);
 		total = matches;
 		say(matches, q);
+		if (matches === 0) await offer(q, my);
+	}
+
+	// Nothing found: the first of the nearest searches (#lib/glossary.ts suggestSearches) that the
+	// node has matches for, asked with a list of one. Nothing is offered when none has any.
+	async function offer(q: string, my: number): Promise<void> {
+		for (const s of suggestSearches(q)) {
+			const p = await ask(listUrl(s, null, 1, freshOnly)).catch(() => null);
+			if (my !== seq || !p || p === 'busy') return;
+			if (p.total > 0) return void (suggest = { q: s, total: p.total });
+		}
+	}
+
+	function take(q: string) {
+		clearTimeout(timer);
+		query = q;
+		open = null;
+		pushed = false;
+		missing = null;
+		remember();
+		void load(cleanSearch(q));
 	}
 
 	async function load(q: string) {
@@ -180,6 +216,7 @@
 		found = [];
 		shown = PAGE;
 		capped = false;
+		suggest = null;
 		listed = q;
 		segs = q ? [] : plain ? [{ any: '', fresh: false, keep: () => true }] : defaultSegments(freshOnly);
 		segAt = 0;
@@ -216,21 +253,24 @@
 
 	// The node's own counts, for the line that says how many datasets are being updated.
 	async function count() {
-		const one = async (url: string) => {
+		const one = async (url: string): Promise<unknown> => {
 			try {
-				const p = await ask(url);
-				return p && p !== 'busy' && p.total > 0 ? p.total : null;
+				const r = await fetch(url, { headers: { accept: 'application/json' } });
+				return r.ok && (r.headers.get('content-type') ?? '').includes('json') ? await r.json() : null;
 			} catch {
 				return null;
 			}
 		};
-		[all, fresh] = await Promise.all([one(countUrl()), one(freshCountUrl())]);
+		const [a, f] = await Promise.all([one(countUrl()), one(freshCountUrl())]);
+		[all, fresh] = [readPage(a)?.total || null, readPage(f)?.total || null];
+		publishers = publisherCounts(a);
 	}
 
 	// The address bar keeps the search and the open dataset, so a link shows the same view.
-	function remember() {
+	// `push`: a new history entry (a dataset opened), so Back closes it and stays on the list.
+	function remember(push = false) {
 		try {
-			replaceState(toLink(cleanSearch(query), open), {});
+			(push ? pushState : replaceState)(toLink(cleanSearch(query), open), {});
 		} catch {
 			// Before the router is ready: the next change writes it.
 		}
@@ -240,6 +280,7 @@
 		clearTimeout(timer);
 		timer = setTimeout(() => {
 			open = null;
+			pushed = false;
 			missing = null;
 			gone = null;
 			ended = null;
@@ -256,6 +297,7 @@
 		plain = false;
 		clearTimeout(timer);
 		open = null;
+		pushed = false;
 		missing = null;
 		gone = null;
 		ended = null;
@@ -263,15 +305,23 @@
 		load(cleanSearch(query));
 	}
 
-	async function toggle(d: Dataset) {
+	// Opening a dataset adds a history entry (newcomer test 3: Back left the list); closing it by
+	// hand goes back over that entry. A dataset opened from a link, or in place of an open one,
+	// rewrites the entry it is on.
+	async function toggle(d: Dataset, viaLink = false) {
 		const id = idOf(d);
 		if (open === id) {
 			open = null;
-			remember();
+			if (pushed) {
+				pushed = false;
+				window.history.back();
+			} else remember();
 			return;
 		}
+		const fresh = !viaLink && !pushed;
 		open = id;
-		remember();
+		remember(fresh);
+		if (fresh) pushed = true;
 		if (samples[id] && samples[id] !== 'none') return;
 		samples[id] = 'loading';
 		try {
@@ -293,7 +343,7 @@
 	// A linked dataset: shown (past the first 50 too), opened and scrolled to.
 	async function openLinked(d: Dataset) {
 		shown = Math.max(shown, found.indexOf(d) + 1);
-		if (open !== idOf(d)) await toggle(d);
+		if (open !== idOf(d)) await toggle(d, true);
 		await reveal(idOf(d));
 	}
 
@@ -340,36 +390,74 @@
 				at = s.nextPage;
 				history[id] = { state: 'run', rows: rows.length };
 			}
-			save(csvName(d), csv(columns, rows, dayKeys(d.keyMin, d.keyMax)));
+			save(csvName(d, true), csv(columns, rows, dayKeys(d.keyMin, d.keyMax)));
 			history[id] = { state: at === null ? 'done' : 'capped', rows: rows.length };
 		} catch {
 			history[id] = { state: 'fail', rows: rows.length };
 		}
 	}
 
+	// A page link: the search it names, then its dataset opened. A `d` that is no
+	// "publisher/dataset" gets the same not-found line as an unknown id.
+	async function arrive(link: ReturnType<typeof fromLink>, hash: string) {
+		arriving = hash;
+		clearTimeout(timer);
+		open = null;
+		pushed = false;
+		missing = null;
+		gone = null;
+		ended = null;
+		// A dataset link searches for its name and opens it.
+		query = link.q || (link.d ? cleanSearch(link.d.split('/')[1]) : link.bad && link.bad !== '?' ? link.bad : '');
+		try {
+			await load(cleanSearch(query));
+			if (link.bad) return void (missing = link.bad);
+			const d = link.d ? found.find((x) => idOf(x) === link.d) : undefined;
+			if (d) return void (await openLinked(d));
+			if (!link.d || none) return;
+			const { moved: m, removed } = await successor(link.d);
+			if (!m) return void (removed ? (ended = { from: link.d, catalog: removed.catalog }) : (missing = link.d));
+			gone = { from: link.d, ...m };
+			if (!m.live || !m.to) return;
+			// The dataset moved: search for the id it moved to and open that one.
+			query = cleanSearch(m.to.split('/')[1]);
+			await load(cleanSearch(query));
+			const to = found.find((x) => idOf(x) === m.to);
+			if (to) await openLinked(to);
+			else gone = { from: link.d, to: m.to, live: false };
+		} finally {
+			if (arriving === hash) arriving = null;
+		}
+	}
+
+	// The address changed under the page: Back or Forward, the header search, a dataset link.
+	async function follow() {
+		const hash = location.hash;
+		if (!hash.startsWith('#/datasets') || hash === arriving) return;
+		const link = fromLink(hash);
+		pushed = false;
+		if (link.d && link.d === open) return;
+		const d = link.d ? found.find((x) => idOf(x) === link.d) : undefined;
+		if (d) return void (await openLinked(d));
+		// The same search without a dataset: only close the open one.
+		if (!link.d && !link.bad && link.q === listed) return void (open = null);
+		await arrive(link, hash);
+	}
+
+	afterNavigate((nav) => {
+		if (nav.type !== 'enter' && nav.from?.route.id === nav.to?.route.id) void follow();
+	});
+
 	onMount(() => {
 		origin = location.origin;
-		const link = fromLink(location.hash);
-		// A dataset link searches for its name and opens it.
-		query = link.q || (link.d ? cleanSearch(link.d.split('/')[1]) : '');
-		count()
-			.then(() => load(cleanSearch(query)))
-			.then(async () => {
-				const d = link.d ? found.find((x) => idOf(x) === link.d) : undefined;
-				if (d) return void openLinked(d);
-				if (!link.d || none) return;
-				const { moved: m, removed } = await successor(link.d);
-				if (!m) return void (removed ? (ended = { from: link.d, catalog: removed.catalog }) : (missing = link.d));
-				gone = { from: link.d, ...m };
-				if (!m.live || !m.to) return;
-				// The dataset moved: search for the id it moved to and open that one.
-				query = cleanSearch(m.to.split('/')[1]);
-				await load(cleanSearch(query));
-				const to = found.find((x) => idOf(x) === m.to);
-				if (to) await openLinked(to);
-				else gone = { from: link.d, to: m.to, live: false };
-			});
-		return () => clearTimeout(timer);
+		const hash = location.hash;
+		void count().then(() => arrive(fromLink(hash), hash));
+		const back = () => void follow();
+		addEventListener('popstate', back);
+		return () => {
+			clearTimeout(timer);
+			removeEventListener('popstate', back);
+		};
 	});
 
 	const curl = (d: Dataset, s: Sample) => `curl -s "${origin}/v1/bulk/${d.publisher}/${d.dataset}/rows?from=${s.from}&to=${s.to}&limit=100" > rows.json`;
@@ -378,7 +466,7 @@
 	const SIGNED = 'The publisher signed this version with its own key. Onyx did not check the numbers.';
 </script>
 
-<svelte:head><title>All datasets · Onyx</title></svelte:head>
+<svelte:head><title>{pageTitle(open)}</title></svelte:head>
 
 <OnyxSlab>
 	<h1>All datasets</h1>
@@ -398,6 +486,13 @@
 		{#if counts}
 			<p class="updated" data-testid="datasets-freshness"><b>{group(counts.fresh)} of {group(counts.all)}</b> datasets were updated in the last {STALE_DAYS} days. {#if counts.stale}The other {group(counts.stale)} were not: each of them shows its last day.{/if}</p>
 		{/if}
+		<!-- Newcomer test 3 (2026-11-18): one publisher holds nearly every dataset and its method is
+		     not published; said here and on every opened card (#lib/datasets.ts sourceNote). -->
+		<p class="fine where" data-testid="datasets-where">
+			<b>Where these numbers come from.</b>
+			{#if main}{group(main.datasets)} of {group(main.total)} datasets here come from one publisher, <span class="mono">{main.publisher}</span>.{/if}
+			{sourceNote(main?.publisher ?? '').join(' ')}
+		</p>
 		<div class="find">
 			<label for="ds-q" class="muted">Names or meanings, for example <span class="mono">bitcoin holders</span>, <span class="mono">whale</span> or <span class="mono">eth supply</span></label>
 			<input id="ds-q" type="search" bind:value={query} oninput={search} maxlength={MAX_SEARCH} spellcheck="false" autocomplete="off" placeholder={all !== null ? `Search ${group(all)} datasets` : 'Search datasets'} data-testid="datasets-q" />
@@ -425,7 +520,7 @@
 			<p class="muted" role="status" data-testid="datasets-removed">The publisher removed <span class="mono">{ended.from}</span>{ended.catalog !== null ? ` in its catalog ${ended.catalog}` : ''}. {total ? 'The closest names are below.' : ''}</p>
 		{/if}
 		{#if missing}
-			<p class="muted" data-testid="datasets-missing">This node holds no dataset <span class="mono">{missing}</span>. {total ? 'The closest names are below.' : ''}</p>
+			<p class="muted" role="status" data-testid="datasets-missing">This node holds no dataset {#if missing === '?'}with that name{:else}<span class="mono">{missing}</span>{/if}. {total ? 'The closest names are below.' : ''}</p>
 		{/if}
 		{#if none}
 			<p class="muted" data-testid="datasets-none">This site’s node shows no datasets.</p>
@@ -465,6 +560,7 @@
 							{@const s = samples[id]}
 							<div class="more" id="ds-{id}" data-testid="datasets-detail">
 								<p class="fine" data-testid="datasets-signed">Published by <span class="mono">{d.publisher}</span>. {SIGNED}</p>
+								<p class="fine" data-testid="datasets-where-card"><b>Where these numbers come from.</b> {sourceNote(d.publisher).join(' ')}</p>
 								{#if s === 'loading' || s === undefined}
 									<p class="muted">Reading the newest rows…</p>
 								{:else if s === 'none'}
@@ -497,6 +593,9 @@
 											</tbody>
 										</table>
 									</div>
+									{#if unitLegend(s.columns).length}
+										<p class="fine legend" data-testid="datasets-units">Column name endings: {#each unitLegend(s.columns) as u, ui (u)}{ui ? ' · ' : ''}<span class="nw"><span class="mono">{u.split(': ')[0]}</span>: {u.split(': ')[1]}</span>{/each}</p>
+									{/if}
 									<div class="dl" data-testid="datasets-download">
 										<button type="button" class="btn ghost" onclick={() => save(csvName(d), csv(s.columns, s.rows, days))} data-testid="datasets-csv">Download CSV ({group(s.rows.length)} {s.rows.length === 1 ? 'row' : 'rows'})</button>
 										{#if d.rows > s.rows.length}
@@ -517,8 +616,8 @@
 										<pre class="code" data-testid="datasets-commands">{curl(d, s)}
 {check(d, s)}</pre>
 									{/if}
-									<p class="fine">Or read the newest rows in Python (needs <span class="mono">requests</span> and <span class="mono">pandas</span>; at most 1,000 rows a call):</p>
-									<pre class="code" data-testid="datasets-python">{pythonSnippet(origin, d)}</pre>
+									<p class="fine">Or read the newest rows in Python (needs <span class="mono">requests</span> and <span class="mono">pandas</span>; at most 1,000 rows a call). The node sends every value as text{days ? ' and each day as unix seconds' : ''}: the snippet turns them into numbers{days ? ' and dates' : ''} (floats, so not exact to the last digit).</p>
+									<pre class="code" data-testid="datasets-python">{pythonSnippet(origin, d, { key: s.columns[0], days, text: textColumns(s) })}</pre>
 								{/if}
 							</div>
 						{/if}
@@ -533,11 +632,44 @@
 			</div>
 		{:else if total === 0 || (!busy && pill.state === 'good')}
 			<p class="muted" data-testid="datasets-empty">{freshOnly ? `No dataset${cleanSearch(query) ? ' with every word of this search in its name' : ''} has data from the last ${STALE_DAYS} days.` : 'No dataset has every word of this search in its name.'}</p>
+			{#if suggest}
+				<p class="suggest" role="status" data-testid="datasets-suggest">Did you mean <button type="button" class="linkbtn" onclick={() => take(suggest!.q)} data-testid="datasets-suggest-go">{suggest.q}</button>? ({group(suggest.total)} {suggest.total === 1 ? 'dataset' : 'datasets'})</p>
+			{/if}
 		{/if}
 	</section>
 </div>
 
 <style>
+	.where {
+		margin: var(--sp-2) 0 0;
+		max-width: 68ch;
+	}
+	.legend {
+		margin: 0 0 var(--sp-3);
+	}
+	.suggest {
+		margin: var(--sp-2) 0 0;
+	}
+	/* A suggested search: a link-coloured word, not a pill button (44 px tall for a finger). */
+	.linkbtn {
+		display: inline-flex;
+		align-items: center;
+		min-height: 44px;
+		padding: 0 var(--sp-1);
+		background: none;
+		border: 0;
+		border-radius: var(--radius-sm);
+		box-shadow: none;
+		color: var(--accent);
+		font: inherit;
+		font-weight: 500;
+		text-decoration: underline;
+		cursor: pointer;
+	}
+	.linkbtn:hover:not(:disabled) {
+		transform: none;
+		box-shadow: none;
+	}
 	.updated {
 		margin: var(--sp-3) 0 0;
 		max-width: 68ch;

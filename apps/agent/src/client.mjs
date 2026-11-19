@@ -165,6 +165,27 @@ export function createClient({ baseUrl, spec = loadSpec(), fetch: f = globalThis
 			}
 			return JSON.parse(Buffer.concat(chunks).toString('utf8'));
 		},
+		/**
+		 * GET /v1/observations/{metric} without a subject: the node's 400 names a round it holds
+		 * (agent connect asks this before it says which call works). Returns { status, body }.
+		 */
+		async heldRound(metric) {
+			if (typeof metric !== 'string' || !/^[a-z0-9][a-z0-9._-]{0,127}$/.test(metric) || /^\.+$/.test(metric)) throw new Error('metric: not a metric name');
+			const headers = { accept: 'application/json', 'user-agent': userAgent };
+			if (forwardedFor) headers['x-forwarded-for'] = forwardedFor;
+			const res = await f(`${base}/v1/observations/${metric}`, { headers, redirect: 'error', signal: AbortSignal.timeout(TIMEOUT_MS) });
+			const len = Number(res.headers.get('content-length') ?? 0);
+			if (len > 64 * 1024) {
+				await res.body?.cancel();
+				throw new Error('answer too large');
+			}
+			const text = (await readCapped(res)).slice(0, 64 * 1024);
+			let body = null;
+			try {
+				body = JSON.parse(text);
+			} catch {}
+			return { status: res.status, body };
+		},
 		base,
 		operations: () => [...ops.values()],
 		async call(id, args = {}) {

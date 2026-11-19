@@ -90,7 +90,7 @@ const allChecks: Check[] = [
 	...(PUBLIC ? publicChecks : inputChecks),
 	{
 		id: 'headers',
-		title: 'Live blocks have real proof of work',
+		title: 'Recorded blocks have real proof of work',
 		detail: 'Every header from our node meets the pinned difficulty, links to the one before, and the chain ends at the pinned tip.',
 		run: async (d) => {
 			const pin = await verifier.pinned();
@@ -111,7 +111,7 @@ const allChecks: Check[] = [
 	},
 	{
 		id: 'liveroot',
-		title: 'Live rows hash to the pinned root',
+		title: 'Recorded rows hash to the pinned root',
 		detail: 'The Merkle root over the live rows equals the root pinned in the code. The numbers shown are decoded from these rows.',
 		run: async (d) => {
 			const pin = await verifier.pinned();

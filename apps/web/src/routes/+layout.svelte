@@ -16,6 +16,7 @@
 	import { fadeSections } from '#lib/fade.ts';
 	import { FOOTER_NAV, PRIMARY_NAV } from '#lib/nav.ts';
 	import { REPO } from '#lib/release.ts';
+	import { searchKey } from '#lib/format.ts';
 	let palette: CommandPalette;
 	let { children } = $props();
 
@@ -81,6 +82,13 @@
 	onMount(() => (mainEl ? fadeSections(mainEl) : undefined));
 
 	const nav = PRIMARY_NAV;
+
+	// The search shortcut as this keyboard prints it (Ctrl K until the platform is known).
+	let key = $state(searchKey(''));
+	onMount(() => {
+		const data = (navigator as Navigator & { userAgentData?: { platform?: string } }).userAgentData;
+		key = searchKey(data?.platform || navigator.platform || '');
+	});
 </script>
 
 <svelte:window onkeydown={onKey} onpointerdown={onDown} />
@@ -107,8 +115,9 @@
 		</nav>
 		<!-- Named by its words, not an aria-label, so the visible shortcut is part of the name (W3:
 		     axe label-content-name-mismatch). -->
-		<button type="button" class="kbtn" onclick={() => palette.open()} aria-keyshortcuts="Control+K Meta+K" title="Search pages and actions (Ctrl+K)"
-			><Search size={16} /><span class="sr-only">Search pages and actions</span><kbd>⌘K</kbd></button
+		<button type="button" class="kbtn" onclick={() => palette.open()} aria-keyshortcuts="Control+K Meta+K" title="Search pages, actions and datasets ({key})"
+			data-testid="search-button"
+			><Search size={16} /><span class="sr-only">Search pages, actions and datasets</span><kbd>{key}</kbd></button
 		>
 		<!-- WCAG 2.2.2: the slab, the block strip and the beams move on their own; this stops them
 		     (remembered). Hidden when the system already asks for reduced motion. -->
@@ -157,7 +166,9 @@
 		</div>
 		<div class="fline">
 			<span class="fstate"><span class="dot" aria-hidden="true"></span>Testnet only · {PUBLIC ? 'early preview' : 'private preview'}</span>
-			<span>Every check runs in your browser, on the network's own code.</span>
+			<!-- Newcomer test 3 (2026-11-18): only the demo checks run in the browser; a dataset's proof
+			     is checked by the onyx-check program on the reader's own machine. -->
+			<span data-testid="footer-checks">The demo checks on How it works run in your browser, on the network's own code. A dataset's proof needs the onyx-check program: a Linux download, or a build from source elsewhere.</span>
 			<!-- Newcomer test (A14): the public source and how to connect an AI, from every page. -->
 			<span class="fmore" data-testid="footer-more">
 				<a href={REPO} target="_blank" rel="noopener">Source code</a>

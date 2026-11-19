@@ -153,10 +153,14 @@ test('a page link carries the search and the open dataset, and nothing else', ()
 	assert.equal(toLink(''), '#/datasets');
 	assert.equal(toLink('btc sth'), '#/datasets?q=btc+sth');
 	assert.equal(toLink('', 'onchain-archive/btc.a'), '#/datasets?d=onchain-archive%2Fbtc.a');
-	assert.deepEqual(fromLink('#/datasets?q=BTC+sth&d=onchain-archive%2Fbtc.a'), { q: 'btc sth', d: 'onchain-archive/btc.a' });
-	assert.deepEqual(fromLink('#/datasets'), { q: '', d: null });
-	assert.deepEqual(fromLink('#/datasets?q=%3Cscript%3E&d=javascript:alert(1)'), { q: 'script', d: null });
-	assert.deepEqual(fromLink('#/datasets?d=a/b/c'), { q: '', d: null });
+	assert.deepEqual(fromLink('#/datasets?q=BTC+sth&d=onchain-archive%2Fbtc.a'), { q: 'btc sth', d: 'onchain-archive/btc.a', bad: null });
+	assert.deepEqual(fromLink('#/datasets'), { q: '', d: null, bad: null });
+	assert.deepEqual(fromLink('#/datasets?q=%3Cscript%3E&d=javascript:alert(1)'), { q: 'script', d: null, bad: 'javascript alert 1' });
+	assert.deepEqual(fromLink('#/datasets?d=a/b/c'), { q: '', d: null, bad: 'a/b/c' });
+	// Newcomer test 3 (2026-11-18): a `d` without a slash silently showed the whole list.
+	assert.deepEqual(fromLink('#/datasets?d=garbage'), { q: '', d: null, bad: 'garbage' });
+	assert.deepEqual(fromLink('#/datasets?d=%25%25'), { q: '', d: null, bad: '?' });
+	assert.deepEqual(fromLink('#/datasets?d='), { q: '', d: null, bad: '?' });
 });
 
 test('a dataset opens with its newest 90 days (day keys) or its newest 10 rows', () => {
@@ -283,7 +287,8 @@ test('the count is asked as an unfiltered list of one', () => {
 });
 
 // ---- Newcomer test 2026-11-18: order, counts, headline column, CSV. ----
-import { rankSearch, searchAssets, defaultOrder, defaultSegments, isTestSet, isFresh, freshCounts, freshIn, freshCountUrl, headlineColumn, newestFirst, csv, csvName, historyUrl, pythonSnippet, anyUrl, HISTORY_PAGE } from '../src/lib/datasets.ts';
+import { rankSearch, searchAssets, defaultOrder, defaultSegments, isTestSet, isFresh, freshCounts, freshIn, freshCountUrl, headlineColumn, newestFirst, csv, csvName, historyUrl, pythonSnippet, anyUrl, HISTORY_PAGE, textColumns, pageTitle, publisherCounts, mainPublisher, sourceNote } from '../src/lib/datasets.ts';
+import { readFileSync } from 'node:fs';
 import { datasetTitle } from '../src/lib/glossary.ts';
 
 const D = (dataset, ageDays = 2, publisher = 'onchain-archive') => ({ publisher, dataset, ageDays });
@@ -306,8 +311,12 @@ test('search ranking: the exact asset first, then the exact metric; a stale exac
 	assert.deepEqual(ids(rankSearch([...list].reverse(), 'btc mvrv')), ids(rankSearch(list, 'bitcoin mvrv')));
 	const price = [D('wbtc.price', 0), D('btc.price-floor-levels', 0), D('btc.realized-price', 0), D('btc.price', 82)];
 	assert.deepEqual(ids(rankSearch(price, 'bitcoin price')), ['btc.price', 'btc.realized-price', 'btc.price-floor-levels', 'wbtc.price']);
-	// No asset searched: only the exact metric, freshness, the shorter name and the id decide.
-	assert.deepEqual(ids(rankSearch([D('eth.mvrv-bands', 1), D('eth.mvrv', 90), D('btc.mvrv', 1)], 'mvrv')), ['btc.mvrv', 'eth.mvrv', 'eth.mvrv-bands']);
+	// No asset searched (newcomer test 3: "mvrv" opened at 1inch): Bitcoin, then Ethereum, then the
+	// other assets by id; in one asset fresh data first, then the exact metric and the shorter name.
+	assert.deepEqual(ids(rankSearch([D('eth.mvrv-bands', 1), D('eth.mvrv', 90), D('btc.mvrv', 1)], 'mvrv')), ['btc.mvrv', 'eth.mvrv-bands', 'eth.mvrv']);
+	const many = [D('1inch.mvrv', 1), D('aave.mvrv', 1), D('eth.sth-mvrv', 1), D('eth.mvrv', 1), D('btc.mvrv', 82), D('btc.entity-adjusted-mvrv', 2), D('wbtc.mvrv', 1), D('aave.mvrv-z-score', 90)];
+	assert.deepEqual(ids(rankSearch(many, 'mvrv')), ['btc.entity-adjusted-mvrv', 'btc.mvrv', 'eth.mvrv', 'eth.sth-mvrv', '1inch.mvrv', 'aave.mvrv', 'aave.mvrv-z-score', 'wbtc.mvrv']);
+	assert.deepEqual(ids(rankSearch([...many].reverse(), 'mvrv')), ids(rankSearch(many, 'mvrv')), 'whatever order the node sent');
 	// A key that is no time (no age) counts as not fresh, never as an error.
 	assert.deepEqual(ids(rankSearch([D('btc.b', null), D('btc.a', 5)], 'btc')), ['btc.a', 'btc.b']);
 	assert.deepEqual(rankSearch([], 'btc'), []);
@@ -382,6 +391,8 @@ test('CSV: a header, one line a row, quoting, dates for day keys, no formulas', 
 	assert.equal(csv(['k', 'v'], [['1', '=1+1'], ['2', '@x'], ['3', '-cmd'], ['4', '-0.5'], ['5', '+1']]), "k,v\r\n1,'=1+1\r\n2,'@x\r\n3,'-cmd\r\n4,-0.5\r\n5,'+1\r\n");
 	assert.equal(csv(['k'], []), 'k\r\n');
 	assert.equal(csvName({ publisher: 'onchain-archive', dataset: 'btc.mvrv' }), 'onchain-archive_btc.mvrv.csv');
+	// Newcomer test 3: the two buttons of a card saved the same file name.
+	assert.equal(csvName({ publisher: 'onchain-archive', dataset: 'btc.mvrv' }, true), 'onchain-archive_btc.mvrv-full.csv');
 });
 
 test('a full history is read 1,000 rows a call, pinned to one version', () => {
@@ -395,6 +406,69 @@ test('a full history is read 1,000 rows a call, pinned to one version', () => {
 	const py = pythonSnippet('https://node.example', d).split('\n');
 	assert.equal(py.length, 5);
 	assert.ok(py[1].includes('https://node.example/v1/bulk/onchain-archive/btc.sth-net-position/rows') && py[2].includes('"limit": 1000') && py[2].includes('"order": "desc"'));
+});
+
+// Newcomer test 3 (2026-11-18): the snippet's frame held strings and unix seconds.
+test('the Python snippet turns text into numbers and a day key into dates', () => {
+	const d = { publisher: 'onchain-archive', dataset: 'btc.price' };
+	const days = pythonSnippet('https://node.example', d, { key: 'day', days: true, text: [] }).split('\n');
+	assert.deepEqual(days.slice(4), [
+		'df = df.apply(pd.to_numeric, errors="coerce")  # values arrive as text',
+		'df["day"] = pd.to_datetime(df["day"], unit="s")  # the key is a day, in unix seconds',
+		'print(df.dtypes, df.head(10), sep="\\n")'
+	]);
+	assert.ok(days.length <= 8, 'short');
+	// A key that is no day (a block height) stays a number: no to_datetime.
+	const heights = pythonSnippet('https://node.example', d, { key: 'height', days: false, text: [] });
+	assert.ok(heights.includes('pd.to_numeric') && !heights.includes('to_datetime'));
+	// Text columns are left as text, by name.
+	const series = pythonSnippet('https://node.example', d, { key: 'day', days: true, text: ['series', 'day'] }).split('\n');
+	assert.equal(series[4], 'num = df.columns.drop(["series"])  # values arrive as text');
+	assert.equal(series[5], 'df[num] = df[num].apply(pd.to_numeric, errors="coerce")');
+	// A name that is no column name never reaches the code.
+	const odd = pythonSnippet('https://node.example', d, { key: 'day"]; import os #', days: true, text: ['x"]) or exec("1'] });
+	assert.ok(!odd.includes('import os') && !odd.includes('exec') && !odd.includes('to_numeric'));
+	const s = { columns: ['day', 'series', 'value', 'blank'], rows: [['1', 'bands', '1.5', ''], ['2', 'bands', '-2', '']] };
+	assert.deepEqual(textColumns(s), ['series']);
+	assert.deepEqual(textColumns({ columns: ['day', 'a'], rows: [['x', '1']] }), [], 'the key column is never listed');
+});
+
+test('the tab title names the open dataset', () => {
+	assert.equal(pageTitle(null), 'All datasets · Onyx');
+	assert.equal(pageTitle('onchain-archive/btc.mvrv-z-score'), 'Bitcoin · MVRV Z-score · Onyx');
+	assert.equal(pageTitle('garbage'), 'All datasets · Onyx');
+});
+
+// Newcomer test 3 (2026-11-18): Home said "many sources" while one publisher held nearly all.
+test('publisher counts come from the node\'s catalogs, and a majority publisher is named', () => {
+	const answer = { datasets: [], total: 9054, catalogs: [{ publisher: 'early-record', leaves: 2, removed: 0, moved: 0, number: 22 }, { publisher: 'onchain-archive', leaves: 9059, removed: 8, moved: 8, number: 15 }] };
+	assert.deepEqual(publisherCounts(answer), [{ publisher: 'onchain-archive', datasets: 9051 }, { publisher: 'early-record', datasets: 2 }]);
+	assert.deepEqual(mainPublisher(publisherCounts(answer), 9054), { publisher: 'onchain-archive', datasets: 9051, total: 9054 });
+	// Out of shape: dropped, never guessed.
+	for (const v of [null, {}, { catalogs: 'x' }, { catalogs: [{ publisher: '<b>', leaves: 3 }, { publisher: 'a', leaves: -1 }, { publisher: 'b', leaves: 2, removed: 5 }, null] }]) assert.deepEqual(publisherCounts(v), []);
+	assert.deepEqual(publisherCounts({ catalogs: [{ publisher: 'a', leaves: 4 }, { publisher: 'a', leaves: 9 }] }), [{ publisher: 'a', datasets: 4 }], 'one line per publisher');
+	// No majority, no total, or a count over the total: nothing is claimed.
+	assert.equal(mainPublisher([{ publisher: 'a', datasets: 5 }, { publisher: 'b', datasets: 5 }], 10), null);
+	assert.equal(mainPublisher([{ publisher: 'a', datasets: 11 }], 10), null);
+	assert.equal(mainPublisher([{ publisher: 'a', datasets: 9 }], null), null);
+	assert.equal(mainPublisher([], 10), null);
+});
+
+test('"where these numbers come from" never invents a method', () => {
+	const main = sourceNote('onchain-archive');
+	assert.equal(main[0], 'What Onyx knows about these numbers is only what their publisher states.');
+	assert.ok(main.includes('The publisher has not published its method.'));
+	assert.equal(main.at(-1), 'The proof shows these are the rows it signed.');
+	// The one line the repository's public notes hold about it, word for word.
+	assert.ok(readFileSync(new URL('../../../docs/ops/deployment.md', import.meta.url), 'utf8').includes('Bulk publisher `onchain-archive` (on-chain metrics from its own nodes;'));
+	assert.ok(main.some((l) => l.includes('“on-chain metrics from its own nodes”')));
+	// An unknown publisher: nothing is said about it but that.
+	assert.deepEqual(sourceNote('someone-new'), [main[0], 'The publisher has not published its method.', main.at(-1)]);
+	assert.deepEqual(sourceNote('__proto__'), sourceNote('someone-new'));
+	// The network's own test record and the synthetic demo say what they are.
+	assert.ok(!sourceNote('early-record').includes('The publisher has not published its method.') && sourceNote('synthetic-demo').some((l) => /synthetic/.test(l)));
+	// Nothing names who runs a publisher.
+	for (const p of ['onchain-archive', 'early-record', 'synthetic-demo', 'x']) assert.doesNotMatch(sourceNote(p).join(' '), /run by|operated by|owned by|company|team/i, p);
 });
 
 test('"z-score" reads as one term in a title', () => {

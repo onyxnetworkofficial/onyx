@@ -323,8 +323,8 @@
 				<div class="fact">
 					<dt>Price</dt>
 					<dd data-testid="reserve-api-price">
-						Set by each operator, per row, paid with x402 while the data is fresh. The local rehearsal charges 2,500 micro-USDC (0.0025 test USDC)
-						for 24 hours.
+						Planned: set by each operator, per row, paid with x402 while the data is fresh. Payments are switched off on the hosted test node
+						today. The recorded local rehearsal charged 2,500 micro-USDC (0.0025 test USDC) for 24 hours.
 					</dd>
 				</div>
 				<div class="fact">

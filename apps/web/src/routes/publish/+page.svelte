@@ -92,7 +92,7 @@
 				<p class="swarn">The id and the origin are bound together for good. Lose the origin and you lose the proof of your id: keep the domain paid.</p>
 			</div>
 			<div class="panel" data-testid="publish-words">
-				<span class="ititle">Four words used below</span>
+				<span class="ititle">Words used below</span>
 				<dl class="words">
 					{#each WORDS as w (w.word)}
 						<dt>{w.word}</dt>
@@ -146,6 +146,7 @@
 						<PublisherPointer />
 						<h4 class="way" data-testid="publish-issue-way">Second way: a public issue on the source repository</h4>
 						<p>Title it "{ISSUE_TITLE}" and put exactly these two lines in it.</p>
+						<p class="fine" data-testid="publish-readme-note">The README inside the downloaded tool file may name only the issue: that file was packed before the form existed. Both ways reach the same reviewer, and one is enough.</p>
 					{/if}
 					{#each s.commands as c, j (c)}
 						<!-- svelte-ignore a11y_no_noninteractive_tabindex -->

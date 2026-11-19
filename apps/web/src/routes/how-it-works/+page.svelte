@@ -17,7 +17,8 @@
 	import FileText from '@lucide/svelte/icons/file-text';
 	import UserRound from '@lucide/svelte/icons/user-round';
 	import type { PillState } from '#lib/components/Pill.svelte';
-	import { LEVELS } from '#lib/levels.ts';
+	import { LEVELS, STATUS, STATUSES, levelMark } from '#lib/levels.ts';
+	import { dayText } from '#lib/catalog.ts';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import { FALLBACK, PUBLIC } from '#lib/mode.ts';
 	import { HELD_BACK, HELD_WHY } from '#lib/components/HeldBack.svelte';
@@ -57,6 +58,12 @@
 	);
 	// From the export, never a literal (AUD-1-F6).
 	const fullFuel = $derived(demo?.runs.find((r) => r.id === 'full')?.fuel ?? null);
+	// Newcomer test 3 (2026-11-18): the blocks are a recorded sample, so their figures carry its day
+	// (the newest block's header time, UTC).
+	const sampleDay = $derived.by(() => {
+		const t = demo?.live?.blocks.at(-1)?.time;
+		return t ? dayText(new Date(t * 1000).toISOString().slice(0, 10)) : '';
+	});
 	const passed = $derived(checks.filter((c) => results[c.id].state === 'good').length);
 	const failed = $derived(checks.filter((c) => results[c.id].state === 'bad').length);
 	let console_: HTMLElement;
@@ -181,7 +188,7 @@
 		{ icon: Pickaxe, title: 'Miners', note: 'Run the recipe, seal the answer' },
 		{ icon: ShieldCheck, title: 'Validators', note: 'Rerun a sample; cheaters lose their bond' },
 		{ icon: Link, title: 'Chain', note: 'Root on Base Sepolia' },
-		{ icon: Receipt, title: 'Customers', note: 'Pay per call, check the proof' }
+		{ icon: Receipt, title: 'Customers', note: 'Check the proof, free today' }
 	];
 	const milestones = [
 		['M0', 'Foundation', 'done'],
@@ -211,19 +218,14 @@
 	// Level 2's sources are the recorded rounds the site ships (AUD-2-F11), read from their files.
 	let l2Sources = $state.raw<string[]>([]);
 	const ladder = $derived([
-		{ icon: Cpu, name: LEVELS[0].name, how: LEVELS[0].means, eg: 'Open ledgers, public datasets', status: 'Live', live: true },
-		{
-			icon: Globe,
-			name: LEVELS[1].name,
-			how: LEVELS[1].means,
-			eg: 'Prices, open APIs, filings',
-			// Short (W12: at most three lines); the note under the ladder names the sources and the limit.
-			status: 'Built; recorded rounds with simulated observers, live rounds under one operator'
-		},
-		{ icon: Signature, name: LEVELS[2].name, how: LEVELS[2].means, eg: 'Signed feeds, sensors, keyed APIs', status: 'Live for signed labels; signed data feeds built, none connected yet', live: true },
-		{ icon: Scale, name: LEVELS[3].name, how: LEVELS[3].means, eg: 'Your own data, field reports, lists', status: 'Live for unsigned label lists; bond planned', live: true },
-		{ icon: ChartLine, name: LEVELS[4].name, how: LEVELS[4].means, eg: 'Forecasts, labels', status: 'Built; no real records yet' }
-	]);
+		// Each status line is the levels table's own (#lib/levels.ts: one vocabulary for every page).
+		// Short (W12: at most three lines); the note under the ladder names the sources and the limit.
+		{ icon: Cpu, eg: 'Open ledgers, public datasets' },
+		{ icon: Globe, eg: 'Prices, open APIs, filings' },
+		{ icon: Signature, eg: 'Signed feeds, sensors, keyed APIs' },
+		{ icon: Scale, eg: 'Your own data, field reports, lists' },
+		{ icon: ChartLine, eg: 'Forecasts, labels' }
+	].map((r, i) => ({ ...r, name: LEVELS[i].name, how: LEVELS[i].means, status: levelMark(LEVELS[i]), live: LEVELS[i].status === 'live' })));
 
 	// NORTH-STAR NS1: Onyx is for any data; each kind names the proof level it can reach. The
 	// Bitcoin demo on this page is one example (anyone can recompute it), not the limit.
@@ -256,11 +258,12 @@
 			<h1>How Onyx checks data</h1>
 			<p class="lede" data-testid="home-what">
 				Onyx is a contributor-run network for any kind of data: anyone can submit data, others check it by the strongest
-				method the data allows, and buyers pay per row and check every answer against a root posted on Base Sepolia (testnet).
+				method the data allows, and readers check every answer against a root posted on Base Sepolia (testnet). Paying per row is planned and
+				switched off: everything is free to read today.
 			</p>
 			<div class="row cta">
 				<button type="button" onclick={checkNow} disabled={!demo} data-testid="home-primary"><ShieldCheck size={16} />Verify it in your browser</button>
-				<a class="btn ghost on-slab" href={resolve('/run')} data-testid="home-secondary">See the live run <ArrowRight size={16} /></a>
+				<a class="btn ghost on-slab" href={resolve('/run')} data-testid="home-secondary">See the recorded run <ArrowRight size={16} /></a>
 			</div>
 			<p class="note" data-testid="home-note">
 				<span class="dot" aria-hidden="true"></span><b>Testnet only · {PUBLIC ? 'early preview' : 'private preview'}</b>
@@ -297,7 +300,7 @@
 						<h3><a class="plink" href={resolve('/run')}>Full runs on Base Sepolia</a></h3>
 						<p>{netRead ? 'The run records could not be read here; the Run page links every transaction.' : 'Reading the run records…'}</p>
 					{/if}
-					<div class="pfoot"><span class="pgo" aria-hidden="true">See the live run <ArrowRight size={16} /></span></div>
+					<div class="pfoot"><span class="pgo" aria-hidden="true">See the recorded run <ArrowRight size={16} /></span></div>
 				</div>
 			</li>
 			<li>
@@ -345,8 +348,8 @@
 
 	<!-- Always rendered with fixed height, so nothing jumps when values arrive. -->
 	<div class="stats" bind:this={statsEl}>
-		<div class="stat"><b>{#if pin}<Ticker value={pin.live.to - pin.live.from + 1} />{:else if warmed}<span class="na">Could not load</span>{:else}<span class="na" aria-hidden="true">Loading…</span><span class="sr-only">Loading the live block count</span>{/if}</b><span>live blocks from our node</span></div>
-		<div class="stat"><b>{#if labelCount !== null}<Ticker value={labelCount} />{:else if warmed}<span class="na">{PUBLIC ? 'Not in the public build' : 'Could not load'}</span>{:else}<span class="na" aria-hidden="true">Loading…</span><span class="sr-only">Loading the label count</span>{/if}</b><span>labels in the sample dataset</span></div>
+		<div class="stat"><b>{#if pin}<Ticker value={pin.live.to - pin.live.from + 1} />{:else if warmed}<span class="na">Could not load</span>{:else}<span class="na" aria-hidden="true">Loading…</span><span class="sr-only">Loading the recorded block count</span>{/if}</b><span data-testid="stat-blocks">recorded blocks from our node{sampleDay ? `, ${sampleDay}` : ''}</span></div>
+		<div class="stat"><b>{#if labelCount !== null}<Ticker value={labelCount} />{:else if warmed}<span class="na">{PUBLIC ? 'Not in the public build' : 'Could not load'}</span>{:else}<span class="na" aria-hidden="true">Loading…</span><span class="sr-only">Loading the label count</span>{/if}</b><span>labels in the recorded sample dataset</span></div>
 		<div class="stat"><b>{#if demo?.bip322_vectors}<Ticker value={demo.bip322_vectors.length} />{:else}<span class="na" aria-hidden="true">Loading…</span><span class="sr-only">Loading the vector count</span>{/if}</b><span>signature test vectors</span></div>
 		{#if FALLBACK}
 			<div class="stat" data-testid="stat-checks"><b>{checks.length}</b><span>checks run in your browser</span></div>
@@ -424,6 +427,7 @@
 				</li>
 			{/each}
 		</ol>
+		<p class="muted l2note" data-testid="status-words">{#each STATUSES as k (k)}<span><b>{STATUS[k].label}:</b> {STATUS[k].means} </span>{/each}</p>
 		<!-- Which level-2 rounds are which, and the limit of the live ones (never "independent"). -->
 		<p class="muted l2note" data-testid="ladder-l2-note">
 			Level 2 has run two ways. The {l2Sources.length ? `recorded rounds on ${l2Sources.join(' and ')}` : 'recorded rounds'}, shown on <a href={resolve('/data')}>Browse data</a>, are rehearsals: their observers are simulated.
@@ -466,7 +470,7 @@
 			<div class="panel tile wide">
 				<span class="ti ptitle"><Cpu size={18} /> One engine, one answer</span>
 				<p class="muted">Every machine runs the same recipe on the same interpreter and gets the same bytes.</p>
-				<div class="fuel"><b>{#if fullFuel !== null}<Ticker value={fullFuel} />{:else}<span aria-hidden="true">–</span><span class="sr-only">Loading the compute count</span>{/if}</b><span>compute units for the full test run, identical on every machine</span></div>
+				<div class="fuel"><b>{#if fullFuel !== null}<Ticker value={fullFuel} />{:else}<span aria-hidden="true">–</span><span class="sr-only">Loading the compute count</span>{/if}</b><span>compute units for the full test run on the recorded sample{sampleDay ? ` (${sampleDay})` : ''}, identical on every machine</span></div>
 			</div>
 			<div class="panel tile">
 				<span class="ti ptitle"><GitMerge size={18} /> Rows come with proofs</span>

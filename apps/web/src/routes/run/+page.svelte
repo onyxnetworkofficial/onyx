@@ -8,6 +8,7 @@
 	import { COLOR } from '#lib/chart.ts';
 	import { group, int, short } from '#lib/format.ts';
 	import { TESTNET_RUNS } from '#lib/runs.ts';
+	import { PAYMENTS } from '#lib/levels.ts';
 
 	// A recorded run of scripts/demo-local.sh --dispute --json (M8 rehearsal on
 	// a local anvil chain) and the shared Rust/Solidity fee-split vectors.
@@ -362,12 +363,12 @@
 	];
 </script>
 
-<svelte:head><title>Live run · Onyx</title></svelte:head>
+<svelte:head><title>Recorded run · Onyx</title></svelte:head>
 
 <OnyxSlab>
-	<h1>Live run</h1>
+	<h1>Recorded run</h1>
 	<div class="slabside" data-testid="slabside">
-		<p class="slablede">Base Sepolia, a public testnet: {TESTNET_RUNS.length} full runs, every transaction linked · and an earlier rehearsal on a local test chain</p>
+		<p class="slablede">Recorded runs on Base Sepolia, a public testnet: {TESTNET_RUNS.length} full runs, the newest on {fileDate(TESTNET_RUNS[0])}, every transaction linked · and an earlier rehearsal on a local test chain. Nothing on this page is running now.</p>
 	</div>
 </OnyxSlab>
 
@@ -425,7 +426,7 @@
 			{#if net.reserve}
 				{@const r = net.reserve}
 				<p class="fine" data-testid="net-reserve">
-					Reserve round {r.round} (blocks {nums(r.blocks)}): one OKX reserve row, {r.okx_btc === null ? 'its value held back until data rights are cleared,' : `${r.okx_btc} BTC`} at block {int(r.okx_block)}, sold for {int(Number(r.price_micro_usdc))} micro-USDC after serving check
+					Reserve round {r.round} (blocks {nums(r.blocks)}): one OKX reserve row, {r.okx_btc === null ? 'its value held back until data rights are cleared,' : `${r.okx_btc} BTC`} at block {int(r.okx_block)}, sold in this recorded run for {int(Number(r.price_micro_usdc))} micro-USDC of test USDC (no real money) after serving check
 					<span class="mono">{r.gate}</span> cleared it (proof level {r.level}, {r.okx_cross_check === 'published-por-file' ? "checked against OKX's published proof-of-reserves file" : `cross-check ${r.okx_cross_check}`}); Binance refused before any payment (no independent cross-check).
 				</p>
 			{/if}
@@ -694,9 +695,10 @@
 				<h2>Who earns</h2>
 				<span class="meta">Split by the contract</span>
 			</div>
+			<div class="notebar"><p class="fine" data-testid="payments-off">{PAYMENTS.note}</p></div>
 			{#if main}
 				<div class="panel split" data-testid="split">
-					<p class="lead"><b class="mono">{int(Number(main.amount))}</b> micro-USDC ({usdc(main.amount)} USDC, one paid answer) becomes:</p>
+					<p class="lead"><b class="mono">{int(Number(main.amount))}</b> micro-USDC ({usdc(main.amount)} test USDC, one paid answer in the recorded run) becomes:</p>
 					<div class="bar" aria-hidden="true">
 						{#each parts as p, i (p.key)}
 							<i style:left="{p.x}%" style:width="{p.w}%" style:background={COLOR.cat(i)}></i>
@@ -734,22 +736,22 @@
 				<div class="tile">
 					<b class="ititle">Add data, get data</b>
 					{#if policy}
-						<span data-testid="contrib-rule">Accepted work in the last {policy.windowDays} days reads fresh rows free: {group(policy.readsPerMinute)} reads a minute, {group(policy.rowsPerDay)} rows a day. Full exports stay paid.</span>
+						<span data-testid="contrib-rule">Planned: accepted work in the last {policy.windowDays} days reads fresh rows free: {group(policy.readsPerMinute)} reads a minute, {group(policy.rowsPerDay)} rows a day. Full exports would stay paid.</span>
 					{:else}
-						<span>Accepted work reads fresh rows free. Full exports stay paid.</span>
+						<span>Planned: accepted work reads fresh rows free. Full exports would stay paid.</span>
 					{/if}
 				</div>
 				<div class="tile">
-					<b class="ititle">Agents pay per call</b>
+					<b class="ititle">Planned: agents pay per call</b>
 					{#if prices}
-						<span data-testid="price-rule"><b class="mono">{cents(prices.answerMicroUsdc)}</b> an answer (recommended), <b class="mono">{cents(prices.datasetMicroUsdc)}</b> a fresh dataset: never more than buying every row, never less than {prices.datasetFloorRows} rows' worth.</span>
+						<span data-testid="price-rule">Planned prices, switched off today: <b class="mono">{cents(prices.answerMicroUsdc)}</b> an answer (recommended), <b class="mono">{cents(prices.datasetMicroUsdc)}</b> a fresh dataset: never more than buying every row, never less than {prices.datasetFloorRows} rows' worth.</span>
 					{:else}
-						<span>A fraction of a cent an answer; a flat price per fresh dataset.</span>
+						<span>Planned: a fraction of a cent an answer; a flat price per fresh dataset.</span>
 					{/if}
 				</div>
 				<div class="tile">
-					<b class="ititle">Old data is free</b>
-					<span>After its fresh window a row costs nothing, and still comes with its proof.</span>
+					<b class="ititle">Planned: old data stays free</b>
+					<span>After its fresh window a row would cost nothing, and still come with its proof. Today every row is free.</span>
 				</div>
 			</div>
 		</section>

@@ -179,6 +179,10 @@ export async function ns11(browser, base, root, expect) {
 		const stored = await pg.evaluate(() => JSON.stringify({ ...localStorage }) + JSON.stringify({ ...sessionStorage }) + location.href);
 		expect(!stored.includes('sepolia.base.org'), `${NOT_STORED} (${width})`);
 		expect((await pg.getByTestId('live-total-1').innerText()) === '125 tONYX' && (await pg.getByTestId('live-value-1').innerText()) === 'Not on chain yet', `NS11 ${width}: pool 125 tONYX, no value yet`);
+		// Newcomer test 3 (2026-11-18): the page calls a market open only when the chain does: one
+		// line counts the states of the last read, and only a void market shows a void reason.
+		const tally = (await pg.getByTestId('live-tally').innerText()).replace(/\s+/g, ' ').trim();
+		expect(/^\d test markets? read: (none|\d) open for bets/.test(tally) && (await pg.getByTestId('live-void-reason-1').count()) === 0, `NS11 ${width}: the states of the markets read are counted in one line (${tally})`);
 		const state = await pg.getByTestId('live-state-1').innerText();
 		// From the time the market can be voided, with no value, the badge no longer says "waiting", and the card
 		// says what the contract then allows (tests/markets.test.mjs holds the rule on a fixed clock).

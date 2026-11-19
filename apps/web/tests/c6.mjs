@@ -76,7 +76,7 @@ export async function c6(browser, base, root, expect) {
 		// Review TR-S-R2-2: the Data map does not call label track records live while no labeler is scored.
 		const cells = await pg.getByTestId('data-map').locator('[role=cell]').evaluateAll((els) => els.map((e) => e.textContent ?? ''));
 		const label = cells.find((c) => c.includes('Label track records')) ?? '';
-		expect(/\bBuilt\b/.test(label) && !/\bLive\b/.test(label) && /no labeler scored yet/.test(label), 'C6 track records: the data map says label track records are built, none scored yet');
+		expect(/Recorded/.test(label) && !/\bLive\b/.test(label) && /One example record; no labeler scored yet/.test(label), 'C6 track records: the data map says label track records are one recorded example, none scored yet');
 		await pg.close();
 	}
 	{
@@ -101,7 +101,7 @@ export async function c6(browser, base, root, expect) {
 		const rung = pg.locator('.rung', { hasText: 'Scored when the truth arrives later' });
 		await rung.waitFor({ timeout: 120000 });
 		const st = (await rung.locator('.lstat').innerText()).trim();
-		expect(st === 'Built; no real records yet' && !(await rung.evaluate((e) => e.classList.contains('live'))), 'C6 track records: the home ladder says level 5 is built with no real records yet');
+		expect(st === 'Recorded: one example, none scored yet' && !(await rung.evaluate((e) => e.classList.contains('live'))), 'C6 track records: the home ladder says level 5 is one recorded example, none scored yet');
 		await pg.close();
 	}
 	{

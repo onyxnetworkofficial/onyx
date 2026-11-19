@@ -41,6 +41,8 @@ const TESTSET = ds('testnet.early-contributors', { publisher: 'early-record', ke
 const ALL = [TESTSET, ds('aave.btc-beta', { newest: '2026-11-15', newest_age_days: 1 }), ...['btc.alpha', 'btc.beta', 'eth.gamma', 'eth.wide'].map((n) => ds(n, FRESHNESS[n] ?? {})), ...FILL];
 const N = ALL.length;
 const TOP = ['btc.alpha', 'eth.gamma', 'aave.btc-beta', 'btc.beta', 'eth.wide'];
+// Newcomer test 3 (2026-11-18): the node's catalogs give each publisher's count (leaves less removed).
+const CATALOGS = [{ publisher: 'early-record', leaves: 1, removed: 0 }, { publisher: 'onchain-archive', leaves: N + 1, removed: 2 }];
 // Review FRESH-R1 M1: a dataset whose newest key is dated in the future (found by its own name).
 const AHEAD = ds('sol.ahead', { key_max: '4102358400', newest_in_future: true, newest: '2099-12-31', newest_age_days: 0 });
 // R-BULK-17: what the fake node's 410 says of each removed dataset: eth.old moved to eth.gamma
@@ -112,7 +114,7 @@ export async function datasets(browser, base, expect) {
 			const next = rest.length > n ? `${pageItems[n - 1].publisher}/${pageItems[n - 1].dataset}` : null;
 			// One hostile item rides along on the first page: it must never be printed.
 			const evil = !after && !groups.length ? [ds('<img src=x onerror=__xss()>')] : [];
-			return route.fulfill({ json: { datasets: [...pageItems, ...evil], total: hit.length, next } });
+			return route.fulfill({ json: { catalogs: CATALOGS, datasets: [...pageItems, ...evil], total: hit.length, next } });
 		});
 		await pg.route('**/v1/bulk/onchain-archive/*/rows?*', rowsRoute);
 		await pg.goto(base + '#/datasets');
@@ -251,7 +253,9 @@ export async function datasets(browser, base, expect) {
 		});
 		expect(S.cols === 64 && S.rows === 5 && S.first === '2023-12-09', `${at}: the newest rows, newest first, 64 columns, day keys as dates (${S.cols}, ${S.rows}, ${S.first})`);
 		const py = await pg.getByTestId('datasets-python').innerText();
-		expect(py.split('\n').length === 5 && py.includes('import requests, pandas as pd') && py.includes('/v1/bulk/onchain-archive/eth.wide/rows"') && py.includes('"limit": 1000'), `${at}: five lines of Python read the same dataset (${py.split('\n').length} lines)`);
+		// Newcomer test 3 (2026-11-18): the snippet's frame held strings and unix seconds. It now turns
+		// every column but the text one ("series") into numbers and the day key into dates.
+		expect(py.split('\n').length === 8 && py.includes('import requests, pandas as pd') && py.includes('/v1/bulk/onchain-archive/eth.wide/rows"') && py.includes('"limit": 1000') && py.includes('num = df.columns.drop(["series"])') && py.includes('df[num] = df[num].apply(pd.to_numeric, errors="coerce")') && py.includes('df["day"] = pd.to_datetime(df["day"], unit="s")'), `${at}: a few lines of Python read the same dataset as numbers and dates (${py.split('\n').length} lines)`);
 		expect((await pg.getByTestId('datasets-chart').count()) === 0, `${at}: a table of series (one row per series and day) gets no chart`);
 		expect(!S.pageScroll && (width > 1000 || S.boxScrolls), `${at}: the wide sample scrolls in its own box, never the page`);
 		expect(S.expanded === 'true', `${at}: the opened dataset says so (aria-expanded)`);
@@ -265,7 +269,7 @@ export async function datasets(browser, base, expect) {
 			await p.route('**/v1/bulk?*', (route) => {
 				const groups = anyOf(new URL(route.request().url()).searchParams.get('any'));
 				const hit = ALL.filter((d) => matchesAny(groups, `${d.publisher}/${d.dataset}`));
-				return route.fulfill({ json: { datasets: hit, total: hit.length, next: null } });
+				return route.fulfill({ json: { catalogs: CATALOGS, datasets: hit, total: hit.length, next: null } });
 			});
 			await p.route('**/v1/bulk/onchain-archive/*/rows?*', rowsRoute);
 			// R-BULK-17: the node's answer about one dataset. A removed one is 410 with its successor.
@@ -308,6 +312,7 @@ export async function datasets(browser, base, expect) {
 		const allText = await text(allCsv);
 		await pg2.waitForFunction(() => /Saved 10 rows/.test(document.querySelector('[data-testid="datasets-csv-status"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});
 		const status = (await pg2.getByTestId('datasets-csv-status').innerText()).replace(/\s+/g, ' ').trim();
+		expect(allCsv.suggestedFilename() === 'onchain-archive_eth.gamma-full.csv', `${at}: the full history is saved under its own name (${allCsv.suggestedFilename()})`);
 		expect(allText.trim().split('\r\n').length === 11 && allText.includes('\r\n2023-11-15,1000.1,1000.2\r\n') && allText.includes('\r\n2023-11-24,') && /^Saved 10 rows, oldest first\./.test(status), `${at}: "Download full history" pages through the node (2 calls here) and says what it saved ("${status}")`);
 		// A link to a dataset this node does not hold says so and shows the closest names.
 		await pg2.close();
@@ -358,6 +363,37 @@ export async function datasets(browser, base, expect) {
 		};
 		expect(E.note === 'The publisher removed onchain-archive/eth.ended in its catalog 15.' && E.missing === 0 && E.moved === 0 && E.open === 0, `${at}: a removed dataset without a successor says its publisher removed it and in which catalog (${JSON.stringify(E)})`);
 		await pg5.close();
+		// Newcomer test 3 (2026-11-18). A link whose `d` is no "publisher/dataset" says so, as an unknown id does.
+		const pg6 = await fresh();
+		await pg6.goto(base + '#/datasets?d=garbage');
+		await pg6.getByTestId('datasets-missing').waitFor({ timeout: 30000 }).catch(() => {});
+		const garbage = (await pg6.getByTestId('datasets-missing').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim();
+		expect(garbage === 'This node holds no dataset garbage.' && (await pg6.getByTestId('datasets-row').count()) === 0 && (await pg6.getByTestId('datasets-detail').count()) === 0, `${at}: a link with a malformed dataset says no dataset has that name, and lists nothing as if it were found ("${garbage}")`);
+		// Opening a dataset adds a history entry: Back closes it and stays on the list; Forward opens it again.
+		await pg6.goto(base + '#/datasets');
+		await pg6.getByTestId('datasets-list').waitFor({ timeout: 30000 });
+		expect((await pg6.title()) === 'All datasets · Onyx', `${at}: the list's tab title`);
+		await pg6.getByTestId('datasets-open').first().click();
+		await pg6.getByTestId('datasets-sample').waitFor({ timeout: 30000 }).catch(() => {});
+		const opened = { title: await pg6.title(), hash: await pg6.evaluate(() => location.hash), units: (await pg6.getByTestId('datasets-units').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(), where: (await pg6.getByTestId('datasets-where-card').allInnerTexts()).join(' ').replace(/\s+/g, ' ').trim(), top: (await pg6.getByTestId('datasets-where').innerText()).replace(/\s+/g, ' ').trim() };
+		expect(opened.title === 'Bitcoin · Alpha · Onyx' && opened.hash === '#/datasets?d=onchain-archive%2Fbtc.alpha', `${at}: an open dataset names the tab and the address (${opened.title}, ${opened.hash})`);
+		expect(opened.units === 'Column name endings: _usd: in US dollars', `${at}: the opened card explains the unit hint its columns end in ("${opened.units}")`);
+		expect(/^Where these numbers come from\. What Onyx knows about these numbers is only what their publisher states\./.test(opened.where) && /The publisher has not published its method\. The proof shows these are the rows it signed\.$/.test(opened.where), `${at}: the opened card says where the numbers come from ("${opened.where}")`);
+		expect(opened.top.includes(`${N - 1} of ${N} datasets here come from one publisher, onchain-archive.`), `${at}: the page says how many datasets one publisher holds, from the node's catalogs ("${opened.top.slice(0, 110)}")`);
+		const py6 = await pg6.getByTestId('datasets-python').innerText();
+		expect(py6.includes('df = df.apply(pd.to_numeric, errors="coerce")') && py6.includes('pd.to_datetime(df["day"], unit="s")') && py6.split('\n').length === 7, `${at}: with only number columns the snippet converts the whole frame (${py6.split('\n').length} lines)`);
+		await pg6.goBack();
+		await pg6.waitForFunction(() => !document.querySelector('[data-testid="datasets-detail"]'), null, { timeout: 15000 }).catch(() => {});
+		const back = { hash: await pg6.evaluate(() => location.hash), open: await pg6.getByTestId('datasets-detail').count(), rows: await pg6.getByTestId('datasets-row').count(), title: await pg6.title() };
+		expect(back.hash === '#/datasets' && back.open === 0 && back.rows > 0 && back.title === 'All datasets · Onyx', `${at}: Back closes the open dataset and stays on the list (${JSON.stringify(back)})`);
+		await pg6.goForward();
+		await pg6.getByTestId('datasets-detail').waitFor({ timeout: 15000 }).catch(() => {});
+		expect((await pg6.getByTestId('datasets-detail').count()) === 1 && (await pg6.title()) === 'Bitcoin · Alpha · Onyx', `${at}: Forward opens it again`);
+		// Closed by hand, the address drops the dataset too.
+		await pg6.getByTestId('datasets-open').first().click();
+		await pg6.waitForFunction(() => !document.querySelector('[data-testid="datasets-detail"]') && location.hash === '#/datasets', null, { timeout: 15000 }).catch(() => {});
+		expect((await pg6.getByTestId('datasets-detail').count()) === 0 && (await pg6.evaluate(() => location.hash)) === '#/datasets' && (await pg6.title()) === 'All datasets · Onyx', `${at}: closing a dataset by hand clears it from the address and the tab title`);
+		await pg6.close();
 		busy = true;
 		await pg.getByTestId('datasets-q').fill('btc');
 		await pg.waitForFunction(() => /Busy/.test(document.querySelector('[data-testid="datasets"]')?.textContent ?? ''), null, { timeout: 15000 }).catch(() => {});

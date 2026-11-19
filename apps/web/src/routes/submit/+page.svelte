@@ -13,7 +13,7 @@
 	import SubmissionReceipt from '#lib/components/SubmissionReceipt.svelte';
 	import WantedData from '#lib/components/WantedData.svelte';
 	import AddWithAgents from '#lib/components/AddWithAgents.svelte';
-	import { LEVELS } from '#lib/levels.ts';
+	import { LEVELS, STATUS, STATUSES, levelMark } from '#lib/levels.ts';
 	import Downloads from '#lib/components/Downloads.svelte';
 	import Bot from '@lucide/svelte/icons/bot';
 	import { parseReceipt } from '#lib/submission-receipt.ts';
@@ -407,6 +407,15 @@
 			<li><span>I hold a dataset I may share</span><b><a href={resolve('/publish')} data-testid="decide-publish">Publish</a> (about 40 minutes of work, 20 to 40 minutes of waiting, and a review of up to 5 days)</b></li>
 			<li><span>My source needs my own API key</span><b>Use <a href={resolve('/download')} data-testid="decide-app">the Onyx app</a>: your key stays on your computer</b></li>
 		</ul>
+		<!-- Newcomer test 3 (2026-11-18): a CSV owner stopped before step 1 of Publish. What that
+		     path needs today, said before the click, and the way in without any of it. -->
+		<p class="csvnote" data-testid="csv-owner">
+			<b>I have a CSV file.</b> Publishing it yourself needs three things today: an HTTPS host you control (for your keys document, your application and a
+			sample of the data), a Linux machine for the ready-made tools (or a Rust build of them on another system), and a schema file you write by hand
+			that names every column (<a href={resolve('/publish')} data-testid="csv-owner-example">step 3 of Publish shows an example</a>). After a review of up to 5 days your key is
+			registered on the test chain; then you upload, and the node serves your rows with their proofs. Without a host or a Linux machine, describe
+			the file in the form below instead: a reviewer answers, and nothing is published by itself.
+		</p>
 		<div class="paths">
 			<div class="panel path" data-testid="path-suggest">
 				<h3 class="ptitle">Suggest a dataset</h3>
@@ -669,9 +678,10 @@
 		<div class="levelsbox">
 		<ol class="levels">
 			{#each LEVELS as l (l.level)}
-				<li data-testid="level-{l.level}"><b>Level {l.level}</b><span>{l.name}: {l.means} <span class="lmark">{l.mark}.</span></span></li>
+				<li data-testid="level-{l.level}"><b>Level {l.level}</b><span>{l.name}: {l.means} <span class="lmark">{levelMark(l)}.</span></span></li>
 			{/each}
 		</ol>
+		<p class="planned" data-testid="status-words">{#each STATUSES as k (k)}<span><b>{STATUS[k].label}:</b> {STATUS[k].means} </span>{/each}</p>
 		<p class="planned">Staking on your data being right is planned, not built.</p>
 		</div>
 	</section>
@@ -915,6 +925,16 @@
 	.levelsbox {
 		display: grid;
 		gap: var(--sp-3);
+	}
+	.csvnote {
+		max-width: 76ch;
+		margin: var(--sp-4) 0 var(--sp-5);
+		color: var(--muted);
+		font-size: var(--text-sm);
+		line-height: var(--lh-body);
+	}
+	.csvnote b {
+		color: var(--ink);
 	}
 	.levels .lmark {
 		color: var(--muted);

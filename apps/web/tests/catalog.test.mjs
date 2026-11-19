@@ -57,20 +57,51 @@ test('a value keeps its digits: only the whole part is grouped', () => {
 
 // Newcomer test 2026-11-18: the five levels read the same on Add data and How it works.
 import { readFileSync } from 'node:fs';
-import { LEVELS } from '../src/lib/levels.ts';
+import { LEVELS, PAYMENTS, STATUS, STATUSES, levelMark, planned } from '../src/lib/levels.ts';
 import * as C from '../src/lib/catalog.ts';
 
 test('one wording for the five levels, with what is built and what is planned', () => {
 	assert.deepEqual(LEVELS.map((l) => l.level), [1, 2, 3, 4, 5]);
 	assert.deepEqual(LEVELS.map((l) => l.name), [1, 2, 3, 4, 5].map((n) => C.LEVEL_NAME[n]));
-	for (const l of LEVELS) assert.ok(/\.$/.test(l.means) && /^Built/.test(l.mark), l.name);
+	for (const l of LEVELS) assert.ok(/\.$/.test(l.means) && STATUSES.includes(l.status) && l.note.length >= 10 && !/\.$/.test(l.note), l.name);
 	assert.match(LEVELS[3].means, /^A claim nobody has checked, labelled unverified\./);
-	assert.match(LEVELS[3].mark, /bond .*planned/);
+	assert.match(LEVELS[3].note, /bond .*planned/);
 	const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
 	for (const f of ['routes/submit/+page.svelte', 'routes/how-it-works/+page.svelte', 'lib/components/DataMap.svelte']) {
 		assert.match(src(f), /from '#lib\/levels\.ts'/, f);
 		assert.doesNotMatch(src(f), /Bonded claim|Submitter stakes/, f);
 	}
+});
+
+// Newcomer test 3 (2026-11-18): "Live", "Built" and "recorded" disagreed between pages. One table,
+// four words; no page writes a status word of its own.
+test('one status vocabulary: live now, recorded, planned, switched off', () => {
+	assert.deepEqual(STATUSES, ['live', 'recorded', 'planned', 'off']);
+	assert.deepEqual(STATUSES.map((s) => STATUS[s].label), ['Live now', 'Recorded', 'Planned', 'Switched off']);
+	for (const s of STATUSES) assert.match(STATUS[s].means, /\.$/, s);
+	assert.match(STATUS.live.means, /hosted test node today/);
+	assert.match(STATUS.recorded.means, /past run/);
+	// Each level's line starts with one of the four words; "Built" and a bare "Live" are gone.
+	for (const l of LEVELS) {
+		assert.ok(STATUSES.some((s) => levelMark(l).startsWith(`${STATUS[s].label}: `)), levelMark(l));
+		assert.doesNotMatch(levelMark(l), /^Built|^Live(?! now)/, l.name);
+	}
+	// What the hosted node serves today is live; what the site ships from files is recorded.
+	assert.deepEqual(LEVELS.map((l) => l.status), ['recorded', 'live', 'live', 'recorded', 'recorded']);
+	assert.match(levelMark(LEVELS[1]), /^Live now: the hosted node, one operator; .*recorded/);
+	assert.match(levelMark(LEVELS[4]), /^Recorded: one example, none scored yet$/);
+	// Payments are switched off: a price is always "Planned: …".
+	assert.equal(PAYMENTS.status, 'off');
+	assert.match(PAYMENTS.note, /switched off on the hosted test node: everything is free to read today/);
+	assert.equal(planned('0.25¢ an answer'), 'Planned: 0.25¢ an answer');
+	const src = (f) => readFileSync(new URL(`../src/${f}`, import.meta.url), 'utf8');
+	// The pages print the table's words: none of the old status texts is left in their source.
+	for (const f of ['routes/submit/+page.svelte', 'routes/how-it-works/+page.svelte', 'lib/components/DataMap.svelte']) {
+		assert.doesNotMatch(src(f), /status: 'Live'|status: 'Built|'Held back'|Built; |\{l\.mark\}/, f);
+	}
+	assert.match(src('lib/components/DataMap.svelte'), /STATUS\[it\.status\]\.label/);
+	assert.match(src('routes/run/+page.svelte'), /<h1>Recorded run<\/h1>/);
+	assert.doesNotMatch(src('routes/run/+page.svelte'), /Live run/);
 });
 
 // Newcomer test 2026-11-18: the earthquake card said 8 Jul 2026 while the hosted node serves the

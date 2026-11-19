@@ -41,6 +41,20 @@ test('a settled or void market says its own state, and nothing is due without a 
 	assert.equal(voidable({ ...closed, trading: true }, BY + 1), false);
 });
 
+// Newcomer test 3 (2026-11-18): a void card gave no reason, and the page said "Open markets"
+// while none was open.
+import { marketTally, voidReason } from '../src/lib/markets.ts';
+
+test('a void market says why, and the tally names only the states the chain gave', () => {
+	assert.equal(voidReason({ ...closed, state: 'void', value: null }), 'No value was recorded by the date, so the market was voided. Every bet can be withdrawn in full.');
+	assert.match(voidReason({ ...closed, state: 'void', value: '4051234567890123.45' }), /a range nobody had bet on, so the market was voided\. Every bet can be withdrawn in full\.$/);
+	for (const state of ['open', 'resolved']) assert.equal(voidReason({ ...closed, state }), '');
+	assert.equal(marketTally([]), '');
+	assert.equal(marketTally([{ state: 'resolved' }, { state: 'void' }]), '2 test markets read: none open for bets, 1 settled, 1 void.');
+	assert.equal(marketTally([{ state: 'open', trading: true }]), '1 test market read: 1 open for bets.');
+	assert.equal(marketTally([{ state: 'open', trading: false }, { state: 'open', trading: true }, { state: 'resolved' }]), '3 test markets read: 1 open for bets, 1 closed and waiting for a value, 1 settled.');
+});
+
 // Newcomer test 2026-11-18: the practice markets' dates roll with today (never a day that passed).
 import { practiceDay, practiceDayLabel } from '../src/lib/arena.ts';
 

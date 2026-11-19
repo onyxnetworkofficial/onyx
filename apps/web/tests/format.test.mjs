@@ -3,7 +3,7 @@
 // strips the TypeScript types of format.ts).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { dayMonth, group } from '../src/lib/format.ts';
+import { dayMonth, group, searchKey } from '../src/lib/format.ts';
 
 test('dayMonth matches toLocaleDateString en-GB day month UTC', () => {
 	const opts = { day: 'numeric', month: 'short', timeZone: 'UTC' };
@@ -16,4 +16,10 @@ test('dayMonth matches toLocaleDateString en-GB day month UTC', () => {
 test('group matches toLocaleString en-US', () => {
 	for (const n of [0, 7, 999, 1000, 846000, -1234567, 2 ** 53 - 1]) assert.equal(group(n), n.toLocaleString('en-US'));
 	assert.equal(group(123456789012345678901234567890n), (123456789012345678901234567890n).toLocaleString('en-US'));
+});
+
+// Newcomer test 3 (2026-11-18): the header showed "⌘K" on Linux and Windows.
+test('the search shortcut is printed for the reader\'s keyboard', () => {
+	for (const p of ['MacIntel', 'macOS', 'iPhone', 'iPad']) assert.equal(searchKey(p), '⌘K', p);
+	for (const p of ['Linux x86_64', 'Win32', 'Windows', 'Android', '']) assert.equal(searchKey(p), 'Ctrl K', p);
 });

@@ -132,3 +132,26 @@ export function marketStatus(m: MarketView, now: number): string {
 	if (m.trading) return 'Trading open';
 	return voidable(m, now) ? 'No value yet, can be voided' : 'Trading closed, waiting for the observed value';
 }
+
+/** Why a void futures market is void, in plain words (newcomer test 3, 2026-11-18: the card said
+ * "Void" and gave no reason). OnyxFutures voids for two reasons only: no observed value by
+ * `resolveBy`, or a value whose winning range had no bet. Empty for a market that is not void. */
+export function voidReason(m: MarketView): string {
+	if (m.state !== 'void') return '';
+	return m.value
+		? 'The observed value fell in a range nobody had bet on, so the market was voided. Every bet can be withdrawn in full.'
+		: 'No value was recorded by the date, so the market was voided. Every bet can be withdrawn in full.';
+}
+
+/** How many of the markets read from the chain are in each state, as one line ("2 test markets
+ * read: none open for bets, 1 settled, 1 void"). The heading never calls a market open by itself:
+ * the word comes from the chain's own state. Empty before a read. */
+export function marketTally(list: MarketView[]): string {
+	if (!list.length) return '';
+	const open = list.filter((m) => m.state === 'open' && m.trading).length;
+	const waiting = list.filter((m) => m.state === 'open' && !m.trading).length;
+	const settled = list.filter((m) => m.state === 'resolved').length;
+	const voided = list.filter((m) => m.state === 'void').length;
+	const parts = [open ? `${open} open for bets` : 'none open for bets', ...(waiting ? [`${waiting} closed and waiting for a value`] : []), ...(settled ? [`${settled} settled`] : []), ...(voided ? [`${voided} void`] : [])];
+	return `${list.length} test ${list.length === 1 ? 'market' : 'markets'} read: ${parts.join(', ')}.`;
+}

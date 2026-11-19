@@ -11,7 +11,7 @@
 	// the page only ever reads (NL6-23).
 	import { onMount } from 'svelte';
 	import Pill, { type PillState } from '#lib/components/Pill.svelte';
-	import { marketStatus, voidable } from '#lib/markets.ts';
+	import { marketStatus, marketTally, voidable, voidReason } from '#lib/markets.ts';
 	import { verifier, type CorrectionSide, type LiveCorrection, type LiveMarket, type LiveProduct, type MarketsLive } from '#lib/verifier.ts';
 
 	const FILE = 'markets/base-sepolia.json';
@@ -129,6 +129,8 @@
 	// The badge and the void note read the reader's clock at the read (#lib/markets.ts).
 	const status = (m: LiveMarket) => marketStatus(m, readAt);
 	const liveOf = (id: number) => live?.markets.find((m) => m.id === id) ?? null;
+	// The states the chain gave at the last read, in one line (never "open" from the page's own words).
+	const tally = $derived(live?.ok ? marketTally([...live.markets, ...(live.insurance?.markets ?? [])].filter((m) => m.ok)) : '');
 	const guardedOf = (id: number) => live?.insurance?.markets?.find((m) => m.id === id) ?? null;
 	const productOf = (id: number) => live?.insurance?.products.find((p) => p.id === id) ?? null;
 	const value = (d: string, unit: string) => (unit === '°C' ? `${d} °C` : `${d} ${unit}`);
@@ -215,6 +217,7 @@
 				<div><dt>Observed value</dt><dd class="mono" data-testid={`live-value-${tid}`}>{m.value ? `${exact(m.value, meta.unit)} (level ${m.level})` : 'Not on chain yet'}</dd></div>
 				<div><dt>Can be voided from</dt><dd class="mono">{when(m.resolveBy ?? 0)}</dd></div>
 			</dl>
+			{#if voidReason(m)}<p class="fine" data-testid={`live-void-reason-${tid}`}>{voidReason(m)}</p>{/if}
 			{#if voidable(m, readAt)}
 				<p class="fine" data-testid={`live-void-${tid}`}>
 					No observed value was on chain by that time. Anyone can now call <span class="mono">resolve</span> on the futures contract: it voids this market, and each
@@ -231,7 +234,7 @@
 <section class="live" aria-labelledby="live-title" data-testid="live-markets">
 	<div class="lhead">
 		<div>
-			<p class="eyebrow"><span class="ldot" aria-hidden="true"></span>Live on {file?.network ?? 'Base Sepolia'} · test token</p>
+			<p class="eyebrow"><span class="ldot" aria-hidden="true"></span>On {file?.network ?? 'Base Sepolia'} · test token · this page only reads</p>
 			<h2 id="live-title">Test markets and insurance on Base Sepolia</h2>
 		</div>
 		<Pill live state={pill.state} text={pill.text} />
@@ -240,6 +243,10 @@
 		These markets and insurance policies run on smart contracts on Base Sepolia, a public test network. Bets and cover are in tONYX, a test token with no value:
 		no real money is at stake. Each one settles from the value Onyx observers record on chain (level 2), never from a vote. Pools and results below come from
 		the chain itself, read by your browser.
+	</p>
+	<p class="lede" data-testid="live-who">
+		These are past test markets. Every bet and every policy so far was placed by the project's own test accounts (the operator's test keys), not by outside
+		traders. Nothing can be traded or bought from this page: it reads the chain and shows what it finds.
 	</p>
 	{#if fileError}
 		<p class="err" role="alert">{fileError}</p>
@@ -253,6 +260,7 @@
 			<label class="rpc"><span>RPC your browser asks</span><input type="url" bind:value={rpc} spellcheck="false" autocomplete="off" data-testid="live-rpc" /></label>
 			<p class="fine">The RPC's operator sees your IP address. Do not paste an RPC URL that carries an API key: the page does not store it, but the RPC sees it.</p>
 		</details>
+		{#if tally}<p class="fine" role="status" data-testid="live-tally">{tally}</p>{/if}
 		{#if readError}<p class="err" role="alert" data-testid="live-error">{readError}</p>{/if}
 		{#if live && !live.ok && live.problems.length}<p class="err" role="alert" data-testid="live-refused">{live.problems.join('; ')}</p>{/if}
 		<div class="lcards">

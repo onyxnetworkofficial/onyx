@@ -13,12 +13,18 @@
 //                            is refused (DNS rebinding); requests without Origin are allowed
 //   ONYX_MCP_TRUSTED_PROXY   the front's address (e.g. 127.0.0.1): only then is X-Forwarded-For read
 //   ONYX_MCP_ALLOW_PROPOSE=1 offer onyx_propose_dataset (a write); off by default here
+//   ONYX_MCP_PAYMENTS=1      the node takes payments: describe the paid tools as paid and offer
+//                            the ticket and credit tools. Default: off, and the server says that
+//                            everything it reads is free today (true of a node with payments off)
+// Without the onyx-check program (ONYX_CHECK_BIN, or onyx-check on PATH) there is no
+// onyx_check_answer tool, and the server says that nothing is checked here.
 import { createServer } from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { createClient, loadSpec } from './client.mjs';
-import { answerStore, buildTools, handle, limiter, PROTOCOLS } from './mcp.mjs';
+import { roundCache } from './connect.mjs';
+import { answerStore, buildTools, checkerPresent, handle, instructionsFor, limiter, paymentsOn, PROTOCOLS } from './mcp.mjs';
 
 /** Largest request body. */
 export const MAX_BODY = 256 * 1024;
@@ -84,12 +90,18 @@ export function rateLimiter({ rate = RATE, burst = BURST, now = Date.now, max = 
 }
 
 /** The HTTP server and its state. `fetch` and `now` are for tests. */
-export function createHttpServer({ env = process.env, fetch, now = Date.now } = {}) {
+export function createHttpServer({ env = process.env, fetch, now = Date.now, payments = paymentsOn(env), checker = checkerPresent(env) } = {}) {
 	const spec = loadSpec();
 	const write = env.ONYX_MCP_ALLOW_PROPOSE === '1';
 	// The raw submit tool is never offered remotely: onyx_propose_dataset checks first. Nor is any
 	// other write (uploads, the relay) or whole-file route: `hosted` (A16); src/mcp.mjs keeps them.
-	const tools = buildTools(spec, { ...env, ONYX_MCP_ALLOW_SUBMIT: '0' }, { write, hosted: true });
+	// What this server says of itself is what holds here (newcomer finding): no payment tools or
+	// "paid" wording unless the operator says its node takes payments, no onyx_check_answer unless
+	// the onyx-check program is here to run. `payments` and `checker` are for tests.
+	const tools = buildTools(spec, { ...env, ONYX_MCP_ALLOW_SUBMIT: '0' }, { write, hosted: true, payments, checker });
+	const instructions = instructionsFor({ write, hosted: true, payments, checker });
+	// One short memory of the rounds the node named, for all sessions (bounded: connect.mjs).
+	const rounds = roundCache({ now });
 	const clientOptions = { baseUrl: env.ONYX_API_URL || 'http://127.0.0.1:8080', spec, fetch, userAgent: env.ONYX_USER_AGENT || 'onyx-agent/0.1' };
 	createClient(clientOptions); // checks the base URL at start
 	const path = env.ONYX_MCP_PATH || '/mcp';
@@ -125,7 +137,7 @@ export function createHttpServer({ env = process.env, fetch, now = Date.now } = 
 		}
 		// The node counts this session's calls against its user's address (THREATS L19-R1 L1).
 		const client = createClient({ ...clientOptions, forwardedFor: addr });
-		const state = { tools, client, env, write, remote: true, answers: answerStore(), limit: (task) => own(() => limit(task)), proposals: p, seen: now() };
+		const state = { tools, client, env, write, remote: true, instructions, rounds, now, free: !payments, checker, answers: answerStore(), limit: (task) => own(() => limit(task)), proposals: p, seen: now() };
 		sessions.set(id, state);
 		return { id, state };
 	};

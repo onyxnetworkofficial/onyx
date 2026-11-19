@@ -2,8 +2,9 @@
 // Copy what the toolkit ships with into apps/agent, so it runs outside this repository (NL21):
 // openapi.json (byte for byte docs/api/openapi.json) and catalog.json (the website's dataset
 // list, apps/web/src/lib/catalog.ts, as data; with it the website's asset names,
-// apps/web/src/lib/glossary.ts, and the settled round of each observed dataset on the hosted
-// node, apps/web/static/level2/ladders-base-sepolia.json). `--check` only compares; scripts/check-openapi.py
+// apps/web/src/lib/glossary.ts, and a settled round of each observed dataset on the hosted
+// node, apps/web/static/level2/ladders-base-sepolia.json: the fallback for when the node cannot
+// be asked which round it holds, src/connect.mjs `heldRounds`). `--check` only compares; scripts/check-openapi.py
 // and the toolkit's tests fail on a stale copy.
 // Usage: node apps/agent/scripts/sync.mjs [--check]   (Node 22.18 or later: it reads a .ts file)
 import { readFileSync, writeFileSync } from 'node:fs';
@@ -16,7 +17,7 @@ export async function wanted() {
 	const { ASSETS } = await import(new URL('apps/web/src/lib/glossary.ts', root).href);
 	// Asset id -> name, for "bitcoin" -> btc and for saying which asset a dataset is of.
 	const assets = Object.fromEntries(Object.entries(ASSETS).map(([id, a]) => [id, a.name]));
-	// Metric -> the subject of its settled round on the hosted node: a call that works.
+	// Metric -> the subject of a settled round on the hosted node: the fallback (the node is asked first).
 	const subjects = nodeSubjects(JSON.parse(readFileSync(new URL('apps/web/static/level2/ladders-base-sepolia.json', root), 'utf8')));
 	const datasets = DATASETS.map((d) => {
 		const out = { id: d.id, title: d.title, what: d.what, level: d.level, source: d.source, unit: d.unit, rights: d.rights };

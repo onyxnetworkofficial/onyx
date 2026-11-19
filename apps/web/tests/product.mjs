@@ -25,7 +25,9 @@ export async function product(browser, base, root, expect) {
 		pg.on('pageerror', (e) => errors.push(String(e)));
 		// Home asks the site's node for its two dataset counts (all, and updated in the last 30
 		// days): the node is faked here; this run's server holds the built files only.
-		await pg.route('**/v1/bulk?*', (r) => r.fulfill({ json: { datasets: [], total: new URL(r.request().url()).searchParams.get('fresh') ? 6302 : 9054, next: null } }));
+		// The same answers list each publisher's catalog (the share of one publisher is read from them).
+		const catalogs = [{ publisher: 'early-record', leaves: 2, removed: 0 }, { publisher: 'onchain-archive', leaves: 9059, removed: 8 }];
+		await pg.route('**/v1/bulk?*', (r) => r.fulfill({ json: { catalogs, datasets: [], total: new URL(r.request().url()).searchParams.get('fresh') ? 6302 : 9054, next: null } }));
 		await pg.goto(base);
 		await settled(pg);
 		await pg.waitForLoadState('networkidle');
@@ -41,6 +43,9 @@ export async function product(browser, base, root, expect) {
 		const testnet = pg.getByTestId('home-testnet');
 		const testnetText = await testnet.innerText();
 		expect(/^Testnet preview\./.test(testnetText) && /test tokens have no value/.test(testnetText) && /6,302 of 9,054 datasets were updated in the last 30 days; the other 2,752 were not\./.test(testnetText.replace(/\s+/g, ' ')), `U1 ${width}: the hero says testnet, tokens without value and how many datasets are being updated, from the node's counts ("${testnetText}")`);
+		// Newcomer test 3 (2026-11-18): the hero said "many sources" while one publisher held nearly all.
+		const publishersText = (await pg.getByTestId('home-publishers').innerText()).replace(/\s+/g, ' ').trim();
+		expect(/built to hold data from many publishers/.test(what) && publishersText === 'Today 9,051 of 9,054 datasets come from one publisher, onchain-archive. Onyx does not check its numbers: each dataset says where they come from.', `U1 ${width}: the hero says how many datasets come from one publisher, from the node's catalogs ("${publishersText}")`);
 		const proofText = (await pg.getByTestId('home-proof').innerText()).replace(/\s+/g, ' ').trim();
 		expect(proofText === 'The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.', `U1 ${width}: the hero says what a proof shows and what it does not ("${proofText}")`);
 		const assistantText = await pg.getByTestId('users-assistant').innerText();

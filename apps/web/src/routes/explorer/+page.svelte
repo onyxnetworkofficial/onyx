@@ -267,7 +267,7 @@
 				<li class="step">
 					<span class="rail {headerPill.state}"><Activity size={18} /></span>
 					<div class="panel">
-						<div class="sh"><h2>Live blocks</h2><Pill live state={headerPill.state} text={headerPill.text} /></div>
+						<div class="sh"><h2>Recorded blocks</h2><Pill live state={headerPill.state} text={headerPill.text} /></div>
 						<Marquee items={demo.live.blocks} states={headerState} />
 						<div class="row"><button type="button" onclick={checkHeaders} disabled={headerPill.state === 'run'}>Check all headers</button></div>
 						{#if liveRows.some((r) => r.tx_count > 0)}

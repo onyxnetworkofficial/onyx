@@ -6,7 +6,7 @@
 	import Bot from '@lucide/svelte/icons/bot';
 	import OnyxSlab from '#lib/components/OnyxSlab.svelte';
 	import { onMount } from 'svelte';
-	import { STALE_DAYS, countUrl, freshCountUrl, freshCounts, page as readPage } from '#lib/datasets.ts';
+	import { STALE_DAYS, countUrl, freshCountUrl, freshCounts, mainPublisher, page as readPage, publisherCounts } from '#lib/datasets.ts';
 	import { group } from '#lib/format.ts';
 
 	// How many datasets the node holds and how many have data from the last STALE_DAYS days: the
@@ -14,13 +14,20 @@
 	let all = $state<number | null>(null);
 	let fresh = $state<number | null>(null);
 	const counts = $derived(freshCounts(all, fresh));
+	// Newcomer test 3 (2026-11-18): the page said "many sources" while one publisher held nearly
+	// every dataset. The same count answer lists each publisher's catalog, so the share is the
+	// node's own; without it the text names no number.
+	let publishers = $state.raw<{ publisher: string; datasets: number }[]>([]);
+	const main = $derived(mainPublisher(publishers, all));
 	onMount(() => {
 		const one = (url: string) =>
 			fetch(url, { headers: { accept: 'application/json' } })
 				.then((r) => (r.ok && (r.headers.get('content-type') ?? '').includes('json') ? r.json() : null))
-				.then((v) => readPage(v)?.total || null)
 				.catch(() => null);
-		void Promise.all([one(countUrl()), one(freshCountUrl())]).then(([a, f]) => ([all, fresh] = [a, f]));
+		void Promise.all([one(countUrl()), one(freshCountUrl())]).then(([a, f]) => {
+			[all, fresh] = [readPage(a)?.total || null, readPage(f)?.total || null];
+			publishers = publisherCounts(a);
+		});
 	});
 	const many = $derived(counts ? group(counts.all) : 'about 9,000');
 </script>
@@ -35,7 +42,7 @@
 		<div class="intro">
 			<p class="eyebrow">Open data network · testnet</p>
 			<h1>Data anyone<br />can check.</h1>
-			<p class="lede" data-testid="home-what">Onyx is one place for data from many sources. Every answer comes with a proof you can verify yourself. Today you can browse {many} datasets, get them by API, or connect an AI assistant.</p>
+			<p class="lede" data-testid="home-what">Onyx is a network built to hold data from many publishers. Every answer comes with a proof you can verify yourself. Today you can browse {many} datasets, get them by API, or connect an AI assistant.</p>
 			<div class="actions">
 				<a class="btn" href={resolve('/datasets')} data-testid="home-primary">Browse datasets <ArrowRight size={18} /></a>
 				<a class="btn ghost" href={resolve('/submit')} data-testid="home-secondary">Add your data <ArrowRight size={18} /></a>
@@ -43,6 +50,10 @@
 			<p class="preview-note" data-testid="home-testnet">
 				Testnet preview. Reading is free, and test tokens have no value.
 				{#if counts}<span data-testid="home-freshness">{group(counts.fresh)} of {group(counts.all)} datasets were updated in the last {STALE_DAYS} days{counts.stale ? `; the other ${group(counts.stale)} were not` : ''}.</span> Each one shows its newest day.{:else}Some datasets are not being updated right now: each one shows its newest day.{/if}
+			</p>
+			<p class="preview-note proof-note" data-testid="home-publishers">
+				{#if main}Today {group(main.datasets)} of {group(main.total)} datasets come from one publisher, <span class="mono">{main.publisher}</span>.{:else}Today almost all datasets come from one publisher.{/if}
+				Onyx does not check its numbers: <a href={resolve('/datasets')}>each dataset says where they come from</a>.
 			</p>
 			<p class="preview-note proof-note" data-testid="home-proof">The proof shows these are exactly the rows the publisher signed and anchored on the test chain. It does not show that the numbers are right.</p>
 		</div>
@@ -73,8 +84,8 @@
 		<a class="btn ghost" href={resolve('/how-it-works')} data-testid="home-technical">How it works <ArrowRight size={18} /></a>
 	</section>
 	<section class="market-preview" aria-labelledby="market-preview-title">
-		<div><p class="eyebrow">Live on the test network</p><h2 id="market-preview-title">Markets that settle on observed data.</h2><p>Test markets on the U.S. Treasury’s debt that settle from the value Onyx observers recorded. Plus test insurance that pays on the weather and earthquakes. Markets use tONYX test tokens. No real money.</p></div>
-		<a class="btn ghost" href={resolve('/markets')} data-testid="home-markets">Open markets <ArrowRight size={18} /></a>
+		<div><p class="eyebrow">Past test markets · test network</p><h2 id="market-preview-title">Markets that settle on observed data.</h2><p>Test markets on the U.S. Treasury’s debt that settle from the value Onyx observers recorded, and test insurance on the weather and earthquakes. The bets were placed by the project’s own test accounts in tONYX, a test token. No real money. The page reads them from the chain; nothing is traded there.</p></div>
+		<a class="btn ghost" href={resolve('/markets')} data-testid="home-markets">See the test markets <ArrowRight size={18} /></a>
 	</section>
 </div>
 

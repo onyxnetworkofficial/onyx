@@ -69,10 +69,10 @@
 	}
 </script>
 
-<svelte:head><title>Markets · Onyx</title><meta name="description" content="Data markets: trade on what a public source will report, settled by Onyx observers. Practice credits on this preview." /></svelte:head>
+<svelte:head><title>Markets · Onyx</title><meta name="description" content="Data markets on what a public source will report, settled by Onyx observers. Past test markets read from the test chain, and practice markets with simulated credits. No real money." /></svelte:head>
 <Confetti fire={arena.celebrate} />
 
-<OnyxSlab><h1>Call the next number.</h1><div class="slabside" data-testid="slabside"><p class="eyebrow">Data markets</p><p class="slablede">Trade on what a public source will report: debt, blocks, gas, filings, prices, weather. Every market settles on a value that Onyx observers fetch and agree on.</p><p class="practice" data-testid="arena-practice"><span class="dot" aria-hidden="true"></span>Test network only: live markets use tONYX test tokens, practice markets use simulated credits. No real money.</p></div></OnyxSlab>
+<OnyxSlab><h1>Call the next number.</h1><div class="slabside" data-testid="slabside"><p class="eyebrow">Data markets</p><p class="slablede">Markets on what a public source will report: debt, blocks, gas, filings, prices, weather. Every market settles on a value that Onyx observers fetch and agree on. This page reads the past test markets from the chain; the practice markets below it are simulated.</p><p class="practice" data-testid="arena-practice"><span class="dot" aria-hidden="true"></span>Test network only: the test markets use tONYX test tokens, the practice markets use simulated credits. No real money, and nothing is traded from this page.</p></div></OnyxSlab>
 <div class="wrap arena" data-testid="arena">
 	<!-- MP3: the real markets on the test network come first; the practice game follows. Kept mounted
 	     (hidden) while a practice market is open, so a read is not lost. -->
@@ -80,7 +80,7 @@
 	<div class="practice-intro" data-testid="practice-intro">
 		<p class="eyebrow">Practice · simulated in your browser</p>
 		<h2>Practice markets</h2>
-		<p>Try trading with practice credits. Prices, volume and other traders are simulated on this page; nothing here touches a chain.</p>
+		<p>Try a market with practice credits. Prices, volume and other traders are simulated on this page; nothing here touches a chain.</p>
 	</div>
 	<div class="player panel" aria-label="Your practice account" data-testid="arena-player">
 		<div class="acct"><span>Balance</span><b class="mono" data-testid="arena-balance">{fmt(arena.balance)}</b></div>
@@ -117,9 +117,9 @@
 		<h2 class="sr" id="all-markets">All markets</h2>
 		<p class="eyebrow practice-head" data-testid="arena-practice-head">Practice markets · simulated in your browser</p>
 		<div class="overview" aria-label="Market overview" data-testid="arena-overview">
-			<div><span>Open markets</span><b class="mono">{openCount}</b></div>
-			<div><span>Volume</span><b class="mono">{short(volume)}</b></div>
-			<div><span>Traders</span><b class="mono">{traders.toLocaleString('en-US')}</b></div>
+			<div><span>Open practice markets</span><b class="mono">{openCount}</b></div>
+			<div><span>Simulated volume</span><b class="mono">{short(volume)}</b></div>
+			<div><span>Simulated traders</span><b class="mono">{traders.toLocaleString('en-US')}</b></div>
 			<div><span>Your rank</span><b class="mono">{traded ? `#${rank}` : 'Unranked'}</b></div>
 		</div>
 		<div class="filters">

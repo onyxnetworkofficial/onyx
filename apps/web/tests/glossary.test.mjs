@@ -3,6 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { ASSETS, MEANINGS, WORDS, anyGroups, anyValue, datasetTitle, meanings, metricTitle, split } from '../src/lib/glossary.ts';
+import * as G from '../src/lib/glossary.ts';
 
 test('titles read as plain English; unknown abbreviations stay as written', () => {
 	const cases = {
@@ -55,4 +56,70 @@ test('meaning search: names, kinds and meanings become id words the node takes',
 	assert.ok(terms.length <= 200);
 	for (const t of terms) assert.match(t, /^[a-z0-9]+(-[a-z0-9]+)*\*?$/, t);
 	assert.equal(anyValue([['a*', 'b'], ['c*']]), 'a*,b;c*');
+});
+
+// Newcomer test 3 (2026-11-18): "eth.gas-analytics" was titled and explained as gas, and holds no
+// gas column (checked against the live columns of every chain's copy).
+test('a metric whose id would mislead is titled and explained by what its columns are', () => {
+	assert.equal(G.datasetTitle('eth.gas-analytics'), 'Ethereum · Network activity');
+	assert.equal(G.datasetTitle('bnb.gas-analytics'), 'BNB · Network activity');
+	const [m] = G.meanings(G.split('eth.gas-analytics').words);
+	assert.match(m, /^Network activity by day: active addresses, transactions/);
+	assert.match(m, /coins burned/);
+	assert.match(m, /no gas column/);
+	assert.equal(G.meanings(G.split('eth.gas-analytics').words).length, 1);
+	// A metric that is about gas keeps the plain meaning and its own words.
+	assert.equal(G.datasetTitle('hype.gas-used-today'), 'Hyperliquid · Gas used today');
+	assert.match(G.meanings(['gas', 'used', 'today'])[0], /^Gas: what transactions pay/);
+	// btc.gini holds percentiles, not one coefficient.
+	assert.match(G.meanings(['gini'])[0], /percentiles \(p25 to p95\), not one coefficient/);
+	assert.match(G.meanings(['gini', 'volatility'])[0], /^Gini coefficient/);
+	// Worded so they hold for every dataset they are shown on.
+	assert.match(G.MEANINGS['hodl-waves'], /supply split into age bands/);
+	assert.match(G.MEANINGS.exchange, /addresses the publisher labels as exchanges/);
+});
+
+test('the unit legend explains the endings the columns carry, and only those', () => {
+	assert.deepEqual(G.unitLegend(['day', 'price_usd', 'transfer_volume_native', 'daily_tx_count', 'supply_in_profit_pct']), [
+		'_usd: in US dollars',
+		'_native: in the asset’s own coin or token, not in dollars',
+		'_count: a count (a whole number)',
+		'_pct: a percentage (50 means 50%)'
+	]);
+	assert.deepEqual(G.unitLegend(['day', 'liveliness_percent']), ['_pct: a percentage (50 means 50%)']);
+	assert.deepEqual(G.unitLegend(['day', 'mvrv', 'usd_price', 'count_x']), []);
+	assert.deepEqual(G.unitLegend([]), []);
+});
+
+// Newcomer test 3 (2026-11-18): "bitcon" and "etherium gas price" found nothing and offered nothing.
+test('did you mean: the nearest known word, by edit distance on the site\'s own names', () => {
+	assert.equal(G.editDistance('bitcon', 'bitcoin'), 1);
+	assert.equal(G.editDistance('etherium', 'ethereum'), 1);
+	assert.equal(G.editDistance('hodlers', 'holders'), 1, 'two neighbours swapped is one edit');
+	assert.equal(G.editDistance('abc', 'abc'), 0);
+	assert.equal(G.editDistance('abcdef', 'uvwxyz'), 3, 'stops counting above the cap');
+	assert.equal(G.nearestWord('bitcon'), 'bitcoin');
+	assert.equal(G.nearestWord('etherium'), 'ethereum');
+	assert.equal(G.nearestWord('solona'), 'solana');
+	assert.equal(G.nearestWord('suply'), 'supply');
+	// A known word, a word start (the node matches starts), a short word and a duration stay.
+	for (const w of ['bitcoin', 'bitc', 'mvrv', 'btc', 'eth', '30d', '2024', 'price']) assert.equal(G.nearestWord(w), w, w);
+	assert.equal(G.nearestWord('zzzzqq'), null);
+	assert.ok(G.KNOWN_WORDS.includes('bitcoin') && G.KNOWN_WORDS.includes('mvrv') && G.KNOWN_WORDS.includes('supply') && new Set(G.KNOWN_WORDS).size === G.KNOWN_WORDS.length);
+	for (const w of G.KNOWN_WORDS) assert.match(w, /^[a-z0-9]{3,}$/, w);
+});
+
+test('did you mean: the corrected search first, then with words dropped from the end', () => {
+	assert.deepEqual(G.suggestSearches('bitcon'), ['bitcoin']);
+	assert.deepEqual(G.suggestSearches('etherium gas price'), ['ethereum gas price', 'ethereum gas', 'ethereum']);
+	assert.deepEqual(G.suggestSearches('Ethereum Gas Price'), ['ethereum gas', 'ethereum']);
+	assert.deepEqual(G.suggestSearches('btc suply'), ['btc supply', 'btc']);
+	// Nothing to offer: one known word, an unknown word, nothing typed.
+	for (const q of ['mvrv', 'bitcoin', 'zzzzqq', '', '   ']) assert.deepEqual(G.suggestSearches(q), [], q);
+	// An unknown word is dropped, the rest kept; never more than 4, never the typed search.
+	assert.deepEqual(G.suggestSearches('bitcoin zzzzqq'), ['bitcoin']);
+	const many = G.suggestSearches('bitcoin holders supply price market cap ratio');
+	assert.ok(many.length === 4 && !many.includes('bitcoin holders supply price market cap ratio'));
+	// Every suggestion is a search the node takes.
+	for (const q of [...many, ...G.suggestSearches('etherium gas price')]) assert.match(q, /^[a-z0-9]+( [a-z0-9]+)*$/, q);
 });

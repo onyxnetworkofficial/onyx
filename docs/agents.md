@@ -20,10 +20,23 @@ Connectors, Add custom connector), Cursor (`{"mcpServers": {"onyx": {"url": "…
 `.vscode/mcp.json`) and Gemini CLI (`"httpUrl"` in `~/.gemini/settings.json`; its `url` means SSE).
 The website's Add data page shows each one. The hosted server
 finds and reads data and proposes missing datasets (`onyx_propose_dataset`, section 4; on since the
-2026-10-29 release). It offers the read tools only (about 30): the tools that upload, relay a
-transaction or hand out whole stored files are in the local toolkit, not here. It has no `onyx-check` program, so `onyx_check_answer` there says
-`not_checked`; check values yourself (section 3). The website's Add data page shows these steps
-under "Add data with AI or the API".
+2026-10-29 release). It offers the read tools only (about 25): the tools that upload, relay a
+transaction or hand out whole stored files are in the local toolkit, not here.
+
+The hosted server describes itself as it is. Its `initialize` instructions say: start with
+`onyx_find_dataset`; everything it reads is free today; nothing is checked by the server; propose
+only after the user agrees. In detail:
+
+- Payments are switched off on the hosted node, so no tool there asks for a payment: the ticket
+  and credit tools and the payment headers are left out, and no tool is described as paid.
+- It has no `onyx-check` program, so it has no `onyx_check_answer` tool. Every row and value is
+  the node's word until you check it on your own machine (section 3), with the command the tools
+  return, for example `onyx-check --bulk rows.json --publisher <publisher> --dataset <dataset>
+  --rpc <your Base Sepolia node> --chain-id 84532 --book <the book address you trust>`.
+- A server run for a node that takes payments (`ONYX_MCP_PAYMENTS=1`) or with the `onyx-check`
+  program installed lists those tools again; the local toolkit always has the full list.
+
+The website's Add data page shows these steps under "Add data with AI or the API".
 
 **Local (works today):** Node 20 or later and this folder `apps/agent`, nothing else. No Rust
 build and no repository clone beyond that folder.
@@ -54,14 +67,25 @@ It gets each match with its proof level (what the level means), the newest date 
 it, or `"found": false` and how to propose it. The list is the website's own dataset list,
 shipped with the toolkit; the newest dates come from the node's website files.
 
+Every word asked must be the dataset's own (words such as "history" or "latest" aside). A
+question that names a place, an asset or anything else the datasets do not have is not found:
+`"found": false`, the near datasets under `similar` instead of `matches`, and one sentence in
+`similarNote`, for example "Onyx has daily high temperature for Denver and New York, not for
+Paris." Never report a `similar` dataset as the data asked for.
+
 A value that observers read from a public source (earthquakes, temperatures, Treasury numbers) is
 asked for by its `subject`: the source's series name, a colon and the day, for example
 `usgs.earthquakes.m5_world:2026-07-19`. Only days a round settled are served. So each such match
-has `example`: a call that works on the hosted node, as the tool call (`onyx_get_observation` with
-its `metric` and `subject`) and as the HTTP request. The subjects are the settled rounds the
-website ships (`level2/ladders-base-sepolia.json`), copied into the toolkit. A match the hosted
-node holds no round of has `"readable": false` and says so in `access`. Asked without a subject,
-the node answers 400 and names one it holds; asked for a day without a round, its 404 does too.
+has `example`: a call that works, as the tool call (`onyx_get_observation` with its `metric` and
+`subject`) and as the HTTP request. The subject is asked of the node at answer time: asked
+without a subject (`GET /v1/observations/{metric}`), the node answers 400 and names the newest
+round it holds, and the connector reads that (one request per match, at most 5 a question, each
+answer used again for 5 minutes). `exampleFrom` is `node` then. When the node cannot be asked,
+the round is the one shipped with the toolkit (the website's `level2/ladders-base-sepolia.json`)
+and `exampleFrom` is `shipped`. `dataAsOf` is the day of the round `example` reads. A match has
+`"readable": false`, and says so in `access`, only when the node itself said it holds no round
+of that dataset; when nothing is known the field is left out. Asked for a day without a round,
+the node's 404 names one it holds too.
 
 The same call also searches the bulk datasets publishers upload (`GET /v1/bulk?q=`), for example
 `{ "query": "bitcoin mvrv" }`. Their ids start with the asset's short name (`btc.mvrv`), so the
@@ -83,14 +107,20 @@ one asked for. `GET /v1/bulk?q=` on the node takes the same names and lists in t
 `onyx_get_bulk_rows` says the same under `freshness`. Tell your user before using a stale one.
 A dataset whose newest key is dated in the future has `newestInFuture`: `true` instead: its newest
 day is not known, and it is never counted as fresh. All of this is the node's word, not checked.
-When no id holds every word, the answer drops one word, says which, and does not call that found.
+A bulk dataset that holds every word is found (`"found": true`), also when it is stale: the answer
+says it is stale, never that it is missing. Words that name no dataset ("history", "latest",
+"daily" and the like) are passed over when no id holds them, and `bulk.ignored` lists them:
+"bitcoin price history" finds `btc.price`. When no id holds every other word, the answer drops
+one word, says which, and does not call that found; it lists what holds the rest and does not
+say "not on Onyx".
 
 ## 3. Read and check a value
 
 - Free public values (earthquakes, Denver temperature, U.S. debt): `onyx_get_observation`.
-- Paid rows: `onyx_get_metric`, `onyx_get_proof`, `onyx_get_export`, `onyx_get_settlement`. A
-  paid answer first returns a 402 offer. Pay only `offerCheck.pay`, and only when
-  `offerCheck.ok` is true, with your own wallet (README of `apps/agent`).
+- Paid rows: `onyx_get_metric`, `onyx_get_proof`, `onyx_get_export`, `onyx_get_settlement`. On a
+  node that takes payments a paid answer first returns a 402 offer. Pay only `offerCheck.pay`,
+  and only when `offerCheck.ok` is true, with your own wallet (README of `apps/agent`). The
+  hosted node takes no payments today: there these answer without an offer.
 - Bulk datasets (free): `onyx_get_bulk_rows` with `publisher` and `dataset`. It returns 10 rows
   by default, oldest first; `"order": "desc"` asks for a newest-first page. A row's key is a
   whole number. When the answer's `key.unit` is `unix_seconds` (a key column named as a time
@@ -102,9 +132,10 @@ When no id holds every word, the answer drops one word, says which, and does not
   `"checked": false`, which `onyx-check --bulk` checks on your own machine (section 6). The
   suggested check command is built from your own arguments, never from the node's answer.
   `"columns": ["mvrv"]` keeps only the columns you name.
-- Check a row answer with `onyx_check_answer`. Only `outcome: "verified"` is verified. Without the
-  `onyx-check` program (`cargo build --release -p onyx-check`) the outcome is `not_checked`:
-  nothing was checked, so do not rely on the answer.
+- Check a row answer with `onyx_check_answer` (the local toolkit). Only `outcome: "verified"` is
+  verified. Without the `onyx-check` program (`cargo build --release -p onyx-check`) the outcome
+  is `not_checked`: nothing was checked, so do not rely on the answer. The hosted server has no
+  such tool: check on your own machine with `onyx-check`.
 
 ## 4. Propose a missing dataset
 

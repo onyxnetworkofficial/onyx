@@ -357,7 +357,8 @@ test('MCP: a lying node cannot put text into the suggested check command (review
 
 test('MCP: a hosted server leaves out writes and whole-file routes; the local one keeps them (A16)', () => {
 	const local = buildTools(spec, {});
-	const hosted = buildTools(spec, {}, { write: false, hosted: true });
+	// With the checker there and the node taking payments; test/connect.test.mjs has the other hosted mode.
+	const hosted = buildTools(spec, {}, { write: false, hosted: true, payments: true, checker: true });
 	const gone = ['onyx_post_bulk_manifest', 'onyx_post_bulk_catalog', 'onyx_post_relay', 'onyx_post_want', 'onyx_check_submission', 'onyx_get_bulk_shard', 'onyx_get_bulk_manifest', 'onyx_get_bulk_catalog', 'onyx_get_bulk_catalog_files', 'onyx_get_bulk_catalog_leaf', 'onyx_get_open_api', 'onyx_propose_dataset', 'onyx_submit_proposal'];
 	for (const n of gone) assert.equal(hosted.has(n), false, n);
 	for (const n of gone.filter((n) => n !== 'onyx_submit_proposal')) assert.equal(local.has(n), true, n);

@@ -14,9 +14,12 @@
 //                         402 offer is then checked against them on ONYX_CHECK_RPC
 //   ONYX_CHECK_BIN        path to onyx-check (default: on PATH)
 //   ONYX_MCP_ALLOW_SUBMIT=1 add the raw onyx_submit_proposal tool (a write)
+//   ONYX_MCP_PAYMENTS=1   only for the HTTP server (src/http.mjs): its node takes payments, so the
+//                         paid tools are described as paid (default there: everything is free)
 //   ONYX_MCP_READ_ONLY=1  leave out onyx_propose_dataset (agent connect, NL21: on by default here,
 //                         off by default on the remote server, src/http.mjs)
-import { realpathSync } from 'node:fs';
+import { accessSync, constants, realpathSync } from 'node:fs';
+import { delimiter, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { createClient, loadSpec, operations } from './client.mjs';
 import { checkAnswer, checkOffer, nodeFromEnv, payFromEnv } from './check.mjs';
@@ -37,6 +40,53 @@ export const INSTRUCTIONS =
 /** The same without proposals, for a server that does not offer onyx_propose_dataset (NL15 review). */
 export const INSTRUCTIONS_READ_ONLY =
 	'Onyx serves data with a receipt. Start with onyx_find_dataset ("does Onyx have X?"); this server is read-only, so data Onyx lacks is proposed elsewhere (the answer says where). Ask with the onyx_get_* tools, then check row answers with onyx_check_answer (by answerId). Paid answers return a 402 offer first: pay only offerCheck.pay when offerCheck.ok is true.';
+/** The check command the bulk rows tool returns, as a shape (the values come from the caller's own question). */
+export const CHECK_SHAPE = 'onyx-check --bulk rows.json --publisher <publisher> --dataset <dataset> --rpc <their own Base Sepolia node> --chain-id 84532 --book <the book address they trust, from docs/agents.md>';
+
+/**
+ * What a server tells an assistant about itself at `initialize`. A local server (`hosted` false)
+ * says what it always said. A hosted one says what holds there: with payments off everything it
+ * reads is free and no tool asks for a payment; without the onyx-check program it checks nothing,
+ * and the user checks on their own machine (newcomer finding: the hosted server told assistants
+ * to check with a tool that could not check, and to pay offers its node never makes).
+ */
+export function instructionsFor({ write = true, hosted = false, payments = true, checker = true } = {}) {
+	if (!hosted) return write ? INSTRUCTIONS : INSTRUCTIONS_READ_ONLY;
+	const start = 'Onyx serves data with a receipt. Start with onyx_find_dataset ("does Onyx have X?"): it says what Onyx has, how fresh it is and the exact call that reads it; datasets it lists as `similar` are not the data asked for.';
+	const pay = payments
+		? 'Paid answers return a 402 offer first: this server holds no wallet and pays for nothing; pay only offerCheck.pay, and only when offerCheck.ok is true.'
+		: 'Everything this server reads is free today: payments are switched off on its node, so no tool here asks for a payment or a wallet.';
+	const check = checker
+		? `onyx_check_answer runs the check on this server, not on your user's machine: before anything depends on an answer, your user checks it on their own machine with onyx-check, in the shape the tools return (${CHECK_SHAPE}).`
+		: `Nothing is checked by this server: every row and value is the node's word, so call it "not checked" until your user checks it on their own machine with onyx-check, in the shape the tools return (${CHECK_SHAPE}).`;
+	const propose = write
+		? 'If Onyx lacks the data, propose it with onyx_propose_dataset only after your user agrees: call it without confirm first (the node checks it and records nothing), then with confirm: true.'
+		: 'This server takes no proposals: data Onyx lacks is proposed elsewhere (the find answer says where), and only after your user agrees.';
+	return `${start} ${pay} ${check} ${propose}`;
+}
+
+/** Whether the onyx-check program is there to run: ONYX_CHECK_BIN, or `onyx-check` on PATH. */
+export function checkerPresent(env = process.env) {
+	const bin = env.ONYX_CHECK_BIN || 'onyx-check';
+	const at = bin.includes('/') ? [bin] : (env.PATH ?? '').split(delimiter).filter(Boolean).map((d) => join(d, bin));
+	return at.some((f) => {
+		try {
+			accessSync(f, constants.X_OK);
+			return true;
+		} catch {
+			return false;
+		}
+	});
+}
+
+/** Whether the operator says the node takes payments: ONYX_MCP_PAYMENTS=1, or the ONYX_PAY_* settings. */
+export const paymentsOn = (env = process.env) => env.ONYX_MCP_PAYMENTS === '1' || !!(env.ONYX_PAY_MANIFEST || env.ONYX_PAY_MAX_AMOUNT);
+
+/** Tools about paying only (tickets, prepaid credits): left out of a hosted server whose node takes no payments. */
+export const PAYMENT_ONLY = new Set(['getTicket', 'getCreditsSchedule', 'getCreditsAccount', 'getCreditLines']);
+/** Request headers that pay or prove an account: not offered where nothing is paid. */
+export const PAYMENT_HEADERS = new Set(['PAYMENT-SIGNATURE', 'ONYX-PREPAID-VOUCHER', 'ONYX-CONTRIBUTOR', 'ONYX-ACCOUNT-PROOF']);
+
 /** Rows of onyx_get_bulk_rows when `limit` is not given (the node's own default is 100). */
 export const BULK_ROWS_DEFAULT = 10;
 /**
@@ -59,17 +109,25 @@ function schemaOf(p) {
 
 /**
  * The tool list for `spec`, and how to run each tool. `write` adds onyx_propose_dataset;
- * `hosted` leaves out the tools a shared server does not offer ([`hiddenWhenHosted`]).
+ * `hosted` leaves out the tools a shared server does not offer ([`hiddenWhenHosted`]). A hosted
+ * server also describes itself as it is: with `payments` false (its node takes none: the default
+ * there, see [`paymentsOn`]) the payment-only tools and the payment headers are left out and no
+ * tool is called paid; with `checker` false (no onyx-check program: [`checkerPresent`]) there is
+ * no onyx_check_answer. A local server always has the full list.
  */
-export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_ONLY !== '1', hosted = false } = {}) {
+export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_ONLY !== '1', hosted = false, payments = !hosted || paymentsOn(env), checker = !hosted || checkerPresent(env) } = {}) {
 	const tools = new Map();
+	const free = hosted && !payments;
+	const self = hosted && !checker;
 	for (const def of connectTools({ write })) tools.set(def.name, { def, connect: true });
 	for (const op of operations(spec)) {
 		if (op.id === 'submitProposal' && env.ONYX_MCP_ALLOW_SUBMIT !== '1') continue;
 		if (hosted && hiddenWhenHosted(op)) continue;
+		if (free && PAYMENT_ONLY.has(op.id)) continue;
 		const properties = {};
 		const required = [];
 		for (const p of op.parameters) {
+			if (free && p.in === 'header' && PAYMENT_HEADERS.has(p.name)) continue;
 			properties[p.name] = schemaOf(p);
 			if (p.required) required.push(p.name);
 		}
@@ -80,8 +138,10 @@ export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_
 		const paid = op.paid
 			? ' Paid per answer (x402): a 402 result holds the offer in paymentRequired and, when the operator set a deployment manifest, offerCheck. Pay only offerCheck.pay, and only when offerCheck.ok is true; then call again with PAYMENT-SIGNATURE from your own wallet (or a prepaid ONYX-PREPAID-VOUCHER).'
 			: '';
-		const check = ROW_OPS[op.id] ? ' The result has an answerId: check it with onyx_check_answer before you rely on it.' : '';
-		let description = `${op.method} ${op.path}: ${op.summary}. ${op.description}${paid}${check}`.trim();
+		// Said last, so it stands against anything the API's own text says of prices above it.
+		const today = op.paid && free ? ' On this server today: free. Payments are switched off on its node, so it answers without a 402 offer and takes no payment header.' : '';
+		const check = !ROW_OPS[op.id] ? '' : self ? ' This server checks nothing: check the answer with onyx-check on your own machine before you rely on it (docs/agents.md).' : ' The result has an answerId: check it with onyx_check_answer before you rely on it.';
+		let description = `${op.method} ${op.path}: ${op.summary}. ${op.description}${free ? '' : paid}${today}${check}`.trim();
 		if (op.id === 'getBulkRows') {
 			// Sized for an agent (A16): few rows, values without the proof bytes, unless asked.
 			properties.limit = { ...properties.limit, description: `Rows per page, 1..=1000. Default here: ${BULK_ROWS_DEFAULT}.` };
@@ -100,6 +160,7 @@ export function buildTools(spec, env = process.env, { write = env.ONYX_MCP_READ_
 			op,
 		});
 	}
+	if (self) return tools;
 	tools.set('onyx_check_answer', {
 		def: {
 			name: 'onyx_check_answer',
@@ -176,7 +237,7 @@ export async function runTool(state, name, args = {}) {
 		if (t.op.id === 'getBulkRows') return text(...(await bulkRows(client, args, state.now)));
 		const r = await client.call(t.op.id, args);
 		const out = { note: DATA_NOTE, status: r.status, headers: r.headers };
-		if (r.status === 200 && ROW_OPS[t.op.id]) out.answerId = answers.put(r.body);
+		if (r.status === 200 && ROW_OPS[t.op.id] && tools.has('onyx_check_answer')) out.answerId = answers.put(r.body);
 		const shown = JSON.stringify(r.body ?? null);
 		if (shown.length <= SHOW_BODY) out.body = r.body;
 		else Object.assign(out, { bodyOmitted: true, bodyBytes: shown.length });
@@ -345,7 +406,7 @@ export async function handle(state, msg) {
 				capabilities: { tools: { listChanged: false } },
 				// Another server built on this plumbing (apps/contrib) names itself and its tools.
 				serverInfo: state.serverInfo ?? { name: 'onyx', title: 'Onyx data', version: '0.1.0' },
-				instructions: state.instructions ?? (state.write ? INSTRUCTIONS : INSTRUCTIONS_READ_ONLY),
+				instructions: state.instructions ?? instructionsFor({ write: !!state.write }),
 			});
 		}
 		case 'ping':

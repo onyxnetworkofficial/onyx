@@ -11,9 +11,10 @@
 	<h1>No page here</h1>
 	<p class="lede">The link may be old. Every page that exists is one click away.</p>
 	<div class="row links">
-		<a class="btn" href={resolve('/')}>Home</a>
-		<a class="btn ghost" href={resolve('/explorer')}>Shard explorer</a>
-		<a class="btn ghost" href={resolve('/labels')}>Address labels</a>
+		<!-- Newcomer test 3 (2026-11-18): the two places a reader most likely wanted come first. -->
+		<a class="btn" href={resolve('/data')} data-testid="notfound-data">Browse data</a>
+		<a class="btn ghost" href={resolve('/datasets')} data-testid="notfound-datasets">All datasets</a>
+		<a class="btn ghost" href={resolve('/')}>Home</a>
 		<a class="btn ghost" href={resolve('/api')}>Query API</a>
 	</div>
 </OnyxSlab>

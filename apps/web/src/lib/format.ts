@@ -26,3 +26,8 @@ const DAY = new Intl.DateTimeFormat('en-GB', { day: 'numeric', month: 'short', t
 /** Unix seconds as "4 Oct" in UTC; same text as
  *  `toLocaleDateString('en-GB', { day: 'numeric', month: 'short', timeZone: 'UTC' })`. */
 export const dayMonth = (t: number): string => DAY.format(new Date(t * 1000));
+
+/** The search shortcut as the reader's keyboard prints it: "⌘K" on Apple machines, "Ctrl K"
+ * elsewhere (newcomer test 3, 2026-11-18: "⌘K" was shown on Linux and Windows). `platform` is
+ * `navigator.platform` (or the user-agent data's platform). */
+export const searchKey = (platform: string): string => (/mac|iphone|ipad|ipod/i.test(platform) ? '⌘K' : 'Ctrl K');

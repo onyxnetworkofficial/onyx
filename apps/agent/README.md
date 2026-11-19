@@ -10,14 +10,21 @@ Quickstart for AI agents: [docs/agents.md](../../docs/agents.md).
   `onyx_propose_dataset` (check, then record on confirm) and `onyx_proposal_status`.
   `onyx_find_dataset` also searches the node's bulk datasets (`GET /v1/bulk?q=`; asset names
   are made their short ids, and the asset asked for is listed before any other, with a sentence
-  when a shown match is of another asset), gives each observed dataset a call that works, and
+  when a shown match is of another asset), gives each observed dataset a call that works (its
+  round is asked of the node, kept 5 minutes; the shipped list is the fallback), and lists
+  datasets that hold only part of the question under `similar`, not as found.
   `onyx_get_bulk_rows` answers 10 rows in a compact form unless asked for `full`.
 - `src/http.mjs`: the read tools over HTTP (MCP Streamable HTTP, one URL), read-only by default,
   rate-limited per client address, sessions by `Mcp-Session-Id`, foreign browser origins refused.
   It leaves out the tools that write (uploads, the relay, wants) or hand out whole stored files.
+  It says what holds on its machine: unless `ONYX_MCP_PAYMENTS=1` (the node takes payments) it
+  leaves out the ticket and credit tools and the payment headers and says everything is free
+  today; without the `onyx-check` program (`ONYX_CHECK_BIN`, or `onyx-check` on `PATH`) it has no
+  `onyx_check_answer` and says that nothing is checked there. The stdio server always has the
+  full list.
 - `openapi.json` and `catalog.json`: copies of `docs/api/openapi.json` and the website's dataset
-  list (with its asset names and the settled round of each observed dataset on the hosted
-  node), so this folder runs on its own. `node scripts/sync.mjs` writes them; `--check`, the tests
+  list (with its asset names and a settled round of each observed dataset on the hosted
+  node, used only when the node cannot be asked), so this folder runs on its own. `node scripts/sync.mjs` writes them; `--check`, the tests
   and `scripts/check-openapi.py` fail on a stale copy.
 - `src/check.mjs`: runs `onyx-check`, the Rust command that checks an answer
   (`crates/onyx-check`). No check is written in JavaScript.
@@ -59,6 +66,7 @@ Add a server entry like this to your MCP client's settings:
 | `ONYX_PAY_MANIFEST`, `ONYX_PAY_MAX_AMOUNT` | The deployment manifest you trust (`{"chainId","revenue","usdc","revenueCodeHash"}`) and your limit per answer in the token's smallest unit. Every 402 offer is then checked on `ONYX_CHECK_RPC`. |
 | `ONYX_CHECK_UNCHECKED=1` | Allow checks without a chain node. The outcome is then `unverified_on_chain`. Demo only. |
 | `ONYX_MCP_ALLOW_SUBMIT=1` | Add the raw `onyx_submit_proposal` (stdio only). `onyx_propose_dataset` is the checked way. |
+| `ONYX_MCP_PAYMENTS=1` | HTTP server only: its node takes payments, so the paid tools are described as paid and the ticket and credit tools are listed. Default: off (everything it reads is free). |
 | `ONYX_MCP_READ_ONLY=1` | Leave out `onyx_propose_dataset` (stdio; the HTTP server leaves it out unless `ONYX_MCP_ALLOW_PROPOSE=1`). |
 
 ## What an agent does

@@ -2,7 +2,7 @@
 // (`GET /v1/bulk?q=&limit=&after=`). Every value shown comes from the answer through the checks
 // below: an item that does not match the shape is dropped, never printed.
 import { group } from './format.ts';
-import { ASSETS, anyGroups, anyValue } from './glossary.ts';
+import { ASSETS, anyGroups, anyValue, datasetTitle } from './glossary.ts';
 
 export type Dataset = {
 	publisher: string;
@@ -212,13 +212,19 @@ export function newestUrl(d: Dataset, n = 10): string {
 
 const PAIR = /^[a-z0-9][a-z0-9._:-]{0,127}\/[a-z0-9][a-z0-9._:-]{0,127}$/;
 
-/** The search and the open dataset a page link carries ("#/datasets?q=btc&d=pub/ds"). */
-export function fromLink(hash: string): { q: string; d: string | null } {
+/** The search and the open dataset a page link carries ("#/datasets?q=btc&d=pub/ds"). `bad` is a
+ * `d` that is not "publisher/dataset" (newcomer test 3: "?d=garbage" silently showed the whole
+ * list), cut to the characters a search takes, so the page can say that nothing has that name. */
+export function fromLink(hash: string): { q: string; d: string | null; bad: string | null } {
 	const i = hash.indexOf('?');
 	const p = new URLSearchParams(i < 0 ? '' : hash.slice(i + 1));
 	const d = p.get('d');
-	return { q: cleanSearch(p.get('q') ?? ''), d: d && PAIR.test(d) ? d : null };
+	const ok = !!d && PAIR.test(d);
+	return { q: cleanSearch(p.get('q') ?? ''), d: ok ? d : null, bad: d !== null && !ok ? cleanSearch(d) || '?' : null };
 }
+
+/** The browser tab's title: the open dataset's name, else the page's. */
+export const pageTitle = (open: string | null): string => (open && PAIR.test(open) ? `${datasetTitle(open.split('/')[1])} · Onyx` : 'All datasets · Onyx');
 
 /** The page link for a search and an open dataset. */
 export function toLink(q: string, d: string | null = null): string {
@@ -260,6 +266,51 @@ export function removed(status: number, v: unknown): { catalog: number | null } 
 	if (o.error?.code !== 'bulk_dataset_removed' || (o.successor && typeof o.successor === 'object')) return null;
 	const n = o.catalog;
 	return { catalog: typeof n === 'number' && Number.isSafeInteger(n) && n >= 0 ? n : null };
+}
+
+/** How many datasets each publisher's newest catalog lists (the list answer's `catalogs`: leaves
+ * less the removed ones), most first. A catalog out of shape is dropped; a publisher that has
+ * no catalog is not in the list, so the counts may add up to less than the node's total. */
+export function publisherCounts(v: unknown): { publisher: string; datasets: number }[] {
+	const cats = v && typeof v === 'object' ? (v as { catalogs?: unknown }).catalogs : null;
+	if (!Array.isArray(cats)) return [];
+	const out: { publisher: string; datasets: number }[] = [];
+	for (const c of cats) {
+		const o = (c && typeof c === 'object' ? c : {}) as Record<string, unknown>;
+		const [leaves, removed] = [nat(o.leaves), nat(o.removed) ?? 0];
+		if (typeof o.publisher !== 'string' || !ID.test(o.publisher) || leaves === null || removed > leaves) continue;
+		if (!out.some((x) => x.publisher === o.publisher)) out.push({ publisher: o.publisher, datasets: leaves - removed });
+	}
+	return out.sort((a, b) => b.datasets - a.datasets || (a.publisher < b.publisher ? -1 : 1));
+}
+
+/** The publisher most datasets come from, when it holds more than half of the node's `total`
+ * (newcomer test 3, 2026-11-18: the site said "many sources" while one publisher held nearly
+ * all). Null when no count is known, a count is over the total, or no publisher has a majority. */
+export function mainPublisher(counts: { publisher: string; datasets: number }[], total: number | null): { publisher: string; datasets: number; total: number } | null {
+	const top = counts[0];
+	if (!top || total === null || !Number.isSafeInteger(total) || total <= 0 || top.datasets > total || top.datasets * 2 <= total) return null;
+	return { ...top, total };
+}
+
+/** "Where these numbers come from": what is known about a publisher's data. Onyx checks no
+ * number; it knows only what the publisher states. `says` quotes this repository's public files
+ * (docs/ops/deployment.md, docs/join.md) and is never a method Onyx vouches for. */
+const PUBLISHER_SAYS: Record<string, { says: string; method: boolean }> = {
+	'onchain-archive': { says: 'The project’s public notes describe this publisher in one line: “on-chain metrics from its own nodes”.', method: false },
+	'early-record': { says: 'This is the network’s own test record: one row per accepted piece of testnet work, published once a day. Anyone can rebuild it from public chain logs.', method: true },
+	'synthetic-demo': { says: 'These rows are synthetic: made-up test data, not measurements of anything.', method: true }
+};
+
+/** The lines of the "Where these numbers come from" note for a publisher. */
+export function sourceNote(publisher: string): string[] {
+	const known = Object.hasOwn(PUBLISHER_SAYS, publisher) ? PUBLISHER_SAYS[publisher] : null;
+	return [
+		'What Onyx knows about these numbers is only what their publisher states.',
+		...(known ? [known.says] : []),
+		...(known?.method ? [] : ['The publisher has not published its method.']),
+		'The proof shows these are the rows it signed.'
+	];
 }
 
 /** The node's whole dataset count (`total` of an unfiltered list of one), or null. */
@@ -379,7 +430,8 @@ const metricWords = (dataset: string): string[] => {
  *    one of another asset;
  * 2. then a dataset whose metric name is exactly the other words searched ("mvrv": btc.mvrv
  *    before btc.sth-mvrv);
- * 3. then data from the last STALE_DAYS days, the shorter name, the id. */
+ * 3. then data from the last STALE_DAYS days, the shorter name, the id.
+ * A search that names no asset is ordered by asset instead (see below). */
 export function rankSearch<T extends Ordered>(items: T[], typed: string): T[] {
 	const { assets, rest } = searchAssets(typed);
 	const want = rest.join(' ');
@@ -387,10 +439,17 @@ export function rankSearch<T extends Ordered>(items: T[], typed: string): T[] {
 		const words = metricWords(d.dataset);
 		return [assets.length && assets.includes(head(d.dataset)) ? 0 : 1, want && words.join(' ') === want ? 0 : 1, isFresh(d) ? 0 : 1, words.length];
 	};
-	return items
-		.map((d) => ({ d, k: key(d) }))
-		.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2] || a.k[3] - b.k[3] || byId(a.d, b.d))
-		.map((x) => x.d);
+	const ranked = items.map((d) => ({ d, k: key(d) }));
+	// A search that names no asset ("mvrv": 839 matches that opened at 1inch, newcomer test 3):
+	// the majors first (btc, eth), then the other assets by id; in one asset, data from the last
+	// STALE_DAYS days first, then the exact metric, the shorter name, the id.
+	if (!assets.length) {
+		const asset = (d: T) => head(d.dataset);
+		return ranked
+			.sort((a, b) => majorRank(a.d) - majorRank(b.d) || (asset(a.d) < asset(b.d) ? -1 : asset(a.d) > asset(b.d) ? 1 : 0) || a.k[2] - b.k[2] || a.k[1] - b.k[1] || a.k[3] - b.k[3] || byId(a.d, b.d))
+			.map((x) => x.d);
+	}
+	return ranked.sort((a, b) => a.k[0] - b.k[0] || a.k[1] - b.k[1] || a.k[2] - b.k[2] || a.k[3] - b.k[3] || byId(a.d, b.d)).map((x) => x.d);
 }
 
 /** How many datasets have data from the last STALE_DAYS days and how many do not, from the
@@ -467,16 +526,38 @@ export function historyUrl(d: Pick<Dataset, 'publisher' | 'dataset' | 'root'>, p
 	return `/v1/bulk/${d.publisher}/${d.dataset}/rows?limit=${HISTORY_PAGE}&page=${page}${d.root ? `&root=${d.root}` : ''}`;
 }
 
-/** The name a download is saved under ("onchain-archive_btc.mvrv.csv"). */
-export const csvName = (d: Pick<Dataset, 'publisher' | 'dataset'>): string => `${d.publisher}_${d.dataset}.csv`.replace(/[^a-z0-9._-]/g, '_');
+/** The name a download is saved under ("onchain-archive_btc.mvrv.csv"); the full history gets
+ * "-full" ("onchain-archive_btc.mvrv-full.csv"), so the two downloads of a card never share a name. */
+export const csvName = (d: Pick<Dataset, 'publisher' | 'dataset'>, full = false): string => `${d.publisher}_${d.dataset}${full ? '-full' : ''}.csv`.replace(/[^a-z0-9._-]/g, '_');
 
-/** Five lines of Python (requests and pandas) that read a dataset's newest rows. */
-export function pythonSnippet(origin: string, d: Pick<Dataset, 'publisher' | 'dataset'>): string {
-	return [
+/** The columns of a sample that hold text: some value is not a plain number (the key column,
+ * the first, is never listed). pandas must not turn these into numbers. */
+export function textColumns(s: Pick<Sample, 'columns' | 'rows'>): string[] {
+	return s.columns.filter((_, i) => i > 0 && s.rows.some((r) => r[i] !== '' && !DEC.test(r[i])));
+}
+
+/** A few lines of Python (requests and pandas) that read a dataset's newest rows as numbers and
+ * dates. The node sends every value as text (exact decimals) and a day key as unix seconds
+ * (newcomer test 3: the frame held strings), so the snippet converts: every column but the text
+ * ones (`text`, from `textColumns`) with pd.to_numeric, and the key column with pd.to_datetime
+ * only when `days` (the key is a day, `dayKeys`). Without `shape` (no sample read yet) it only
+ * reads the rows. */
+export function pythonSnippet(origin: string, d: Pick<Dataset, 'publisher' | 'dataset'>, shape?: { key: string; days: boolean; text: string[] }): string {
+	const name = /^[a-z_][a-z0-9_]{0,62}$/;
+	const lines = [
 		'import requests, pandas as pd',
 		`url = "${origin}/v1/bulk/${d.publisher}/${d.dataset}/rows"`,
 		`rows = requests.get(url, params={"order": "desc", "limit": ${HISTORY_PAGE}}).json()["rows"]`,
-		'df = pd.DataFrame([r["values"] for r in rows])',
-		'print(df.head(10))'
-	].join('\n');
+		'df = pd.DataFrame([r["values"] for r in rows])'
+	];
+	if (shape && name.test(shape.key)) {
+		const text = shape.text.filter((c) => name.test(c) && c !== shape.key);
+		if (text.length) {
+			lines.push(`num = df.columns.drop([${text.map((c) => `"${c}"`).join(', ')}])  # values arrive as text`);
+			lines.push('df[num] = df[num].apply(pd.to_numeric, errors="coerce")');
+		} else lines.push('df = df.apply(pd.to_numeric, errors="coerce")  # values arrive as text');
+		if (shape.days) lines.push(`df["${shape.key}"] = pd.to_datetime(df["${shape.key}"], unit="s")  # the key is a day, in unix seconds`);
+	}
+	lines.push('print(df.dtypes, df.head(10), sep="\\n")');
+	return lines.join('\n');
 }

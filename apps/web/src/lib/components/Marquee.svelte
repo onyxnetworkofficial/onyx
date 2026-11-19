@@ -90,7 +90,7 @@
 {/snippet}
 {#if narrow}
 <div class="strip">
-	<div class="bgrid" role="list" aria-label="Live blocks" data-testid="live-strip">
+	<div class="bgrid" role="list" aria-label="Recorded blocks" data-testid="live-strip">
 		{#each shown as b (b.height)}{@render card(b, 0)}{/each}
 	</div>
 	{#if phone && items.length > PHONE_MAX}
@@ -110,12 +110,12 @@
 	onkeydown={keys}
 	tabindex={motion.off ? 0 : undefined}
 	role={motion.off ? 'region' : undefined}
-	aria-label={motion.off ? 'Live blocks' : undefined}
+	aria-label={motion.off ? 'Recorded blocks' : undefined}
 	data-testid="live-strip"
 >
 	<div class="track">
 		{#each [0, 1] as copy (copy)}
-			<div class="group" role={copy === 0 ? 'list' : undefined} aria-label={copy === 0 && !motion.off ? 'Live blocks' : undefined} aria-hidden={copy === 1 ? 'true' : undefined}>
+			<div class="group" role={copy === 0 ? 'list' : undefined} aria-label={copy === 0 && !motion.off ? 'Recorded blocks' : undefined} aria-hidden={copy === 1 ? 'true' : undefined}>
 				{#each items as b (b.height)}{@render card(b, copy)}{/each}
 			</div>
 		{/each}

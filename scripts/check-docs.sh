@@ -53,5 +53,9 @@ python3 -I scripts/check-source-terms.py --lint || fail=1
 # Public snapshot (open-source checklist E): the exclude list covers every path DATA-LICENSE.md
 # section 1 names, so an uncleared file cannot reach a snapshot.
 python3 -I scripts/public-snapshot-coverage.py . >/dev/null || { python3 -I scripts/public-snapshot-coverage.py .; fail=1; }
+# No tracked Markdown file is empty (2026-11-19: an edit emptied docs/ops/early-record.md, 348
+# lines, and every guard passed; it stayed empty in two public snapshots).
+empty=$(git ls-files -z '*.md' | while IFS= read -r -d '' f; do [ -s "$f" ] || printf '%s\n' "$f"; done)
+[ -z "$empty" ] || { echo "empty Markdown file(s): $empty" >&2; fail=1; }
 [ "$fail" -eq 0 ] && echo "docs ok: $(ls docs/spec/*.md | wc -l) specs, $(ls docs/adr/[0-9]*.md | wc -l) ADRs"
 exit "$fail"

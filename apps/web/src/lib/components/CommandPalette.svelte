@@ -8,6 +8,7 @@
 	import CornerDownLeft from '@lucide/svelte/icons/corner-down-left';
 	import { verifier } from '#lib/verifier.ts';
 	import { checks } from '#lib/checks.ts';
+	import { cleanSearch } from '#lib/datasets.ts';
 
 	type Item = { label: string; hint: string; run: () => void | Promise<void> };
 	let dialog: HTMLDialogElement;
@@ -23,13 +24,14 @@
 		{ label: 'Markets preview', hint: 'Page', run: () => goto(resolve('/markets')) },
 		{ label: 'How it works', hint: 'Page', run: () => goto(resolve('/how-it-works')) },
 		{ label: 'Reserves', hint: 'Page', run: () => goto(resolve('/reserves')) },
-		{ label: 'Live run', hint: 'Page', run: () => goto(resolve('/run')) },
+		{ label: 'Recorded run', hint: 'Page', run: () => goto(resolve('/run')) },
 		{ label: 'Shard explorer', hint: 'Page', run: () => goto(resolve('/explorer')) },
 		{ label: 'Address labels', hint: 'Page', run: () => goto(resolve('/labels')) },
 		{ label: 'Query API', hint: 'Page', run: () => goto(resolve('/api')) },
 		{ label: 'Add data', hint: 'Page', run: () => goto(resolve('/submit')) },
 		{ label: 'Publish your own data', hint: 'Page', run: () => goto(resolve('/publish')) },
 		{ label: 'Download the Onyx app', hint: 'Page', run: () => goto(resolve('/download')) },
+		{ label: 'About Onyx', hint: 'Page', run: () => goto(resolve('/about')) },
 		{
 			label: `Run all ${checks.length} checks`,
 			hint: 'Action',
@@ -52,7 +54,13 @@
 			}
 		}
 	];
-	const shown = $derived(items.filter((i) => i.label.toLowerCase().includes(query.trim().toLowerCase())));
+	// Newcomer test 3 (2026-11-18): "bitcoin" or "mvrv" answered "No match". Whatever is typed can
+	// also be sent to the dataset search (the last entry; the only one when no page matches).
+	const wanted = $derived(cleanSearch(query));
+	const shown = $derived<Item[]>([
+		...items.filter((i) => i.label.toLowerCase().includes(query.trim().toLowerCase())),
+		...(wanted ? [{ label: `Search datasets for “${wanted}”`, hint: 'Datasets', run: () => goto(`${resolve('/datasets')}?q=${encodeURIComponent(wanted)}`) }] : [])
+	]);
 
 	export function open() {
 		query = '';
@@ -64,7 +72,7 @@
 	async function choose(i: Item | undefined) {
 		if (!i) return;
 		await i.run();
-		if (i.hint === 'Page' || i.label.startsWith('Run')) dialog.close();
+		if (i.hint === 'Page' || i.hint === 'Datasets' || i.label.startsWith('Run')) dialog.close();
 	}
 	function key(e: KeyboardEvent) {
 		if (e.key === 'ArrowDown') (active = Math.min(active + 1, shown.length - 1)), e.preventDefault();
@@ -90,7 +98,7 @@
 		<label class="field">
 			<Search size={16} />
 			<input bind:this={input} bind:value={query} oninput={() => (active = 0)} onkeydown={key}
-				placeholder="Jump to a page or run an action" aria-label="Search commands" role="combobox"
+				placeholder="Jump to a page, run an action or search datasets" aria-label="Search commands" role="combobox"
 				aria-expanded="true" aria-controls="pal-list" aria-activedescendant={shown[active] ? `pal-${active}` : undefined} />
 			<kbd>Esc</kbd>
 		</label>

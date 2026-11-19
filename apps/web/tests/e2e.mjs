@@ -31,6 +31,7 @@ import { pp6 } from './pp6.mjs';
 import { pp3 } from './pp3.mjs';
 import { pp4 } from './pp4.mjs';
 import { datasets } from './datasets.mjs';
+import { nc3 } from './nc3.mjs';
 import { attr, capWaits, checksDone, quietDom, settled, WAIT_CAP } from './wait.mjs';
 
 const root = new URL('../build/', import.meta.url).pathname;
@@ -169,7 +170,10 @@ const runSuites = () =>
 			// Pre-public loop PP4: Browse data opens with the datasets (U5).
 			() => pp4(browser, base, expect, FB),
 			// ROADMAP S22: All datasets (search and pages against a fake node).
-			() => datasets(browser, base, expect)
+			() => datasets(browser, base, expect),
+			// Newcomer test 3 (2026-11-18): one publisher said, no market called open, recorded and planned
+			// said as such, the header search, "Did you mean", the About page.
+			() => nc3(browser, base, expect)
 		])
 	]);
 let suites = Promise.resolve();
@@ -274,7 +278,7 @@ try {
 	expect(await settles(p.locator('.stats .stat').nth(2).locator('b'), String(nVectors)), `overview: vector count is the export's (${nVectors})`);
 	if (!FB) expect((await p.locator('.mq .q').innerText()).includes(`blocks ${n(demo0.live.from_height)}–${n(demo0.live.to_height)}`), 'overview: market block range is the live range');
 	// ADR-0028: the ladder states level 3 honestly (signed data feeds built, none connected).
-	expect((await p.getByText(/signed data feeds built, none connected yet/).count()) >= 1, 'overview: level-3 ladder line says no signed feed is connected');
+	expect((await p.getByText(/no signed data feed connected yet/).count()) >= 1, 'overview: level-3 ladder line says no signed feed is connected');
 	// AUD-2-F11: level 2 names the recorded sources from their files.
 	expect(await p.getByText(/recorded rounds on U\.S\. Treasury Fiscal Data and SEC EDGAR/).first().waitFor({ timeout: WAIT_CAP }).then(() => true, () => false), 'overview: level-2 line names both recorded sources');
 	// Newcomer test 2026-11-18: the line said only "observers simulated" while Markets says markets settle from
@@ -282,7 +286,11 @@ try {
 	// rounds' limit (one machine, one operator), and never claims independent observers.
 	const l2line = (await p.locator('.rung').nth(1).locator('.lstat').innerText()).replace(/\s+/g, ' ').trim();
 	const l2note = (await p.getByTestId('ladder-l2-note').innerText()).replace(/\s+/g, ' ').trim();
-	expect(l2line === 'Built; recorded rounds with simulated observers, live rounds under one operator', `overview: the level-2 line names both kinds of round (${l2line})`);
+	expect(l2line === 'Live now: the hosted node, one operator; this site’s own rounds are recorded', `overview: the level-2 line names both kinds of round, in the site's one status vocabulary (${l2line})`);
+	// Newcomer test 3 (2026-11-18): one status vocabulary, explained under the ladder; every rung starts with one of its words.
+	const rungs = await p.locator('.rung .lstat').allInnerTexts();
+	const words = (await p.getByTestId('status-words').innerText()).replace(/\s+/g, ' ');
+	expect(rungs.length === 5 && rungs.every((r) => /^(Live now|Recorded|Planned|Switched off): /.test(r.trim())) && ['Live now: Served by the hosted test node today.', 'Recorded: A past run', 'Planned:', 'Switched off:'].every((w) => words.includes(w)), `overview: every level's status is one of the four words, each explained (${rungs.map((r) => r.split(':')[0]).join(', ')})`);
 	expect(/recorded rounds on U\.S\. Treasury Fiscal Data and SEC EDGAR, shown on Browse data, are rehearsals: their observers are simulated\./.test(l2note) && /live rounds on Base Sepolia, the ones the test markets settle from, ran seven observer processes, each with its own key/.test(l2note) && /All seven ran on one machine under one operator, so they test the round, not independence\./.test(l2note) && !/independent/i.test(l2note + l2line), `overview: the level-2 note says which rounds are simulated and the live rounds' limit (${l2note})`);
 
 	await p.goto(base + '#/explorer');
@@ -332,7 +340,11 @@ try {
 		// textContent: the level suffix is hidden where the column already shows it.
 		const cells = await map.locator('[role=cell]').evaluateAll((els) => els.map((e) => e.textContent ?? ''));
 		expect(cells.some((c) => c.includes('Bitcoin pool shares') && c.includes('L4')), 'data map: pool shares at level 4');
-		expect(cells.some((c) => c.includes('Company filings') && c.includes('Live') && c.includes('L2')), 'data map: SEC filings live at level 2');
+		expect(cells.some((c) => c.includes('Company filings') && c.includes('Recorded') && c.includes('L2')), 'data map: SEC filings are recorded rounds at level 2');
+		// Newcomer test 3 (2026-11-18): a tile's state is one of the site's four words ("Live" alone, "Built" and "Held back" are gone).
+		const states = await map.locator('[role=cell] .st').evaluateAll((els) => els.map((e) => (e.firstChild?.nextSibling?.textContent ?? e.textContent ?? '').trim()));
+		expect(states.length >= 10 && states.every((s) => /^(Live now|Recorded|Planned|Switched off)/.test(s)), `data map: every tile's state is live now, recorded, planned or switched off (${[...new Set(states.map((s) => s.split(' · ')[0]))].join(', ')})`);
+		expect(cells.some((c) => c.includes('Open APIs') && c.includes('Live now') && c.includes('hosted node')), 'data map: the Treasury rounds the hosted node serves are live now');
 	}
 	if (FB) {
 		const hb = p.getByTestId('flows-held-back');
@@ -824,7 +836,7 @@ try {
 	}
 
 	await p.goto(base + '#/how-it-works');
-	await p.getByRole('button', { name: /Search pages and actions/ }).waitFor();
+	await p.getByRole('button', { name: /Search pages, actions and datasets/ }).waitFor();
 	await p.keyboard.press('Control+k');
 	await p.keyboard.type('expl');
 	await p.keyboard.press('Enter');
@@ -832,6 +844,9 @@ try {
 
 	await p.goto(base + '#/does-not-exist');
 	expect(await p.getByRole('heading', { name: 'No page here' }).waitFor().then(() => true, () => false), 'unknown route: styled not-found page');
+	// Newcomer test 3 (2026-11-18): the not-found page offers Browse data and All datasets first.
+	const lost = await p.locator('main .links a').evaluateAll((as) => as.map((a) => a.getAttribute('href')));
+	expect(lost[0] === '#/data' && lost[1] === '#/datasets', `unknown route: Browse data and All datasets come first (${lost.join(', ')})`);
 
 	// A forger edits the data next to the page. Checks against pinned values must fail.
 	const forged = await browser.newPage();
@@ -887,7 +902,7 @@ try {
 			expect(failedTitles.includes('Blocks and labels are the pinned ones'), 'forged: swapped input refused');
 			expect(failedTitles.includes('Recipe rerun gives the pinned root'), 'forged: swapped input gives the wrong root');
 		}
-		expect(failedTitles.includes('Live rows hash to the pinned root'), 'forged: edited live row refused');
+		expect(failedTitles.includes('Recorded rows hash to the pinned root'), 'forged: edited live row refused');
 
 		await forged.route(`**/history/week/${lastDay.file}`, async (route) => {
 			const d = await (await route.fetch()).json();
@@ -1434,7 +1449,7 @@ try {
 	const what = await p.getByTestId('home-what').innerText();
 	expect(
 		(await p.locator('h1').innerText()) === 'How Onyx checks data' &&
-			/^Onyx is a contributor-run network for any kind of data: anyone can submit data, others check it by the strongest method the data allows, and buyers pay per row and check every answer against a root posted on Base Sepolia \(testnet\)\.$/.test(what.replace(/\s+/g, ' ').trim()),
+			/^Onyx is a contributor-run network for any kind of data: anyone can submit data, others check it by the strongest method the data allows, and readers check every answer against a root posted on Base Sepolia \(testnet\)\. Paying per row is planned and switched off: everything is free to read today\.$/.test(what.replace(/\s+/g, ' ').trim()),
 		'home: the headline and one sentence say what Onyx is'
 	);
 	// NORTH-STAR NS1: the page speaks about any data; Bitcoin is named as one example.
@@ -1448,9 +1463,18 @@ try {
 	// W5 review: the roots are on the testnet, and the sentence says so (no bare "on Base").
 	expect(what.includes('Base Sepolia (testnet)') && !/on Base\.|on Base\b(?! Sepolia)/.test(what), 'home: the hero sentence names Base Sepolia (testnet), not Base');
 	expect(
-		(await p.locator('meta[name="description"]').getAttribute('content')).includes('every submission needs review'),
-		'site: metadata invites contributions without promising publication'
+		/^Browse thousands of datasets you can check: every row comes with a proof/.test(await p.locator('meta[name="description"]').getAttribute('content')),
+		'site: the description is about browsing data that can be checked, with no count that goes stale'
 	);
+	{
+		// Newcomer test 3 (2026-11-18): a link preview needs absolute URLs (og:image was "og.jpg" and
+		// og:url was missing). They name the host the site is deployed to (scripts/deploy-site.sh's
+		// ONYX_SITE_DOMAIN and its default): a build for another host must change src/app.html too.
+		const og = await p.evaluate(() => Object.fromEntries([...document.querySelectorAll('meta[property^="og:"]')].map((m) => [m.getAttribute('property'), m.getAttribute('content')])));
+		const site = `https://${process.env.ONYX_SITE_DOMAIN ?? 'onyx.cryptagraph.com'}`;
+		expect(og['og:url'] === `${site}/` && og['og:image'] === `${site}/og.jpg` && og['og:title'] === 'Onyx · Data anyone can check' && /^Browse thousands of datasets you can check/.test(og['og:description'] ?? ''), `site: the share preview has an absolute image and address on ${site} and a browse-first title (${JSON.stringify(og)})`);
+		expect(await readFile(join(root, 'og.jpg')).then((b) => b.length > 1000, () => false), 'site: the share preview image is in the build');
+	}
 	const note = p.getByTestId('home-note');
 	const noteText = (await note.innerText()).replace(/\s+/g, ' ');
 	expect(
@@ -1463,7 +1487,7 @@ try {
 	const primary = p.getByTestId('home-primary');
 	const secondary = p.getByTestId('home-secondary');
 	expect(
-		(await primary.evaluate((e) => e.tagName)) === 'BUTTON' && (await primary.innerText()).trim() === 'Verify it in your browser' && (await secondary.getAttribute('href')) === '#/run' && (await secondary.innerText()).trim() === 'See the live run',
+		(await primary.evaluate((e) => e.tagName)) === 'BUTTON' && (await primary.innerText()).trim() === 'Verify it in your browser' && (await secondary.getAttribute('href')) === '#/run' && (await secondary.innerText()).trim() === 'See the recorded run',
 		'home: one primary step (verify in your browser) and one secondary (see the live run)'
 	);
 	const ctaStyle = await p.evaluate(() => [...document.querySelectorAll('.pitch button, .pitch a')].map((e) => e.className));
@@ -1505,7 +1529,7 @@ try {
 		`home: proof 2 shows the committed OKX (${btcFmt(okxX.onyx_sats)}, at its 2026-09-08 snapshot) and BITB (${btcFmt(bitbX.onyx_sats)}) totals`
 	);
 	await runCard.click();
-	expect(await p.locator('h1', { hasText: 'Live run' }).waitFor({ timeout: WAIT_CAP }).then(() => true, () => false) && (await p.evaluate(() => location.hash)) === '#/run', 'home: proof 1 opens the Run page');
+	expect(await p.locator('h1', { hasText: 'Recorded run' }).waitFor({ timeout: WAIT_CAP }).then(() => true, () => false) && (await p.evaluate(() => location.hash)) === '#/run', 'home: proof 1 opens the Run page');
 	await p.goto(base + '#/how-it-works');
 	await resCard.click();
 	const resLive = p.getByTestId(FB ? 'reserves-held-back' : 'reserve-live');
@@ -1519,7 +1543,7 @@ try {
 	);
 	await p.goto(base + '#/how-it-works');
 	await p.getByTestId('home-secondary').click();
-	expect(await p.locator('h1', { hasText: 'Live run' }).waitFor({ timeout: WAIT_CAP }).then(() => true, () => false), 'home: the secondary step opens the Run page');
+	expect(await p.locator('h1', { hasText: 'Recorded run' }).waitFor({ timeout: WAIT_CAP }).then(() => true, () => false), 'home: the secondary step opens the Run page');
 	// Proof 3 runs the in-browser checks and says the result on the card.
 	await p.goto(base + '#/how-it-works');
 	const verify = p.getByTestId('proof-verify');
@@ -1596,7 +1620,7 @@ try {
 	// right edge, the menu reaches every page, primary controls are 44 x 44 px tap targets,
 	// no text under 12 px, and a skip link comes first.
 	const phone = await browser.newPage({ viewport: { width: 390, height: 844 } });
-	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets'], ['#/datasets', 'All datasets'], ['#/publish', 'Publish data']];
+	const ROUTES = [['', 'Home'], ['#/how-it-works', 'How it works'], ['#/data', 'Browse data'], ['#/reserves', 'Reserves'], ['#/run', 'Run'], ['#/explorer', 'Explorer'], ['#/labels', 'Labels'], ['#/api', 'API'], ['#/submit', 'Add data'], ['#/download', 'Download'], ['#/markets','Markets'], ['#/datasets', 'All datasets'], ['#/publish', 'Publish data'], ['#/about', 'About']];
 	// CL10: Download (the desktop app) is the fifth primary destination.
 	const PRIMARY = [['#/data', 'Browse data'], ['#/markets', 'Markets'], ['#/how-it-works', 'How it works'], ['#/submit', 'Add data'], ['#/download', 'Download']];
 	// Each page is measured once settled (tests/wait.mjs): drawn, no placeholder or running

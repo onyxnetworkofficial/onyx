@@ -61,7 +61,7 @@ export async function w4(browser, base, root, expect) {
 		expect(h.length === 0, `W4 home ${size.width} px: first visit loads no verifier, input or history (${urls.length} requests${h.length ? '; got ' + h.join(', ') : ''})`);
 		// The stats still say "Loading…" (not a made-up number) until the verifier has run, and say they are loading.
 		const live = await p.locator('.stats .stat').first().locator('b').evaluate((b) => [b.querySelector('[aria-hidden="true"]')?.textContent, b.querySelector('.sr-only')?.textContent]);
-		expect(live[0] === 'Loading…' && live[1] === 'Loading the live block count', `W4 home ${size.width} px: the pinned figures wait for the verifier ("${live.join('" / "')}")`);
+		expect(live[0] === 'Loading…' && live[1] === 'Loading the recorded block count', `W4 home ${size.width} px: the pinned figures wait for the verifier ("${live.join('" / "')}")`);
 		if (size.width === 1280) {
 			// Scrolling to the figures loads the verifier and fills them from it.
 			await p.locator('.stats').scrollIntoViewIfNeeded();
