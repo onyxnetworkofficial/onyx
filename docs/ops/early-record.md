@@ -13,8 +13,9 @@ the operator sets up once before the first run.
   put it in a file in the repository. `--rpc URL` still works, but every user on the machine can
   read it in the process list, so the tool warns. The tool never prints the URL; errors show
   its scheme and host only.
-- `deploy/early-record/contracts.json` (the deployments) and `deploy/early-record/exclusions.json`
-  (the reviewed list of the operator's own keys).
+- `deploy/early-record/contracts.json` (the deployments; with the earlier lists it names beside
+  it, today `contracts-1.json`: "Changing the contract list" below) and
+  `deploy/early-record/exclusions.json` (the reviewed list of the operator's own keys).
 - A state directory that only this tool writes. Keep it between runs.
 
 ## Build one day
@@ -53,7 +54,8 @@ be the folder of the state's last day.
 | `early-record: node: ...` | The node failed or rate-limited past the retries, or its two reads of the day differ. The logs read so far are kept in `STATE_DIR/pending.json` (dropped when the reads differ); run the same command again to go on | 1 |
 | `early-record: the previous day's last block changed: ...` | A reorg or another chain. Stop and find out why; do not delete the state | 1 |
 | `early-record: folder: ...` | A folder or the state does not match (for example a changed `data.csv`, `day.json` or schema file), or another run holds the state directory. The tool never builds a built folder again | 1 |
-| `early-record: contracts: ...` | `contracts.json` does not match the chain (first run only) | 1 |
+| `early-record: contracts: ...` | `contracts.json` does not match the chain (checked on the first run, and for the contracts a new list adds on its first day), or a new list starts on a day that is already built ("Changing the contract list") | 1 |
+| `early-record: contracts.json: ...` | The list file is refused before anything is read: a field the tool does not know, two contracts with one counted ABI tag, an earlier list that is missing or changed | 1 |
 
 ## The folders
 
@@ -90,6 +92,96 @@ Each entry of `deploy/early-record/exclusions.json` has a `from_day` and, when i
 `until_day`. Give a new entry a `from_day` after the last built day: a replay from the deploy
 blocks then gives every earlier day the same bytes. Never edit an entry's days after a version
 used it.
+
+## Changing the contract list
+
+Every published day names the hash of the list it was built with (in its `day_close` row and in
+`day.json`). So a list that a published day used never changes, not by one byte. A new contract
+gets a new list, and each day has exactly one list.
+
+**The files.** `contracts.json` is always the newest list. A list that replaces another has two
+more fields:
+
+- `from_day`: the first UTC day built with it.
+- `previous`: the file name of the list before it (in the same folder) and the keccak256 of that
+  file's bytes.
+
+The first list has neither field. Today: `contracts-1.json` is list 1 (every day up to
+2026-11-19; hash `0xa5b599c58c19f77f4629277c503570ec8b62dcbad303924065972d9c1fb4e976`), and
+`contracts.json` is list 2, from 2026-11-20: list 1 and `OnyxStorage` v4.
+
+**What the tool does.**
+
+1. It reads `contracts.json` and, from the same folder, every earlier list it names. It checks
+   each hash. A changed earlier list stops the run.
+2. It builds each day with the list in force on that day. So a day before `from_day` gets the
+   same bytes as before the new list existed, in `build` and in `verify`. A contract that the
+   day's list does not name is not read at all: its address is not in the request to the node.
+3. On the first day of a new list it checks the contracts the list adds on the chain (code at
+   the deploy block and none one block before; the node must still keep that state). Then it
+   reads these contracts from their `scan_from` blocks, not only from the day's first block.
+4. Rows that the added contracts accepted before that day go into that day's version. Their days
+   are published and never change. Such a row keeps its own `accept_block` and `accept_tx`; its
+   `day` cell is the day of the version it is in. Only the added contracts are read again for
+   the earlier blocks. The `day_close` row keeps its form: its block range is the day's own.
+5. From then on the state is bound to the new list.
+
+**What a new list may change.** It only adds. The tool refuses a list that:
+
+- drops a counted contract of the list before it, or changes its address, ABI tag or `scan_from`;
+- has another chain id;
+- has a `from_day` that is not after the `from_day` of the list before it;
+- starts on a day that is already built (the run stops with `give a new list a from_day after
+  the last built day`): a replay would give that day other bytes.
+
+**What a conflict is.** Two contracts with the same counted ABI tag in one list. The record keeps
+one set of ids for each tag (deal and node ids, claim ids, market ids), so two contracts of one
+tag would mix their ids. A second deployment of a contract gets an ABI tag of its own, as
+`storage-v4` beside `storage-v3`: each storage contract numbers its deals from 0, and the record
+keeps the two apart by contract address.
+
+**`storage-v4` (`OnyxStorage`, `RULES_VERSION` 4).** The five counted events have the same
+signatures and topics as in `storage-v3`: `Activated`, `DealCreated`, `Answered`, `Slashed`,
+`MissReward`. The role getter is the same (`treasury()`). The new event
+`DealAnchor(uint64,bytes32,bool)` is not read: a deal's payer comes from `DealCreated`. The reader
+contract `OnyxStorageAnchor` has no events, no state and no roles, so it has no entry.
+
+**To add a contract later.**
+
+1. Copy `contracts.json` to `contracts-N.json` (N is the number of that list), byte for byte.
+2. In `contracts.json` add the new entry at the end. Set `from_day` to a day after the last built
+   day, and `previous` to `contracts-N.json` and its hash:
+   `cast keccak 0x$(xxd -p deploy/early-record/contracts-N.json | tr -d '\n')`.
+3. State the contract's deploy block with its address in the document the entry names. Run
+   `cargo test -p onyx-api --lib early`.
+4. Install the tool and both files as in the roll-out below.
+
+**Roll-out of list 2 (the daily run reads its own checkout and its own tools).**
+
+1. Build the tool from a commit with this section:
+   `cargo build --release -p onyx-api --features http-client --example early-record`. Put
+   `target/release/examples/early-record` into the folder `ONYX_EARLY_BIN` names. Do this first:
+   the old tool refuses the new file (`unknown field`), and the new tool gives the same bytes as
+   the old one with the old file.
+2. Check the list the job has used so far: `grep contracts_hash OUT/versions/<the last
+   day>/day.json` must show the hash of list 1 above. If it shows another hash, stop: the job's
+   list is not the repository's list 1. Put the job's file, byte for byte, in `contracts-1.json`
+   and its hash in `previous` first.
+3. While the unit is not running, update that checkout to the same commit. It then holds
+   `deploy/early-record/contracts.json` and `deploy/early-record/contracts-1.json`.
+4. Check a published day with the new tool and the new files, from the state saved before it
+   ("Check a day" above, with `--state-before`): it must say `verified`. This reads a node and
+   writes nothing.
+5. Steps 1 to 3 must be done before the run that builds 2026-11-20 (it starts after 00:30 UTC on
+   2026-11-21). Doing them before 2026-11-19 is built is fine too: that day is built with list 1.
+6. If that run was missed, 2026-11-20 is built with list 1. Then set `from_day` in
+   `contracts.json` (and in the test `the_shipped_list_keeps_the_first_list_and_adds_storage_v4`)
+   to the day after the last built day, commit, and install that. No published day changes, and
+   no work is lost: the first version of list 2 reads v4 from its deploy block whenever it starts.
+
+With nothing installed the daily run goes on as before, with list 1: it builds and publishes
+each day without the v4 rows. Never go back to the old tool after a day was built with list 2:
+it cannot read that state.
 
 ## The record's own publisher (once, before the first daily run)
 

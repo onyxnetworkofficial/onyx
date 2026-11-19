@@ -1,8 +1,11 @@
 # Runbook: deploy the storage network on Base Sepolia (ADR-0060, lead only)
 
-**Trigger:** the lead decides to put the storage network live (ROADMAP S15). Deployed on Base Sepolia
-2026-11-02 (S16, `RULES_VERSION` 3): `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` (block 53457522; the v0
-contract `0x2423837572b58caf82896491ff6ee23080849419` of 2026-11-01 is retired), with
+**Trigger:** the lead decides to put the storage network live (ROADMAP S15). The live contract on
+Base Sepolia since 2026-11-19 is v4 (ADR-0067, `RULES_VERSION` 4): `OnyxStorage`
+`0x80833ee1b5f14349c6d41e75259974d29cd86e6b` (block 60983049) with its reader `OnyxStorageAnchor`
+`0x69124747008fa162799226a31dc00f389c425c91`. Retired: v3, `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`
+(block 53457522, 2026-11-02, S16, `RULES_VERSION` 3; the nodes left it and took their bonds back on
+2026-11-19), and v0, `0x2423837572b58caf82896491ff6ee23080849419` (2026-11-01). All were deployed with
 `scripts/storage-sepolia.sh` (it runs the steps below; state in `.onyx-testnet/storage-sepolia.json`).
 The public endpoint answers `eth_getLogs` for at most 200 blocks per call (THREATS STORAGE-S15-1)
 and HTTP 429 past its rate limit: the five nodes share one address, so each runs one pass a minute
@@ -16,7 +19,8 @@ tONYX test token. Storage nodes are onyx-node processes with `ONYX_STORAGE_*` se
 **Money:** tONYX (no value) for deposits, bonds and pay; test ETH for gas. Measured gas on anvil:
 `createDeal` about 292,000, `register` about 106,000 + `activate` about 181,000, `answer` about
 171,000 with 5 nodes (about 511,000 of execution with 128), `settleMissed` about 145,000,
-`recordSeed` about 46,000.
+`recordSeed` about 46,000. On v4 (2026-11-19, forge): `createDeal` about 308,000 and
+`createDealInCatalog` about 348,000 with a path of 14 levels, both before calldata.
 
 **Who:** the operator with the deployer key in `.env` (never printed, never committed). The
 deployer gets no role in the contract. The treasury is an address the owner names (a multisig
@@ -92,7 +96,7 @@ before mainnet, ROADMAP H1). Each storage node operator uses its own fresh key.
    2026-11-02 the five v0 bonds (10 tONYX each, no value) were left there to save test ETH.
    From v3 on, take the bonds back first: "Move from v3 to v4" below.
 
-## Move from v3 to v4 (ADR-0067 slice 5; prepared 2026-11-19, not yet run live)
+## Move from v3 to v4 (ADR-0067 slice 5; run live 2026-11-19)
 
 **What moves.** The five nodes leave `OnyxStorage` v3 (`0x9244…ee43`, rules 3) and join a new
 `OnyxStorage` v4 (rules 4: deals on catalog-anchored datasets, format-2 manifests). v4 is two
@@ -100,8 +104,9 @@ contracts from one deployment: `OnyxStorage` and the stateless reader `OnyxStora
 its constructor creates. Every step below is one command of `scripts/storage-sepolia.sh`. Each
 step can be run again: it reads the chain first and sends only what is still missing. A step
 that sends needs `--yes`; without it, it prints what it would send and sends nothing. All of it
-is tested with fake tools (`scripts/storage-sepolia-tests.sh`), none of it against the live
-chain.
+is tested with fake tools (`scripts/storage-sepolia-tests.sh`). It was run once against the
+live chain, on 2026-11-19: "What the live run showed" below. The steps stay as written, for the
+next move.
 
 **The rule behind the order.** A node must never be on a contract's list, with a deal to answer
 for, while no process can answer. A node of the new build follows rules 4 only: pointed at v3 it
@@ -244,18 +249,19 @@ to run if its target were below the bond, and fails if a node is still short aft
    `RULES_VERSION` 4, both code sizes, the reader's address, the parameters and the deploy cost.
    Mark v3 retired there and at the top of this runbook.
 2. **The early record's contract list** is `deploy/early-record/contracts.json` in this
-   repository (ADR-0065). The entry to add, after the v3 entry, which stays:
+   repository (ADR-0065). Done in the repository on 2026-11-19 (ADR-0065 amendment 1): the old
+   file is kept byte for byte as `contracts-1.json` (every published day names its hash), and
+   `contracts.json` is list 2, in force from 2026-11-20, with the v3 entry and this one:
    ```json
-   {"name": "OnyxStorage (v4)", "abi": "storage-v4", "address": "0x<v4 address>", "doc": "docs/STORAGE-NETWORK.md", "scan_from": <deploy block>, "scan_from_is": "deploy", "block_doc": "docs/STORAGE-NETWORK.md", "block_quote": "`OnyxStorage` `0x<v4 address>` at block <deploy block>", "why": "The deploy block, stated with the address."}
+   {"name": "OnyxStorage (v4)", "abi": "storage-v4", "address": "0x80833ee1b5f14349c6d41e75259974d29cd86e6b", "doc": "docs/STORAGE-NETWORK.md", "scan_from": 60983049, "scan_from_is": "deploy", "block_doc": "docs/STORAGE-NETWORK.md", "block_quote": "`OnyxStorage` `0x80833ee1b5f14349c6d41e75259974d29cd86e6b` at block 60983049", "why": "The deploy block, stated with the address."}
    ```
-   **This needs code first.** The reader of that file (`onyx_api::early`, `Contracts::parse`)
-   refuses a second contract with an ABI whose events count, and it knows `storage-v3` only. So
-   the entry above is refused today. Before it can be added: a `storage-v4` ABI in
-   `crates/onyx-api/src/early.rs` that counts the same five events (`Activated`, `DealCreated`,
-   `Answered`, `Slashed`, `MissReward`: their shapes did not change in v4), its tests, and a
-   decision on what a changed list means for days already published (every `day_close` names
-   the file's hash). `OnyxStorageAnchor` needs no entry: it has no events, no state and no roles.
-   Until then the early record does not count work on v4.
+   `storage-v4` counts the same five events as `storage-v3` (`Activated`, `DealCreated`,
+   `Answered`, `Slashed`, `MissReward`: their shapes did not change in v4). `OnyxStorageAnchor`
+   needs no entry: it has no events, no state and no roles. **The daily run counts v4 only once
+   its own tool and checkout are updated**: docs/ops/early-record.md "Changing the contract
+   list" has the steps and the day by which to do them. Until then it goes on with list 1 and
+   publishes each day without the v4 rows; the first version of list 2 then reads v4 from its
+   deploy block, so no work is lost.
 3. **Source verification.** The script does not verify source. By hand, from `contracts/`, with
    an explorer that takes it (not tried): `forge verify-contract <v4 address>
    src/OnyxStorage.sol:OnyxStorage --chain 84532 --constructor-args $(cast abi-encode
@@ -265,6 +271,38 @@ to run if its target were below the bond, and fails if a node is still short aft
 4. The node's settings need no hand edit: `install` wrote the new contract, node id and block.
    The node's saved log file is named by contract address, so v3's and v4's do not mix. The v3
    shard files stay on disk: never delete shard files by hand.
+
+### What the live run showed (2026-11-19)
+
+Nothing differed from the order of the steps above.
+
+1. **The wait (step 3) was 89 minutes.** The nodes asked to leave in epoch 1041 (five
+   transactions) and their bonds were free from epoch 1045. That is inside the 72 to 96 minutes
+   given above.
+2. **The bonds came back (step 4):** 9.8, 9.8, 8.82, 7.938 and 7.938 tONYX. `conserved()` was
+   true.
+3. **The treasury's part stays in v3.** After every node withdrew, v3 still holds 5.2336 tONYX:
+   the registration fees and the slashes, less the reporter's rewards. That is inside the 5.2
+   to 5.7 expected in step 4. No step of this runbook moves it.
+4. **The deployment (step 7)** was one transaction: `OnyxStorage` 23,098 bytes, `OnyxStorageAnchor`
+   4,646 bytes, `RULES_VERSION` 4, epochs of 7,200 blocks. It was estimated at 7.9 million gas and
+   0.000087 test ETH (at a highest fee of 0.011 gwei) before it was sent. The gas table above
+   says 6.1 million gas (measured on a local chain) and 0.000037 test ETH at 0.006 gwei: plan
+   for the higher figure.
+5. **What else was recorded.** `close` found both deals closed.
+   `archive-old` moved 23 entries under `old_v3`. After step 6 the public node's manifest answer
+   for a catalog dataset carried the `catalog` field. `fund --yes` left each node key at 0.00012
+   test ETH and 20 tONYX and the payer at 0.00003 test ETH and 100 tONYX. After step 9 all five
+   nodes were active with new node ids and each health answer had `lastTickOk` true.
+6. **The deal (step 11)** is deal 0, through the publisher's catalog 16. The tool asked the
+   book before the approval.
+7. **The first epoch of checks (step 12):** 6 of 6 passed, nothing slashed. `onyx-storage epoch`
+   answered in seconds through the public endpoint. The later epochs are in
+   docs/STORAGE-NETWORK.md "Third live run".
+
+Not done in that run: source verification (it needs an account on a block explorer); `close`,
+which waits for the deal's end; the roll-out of the early record's second contract list
+(docs/ops/early-record.md "Changing the contract list").
 
 ### Going back
 

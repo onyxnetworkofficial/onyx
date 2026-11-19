@@ -14,6 +14,8 @@ scan as gates, its user timer, and the record's own publisher id `early-record`.
 same day fixed nine findings (the state hash in `day.json`, each day published before the next,
 absolute paths for the scan, and six smaller ones; THREATS EARLY-4, EARLY-12, EARLY-19, EARLY-20).
 Its operations are open (section "Slices"). Threats: THREATS.md "EARLY".
+Amendment 1 (2026-11-19, built): a contract list can be replaced by a newer one, and a second
+storage contract is counted (section "Amendment 1").
 
 ## Context
 Early contributors may be rewarded later; this is a record, not a promise.
@@ -146,6 +148,47 @@ comes.
     version and, on a day they change, the exclusions' (docs/ops/bulk-publish.md "Many datasets
     with one anchor"): one anchor a day for both datasets. Each version is created at the end of
     its day (00:00 UTC of the next day), so a stopped build that runs again gives the same bytes.
+
+## Amendment 1 (2026-11-19): a newer contract list, and `OnyxStorage` v4
+
+**Why.** On 2026-11-19 the storage network moved to a new `OnyxStorage` (ADR-0067, rules 4).
+Item 10 had one list and no rule for changing it. Every `day_close` names the list's hash, and
+the join's state is bound to it. So any edit of the file would have given every published day
+other bytes in a rebuild, and the tool refused its own state.
+
+1. **A list never changes; a newer list replaces it from a day on.** `contracts.json` is the
+   newest list. It names the list before it (`previous`: a file in the same folder and the
+   keccak256 of its bytes) and its own first day (`from_day`). The first list has neither. Each
+   day is built with the list in force on it, in `build` and in `verify`. So a day before
+   `from_day` keeps every byte: the same list, the same hash in `day_close`, the same state.
+2. **A newer list only adds.** It keeps the chain id and every counted contract of the list
+   before it (address, ABI tag, `scan_from`), and its first day is later. The tool refuses a
+   newer list whose first day is already built with the list before it.
+3. **The first day of a newer list** (this amends items 7 and 9). The tool checks the added
+   contracts on chain as item 10 says, then reads them from their `scan_from` blocks. Rows they
+   accepted before that day go into that day's version, each with its own accept block and
+   transaction; the `day` cell is the version's day. So item 7 now reads: a version holds the rows
+   its block range accepted on its day, and the first version of a list also holds the earlier
+   rows of the contracts the list adds. The other contracts are not read again. The state is
+   bound to the new list from that day; `day_close` keeps its form.
+4. **One contract for each counted ABI tag, as before.** The join keeps one set of ids for each
+   tag. A second deployment gets a tag of its own. `storage-v4` counts the same five events as
+   `storage-v3` (their signatures did not change) and reads the same role getter; `DealAnchor` is
+   not read. The state keeps the node operators and deal payers of `storage-v3` where they were,
+   and those of every other storage contract by contract address, in fields that are left out
+   while empty. So the state of a day without such a contract has the bytes it always had.
+5. **Rules stay 1.** No row of an earlier day changes, and a row of `storage-v4` is made by the
+   same rule as a row of `storage-v3`. The `contract` cell tells them apart.
+6. **List 2** is in force from 2026-11-20: list 1 (`contracts-1.json`) and `OnyxStorage` v4 from
+   its deploy block 60983049. Runbook: docs/ops/early-record.md "Changing the contract list".
+
+Tests: `onyx_api::early::tests` (`a_list_takes_a_second_storage_contract_and_refuses_a_conflict`,
+`storage_v4_work_is_counted_like_v3_and_kept_apart`,
+`a_v3_then_v4_history_keeps_old_days_and_counts_the_new_contract`,
+`the_shipped_list_keeps_the_first_list_and_adds_storage_v4`) and `onyx_api::early_chain::tests`
+(`days_built_before_the_list_could_change_keep_their_bytes`: the hashes of two built days,
+recorded before this amendment; `a_newer_list_counts_the_new_contract_from_its_deploy_block`;
+`a_newer_list_must_start_after_the_last_built_day`).
 
 ## Slices
 - **Slice 1 (built 2026-11-14, review fixes the same day).** Items 1 to 11 as pure code with

@@ -340,9 +340,9 @@ amendment 5): every earlier shard keeps its bytes, its root and the schema it wa
    the book holds it (with `--unchecked` it is exit 3 marked `chainChecked: false`, like every
    unchecked answer); anything else is refused. Answers show every row in the newest schema (old decimals padded with
    zeros, added columns null; each row's `schema` names the schema it is stored under).
-6. A widened dataset cannot back a storage deal yet: the deployed OnyxStorage reads format-1
-   headers only, and storage nodes refuse a deal on a format-2 manifest. Deals on widened datasets
-   need a new OnyxStorage.
+6. A widened dataset can back a storage deal since 2026-11-19: the live OnyxStorage (v4,
+   ADR-0067) reads format-1 and format-2 headers, and storage nodes take a deal on a format-2
+   manifest. No such deal has been made on the live network yet.
 
 ### Move a dataset to a new id
 
@@ -435,7 +435,8 @@ Rules: catalogs go to a node in number order; each lists every dataset of the on
 each by at most one version; a dataset enters at version 1, or at the version after the newest one
 it already has with its own anchor. Keep every catalog file and its `.report`: a catalog is never
 rebuilt or signed twice under one number (the book would suspend your key). A dataset that only a
-catalog anchors cannot back a storage deal yet (ADR-0059 amendment 1 item 7).
+catalog anchors can back a storage deal since 2026-11-19, through your newest catalog (ADR-0067;
+docs/ops/storage-node.md "A deal through a catalog").
 
 ## If something goes wrong
 

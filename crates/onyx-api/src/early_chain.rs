@@ -49,8 +49,8 @@
 use crate::early::{
     exclusion_changes, exclusions_csv, exclusions_hash, exclusions_in_force, exclusions_schema,
     fixed_exclusions, record_schema, role_calls, schema_file, shard_files_of, utc_day, write_day,
-    ChainLog, Contracts, DayClose, EarlyError, Exclusion, ExclusionRow, ReviewedFile, ScanFrom,
-    State, Views, FORMAT,
+    ChainLog, ContractEntry, Contracts, DayClose, EarlyError, Exclusion, ExclusionRow,
+    ReviewedFile, ScanFrom, State, Views, FORMAT,
 };
 use crate::indexer::{call_retrying, hex_bytes, hex_u64, RpcFailure, Spans, MAX_LOGS_PER_RANGE};
 use crate::roots::JsonRpc;
@@ -299,8 +299,19 @@ impl<'a, R: JsonRpc + ?Sized> Reader<'a, R> {
         c: &Contracts,
         head: u64,
     ) -> Result<BTreeMap<String, u64>, ReadError> {
+        let all: Vec<&ContractEntry> = c.file.contracts.iter().collect();
+        self.check_entries(&all, head).await
+    }
+
+    /// [`Self::check_contracts`] for `entries` only (the contracts a new
+    /// list adds are checked when the list comes into force).
+    pub async fn check_entries(
+        &self,
+        entries: &[&ContractEntry],
+        head: u64,
+    ) -> Result<BTreeMap<String, u64>, ReadError> {
         let mut found = BTreeMap::new();
-        for e in c.file.contracts.iter().filter(|e| e.abi.counted()) {
+        for e in entries.iter().filter(|e| e.abi.counted()) {
             let what = |s: String| ReadError::Contracts(format!("{} ({}): {s}", e.name, e.address));
             let from = e.scan_from.unwrap_or(0);
             if self.code(&e.address, head).await?.is_empty() {
@@ -524,11 +535,11 @@ pub struct BuiltFiles {
 }
 
 impl ToolState {
-    /// A fresh state for `c`.
+    /// A fresh state for `c`: it starts with the first list of its history.
     pub fn new(c: &Contracts) -> ToolState {
         ToolState {
             format: FORMAT,
-            record: State::new(c),
+            record: State::new(c.first()),
             last: None,
             exclusions: Vec::new(),
             built: BTreeMap::new(),
@@ -559,6 +570,10 @@ pub struct Day {
 
 /// Read the next complete day after `tool`'s cursor (`want`: only that
 /// day). `None` when no new day is complete at or below `finalized`.
+///
+/// `c` is the newest list. The day is built with the list in force on it
+/// ([`Contracts::on`]). On the first day of a newer list the contracts it
+/// adds are checked on chain, and read from their `scan_from` blocks.
 pub async fn next_day<R: JsonRpc + ?Sized>(
     reader: &Reader<'_, R>,
     c: &Contracts,
@@ -580,9 +595,6 @@ pub async fn next_day<R: JsonRpc + ?Sized>(
         }
     }
     let mut after = tool.clone();
-    if after.deploy_blocks.is_none() {
-        after.deploy_blocks = Some(reader.check_contracts(c, head).await?);
-    }
     let from = tool.record.next_block;
     let Some((day, to)) = reader.day_of(from, head).await? else {
         return Ok(None);
@@ -593,7 +605,48 @@ pub async fn next_day<R: JsonRpc + ?Sized>(
             crate::early::day_text(day)
         )));
     }
-    let logs = reader.logs(c, from, to, pending, save).await?;
+    // The list in force on this day. A file with no history is its own
+    // only list, on every day.
+    let c = c.on(day);
+    // The list the state was built with, when `c` is a later one.
+    let old = match c.find(&tool.record.contracts) {
+        Some(o) if o.hash == c.hash => None,
+        Some(o) => Some(o),
+        None => {
+            return Err(ReadError::Contracts(format!(
+                "the state was built with a list that is neither the one in force on {} nor one before it",
+                crate::early::day_text(day)
+            )))
+        }
+    };
+    if let (Some(o), Some(l)) = (old, &tool.last) {
+        // A day already built with the list before would get other bytes
+        // in a replay, which gives it the newer list.
+        if let Some(d) = c.after(o).and_then(|n| n.from_day).filter(|d| l.day >= *d) {
+            return Err(ReadError::Contracts(format!(
+                "the list in force from {} came after {} was built with the list before it: give a new list a from_day after the last built day",
+                crate::early::day_text(d),
+                crate::early::day_text(l.day)
+            )));
+        }
+    }
+    match (&mut after.deploy_blocks, old) {
+        (None, _) => after.deploy_blocks = Some(reader.check_contracts(c, head).await?),
+        (Some(known), Some(o)) => {
+            known.extend(reader.check_entries(&c.added_since(o), head).await?)
+        }
+        (Some(_), None) => {}
+    }
+    // The first day of a new list also reads the contracts it adds from
+    // their scan_from blocks: one read of `late.from_block..=to` with the
+    // day's filter, then the earlier logs of the other contracts are left
+    // out (their days are written).
+    let late = tool.record.late(c, from)?;
+    let read_from = late.as_ref().map_or(from, |l| l.from_block);
+    let mut logs = reader.logs(c, read_from, to, pending, save).await?;
+    if let Some(l) = &late {
+        logs = l.keep(from, logs);
+    }
     // Exact observed times where a compromise or a retirement needs them.
     let mut views = Views::default();
     if let Some(book) = c.of(crate::early::Abi::SignedBookV1) {
@@ -660,6 +713,7 @@ pub async fn next_day<R: JsonRpc + ?Sized>(
         last_block_hash: last_hash,
         contracts_hash: c.hash,
         exclusions_hash: exclusions_hash(&now_in_force),
+        late,
     };
     let v = write_day(day, &rows, &close)?;
     after.record.record_keys(&v.keys)?;

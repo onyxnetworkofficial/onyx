@@ -1,13 +1,18 @@
 # ADR-0067: Storage deals on catalog-anchored datasets (READINESS B3, THREATS CAT-2)
 
 ## Status
-Proposed, draft 1 (2026-11-19, test network only). Slices 2, 3 and 4 are built and tested
+Accepted (2026-11-19, test network only). The contract is deployed and the first deal through a
+catalog runs: see "Live run 2026-11-19". The Context below describes the state before the move
+(v3 was then the live contract). What the live proof is: one deal on one small dataset.
+
+History of this note: proposed as draft 1 on 2026-11-19. Slices 2, 3 and 4 were built and tested
 locally (2026-11-19): contract v4, its stateless reader `OnyxStorageAnchor`, the Rust mirror and
 the shared vectors; the node serves and accepts catalog proofs and follows rules 4; the tool
 opens catalog deals; the local demo runs a catalog deal from creation to close. A review of
 slice 2 added one rule (check 7: no deal through a catalog that has a successor). Slice 5 is
 prepared (2026-11-19): the move from v3 is scripted, tested with fake tools and written up as a
-runbook. Nothing is deployed: the live run of slice 5 and slice 6 are open.
+runbook. Slice 5 was then run live and slice 6 (documents, threat rows) written, both on
+2026-11-19.
 
 Words used here: an **own report** is one signed report in the book for one manifest (ADR-0059
 item 3). A **catalog** is one signed report for many datasets (ADR-0059 amendment 1). **v3** is
@@ -243,11 +248,15 @@ v3 cannot be stopped or upgraded. It needs no stop: it holds no open deal.
    `storage-v3` only (`onyx_api::early`, `Contracts::parse`). So this step needs a `storage-v4`
    ABI in that reader first (the same five counted events), and a decision on days already
    published under the old file's hash. Until then the early record does not count work on v4.
+   Built 2026-11-19 (ADR-0065 amendment 1): the old file stays as `contracts-1.json`, the new
+   list is in force from 2026-11-20 and reads v4 from its deploy block.
 5. Mark v3 retired in docs/STORAGE-NETWORK.md and the runbook, as was done for v0.
 
 ### 6. Threat notes
 
-THREATS.md would need these new rows (ids are proposals):
+The rows are written (slice 6): THREATS.md "STOR-CAT", STOR-CAT-1 to STOR-CAT-8, each with its
+tests and with what was built after this table was drafted (check 7, the newest catalog's proof,
+the tool's question to the book, the bounded reads). The table below is the proposal as drafted:
 
 | Id | Threat | Planned answer |
 |---|---|---|
@@ -260,8 +269,8 @@ THREATS.md would need these new rows (ids are proposals):
 | STOR-CAT-7 | A dead or hostile source URL never serves the catalog proof, so each placed node pays one decline | Same class as STORAGE-16. Nodes also ask the catalog nodes and their peers |
 | STOR-CAT-8 | Migration: a v4 node pointed at v3, bonds left in v3, work counted twice in the early record | The rules check refuses the wrong contract; exit before upgrade; one entry per address in the record |
 
-Rows to update: CAT-2 (done when slice 5 is live), CAT-ERASE-2 (what v4 does and does not
-refuse), STORAGE-16.
+Rows updated: CAT-2 (done) and CAT-ERASE-2 (what v4 does and does not refuse). STORAGE-16 is
+not changed: STOR-CAT-7 points at it.
 
 ## Build slices
 
@@ -466,7 +475,7 @@ A fresh design review of this note comes between slices 1 and 2 (about 2 hours).
   report on the full snapshot; a long read is cut by the span and reports progress.
 - **Result:** `scripts/storage-network-anvil.sh` ends with `STORAGE NETWORK DEMO PASSED`.
 
-### Slice 5: deploy v4 and the first catalog deal (prepared 2026-11-19; the live run is open)
+### Slice 5: deploy v4 and the first catalog deal (run live 2026-11-19)
 
 - **Files:** `scripts/storage-sepolia.sh` (`exit-old`, `withdraw-old`, `archive-old`; `deploy`
   records the reader; the bond checks in `fund` and `register`),
@@ -515,10 +524,13 @@ A fresh design review of this note comes between slices 1 and 2 (about 2 hours).
 - **Not tested here:** anything against the live contract, the real `onyx-storage exit` and
   `withdraw-bond` (the fakes follow the contract's rules for them), and the gas of
   `requestExit` and `withdrawBond` (the runbook's figures for these two are estimates).
-- **Left (the live run):** a decision on v4's epoch length before `deploy --yes` (open question
-  4; the script's default is still 7,200 blocks); the twelve steps of the runbook; the
-  `storage-v4` ABI of the early record (section 5 step 4); source verification; the
-  docs/STORAGE-NETWORK.md status line.
+- **Left before the live run (kept as written then):** a decision on v4's epoch length before
+  `deploy --yes` (open question 4; the script's default is still 7,200 blocks); the twelve steps
+  of the runbook; the `storage-v4` ABI of the early record (section 5 step 4); source
+  verification; the docs/STORAGE-NETWORK.md status line.
+- **Run live 2026-11-19:** the twelve steps, in the runbook's order. The results are in "Live
+  run 2026-11-19" below. Still open after it: source verification, the third and fourth epoch of
+  the watch, `close` when the deal ends, and installing the early record's new list.
 - **Verify live:** `RULES_VERSION()` reads 4; `dealInfo` names the manifest root;
   `DealAnchor` names the catalog's report; five nodes tick ok; every check passes for three
   epochs; `onyx-check --bulk` passes on a rows answer from a storage node; `conserved()` is
@@ -530,7 +542,14 @@ A fresh design review of this note comes between slices 1 and 2 (about 2 hours).
   7 transactions per epoch. Under 0.0001 for the move, about 0.000007 per epoch after. Budget
   0.0003: one faucet request for the deployer, one for the payer, one for each node.
 
-### Slice 6: documents and the B3 row
+### Slice 6: documents and the B3 row (written 2026-11-19)
+
+- **Written:** THREATS.md (STOR-CAT-1 to STOR-CAT-8; CAT-2 and CAT-ERASE-2), docs/READINESS.md
+  (B3 done, a new row for the early record's list), docs/STORAGE-NETWORK.md (v4 as the live
+  contract, v3 retired, "Third live run"), the runbook (what the live run showed),
+  docs/spec/storage-network.md (R-STOR-3), docs/ops/bulk-publish.md (the two notes),
+  docs/TRACKER.md, ROADMAP.md. Not changed: ADR-0059 and ADR-0060 (they keep their text as
+  history; DECISIONS.md points here).
 
 - **Files:** `THREATS.md` (the rows of section 6; CAT-2 and CAT-ERASE-2), `docs/READINESS.md`
   (B3), `docs/STORAGE-NETWORK.md`, `docs/spec/storage-network.md` (R-STOR-3),
@@ -547,10 +566,101 @@ and 7.938 tONYX, and each holds gas for its next steps. So the move in slice 5 s
 working nodes. Three of them get less than the 10 tONYX bond back: `fund --yes` tops them up. A node of this build follows rules 4 only: the nodes leave v3 before the new
 node is installed, and the new node is not deployed before that day.
 
+## Live run 2026-11-19
+
+All on Base Sepolia (test network; every address and transaction is public on chain). The steps
+ran in the runbook's order (docs/ops/runbooks/deploy-storage.md "Move from v3 to v4"). Nothing
+differed from it.
+
+### Leaving v3
+
+- `close` found both v3 deals closed.
+- `exit-old --yes` in epoch 1041: five `requestExit` transactions, one per node.
+- The bonds were free from epoch 1045. The wait was 89 minutes (the runbook said 72 to 96).
+- `withdraw-old --yes` returned 9.8, 9.8, 8.82, 7.938 and 7.938 tONYX to the five node
+  addresses. `conserved()` is true. v3 (`0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`) still
+  holds 5.2336 tONYX: the treasury's part (registration fees and slashes, less the reporter's
+  rewards).
+- `archive-old` moved 23 entries of the state file under `old_v3`.
+- The new node and connector were deployed only after that (commit `d97dd5cb`). The public
+  node's manifest answer for a catalog dataset then carried the `catalog` proof.
+
+### The new contract
+
+- `OnyxStorage` `0x80833ee1b5f14349c6d41e75259974d29cd86e6b` at block 60983049: 23,098 bytes,
+  `RULES_VERSION` 4, epochs of 7,200 blocks (24 minutes).
+- Its reader `OnyxStorageAnchor` `0x69124747008fa162799226a31dc00f389c425c91`: 4,646 bytes.
+- One deployment transaction made both. Its cost was estimated before sending at 0.000087 test
+  ETH (an estimate of 7.9 million gas at a highest fee of 0.011 gwei). That is the estimate, not
+  the fee paid.
+- `fund --yes` brought each node key to 0.00012 test ETH and 20 tONYX, and the payer to 0.00003
+  test ETH and 100 tONYX.
+- `register`, then at once `install`: five nodes are registered and active on v4, with new node
+  ids, and each answers its health check with `lastTickOk` true.
+
+| Node | Node id on v4 |
+|---|---|
+| n1 | `0x18c6440ddd460d37405b320e9d01cb7ce2f4d7cf1c0c1c5f5529297140d569a4` |
+| n2 | `0x7ac52d52e9a206ce075dc14c4a455658231db9444e00433033db7c39f644476c` |
+| n3 | `0x8136c4dcb4e79439b1a007bb06256166b7390550eb8b9d2e8d53c41a1903fddf` |
+| n4 | `0xbd02126103662891f41e1dda7377f138ae1454aa96ce526b990462091a2edc0d` |
+| n5 | `0xc8607afecbd8c16ff42a25acca5a29677ceacf1bc31bff1dce30d312167a221e` |
+
+### The first deal through a catalog
+
+- Deal 0, transaction
+  `0x328a0d0b36496d412da4422473af0175fed6cc9f97c018fd219bc47c734e1664`.
+- Dataset `btc.custody-share` of the publisher `onchain-archive`: version 1, one shard, 44,856
+  bytes, manifest root
+  `0x92deb3b4d32738316c4f5334c3849e36fa5c688d1167f6bc42032f947a0f8cfa`.
+- The anchor is the publisher's catalog 16, the newest. The tool asked the book before the
+  approval.
+- 3 copies, epochs 2 to 43 are checked (the tool prints `2..44`: 44 is the end marker), deposit 0.126 tONYX.
+- Three nodes (n1, n2, n4) fetched the shard through the carried catalog proof. They hold no
+  catalog.
+- Epoch 2: 6 of 6 checks passed (2 slots, 3 holders each). Each holder earned 0.001 tONYX.
+  Nothing was slashed and no check stayed open. `conserved()` was true on v4 and on v3.
+- Epochs 3 and 4: 6 of 6 checks passed in each, nothing slashed, none left open; `conserved()` true on v4 and on v3.
+- The `epoch` command answered in seconds through the public endpoint. On v3 the old log scan
+  had not finished one node in 25 minutes.
+- Rows of the dataset read from storage node n1
+  (`/storage/n1/v1/bulk/onchain-archive/btc.custody-share/rows?limit=20`) passed
+  `onyx-check --bulk` against the chain (`chainChecked` true). The answer names catalog 16.
+
+### The "verify live" list of slice 5
+
+| Item | Result |
+|---|---|
+| `RULES_VERSION()` reads 4 | Yes |
+| The deal names the manifest root | Yes: deal 0 is on the root above |
+| `DealAnchor` names the catalog's report | The tool and the rows answer name catalog 16. A read of the event itself is not recorded here |
+| Five nodes tick ok | Yes |
+| Every check passes for three epochs | Epoch 2: yes. Epochs 3 and 4: see the line above |
+| `onyx-check --bulk` passes on rows from a storage node | Yes (n1) |
+| `conserved()` true on v3 and on v4 | Yes, with epoch 2 |
+
+### Not done, and limits
+
+- **Source verification** on a block explorer was not done: it needs an account.
+- **The deal still runs.** It ends after epoch 43, about 14:00 UTC on 2026-11-20. `close` is
+  still to run then.
+- **The early record does not count v4 yet.** Its second contract list is built and tested but
+  not installed (docs/ops/early-record.md "Changing the contract list"). Once installed, it
+  reads v4 from its deploy block.
+- **24-minute epochs are the test setting.** The epoch length for a main network is open (open
+  question 4).
+- **A second key of the same publisher** is not covered by the "newest catalog" rule (check 7).
+- **A deal sent while a new catalog lands** is refused and must be sent again.
+- **A storage node fetches at most 64 earlier versions** of a dataset (open question 6).
+- **One live deal on one small dataset** (one shard, 44,856 bytes, version 1) is the whole live
+  proof so far. No live deal on a widened (format-2) dataset, none with many shards, no live
+  refusal, slash or repair on v4.
+
 ## Open questions
 
 1. **One function or two?** Recommended: two. `createDeal` keeps its signature, so the 24
    existing test calls and the own-report tool path stay as they are.
+   Answered: built as two functions (slice 2), and the live deal used `createDealInCatalog`.
 2. **What if v4 does not fit in 24,576 bytes?** v3 has about 2,500 bytes free. Recommended:
    measure in slice 2. If it does not fit, move the two anchor checks into a second contract
    with no state and no admin key, which v4 calls. Never drop a check to save bytes.
@@ -568,6 +678,9 @@ node is installed, and the new node is not deployed before that day.
    0.000007 a day. Base Sepolia makes a block every 0.2 s, so one day is 432,000 blocks (the
    runbook's default of 43,200 is 2.4 hours). Recommended: 432,000 blocks. The fast feedback
    comes from slice 1 and the local demo.
+   Answered for this test deployment only: v4 was deployed with 7,200 blocks (24 minutes), the
+   script's default. It is a test setting, fixed for this contract. The length for a main
+   network stays open.
 5. **A missed seed with long epochs.** A seed must be recorded within 256 blocks (51 s) of an
    epoch's start (`SEED_WINDOW`), or the epoch has no checks and no pay. With one-day epochs
    one miss costs a day. Recommended: every node tries to record the seed, not only the
@@ -579,13 +692,18 @@ node is installed, and the new node is not deployed before that day.
    Recommended: for the first live deal pick a dataset under 64 versions. Then let a node hold
    a deal's version alone, served by root only. That is its own slice after B3, with its own
    review.
+   Answered for the first deal: it is on a dataset at version 1. The limit of 64 stays, and the
+   slice that lifts it is not built.
 7. **Format 2 in the same contract?** Recommended: yes. It is one line in the contract, and a
    later contract would mean a second migration. The node keeps its gate until the format-2
    test of slice 3 passes.
+   Answered: built so (slices 2 and 3). No live deal on a format-2 dataset has been made.
 8. **Posted answers (ADR-0064) in v4?** Recommended: no. That design is not final. A third
    contract later costs one more migration, which is cheap on the test network.
+   Answered: v4 has no posted answers.
 9. **Should the deal store the catalog root?** Recommended: no. The event is enough, and the
    deal struct stays the same, so checks cost the same gas as today.
+   Answered: built so. The deal stores nothing about the catalog.
 
 ## Consequences
 

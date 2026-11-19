@@ -9,7 +9,11 @@
 //! - **Inputs.** [`Contracts`] (`deploy/early-record/contracts.json`: each
 //!   deployment's address, the block its scan starts at and an ABI tag) and
 //!   finalized logs as [`ChainLog`]s (block number and time, transaction
-//!   hash, log index, address, topics, data).
+//!   hash, log index, address, topics, data). A list never changes once a
+//!   day used it: a newer list names the one before it and its own first
+//!   day ([`Contracts::parse_with`], [`Contracts::on`]), and its first
+//!   version also reads the contracts it adds from their `scan_from`
+//!   blocks ([`Late`]; ADR-0065 amendment 1).
 //! - **Join** ([`State::apply`]). Work events are joined to the events that
 //!   accept them (section 2 of ADR-0065). "Who" is always the address the
 //!   contract checked (a signature or `msg.sender`), read from the event;
@@ -197,6 +201,10 @@ pub enum Abi {
     SignedBookV1,
     /// `OnyxStorage` with `RULES_VERSION` 3.
     StorageV3,
+    /// `OnyxStorage` with `RULES_VERSION` 4 (ADR-0067): the same five
+    /// counted events as rules 3. Its new `DealAnchor` event is not read: a
+    /// deal's payer comes from `DealCreated`.
+    StorageV4,
     /// `OnyxStakes`: staked claims.
     StakesV1,
     /// `OnyxCorrections`: correction markets.
@@ -238,7 +246,7 @@ impl Abi {
                 sig::KEY_COMPROMISED,
                 sig::KEY_RETIRED,
             ],
-            Abi::StorageV3 => &[
+            Abi::StorageV3 | Abi::StorageV4 => &[
                 sig::ACTIVATED,
                 sig::DEAL_CREATED,
                 sig::ANSWERED,
@@ -261,7 +269,9 @@ impl Abi {
     }
 
     /// Whether rules 1 reads events of this ABI (its contract needs a
-    /// `scan_from` block, and at most one contract may carry it).
+    /// `scan_from` block, and at most one contract may carry it: the join
+    /// keeps one set of ids per ABI tag, so two contracts of one tag would
+    /// mix their deal, node, claim or market ids).
     pub fn counted(self) -> bool {
         !self.events().is_empty()
     }
@@ -273,7 +283,7 @@ impl Abi {
             Abi::SettlementV1 => &["coordinator()"],
             Abi::RegistryV1 => &["owner()", "receiptSigner()"],
             Abi::SignedBookV1 => &["reviewer()"],
-            Abi::StorageV3 => &["treasury()"],
+            Abi::StorageV3 | Abi::StorageV4 => &["treasury()"],
             Abi::StakesV1 | Abi::CorrectionsV1 | Abi::PanelOracleV1 => &["owner()", "treasury()"],
             Abi::ReobserveV1 => &["owner()"],
             Abi::TestTokenV1 => &["minter()"],
@@ -354,9 +364,30 @@ pub struct ContractsFile {
     /// What the file is (free text for readers).
     #[serde(default)]
     pub note: String,
+    /// The first UTC day (`YYYY-MM-DD`) this list is in force. Set exactly
+    /// when `previous` is: the first list of a record has neither.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub from_day: Option<String>,
+    /// The list in force before `from_day`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous: Option<PreviousList>,
     /// Every deployment of the chain the record knows.
     pub contracts: Vec<ContractEntry>,
 }
+
+/// The list a newer list replaces: its file and the hash of its bytes (the
+/// hash every `day_close` built with it names).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreviousList {
+    /// A file name in the folder of the list that names it (no path).
+    pub file: String,
+    /// keccak256 of that file's bytes, `0x` and 64 lowercase hex digits.
+    pub keccak256: String,
+}
+
+/// The most lists one file's history may hold.
+pub const MAX_LISTS: usize = 64;
 
 /// A checked `contracts.json` and the Keccak hash of its bytes (`day_close`
 /// names it, so a changed list shows in the record).
@@ -366,6 +397,10 @@ pub struct Contracts {
     pub file: ContractsFile,
     /// keccak256 of the file's bytes.
     pub hash: Hash32,
+    /// The first day this list is in force (`None`: the first list).
+    pub from_day: Option<u32>,
+    /// The list in force before `from_day`, checked the same way.
+    pub previous: Option<Box<Contracts>>,
     by_address: BTreeMap<[u8; 20], usize>,
 }
 
@@ -393,10 +428,38 @@ fn h32_text(h: &Hash32) -> String {
 }
 
 impl Contracts {
+    /// Parse and check a `contracts.json` that names no earlier list (see
+    /// [`Self::parse_with`]).
+    pub fn parse(bytes: &[u8]) -> Result<Contracts, EarlyError> {
+        Contracts::parse_with(bytes, &mut |f| {
+            Err(contracts_err(format!(
+                "it names the earlier list {f}: read it from its folder"
+            )))
+        })
+    }
+
     /// Parse and check `contracts.json`: format 1; lowercase nonzero unique
     /// addresses; every ABI whose events count has a `scan_from` block and
     /// at most one contract; a settlement and its disputes come together.
-    pub fn parse(bytes: &[u8]) -> Result<Contracts, EarlyError> {
+    ///
+    /// A list that replaces another names it (`previous`: a file name and
+    /// the hash of its bytes) and its own first day (`from_day`). `read`
+    /// gives that file's bytes; it is parsed and checked the same way, and
+    /// so on back to the first list. A newer list only adds: it keeps the
+    /// chain id and every counted contract of the list before it (address,
+    /// ABI tag and `scan_from`), and its first day is later.
+    pub fn parse_with(
+        bytes: &[u8],
+        read: &mut dyn FnMut(&str) -> Result<Vec<u8>, EarlyError>,
+    ) -> Result<Contracts, EarlyError> {
+        Contracts::parse_list(bytes, read, MAX_LISTS)
+    }
+
+    fn parse_list(
+        bytes: &[u8],
+        read: &mut dyn FnMut(&str) -> Result<Vec<u8>, EarlyError>,
+        left: usize,
+    ) -> Result<Contracts, EarlyError> {
         let file: ContractsFile =
             serde_json::from_slice(bytes).map_err(|e| contracts_err(e.to_string()))?;
         if file.format != FORMAT {
@@ -474,18 +537,143 @@ impl Contracts {
                 )));
             }
         }
+        if file.from_day.is_some() != file.previous.is_some() {
+            return Err(contracts_err("from_day and previous go together"));
+        }
+        let from_day = file
+            .from_day
+            .as_deref()
+            .map(|d| parse_day(d).ok_or_else(|| contracts_err(format!("from_day {d:?}"))))
+            .transpose()?;
+        let previous = match &file.previous {
+            None => None,
+            Some(p) => {
+                if left <= 1 {
+                    return Err(contracts_err(format!(
+                        "more than {MAX_LISTS} lists in a row"
+                    )));
+                }
+                let name_ok = !p.file.is_empty()
+                    && !p.file.starts_with('.')
+                    && p.file
+                        .bytes()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, b'.' | b'-' | b'_'));
+                if !name_ok {
+                    return Err(contracts_err(format!(
+                        "previous.file {:?} must be a file name in the same folder",
+                        p.file
+                    )));
+                }
+                let b = read(&p.file)?;
+                if h32_text(&keccak256(&b)) != p.keccak256 {
+                    return Err(contracts_err(format!(
+                        "{} does not have the hash previous.keccak256 names: an earlier list never changes",
+                        p.file
+                    )));
+                }
+                let prev = Contracts::parse_list(&b, read, left - 1)?;
+                if prev.file.chain_id != file.chain_id {
+                    return Err(contracts_err(format!("{} is of another chain", p.file)));
+                }
+                if prev.from_day >= from_day {
+                    return Err(contracts_err(format!(
+                        "from_day must be after the from_day of {}",
+                        p.file
+                    )));
+                }
+                for o in prev.file.contracts.iter().filter(|o| o.abi.counted()) {
+                    let kept = file.contracts.iter().any(|c| {
+                        (c.address.as_str(), c.abi, c.scan_from)
+                            == (o.address.as_str(), o.abi, o.scan_from)
+                    });
+                    if !kept {
+                        return Err(contracts_err(format!(
+                            "{} ({}) of {} is gone or changed: a newer list keeps every counted contract, its ABI tag and its scan_from",
+                            o.name, o.address, p.file
+                        )));
+                    }
+                }
+                Some(Box::new(prev))
+            }
+        };
         Ok(Contracts {
             file,
             hash: keccak256(bytes),
+            from_day,
+            previous,
             by_address,
         })
     }
 
-    /// Read and parse a file.
+    /// Read and parse a file, and the earlier lists it names from its folder.
     pub fn load(path: &std::path::Path) -> Result<Contracts, EarlyError> {
-        let b =
-            std::fs::read(path).map_err(|e| contracts_err(format!("{}: {e}", path.display())))?;
-        Contracts::parse(&b)
+        let get = |p: &std::path::Path| {
+            std::fs::read(p).map_err(|e| contracts_err(format!("{}: {e}", p.display())))
+        };
+        let dir = path.parent().unwrap_or(std::path::Path::new(""));
+        Contracts::parse_with(&get(path)?, &mut |f| get(&dir.join(f)))
+    }
+
+    /// The first list of this file's history (a new state starts with it).
+    pub fn first(&self) -> &Contracts {
+        let mut c = self;
+        while let Some(p) = &c.previous {
+            c = p;
+        }
+        c
+    }
+
+    /// The list in force on `day`: the newest whose `from_day` is at or
+    /// before it, or the first list.
+    pub fn on(&self, day: u32) -> &Contracts {
+        let mut c = self;
+        while let (Some(from), Some(p)) = (c.from_day, &c.previous) {
+            if from <= day {
+                break;
+            }
+            c = p;
+        }
+        c
+    }
+
+    /// This list or the earlier one with the `0x` hash `hash`.
+    pub fn find(&self, hash: &str) -> Option<&Contracts> {
+        let mut c = Some(self);
+        while let Some(x) = c {
+            if h32_text(&x.hash) == hash {
+                return Some(x);
+            }
+            c = x.previous.as_deref();
+        }
+        None
+    }
+
+    /// The list that replaced `old` on the way to this one (`None`: `old`
+    /// is this list, or not one before it).
+    pub fn after(&self, old: &Contracts) -> Option<&Contracts> {
+        let mut c = self;
+        while let Some(p) = &c.previous {
+            if p.hash == old.hash {
+                return Some(c);
+            }
+            c = p;
+        }
+        None
+    }
+
+    /// The counted contracts of this list that `old` does not count.
+    pub fn added_since(&self, old: &Contracts) -> Vec<&ContractEntry> {
+        self.file
+            .contracts
+            .iter()
+            .filter(|e| e.abi.counted())
+            .filter(|e| {
+                !old.file
+                    .contracts
+                    .iter()
+                    .any(|o| o.abi.counted() && o.address == e.address)
+            })
+            .collect()
     }
 
     /// The deployment at `a`.
@@ -1273,6 +1461,17 @@ pub struct State {
     /// never released (`release` needs `caseCount == 0`), so it gives no
     /// row; its case's end (`dEnd`) may emit a `Finalized` the join ignores.
     cases: BTreeMap<String, String>,
+    /// Node operators of every storage contract but the `storage-v3` one,
+    /// by `address:node` (the `storage-v3` contract's are in `operators`,
+    /// by node alone, as before a second storage contract was counted).
+    /// Left out of the JSON while empty, so a state with no such contract
+    /// has the bytes, and the hash in `day.json`, it always had.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    operators_at: BTreeMap<String, String>,
+    /// Deal payers of every storage contract but the `storage-v3` one, by
+    /// `address:deal` (each contract numbers its deals from 0).
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    payers_at: BTreeMap<String, String>,
 }
 
 /// Facts the join takes from view calls, not from logs (slice 2 reads them
@@ -1311,16 +1510,45 @@ pub struct DayClose {
     pub contracts_hash: Hash32,
     /// [`exclusions_hash`] of the exclusions in force.
     pub exclusions_hash: Hash32,
+    /// The blocks before `from_block` this version also reads ([`Late`]):
+    /// only in the first version of a new list.
+    pub late: Option<Late>,
+}
+
+/// What the first version of a new list reads before its own day: the logs
+/// of the contracts the list adds, from the earliest of their `scan_from`
+/// blocks. Their rows go into that version, each with its own accept block,
+/// because the versions of those earlier days are published and never
+/// change.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Late {
+    /// The first block to read (below the day's first block).
+    pub from_block: u64,
+    /// The contracts the list adds (`0x` addresses).
+    pub contracts: BTreeSet<String>,
+}
+
+impl Late {
+    /// `logs` without the logs before block `from` of other contracts: the
+    /// list before already read them on their own days.
+    pub fn keep(&self, from: u64, logs: Vec<ChainLog>) -> Vec<ChainLog> {
+        logs.into_iter()
+            .filter(|l| l.block >= from || self.contracts.contains(&addr_text(&l.address)))
+            .collect()
+    }
 }
 
 /// Sort `logs` by (block, log index), drop exact repeats and refuse two
 /// different logs at one position, a log outside `from..=to`, a log from an
 /// address `contracts.json` does not list or before its contract's
-/// `scan_from`, and block times that disagree or go back.
+/// `scan_from`, and block times that disagree or go back. With `late` (the
+/// first version of a new list), a log from `late.from_block` on is in
+/// range when one of the contracts the list adds emitted it.
 fn order(
     c: &Contracts,
     from: u64,
     to: u64,
+    late: Option<&Late>,
     logs: &[ChainLog],
 ) -> Result<Vec<ChainLog>, EarlyError> {
     let mut v: Vec<&ChainLog> = logs.iter().collect();
@@ -1357,7 +1585,11 @@ fn order(
     });
     let mut out: Vec<ChainLog> = Vec::with_capacity(v.len());
     for l in v {
-        if l.block < from || l.block > to {
+        let is_late = l.block < from
+            && late.is_some_and(|x| {
+                l.block >= x.from_block && x.contracts.contains(&addr_text(&l.address))
+            });
+        if (l.block < from && !is_late) || l.block > to {
             return Err(log_err(format!(
                 "log at block {} outside the range {from}..={to}",
                 l.block
@@ -1406,12 +1638,15 @@ fn amount_text(v: u128) -> String {
 /// log a `MissReward` of the same transaction names).
 #[derive(Default)]
 struct Batch {
-    /// (tx, node) -> (subject, deal) of the last `Slashed` with cause MISSED.
-    slashes: BTreeMap<(String, String), (String, u64)>,
+    /// (contract, tx, node) -> (subject, deal) of the last `Slashed` with
+    /// cause MISSED.
+    slashes: BTreeMap<(String, String, String), (String, u64)>,
 }
 
 impl State {
     /// An empty state bound to `c`, starting at its first counted block.
+    /// For a file with a history, `c` is its first list
+    /// ([`Contracts::first`]).
     pub fn new(c: &Contracts) -> State {
         State {
             format: FORMAT,
@@ -1504,9 +1739,39 @@ impl State {
         self.signers.values().cloned().collect()
     }
 
+    /// What a range that starts at block `from` also reads when `c` is not
+    /// the list this state was built with but a later one of the same
+    /// history: the logs of the contracts `c` adds, from their `scan_from`
+    /// (`None`: the same list, or no added contract starts before `from`).
+    /// A list that is neither is refused.
+    pub fn late(&self, c: &Contracts, from: u64) -> Result<Option<Late>, EarlyError> {
+        if self.contracts == h32_text(&c.hash) {
+            return Ok(None);
+        }
+        let old = c.find(&self.contracts).ok_or_else(|| {
+            join_err(
+                "the state was built with another contracts.json: rebuild it from the deploy blocks",
+            )
+        })?;
+        let added = c.added_since(old);
+        let first = added
+            .iter()
+            .filter_map(|e| e.scan_from)
+            .filter(|b| *b < from)
+            .min();
+        Ok(first.map(|from_block| Late {
+            from_block,
+            contracts: added.iter().map(|e| e.address.clone()).collect(),
+        }))
+    }
+
     /// Apply the logs of blocks `from..=to` (`from` must be the cursor) and
     /// return the rows they accept. All or nothing: on an error the state
     /// is unchanged.
+    ///
+    /// `c` is the list this state was built with, or a later list of the
+    /// same history. Then the state moves to `c`, and `logs` may also hold
+    /// the logs before `from` of the contracts `c` adds ([`Self::late`]).
     pub fn apply(
         &mut self,
         c: &Contracts,
@@ -1515,19 +1780,16 @@ impl State {
         logs: &[ChainLog],
         views: &Views,
     ) -> Result<Vec<Row>, EarlyError> {
-        if self.contracts != h32_text(&c.hash) {
-            return Err(join_err(
-                "the state was built with another contracts.json: rebuild it from the deploy blocks",
-            ));
-        }
+        let late = self.late(c, from)?;
         if from != self.next_block || to < from {
             return Err(join_err(format!(
                 "range {from}..={to} does not start at the cursor {}",
                 self.next_block
             )));
         }
-        let logs = order(c, from, to, logs)?;
+        let logs = order(c, from, to, late.as_ref(), logs)?;
         let mut next = self.clone();
+        next.contracts = h32_text(&c.hash);
         let mut rows = Vec::new();
         let mut batch = Batch::default();
         for l in &logs {
@@ -1541,6 +1803,28 @@ impl State {
         next.next_block = to + 1;
         *self = next;
         Ok(rows)
+    }
+
+    /// The operator of `node` on the storage contract `e`.
+    fn operator_of(&self, e: &ContractEntry, node: &str) -> Option<String> {
+        if e.abi == Abi::StorageV3 {
+            self.operators.get(node).cloned()
+        } else {
+            self.operators_at
+                .get(&format!("{}:{node}", e.address))
+                .cloned()
+        }
+    }
+
+    /// The payer of deal `deal` on the storage contract `e`.
+    fn payer_of(&self, e: &ContractEntry, deal: u64) -> Option<String> {
+        if e.abi == Abi::StorageV3 {
+            self.payers.get(&deal).cloned()
+        } else {
+            self.payers_at
+                .get(&format!("{}:{deal}", e.address))
+                .cloned()
+        }
     }
 
     fn revoke(&mut self, digest: &str, why: &str, contract: &str, at: &Ref, rows: &mut Vec<Row>) {
@@ -1786,12 +2070,24 @@ impl State {
                 self.revoke_key_from(&key, from, false, "retired", &e.address, &at, views, rows);
             }
             Ev::Activated { node, operator } => {
-                if self.operators.insert(node.clone(), operator).is_some() {
+                let had = if e.abi == Abi::StorageV3 {
+                    self.operators.insert(node.clone(), operator)
+                } else {
+                    self.operators_at
+                        .insert(format!("{}:{node}", e.address), operator)
+                };
+                if had.is_some() {
                     return Err(join_err(format!("node {node} activated twice")));
                 }
             }
             Ev::Deal { deal, payer } => {
-                if self.payers.insert(deal, payer).is_some() {
+                let had = if e.abi == Abi::StorageV3 {
+                    self.payers.insert(deal, payer)
+                } else {
+                    self.payers_at
+                        .insert(format!("{}:{deal}", e.address), payer)
+                };
+                if had.is_some() {
                     return Err(join_err(format!("deal {deal} created twice")));
                 }
             }
@@ -1803,10 +2099,10 @@ impl State {
                 paid,
             } => {
                 if passed {
-                    let op = self.operators.get(&node).cloned().ok_or_else(|| {
+                    let op = self.operator_of(e, &node).ok_or_else(|| {
                         join_err(format!("answer by node {node} without its Activated log"))
                     })?;
-                    let payer = self.payers.get(&deal).cloned().ok_or_else(|| {
+                    let payer = self.payer_of(e, deal).ok_or_else(|| {
                         join_err(format!("answer on deal {deal} without its DealCreated log"))
                     })?;
                     let mut x = row(Kind::StorageProof, op.clone(), subject, at.clone());
@@ -1823,7 +2119,9 @@ impl State {
                 cause,
             } => {
                 if cause == MISSED {
-                    batch.slashes.insert((at.tx.clone(), node), (subject, deal));
+                    batch
+                        .slashes
+                        .insert((e.address.clone(), at.tx.clone(), node), (subject, deal));
                 }
             }
             Ev::MissReward {
@@ -1833,14 +2131,14 @@ impl State {
             } => {
                 let (subject, deal) = batch
                     .slashes
-                    .get(&(at.tx.clone(), node.clone()))
+                    .get(&(e.address.clone(), at.tx.clone(), node.clone()))
                     .cloned()
                     .ok_or_else(|| {
                         join_err(format!(
                             "MissReward for node {node} without the Slashed log of its transaction"
                         ))
                     })?;
-                let payer = self.payers.get(&deal).cloned().ok_or_else(|| {
+                let payer = self.payer_of(e, deal).ok_or_else(|| {
                     join_err(format!("miss on deal {deal} without its DealCreated log"))
                 })?;
                 let mut x = row(Kind::StorageMissReport, reporter, subject, at.clone());
@@ -2044,6 +2342,11 @@ impl State {
         close: &DayClose,
     ) -> Result<Version, EarlyError> {
         let mut next = self.clone();
+        if close.late != self.late(c, close.from_block)? {
+            return Err(join_err(
+                "the close's late range is not the one this state and list give",
+            ));
+        }
         let rows = next.apply(c, close.from_block, close.to_block, logs, views)?;
         let v = write_day(record_day, &rows, close)?;
         next.record_keys(&v.keys)?;
@@ -2221,7 +2524,9 @@ fn int(v: u64) -> Cell<'static> {
 /// is total), keys `(record_day << 24) + i`, a `day_close` row last whose
 /// subject is `from-to` and whose detail names the last block hash, the
 /// hashes of `contracts.json` and of the exclusions in force, and the row
-/// count. Every row must be accepted in `from..=to` on `record_day`.
+/// count. Every row must be accepted in `from..=to` on `record_day`; with
+/// `close.late` (the first version of a new list), a row of a contract the
+/// list adds may be accepted earlier, from `late.from_block` on.
 pub fn write_day(record_day: u32, rows: &[Row], close: &DayClose) -> Result<Version, EarlyError> {
     if close.from_block > close.to_block {
         return Err(write_err("from_block after to_block"));
@@ -2247,13 +2552,19 @@ pub fn write_day(record_day: u32, rows: &[Row], close: &DayClose) -> Result<Vers
         if r.kind == Kind::DayClose {
             return Err(write_err("a day_close row among the rows"));
         }
-        if r.accept.block < close.from_block || r.accept.block > close.to_block {
+        let is_late = r.accept.block < close.from_block
+            && close.late.as_ref().is_some_and(|x| {
+                r.accept.block >= x.from_block
+                    && x.contracts.contains(&r.contract)
+                    && utc_day(r.accept.time) <= record_day
+            });
+        if (r.accept.block < close.from_block && !is_late) || r.accept.block > close.to_block {
             return Err(write_err(format!(
                 "a row accepted at block {} outside {}..={}",
                 r.accept.block, close.from_block, close.to_block
             )));
         }
-        if utc_day(r.accept.time) != record_day {
+        if !is_late && utc_day(r.accept.time) != record_day {
             return Err(write_err(format!(
                 "a row accepted on {} in the version of {day}",
                 day_text(utc_day(r.accept.time))

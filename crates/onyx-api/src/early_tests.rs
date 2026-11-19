@@ -514,6 +514,7 @@ pub(crate) fn close_for(c: &Contracts, from: u64, to: u64) -> DayClose {
         last_block_hash: h(0xbb),
         contracts_hash: c.hash,
         exclusions_hash: h(0xee),
+        late: None,
     }
 }
 
@@ -1733,8 +1734,14 @@ fn contracts_json_matches_the_deployment_tables() {
                     e.name
                 );
             }
+            // A second deployment of one contract has a name of its own in
+            // the list (`OnyxStorage (v4)`); the document names the contract.
             None => assert!(
-                doc.contains(&format!("`{}` `{}`", e.name, e.address)),
+                doc.contains(&format!(
+                    "`{}` `{}`",
+                    e.name.split(" (").next().unwrap_or_default(),
+                    e.address
+                )),
                 "{} in {}",
                 e.name,
                 e.doc
@@ -1803,7 +1810,10 @@ fn contracts_json_matches_the_deployment_tables() {
         .filter(|e| e.scan_from_is == Some(ScanFrom::Deploy))
         .map(|e| e.name.as_str())
         .collect();
-    assert_eq!(deploy, BTreeSet::from(["OnyxCorrections", "OnyxStorage"]));
+    assert_eq!(
+        deploy,
+        BTreeSet::from(["OnyxCorrections", "OnyxStorage", "OnyxStorage (v4)"])
+    );
     // Every Onyx contract the tables list is in contracts.json (EARLY-3).
     let listed: BTreeSet<&str> = real
         .file
@@ -2438,7 +2448,7 @@ fn role_calls_have_the_pinned_selectors() {
         Abi::SettlementV1 => "OnyxLedger.sol",
         Abi::RegistryV1 => "OnyxRegistry.sol",
         Abi::SignedBookV1 => "OnyxSignedBook.sol",
-        Abi::StorageV3 => "OnyxStorage.sol",
+        Abi::StorageV3 | Abi::StorageV4 => "OnyxStorage.sol",
         Abi::StakesV1 => "OnyxStakes.sol",
         Abi::CorrectionsV1 => "OnyxCorrections.sol",
         Abi::PanelOracleV1 => "OnyxPanelOracle.sol",
@@ -2462,7 +2472,8 @@ fn role_calls_have_the_pinned_selectors() {
         );
         seen += 1;
     }
-    assert_eq!(seen, 16, "every role call of the live contracts is checked");
+    // 16 of list 1, and the treasury of the second storage contract.
+    assert_eq!(seen, 17, "every role call of the live contracts is checked");
     let r = &calls[0];
     assert!(r.exclusion("0x12").is_err());
     assert!(
@@ -2567,4 +2578,549 @@ fn rows_hold_only_addresses_hashes_and_codes() {
     for s in ["Example", "example", "jane", "btc.price", "https"] {
         assert!(!csv.contains(s), "{s}");
     }
+}
+
+// ------------------------------------------------------------------ a second storage contract, a newer list
+
+/// The second storage contract (`storage-v4`).
+pub(crate) const STORAGE4: [u8; 20] = [0x18; 20];
+
+/// `l` as the second storage contract emits it.
+pub(crate) fn v4(mut l: ChainLog) -> ChainLog {
+    l.address = STORAGE4;
+    l
+}
+
+/// The list after `first`: the same contracts and a `storage-v4` contract
+/// read from block `v4_from`, in force from `from_day`; `first` is its
+/// `contracts-1.json`.
+pub(crate) fn list_2_json_of(first: &str, from_day: u32, v4_from: u64) -> String {
+    let mut v: Value = serde_json::from_str(first).expect("json");
+    v["contracts"].as_array_mut().expect("list").push(json!({
+        "name": "OnyxStorage (v4)", "abi": "storage-v4", "address": addr_text(&STORAGE4),
+        "doc": "test", "scan_from": v4_from, "scan_from_is": "deploy", "block_doc": "test",
+        "block_quote": format!("block {v4_from}"),
+    }));
+    v["from_day"] = json!(day_text(from_day));
+    v["previous"] = json!({
+        "file": "contracts-1.json",
+        "keccak256": h32_text(&keccak256(first.as_bytes())),
+    });
+    v.to_string()
+}
+
+pub(crate) fn list_2_json(from_day: u32, v4_from: u64) -> String {
+    list_2_json_of(&test_contracts_json(FROM), from_day, v4_from)
+}
+
+fn with_list_1(json: &str) -> Result<Contracts, EarlyError> {
+    Contracts::parse_with(json.as_bytes(), &mut |f| match f {
+        "contracts-1.json" => Ok(test_contracts_json(FROM).into_bytes()),
+        _ => Err(EarlyError::Contracts(format!("no file {f}"))),
+    })
+}
+
+fn list_2(from_day: u32, v4_from: u64) -> Contracts {
+    with_list_1(&list_2_json(from_day, v4_from)).expect("list 2")
+}
+
+/// Both storage contracts in one list with no history.
+fn both_storages() -> Contracts {
+    let mut v: Value = serde_json::from_str(&list_2_json(DAY, FROM)).expect("json");
+    let o = v.as_object_mut().expect("obj");
+    o.remove("from_day");
+    o.remove("previous");
+    Contracts::parse(v.to_string().as_bytes()).expect("both")
+}
+
+#[test]
+fn a_list_takes_a_second_storage_contract_and_refuses_a_conflict() {
+    let one = contracts();
+    let two = list_2(DAY + 2, FROM + 90_000);
+    let name = |a: Abi| two.of(a).map(|e| e.address.clone());
+    assert_eq!(name(Abi::StorageV3), Some(addr_text(&STORAGE)));
+    assert_eq!(name(Abi::StorageV4), Some(addr_text(&STORAGE4)));
+    // The same five events and the same role getter: nothing new is asked
+    // of the node but one more address. `DealAnchor` is not read.
+    assert_eq!(Abi::StorageV4.events(), Abi::StorageV3.events());
+    assert_eq!(Abi::StorageV4.roles(), Abi::StorageV3.roles());
+    let (addrs, topics) = two.filter();
+    assert_eq!(addrs.len(), 7);
+    assert!(addrs.contains(&addr_text(&STORAGE4)));
+    assert_eq!(topics, one.filter().1);
+    assert!(!topics.contains(&h32_text(&tp("DealAnchor(uint64,bytes32,bool)"))));
+    assert!(!one.filter().0.contains(&addr_text(&STORAGE4)));
+    // The history: each day has one list.
+    assert!(one.previous.is_none() && one.from_day.is_none());
+    assert_eq!(two.first().hash, one.hash);
+    assert_eq!(two.from_day, Some(DAY + 2));
+    assert_eq!(two.on(DAY).hash, one.hash);
+    assert_eq!(two.on(DAY + 1).hash, one.hash);
+    assert_eq!(two.on(DAY + 2).hash, two.hash);
+    assert_eq!(two.on(DAY + 900).hash, two.hash);
+    assert_eq!(one.on(DAY + 900).hash, one.hash);
+    assert_ne!(one.hash, two.hash);
+    assert!(two.find(&h32_text(&one.hash)).is_some());
+    assert!(one.find(&h32_text(&two.hash)).is_none());
+    assert_eq!(two.after(two.first()).map(|c| c.hash), Some(two.hash));
+    assert!(two.after(&two).is_none());
+    let added: Vec<&str> = two
+        .added_since(two.first())
+        .iter()
+        .map(|e| e.name.as_str())
+        .collect();
+    assert_eq!(added, ["OnyxStorage (v4)"]);
+    assert!(two.added_since(&two).is_empty());
+
+    let base: Value = serde_json::from_str(&list_2_json(DAY + 2, FROM + 90_000)).expect("json");
+    let bad = |f: &dyn Fn(&mut Value)| {
+        let mut v = base.clone();
+        f(&mut v);
+        with_list_1(&v.to_string())
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    };
+    let refused = |f: &dyn Fn(&mut Value), why: &str| {
+        let e = bad(f).expect_err(why);
+        assert!(e.contains(why), "{e}");
+    };
+    assert_eq!(bad(&|_| {}), Ok(()));
+    // The conflict: two contracts with one counted ABI tag. The join keeps
+    // one set of ids per tag, so their deals and nodes would mix.
+    let twice = "a second contract with a counted ABI";
+    refused(&|v| v["contracts"][7]["abi"] = json!("storage-v3"), twice);
+    refused(
+        &|v| {
+            let mut e = v["contracts"][7].clone();
+            e["address"] = json!(addr_text(&[0x19; 20]));
+            v["contracts"].as_array_mut().expect("list").push(e);
+        },
+        twice,
+    );
+    refused(
+        &|v| v["contracts"][7]["address"] = json!(addr_text(&STORAGE)),
+        "listed twice",
+    );
+    refused(
+        &|v| v["contracts"][7]["abi"] = json!("storage-v5"),
+        "storage-v5",
+    );
+    // A newer list only adds, and an earlier list never changes.
+    let together = "from_day and previous go together";
+    refused(&|v| v["from_day"] = Value::Null, together);
+    refused(&|v| v["previous"] = Value::Null, together);
+    refused(&|v| v["from_day"] = json!("2026-11-31"), "from_day");
+    refused(
+        &|v| v["previous"]["keccak256"] = json!(h32_text(&h(1))),
+        "never changes",
+    );
+    for f in ["../contracts-1.json", "a/contracts-1.json", ".hidden", ""] {
+        refused(&|v| v["previous"]["file"] = json!(f), "same folder");
+    }
+    refused(
+        &|v| v["previous"]["file"] = json!("contracts-0.json"),
+        "no file",
+    );
+    let gone = "is gone or changed";
+    refused(
+        &|v| {
+            v["contracts"].as_array_mut().expect("list").remove(3);
+        },
+        gone,
+    );
+    refused(
+        &|v| {
+            v["contracts"][3]["scan_from"] = json!(FROM + 1);
+            v["contracts"][3]["block_quote"] = json!(format!("block {}", FROM + 1));
+        },
+        gone,
+    );
+    refused(&|v| v["chain_id"] = json!(1), "another chain");
+    // A list that names an earlier one is not parsed alone.
+    assert!(Contracts::parse(base.to_string().as_bytes()).is_err());
+    // A third list: its first day is after the second's.
+    let second = base.to_string();
+    let third = |from_day: u32| {
+        let mut v = base.clone();
+        v["from_day"] = json!(day_text(from_day));
+        v["previous"] = json!({
+            "file": "contracts-2.json",
+            "keccak256": h32_text(&keccak256(second.as_bytes())),
+        });
+        Contracts::parse_with(v.to_string().as_bytes(), &mut |f| {
+            Ok(match f {
+                "contracts-2.json" => second.clone().into_bytes(),
+                _ => test_contracts_json(FROM).into_bytes(),
+            })
+        })
+    };
+    assert!(third(DAY + 2).is_err() && third(DAY + 1).is_err());
+    let three = third(DAY + 5).expect("list 3");
+    assert_eq!(three.on(DAY + 1).hash, one.hash);
+    assert_eq!(three.on(DAY + 4).hash, two.hash);
+    assert_eq!(three.on(DAY + 5).hash, three.hash);
+    assert_eq!(three.after(three.first()).map(|c| c.hash), Some(two.hash));
+    assert!(three.added_since(three.first()).len() == 1 && three.added_since(&two).is_empty());
+}
+
+/// Every counted storage event of the second contract gives the row the
+/// first contract's gives, under its own address; the two contracts' deal
+/// and node ids never meet.
+#[test]
+fn storage_v4_work_is_counted_like_v3_and_kept_apart() {
+    let c = both_storages();
+    let node = h(0x81);
+    let run =
+        |logs: &[ChainLog]| State::new(&c).apply(&c, FROM, FROM + 1000, logs, &Views::default());
+    // The same node id and the same deal id on both contracts, with other
+    // operators and payers.
+    let mut logs = vec![
+        activated(108, 0, node, OPERATOR),
+        deal(108, 1, 0, PAYER),
+        v4(activated(108, 2, node, MINER_A)),
+        v4(deal(108, 3, 0, MINER_A)),
+        // A log of the new event: not read.
+        lgt(
+            STORAGE4,
+            108,
+            4,
+            108_003,
+            vec![tp("DealAnchor(uint64,bytes32,bool)"), tu(0)],
+            [[7u8; 32], word(1)].concat(),
+        ),
+        answered(109, 0, 0, 2, 0, node, true, 5),
+        v4(answered(109, 1, 0, 2, 0, node, true, 6)),
+        v4(answered(109, 2, 0, 2, 1, node, false, 0)),
+        v4(slashed(110, 0, 1100, node, 0, 2, 1, 3)),
+        v4(miss_reward(110, 1, 1100, node, REPORTER, 9)),
+    ];
+    let rows = run(&logs).expect("apply");
+    let cell = |r: &Row| {
+        (
+            r.kind,
+            r.contract.clone(),
+            r.who.clone(),
+            r.counterparty.clone().unwrap_or_default(),
+            r.detail.clone(),
+            r.amount.unwrap_or_default(),
+            r.subject.clone(),
+        )
+    };
+    let subject = |slot: u32| format!("0:2:{slot}:{}", h32_text(&node));
+    let (three, four) = (addr_text(&STORAGE), addr_text(&STORAGE4));
+    assert_eq!(
+        rows.iter().map(cell).collect::<Vec<_>>(),
+        vec![
+            (
+                Kind::StorageProof,
+                three.clone(),
+                addr_text(&OPERATOR),
+                addr_text(&PAYER),
+                "other".to_string(),
+                5,
+                subject(0)
+            ),
+            (
+                Kind::StorageProof,
+                four.clone(),
+                addr_text(&MINER_A),
+                addr_text(&MINER_A),
+                "self".to_string(),
+                6,
+                subject(0)
+            ),
+            (
+                Kind::StorageMissReport,
+                four.clone(),
+                addr_text(&REPORTER),
+                addr_text(&MINER_A),
+                "reward".to_string(),
+                9,
+                subject(1)
+            ),
+        ]
+    );
+    // The version takes both proofs of slot 0 (same subject, other contract).
+    let v = write_day(DAY, &rows, &close_for(&c, FROM, FROM + 1000)).expect("version");
+    assert_eq!(v.rows, 4);
+    // Each contract needs its own earlier logs: a node or a deal of the
+    // other contract does not stand in, and a repeat is refused per contract.
+    let only_v3 = [
+        activated(108, 0, node, OPERATOR),
+        deal(108, 1, 0, PAYER),
+        v4(activated(108, 2, node, MINER_A)),
+        v4(answered(109, 1, 0, 2, 0, node, true, 6)),
+    ];
+    assert!(matches!(run(&only_v3), Err(EarlyError::Join(m)) if m.contains("DealCreated")));
+    let no_node = [
+        activated(108, 0, node, OPERATOR),
+        v4(deal(108, 3, 0, MINER_A)),
+        v4(answered(109, 1, 0, 2, 0, node, true, 6)),
+    ];
+    assert!(matches!(run(&no_node), Err(EarlyError::Join(m)) if m.contains("Activated")));
+    let reward_only = [
+        v4(activated(108, 2, node, MINER_A)),
+        v4(deal(108, 3, 0, MINER_A)),
+        slashed(110, 0, 1100, node, 0, 2, 1, 3),
+        v4(miss_reward(110, 1, 1100, node, REPORTER, 9)),
+    ];
+    assert!(matches!(run(&reward_only), Err(EarlyError::Join(m)) if m.contains("Slashed")));
+    logs.push(v4(activated(111, 0, node, MINER_B)));
+    assert!(matches!(run(&logs), Err(EarlyError::Join(m)) if m.contains("activated twice")));
+    logs.pop();
+    logs.push(v4(deal(111, 0, 0, PAYER)));
+    assert!(matches!(run(&logs), Err(EarlyError::Join(m)) if m.contains("created twice")));
+    // A malformed event of the second contract is refused like the first's.
+    let mut short = v4(activated(108, 2, node, MINER_A));
+    short.topics.pop();
+    assert!(matches!(run(&[short]), Err(EarlyError::Log(_))));
+    // The saved state: the first contract's facts where they always were,
+    // the second's under its address; and without a second contract the
+    // state has no new field at all.
+    let mut s = State::new(&c);
+    s.apply(&c, FROM, FROM + 1000, &logs[..5], &Views::default())
+        .expect("apply");
+    let j: Value = serde_json::from_slice(&s.to_json()).expect("json");
+    let (n, f) = (h32_text(&node), addr_text(&STORAGE4));
+    assert_eq!(j["operators"], json!({ n.clone(): addr_text(&OPERATOR) }));
+    assert_eq!(j["payers"], json!({ "0": addr_text(&PAYER) }));
+    assert_eq!(
+        j["operators_at"],
+        json!({ format!("{f}:{n}"): addr_text(&MINER_A) })
+    );
+    assert_eq!(
+        j["payers_at"],
+        json!({ format!("{f}:0"): addr_text(&MINER_A) })
+    );
+    assert_eq!(State::from_json(&s.to_json()).expect("back"), s);
+    let one = contracts();
+    let mut old = State::new(&one);
+    old.apply(&one, FROM, FROM + 1000, &full_day(), &Views::default())
+        .expect("apply");
+    let text = String::from_utf8(old.to_json()).expect("utf8");
+    assert!(!text.contains("operators_at") && !text.contains("payers_at"));
+}
+
+/// The first storage contract through its history, then the second one from
+/// its deploy block: days built with the first list keep every byte when the
+/// file has a newer list, and the first version of the newer list holds the
+/// new contract's rows from its `scan_from` block on.
+#[test]
+fn a_v3_then_v4_history_keeps_old_days_and_counts_the_new_contract() {
+    let one = contracts();
+    let (b2, b3) = (FROM + 86_400, FROM + 2 * 86_400);
+    let v4_from = b2 + 500;
+    let two = list_2(DAY + 2, v4_from);
+    let (node, node4) = (h(0x81), h(0x84));
+    let day1 = full_day();
+    // Day 2: the first contract works; the second is deployed and works too.
+    let day2_v3 = vec![
+        answered(b2 + 10, 0, 1, 3, 0, node, true, 6),
+        answered(v4_from + 60, 0, 1, 4, 0, node, true, 6),
+    ];
+    let day2_v4 = [
+        v4(activated(v4_from, 0, node4, MINER_A)),
+        v4(deal(v4_from, 1, 0, PAYER)),
+        v4(answered(v4_from + 50, 0, 0, 2, 0, node4, true, 7)),
+        v4(answered(v4_from + 51, 0, 0, 2, 1, node4, false, 0)),
+    ];
+    let day3 = vec![
+        v4(answered(b3 + 5, 0, 0, 3, 0, node4, true, 8)),
+        answered(b3 + 6, 0, 1, 5, 0, node, true, 6),
+        v4(slashed(b3 + 7, 0, 77, node4, 0, 3, 1, 3)),
+        v4(miss_reward(b3 + 7, 1, 77, node4, REPORTER, 9)),
+    ];
+    let v = Views::default();
+    // As published: the first list alone.
+    let mut a = State::new(&one);
+    let a1 = a
+        .record_day(&one, &day1, &v, DAY, &close_for(&one, FROM, b2 - 1))
+        .expect("day 1");
+    let a1_state = a.to_json();
+    let a2 = a
+        .record_day(&one, &day2_v3, &v, DAY + 1, &close_for(&one, b2, b3 - 1))
+        .expect("day 2");
+    // With the newer list in the file: the same bytes on both days.
+    let mut b = State::new(two.first());
+    assert_eq!(b, State::new(&one));
+    let c1 = two.on(DAY);
+    assert_eq!(b.late(c1, FROM).expect("late"), None);
+    let b1 = b
+        .record_day(c1, &day1, &v, DAY, &close_for(c1, FROM, b2 - 1))
+        .expect("day 1");
+    assert_eq!((b1.csv.as_str(), b.to_json()), (a1.csv.as_str(), a1_state));
+    let c2 = two.on(DAY + 1);
+    let b2v = b
+        .record_day(c2, &day2_v3, &v, DAY + 1, &close_for(c2, b2, b3 - 1))
+        .expect("day 2");
+    assert_eq!(
+        (b2v.csv.as_str(), b.to_json()),
+        (a2.csv.as_str(), a.to_json())
+    );
+    assert!(!b2v.csv.contains(&addr_text(&STORAGE4)));
+    // A log of the contract the first list does not name stops a day built
+    // with it; the reader never asks for one (its filter has no such address).
+    let mut early = a.clone();
+    assert!(matches!(
+        early.record_day(&one, &day3, &v, DAY + 2, &close_for(&one, b3, b3 + 86_399)),
+        Err(EarlyError::Log(m)) if m.contains("does not list")
+    ));
+    assert_eq!(early, a);
+
+    // Day 3, the newer list's first day. What the node gives for the late
+    // range holds the first contract's logs of day 2 again.
+    let c3 = two.on(DAY + 2);
+    let late = b.late(c3, b3).expect("late").expect("a late range");
+    assert_eq!(
+        late,
+        Late {
+            from_block: v4_from,
+            contracts: BTreeSet::from([addr_text(&STORAGE4)]),
+        }
+    );
+    let read: Vec<ChainLog> = [&day2_v3[1..], &day2_v4[..], &day3[..]].concat();
+    let logs = late.keep(b3, read.clone());
+    assert_eq!(logs.len(), read.len() - 1);
+    let close = DayClose {
+        late: Some(late.clone()),
+        ..close_for(c3, b3, b3 + 86_399)
+    };
+    let before = b.clone();
+    // The first contract's earlier log is refused, not counted twice; and
+    // the close must name the late range.
+    assert!(matches!(
+        b.clone().record_day(c3, &read, &v, DAY + 2, &close),
+        Err(EarlyError::Log(m)) if m.contains("outside the range")
+    ));
+    assert!(b
+        .clone()
+        .record_day(c3, &logs, &v, DAY + 2, &close_for(c3, b3, b3 + 86_399))
+        .is_err());
+    let b3v = b.record_day(c3, &logs, &v, DAY + 2, &close).expect("day 3");
+    let lines: Vec<&str> = b3v.csv.lines().skip(1).collect();
+    let four = addr_text(&STORAGE4);
+    assert_eq!(lines.len(), 5, "{}", b3v.csv);
+    // The late proof of day 2 comes first, in day 3's version, with its own block.
+    assert!(lines[0].contains(&format!(
+        ",2026-11-16,storage_proof,{},",
+        addr_text(&MINER_A)
+    )));
+    assert!(lines[0].contains(&four) && lines[0].contains(&format!(",{},0,", v4_from + 50)));
+    assert!(lines[1].contains(",storage_proof,") && lines[1].contains(&four));
+    assert!(lines[2].contains(",storage_proof,") && lines[2].contains(&addr_text(&STORAGE)));
+    assert!(lines[3].contains(",storage_miss_report,") && lines[3].contains(&four));
+    assert!(lines[4].contains(",day_close,"));
+    assert!(lines[4].contains(&format!(",{b3}-{},", b3 + 86_399)));
+    assert!(lines[4].contains(&format!("contracts={};", h32_text(&two.hash))));
+    assert!(a2
+        .csv
+        .contains(&format!("contracts={};", h32_text(&one.hash))));
+    assert_eq!(b.contracts, h32_text(&two.hash));
+    assert_eq!(b.late(c3, b.next_block).expect("late"), None);
+    // Keys ascend, so day 3's version follows day 2's.
+    let m1 = build(&b1.csv, None, T0);
+    let m2 = build(&b2v.csv, Some(&m1), T0 + 86_400);
+    let m3 = build(&b3v.csv, Some(&m2), T0 + 2 * 86_400);
+    m3.check_successor(&m2).expect("day 3 follows day 2");
+    // A late row is taken only from a contract the list adds, and only from
+    // the late range on.
+    let rows = before
+        .clone()
+        .apply(c3, b3, b3 + 86_399, &logs, &v)
+        .expect("rows");
+    let mut wrong = rows.clone();
+    wrong[0].contract = addr_text(&STORAGE);
+    assert!(matches!(
+        write_day(DAY + 2, &wrong, &close),
+        Err(EarlyError::Write(_))
+    ));
+    let mut wrong = rows.clone();
+    wrong[0].accept.block = v4_from - 1;
+    assert!(matches!(
+        write_day(DAY + 2, &wrong, &close),
+        Err(EarlyError::Write(_))
+    ));
+    assert!(write_day(DAY + 2, &rows, &close_for(c3, b3, b3 + 86_399)).is_err());
+    assert_eq!(
+        write_day(DAY + 2, &rows, &close).expect("same").csv,
+        b3v.csv
+    );
+    // The same history again gives the same bytes; a state of a list that is
+    // not in the file's history is refused.
+    let mut again = before.clone();
+    let shuffled: Vec<ChainLog> = logs.iter().rev().cloned().collect();
+    assert_eq!(
+        again
+            .record_day(c3, &shuffled, &v, DAY + 2, &close)
+            .expect("again")
+            .csv,
+        b3v.csv
+    );
+    assert_eq!(again.to_json(), b.to_json());
+    let other = Contracts::parse(test_contracts_json(150).as_bytes()).expect("other");
+    assert!(matches!(
+        State::new(&other).apply(c3, 150, b3, &[], &v),
+        Err(EarlyError::Join(_))
+    ));
+    // A newer state never goes back to the list before.
+    assert!(matches!(
+        b.clone().apply(&one, b.next_block, b.next_block, &[], &v),
+        Err(EarlyError::Join(_))
+    ));
+}
+
+/// The hash of the first list, `deploy/early-record/contracts-1.json`:
+/// every `day_close` up to 2026-11-19 names it.
+const LIST_1_KECCAK: &str = "0xa5b599c58c19f77f4629277c503570ec8b62dcbad303924065972d9c1fb4e976";
+
+#[test]
+fn the_shipped_list_keeps_the_first_list_and_adds_storage_v4() {
+    let head = Contracts::load(&repo().join("deploy/early-record/contracts.json"))
+        .expect("contracts.json");
+    let first = head.first();
+    assert_eq!(h32_text(&first.hash), LIST_1_KECCAK);
+    assert_eq!(
+        h32_text(&keccak256(
+            &std::fs::read(repo().join("deploy/early-record/contracts-1.json")).expect("list 1")
+        )),
+        LIST_1_KECCAK
+    );
+    assert!(first.previous.is_none() && first.from_day.is_none());
+    assert_eq!(head.previous.as_deref().map(|p| p.hash), Some(first.hash));
+    assert_eq!(head.from_day, parse_day("2026-11-20"));
+    assert_eq!(
+        h32_text(&head.on(parse_day("2026-11-19").expect("day")).hash),
+        LIST_1_KECCAK
+    );
+    assert_eq!(
+        head.on(parse_day("2026-11-20").expect("day")).hash,
+        head.hash
+    );
+    // Every entry of the first list is kept as it was, in its place.
+    let n = first.file.contracts.len();
+    assert_eq!(&head.file.contracts[..n], &first.file.contracts[..]);
+    assert_eq!(head.file.contracts.len(), n + 1);
+    let added = head.added_since(first);
+    assert_eq!(added.len(), 1);
+    let e = added[0];
+    assert_eq!(
+        (
+            e.name.as_str(),
+            e.abi,
+            e.address.as_str(),
+            e.scan_from,
+            e.scan_from_is
+        ),
+        (
+            "OnyxStorage (v4)",
+            Abi::StorageV4,
+            "0x80833ee1b5f14349c6d41e75259974d29cd86e6b",
+            Some(60_983_049),
+            Some(ScanFrom::Deploy)
+        )
+    );
+    assert_eq!(
+        head.of(Abi::StorageV3).map(|e| e.address.as_str()),
+        Some("0x9244eeaf5053f90ca2fbce157a3446f828c5ee43")
+    );
 }

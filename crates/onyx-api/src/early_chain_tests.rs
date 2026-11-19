@@ -7,9 +7,10 @@
 
 use super::*;
 use crate::early::tests::{
-    answered, bet, committed, decided, full_day, key_event, key_registered, opened, report,
-    resolved, submitted_on, test_contracts_json, BETTOR_NO, BOOK, DAY, FROM, MINER_A, OPENER,
-    REVIEWER, SETTLE, SIGNER, STORAGE, SUBMITTER, T0,
+    activated, answered, bet, committed, deal, decided, full_day, key_event, key_registered,
+    list_2_json, list_2_json_of, opened, report, resolved, submitted_on, test_contracts_json, v4,
+    BETTOR_NO, BOOK, DAY, FROM, MINER_A, OPENER, PAYER, REVIEWER, SETTLE, SIGNER, STORAGE,
+    STORAGE4, SUBMITTER, T0,
 };
 use crate::early::{addr_text, parse_day, sig};
 use crate::x402::BoxFuture;
@@ -1279,5 +1280,265 @@ async fn verify_compares_the_exclusions_shard_roots() {
         matches!(&e, Err(ReadError::Folder(m)) if m.contains("root differs")),
         "{e:?}"
     );
+    let _ = std::fs::remove_dir_all(root);
+}
+
+// ------------------------------------------------------------------ a newer list
+
+/// The hashes [`two_built_days`] gave before a list could name an earlier
+/// one (recorded 2026-11-19 at commit d97dd5cb): for each of the two days
+/// `data.csv`, `day.json`, `exclusions/data.csv` and the join's state.
+const BEFORE: [&str; 8] = [
+    "0xf4c8a92a3021b81953c644943824a90e15aaef0ed884157b0318ba0c558db7c2",
+    "0x09165ffbe2f67048448f9fe121f5c42b8b5d7012459e22d60015c25c69b9588d",
+    "0x46646bb542c6add5adb7277f35db8026c684e2770d39deb14494e6b72a7d1343",
+    "0x4c4b5a3d4c734b3a32fa8b8430550eaf8b9800087b341a07767bb2548e9e9ee5",
+    "0x84c2bc0d3894c3b7dd718982c9f6d7c650cf27fc4d655c0ee0ec577929575399",
+    "0x14027305995cabea4dd7424dc58f581d2a2fa821aef233d24802deb3d6d4dee9",
+    "none",
+    "0xdd458eff9fa41a09d5552c84f36d9644fe4fd20c00ee28aa5746e2cd5524fa66",
+];
+
+/// Put a newer list in `o`'s folder: the list so far becomes
+/// `contracts-1.json`, and `contracts.json` names it and adds the
+/// `storage-v4` contract from block `v4_from`, in force from `from_day`.
+fn install_list_2(o: &BuildOpts, from_day: u32, v4_from: u64) {
+    let dir = o.contracts.parent().expect("dir");
+    std::fs::write(dir.join("contracts-1.json"), test_contracts_json(FROM)).expect("list 1");
+    std::fs::write(&o.contracts, list_2_json(from_day, v4_from)).expect("list 2");
+}
+
+/// keccak256 (`0x`) of each file of two built days and of the join's state
+/// after each (`newer`: with a newer list installed that starts later).
+async fn two_built_days(newer: bool) -> Vec<String> {
+    let (root, o) = world();
+    if newer {
+        install_list_2(&o, DAY + 2, FROM + PER_DAY + 100);
+    }
+    let f = Fake::new(FROM + 2 * PER_DAY, two_days());
+    let mut got = Vec::new();
+    let mut prev: Option<PathBuf> = None;
+    for name in ["v1", "v2"] {
+        let o = BuildOpts {
+            prev: prev.clone(),
+            ..out(&o, name)
+        };
+        assert!(matches!(
+            build(&quick(&f), &o).await.expect("day"),
+            Built::Day { .. }
+        ));
+        for file in ["data.csv", "day.json", "exclusions/data.csv"] {
+            got.push(match std::fs::read(o.out.join(file)) {
+                Ok(b) => hash_bytes(&b),
+                Err(_) => "none".to_string(),
+            });
+        }
+        got.push(state_hash(&tool_of(&o).record));
+        prev = Some(o.out.clone());
+    }
+    let _ = std::fs::remove_dir_all(root);
+    got
+}
+
+/// Days built before this change keep every byte: with the list alone, and
+/// with a newer list installed whose first day is later.
+#[tokio::test]
+async fn days_built_before_the_list_could_change_keep_their_bytes() {
+    assert_eq!(
+        hash_bytes(test_contracts_json(FROM).as_bytes()),
+        "0xb1f91817af7a4289167321990fcceda8f2e8c8a85b094a0f1db53c2fe8a839c9",
+        "the test list itself is the one the hashes were recorded with"
+    );
+    assert_eq!(two_built_days(false).await, BEFORE);
+    assert_eq!(two_built_days(true).await, BEFORE);
+}
+
+/// Three days: the second storage contract is deployed on day 2 and has
+/// work on days 2 and 3; the first one has work on every day.
+fn three_days(v4_from: u64) -> Vec<ChainLog> {
+    let (node, node4) = (Hash32([0x81; 32]), Hash32([0x84; 32]));
+    let b3 = FROM + 2 * PER_DAY;
+    let mut v = two_days();
+    v.extend([
+        v4(activated(v4_from, 0, node4, MINER_A)),
+        v4(deal(v4_from, 1, 0, PAYER)),
+        v4(answered(v4_from + 5, 0, 0, 2, 0, node4, true, 7)),
+        answered(v4_from + 6, 0, 1, 4, 0, node, true, 6),
+        v4(answered(b3 + 1, 0, 0, 3, 0, node4, true, 8)),
+        answered(b3 + 2, 0, 1, 5, 0, node, true, 6),
+    ]);
+    v
+}
+
+fn folder(o: &BuildOpts) -> Vec<String> {
+    ["data.csv", "day.json", "schema.json"]
+        .iter()
+        .map(|f| read(&o.out.join(f)))
+        .collect()
+}
+
+/// The roll-out as it happens: days 1 and 2 are built with the first list
+/// (the new contract is simply not read), then the newer list is installed
+/// with a `from_day` of day 3. Day 3's version holds the new contract's
+/// rows from its deploy block on; every day verifies from the deploy blocks
+/// with the new files; and a state that had the newer list from the start
+/// writes the same three folders.
+#[tokio::test]
+async fn a_newer_list_counts_the_new_contract_from_its_deploy_block() {
+    let v4_from = FROM + PER_DAY + 100;
+    let four = addr_text(&STORAGE4);
+    let f = Fake::new(FROM + 3 * PER_DAY, three_days(v4_from));
+    f.late.lock().expect("lock").insert(four.clone(), v4_from);
+    let (root, o1) = world();
+    let o2 = BuildOpts {
+        prev: Some(o1.out.clone()),
+        ..out(&o1, "v2")
+    };
+    let o3 = BuildOpts {
+        prev: Some(o2.out.clone()),
+        ..out(&o1, "v3")
+    };
+    build(&quick(&f), &o1).await.expect("day 1");
+    build(&quick(&f), &o2).await.expect("day 2");
+    // The first list does not name the new contract: nothing of it is read.
+    assert!(!read(&o2.out.join("data.csv")).contains(&four));
+    assert_eq!(
+        read(&o2.out.join("data.csv"))
+            .matches(",storage_proof,")
+            .count(),
+        2
+    );
+    let old_hash = tool_of(&o1).record.contracts.clone();
+
+    install_list_2(&o1, DAY + 2, v4_from);
+    let list = Contracts::load(&o1.contracts).expect("list 2");
+    assert!(matches!(
+        build(&quick(&f), &o3).await.expect("day 3"),
+        Built::Day { day, .. } if day == DAY + 2
+    ));
+    let csv = read(&o3.out.join("data.csv"));
+    let proofs: Vec<&str> = csv
+        .lines()
+        .filter(|l| l.contains(",storage_proof,"))
+        .collect();
+    // The new contract's proof of day 2 (late), then day 3's two proofs.
+    assert_eq!(proofs.len(), 3, "{csv}");
+    assert!(proofs[0].contains(&four) && proofs[0].contains(&format!(",{},0,", v4_from + 5)));
+    assert!(proofs[1].contains(&four) && proofs[2].contains(&addr_text(&STORAGE)));
+    assert!(proofs.iter().all(|l| l.contains(",2026-11-16,")));
+    // The first storage contract's proof of day 2 is in day 2's version only.
+    assert!(!csv.contains(&format!(",{},0,", v4_from + 6)));
+    let day: Value = serde_json::from_str(&read(&o3.out.join("day.json"))).expect("day.json");
+    assert_eq!(day["contracts_hash"], json!(hx32(&list.hash)));
+    assert_eq!(day["from_block"], json!(FROM + 2 * PER_DAY));
+    let tool = tool_of(&o1);
+    assert_eq!(tool.record.contracts, hx32(&list.hash));
+    assert_ne!(tool.record.contracts, old_hash);
+    assert_eq!(
+        tool.deploy_blocks
+            .as_ref()
+            .and_then(|d| d.get("OnyxStorage (v4)")),
+        Some(&v4_from)
+    );
+
+    // Every day verifies with the new files: from the deploy blocks, and day
+    // 3 also from the state saved before it.
+    for o in [&o1, &o2, &o3] {
+        verify(&quick(&f), &o.contracts, &o.exclusions, &o.out, None)
+            .await
+            .expect("from the deploy blocks");
+    }
+    let before = o1.state.join("before").join("2026-11-16.json");
+    let v = verify(
+        &quick(&f),
+        &o3.contracts,
+        &o3.exclusions,
+        &o3.out,
+        Some(&before),
+    )
+    .await
+    .expect("from the state before");
+    assert_eq!((v.day, v.rows), (DAY + 2, csv.lines().count() - 1));
+
+    // The newer list installed from the start: the same folders.
+    let (root2, p1) = world();
+    install_list_2(&p1, DAY + 2, v4_from);
+    let p2 = BuildOpts {
+        prev: Some(p1.out.clone()),
+        ..out(&p1, "v2")
+    };
+    let p3 = BuildOpts {
+        prev: Some(p2.out.clone()),
+        ..out(&p1, "v3")
+    };
+    for (p, o) in [(&p1, &o1), (&p2, &o2), (&p3, &o3)] {
+        build(&quick(&f), p).await.expect("day");
+        assert_eq!(folder(p), folder(o));
+    }
+    assert_eq!(
+        read(&p1.state.join("state.json")),
+        read(&o1.state.join("state.json"))
+    );
+    let _ = std::fs::remove_dir_all(root);
+    let _ = std::fs::remove_dir_all(root2);
+}
+
+/// A newer list whose first day is already built with the list before it
+/// is refused: a replay would give that day other bytes. So is a new
+/// contract with no code at its deploy block.
+#[tokio::test]
+async fn a_newer_list_must_start_after_the_last_built_day() {
+    let v4_from = FROM + PER_DAY + 100;
+    let f = Fake::new(FROM + 3 * PER_DAY, three_days(v4_from));
+    f.late
+        .lock()
+        .expect("lock")
+        .insert(addr_text(&STORAGE4), v4_from);
+    let (root, o1) = world();
+    let o2 = BuildOpts {
+        prev: Some(o1.out.clone()),
+        ..out(&o1, "v2")
+    };
+    let o3 = BuildOpts {
+        prev: Some(o2.out.clone()),
+        ..out(&o1, "v3")
+    };
+    build(&quick(&f), &o1).await.expect("day 1");
+    build(&quick(&f), &o2).await.expect("day 2");
+    let state = read(&o1.state.join("state.json"));
+    install_list_2(&o1, DAY + 1, v4_from);
+    let e = build(&quick(&f), &o3).await;
+    assert!(
+        matches!(&e, Err(ReadError::Contracts(m)) if m.contains("from_day after the last built day")),
+        "{e:?}"
+    );
+    assert!(!o3.out.exists());
+    assert_eq!(read(&o1.state.join("state.json")), state);
+    // With a first day after the last built one, but a wrong deploy block.
+    install_list_2(&o1, DAY + 2, v4_from - 1);
+    let e = build(&quick(&f), &o3).await;
+    assert!(
+        matches!(&e, Err(ReadError::Contracts(m)) if m.contains("no code at its deploy block")),
+        "{e:?}"
+    );
+    assert_eq!(read(&o1.state.join("state.json")), state);
+    // An earlier list whose bytes changed: the file is refused.
+    install_list_2(&o1, DAY + 2, v4_from);
+    let other = test_contracts_json(FROM + 1);
+    let first = o1.contracts.with_file_name("contracts-1.json");
+    std::fs::write(&first, &other).expect("another list 1");
+    let e = build(&quick(&f), &o3).await;
+    assert!(
+        matches!(&e, Err(ReadError::Record(EarlyError::Contracts(m))) if m.contains("never changes")),
+        "{e:?}"
+    );
+    // A state of a list that is not in the file's history.
+    std::fs::write(&o1.contracts, list_2_json_of(&other, DAY + 2, v4_from)).expect("list 2");
+    let e = build(&quick(&f), &o3).await;
+    assert!(
+        matches!(&e, Err(ReadError::Contracts(m)) if m.contains("neither")),
+        "{e:?}"
+    );
+    assert_eq!(read(&o1.state.join("state.json")), state);
     let _ = std::fs::remove_dir_all(root);
 }

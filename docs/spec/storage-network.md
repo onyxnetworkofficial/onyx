@@ -8,7 +8,9 @@ ADR-0060 amendment 1 (a row for each holder, the registration fee, the reporter'
 a node's own bond) and amendment 2 item 2 (a notice on declines of proven shards) are in the rules
 below, built and deployed on Base Sepolia 2026-11-02 (`0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`, block 53457522,
 `RULES_VERSION` 3). The S15 contract (v0: row v1, no fee, no reward, jail below `minBond / 2`, no
-notice) is retired.
+notice) is retired. Since 2026-11-19 the live contract is v4 (`RULES_VERSION` 4, ADR-0067,
+`0x80833ee1b5f14349c6d41e75259974d29cd86e6b`, block 60983049): the same rules, plus deals through
+a catalog and format-2 headers (R-STOR-3). The 2026-11-02 contract (v3) is retired too.
 
 ## Scope
 
@@ -99,10 +101,14 @@ fails when they differ from `books()` at the same block.
   checkpoint `(c + 1, setHash)` per epoch, the last change wins; `setHashAt(e)` is the newest
   checkpoint at or before `e` (`keccak256("")` before any). `NodeSet` carries the full list.
 - **R-STOR-3 (deals).** `1 <= r <= MAX_R`, `1 <= epochs <= MAX_DEAL_EPOCHS`; the header is format 1
+  or 2 (format 1 only before rules 4)
   with ids of 1..=255 bytes, a shard count of 1..=65,536 and a byte count of at least 8 per shard; a
   source URL of
   at most 256 bytes; the payload is exactly the
-  anchor of that header (any key, time and sequence); `book.report(digest)` is recorded,
+  anchor of that header (any key, time and sequence), or, with `createDealInCatalog` (rules 4,
+  ADR-0067 section 1), exactly the report of a catalog of the same publisher whose leaves root
+  proves the manifest's leaf (index, leaf count and path), while no report holds in the book for
+  the next catalog number under the same key (`CatalogSuperseded`); `book.report(digest)` is recorded,
   `book.factView(fact)` is accepted on exactly its `reportHash`, `book.keyState(key)` is registered
   and not suspended; at least `r` active nodes; `gib = ceil(max(byteCount, shardCount × 8 MiB) /
   GiB)`; `committedGiB + gib × r <= totalCapacityGiB`; deposit and bonds fit 128 bits; the

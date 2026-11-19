@@ -133,7 +133,7 @@ sendu "$disputes" 'bind(address)' "$settlement"
 registry=$(deploy OnyxRegistry registry-v1 OnyxRegistry.sol/OnyxRegistry.json "$(enc 'f(address,address)' "$deployer" "$settlement")")
 book=$(deploy OnyxSignedBook signed-book-v1 OnyxSignedBook.sol/OnyxSignedBook.json "$(enc 'f(address)' "${A[reviewer]}")")
 EB=10
-storage=$(deploy OnyxStorage storage-v3 OnyxStorage.sol/OnyxStorage.json "$(enc \
+storage=$(deploy OnyxStorage storage-v4 OnyxStorage.sol/OnyxStorage.json "$(enc \
   'f(address,address,address,uint64,uint128,uint128,uint128,uint32,uint32,uint32)' \
   "$token" "$book" "${A[streasury]}" "$EB" 1000000000000000 10000000000000000 1000000000000000000 100000 2 10)")
 corrections=$(deploy OnyxCorrections corrections-v1 OnyxCorrections.sol/OnyxCorrections.json "$(enc \
@@ -280,7 +280,7 @@ day1=2026-11-13 day2=2026-11-14
 python3 -I - "$work/addrs.txt" "$work/contracts.json" "$work/exclusions.json" "$record_key" "$day1" <<'PY'
 import json, sys
 src, contracts, exclusions, record, day = sys.argv[1:]
-counted = {"settlement-v1", "disputes-v1", "signed-book-v1", "storage-v3", "corrections-v1"}
+counted = {"settlement-v1", "disputes-v1", "signed-book-v1", "storage-v4", "corrections-v1"}
 out = []
 for line in open(src):
     name, abi, addr, block, tx = line.split()

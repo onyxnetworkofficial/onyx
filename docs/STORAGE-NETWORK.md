@@ -28,12 +28,12 @@ know it is the real row. And all of this without trusting one company's server.
 | Shard | A piece of a dataset: at most 64 MiB, up to 262,144 rows. Default 8 MiB. |
 | Fingerprint (root) | A 32-byte Keccak hash that changes if any byte of the data changes. |
 | Manifest | The dataset's table of contents: every shard's fingerprint, row count and size. It has its own fingerprint. |
-| Anchor | The publisher's signature over the manifest's fingerprint, recorded on chain in `OnyxSignedBook`. |
+| Anchor | The publisher's signature over the manifest's fingerprint, recorded on chain in `OnyxSignedBook`. Or one signature over a catalog: a list of the newest manifest of each of the publisher's datasets (ADR-0067). |
 | Storage node | A computer that holds shards, serves them, and proves it holds them. It posts a bond. |
 | Bond | tONYX a node locks up. A part is taken (slashed) when it fails a check. |
 | Deal | A publisher's paid order: "keep my manifest, R copies, for N epochs". |
 | R | Replication factor: how many nodes are placed on each shard and paid to answer its checks. Default 3. It does not prove R disk copies (section 6, ADR-0062). |
-| Epoch | The time unit of checks and pay. On Base Sepolia now: 24 minutes (7,200 blocks of 0.2 s). |
+| Epoch | The time unit of checks and pay. On Base Sepolia now: 24 minutes (7,200 blocks of 0.2 s). This is a test setting; the length for a main network is not decided. |
 | Challenge | A random question: "show me row 812 of shard 4,031". |
 | Proof | The row and two short chains of hashes that link it to the anchored fingerprint. |
 | Repair | Copying a shard to a new node when a holder failed. |
@@ -111,8 +111,9 @@ know it is the real row. And all of this without trusting one company's server.
   deal's placement salt comes from the block before the deal. A publisher cannot pick its
   placement. An operator can: it sees its id one block after
   registering, activates only an id it likes and cancels the rest (ADR-0062 finding 7). In v0 it
-  gets the whole bond back. The S16 contract (ADR-0060 amendment 1, live since 2026-11-02) keeps 2%
-  of every bond at registration, so each try costs money.
+  gets the whole bond back. The S16 contract (ADR-0060 amendment 1, deployed 2026-11-02) and the
+  contract after it (live since 2026-11-19) keep 2% of every bond at registration, so each try
+  costs money.
 - **One epoch of notice.** Checks in an epoch use the node list of the epoch before, so a node
   always has at least one full epoch to fetch a shard before it can be asked for it.
 
@@ -136,8 +137,8 @@ know it is the real row. And all of this without trusting one company's server.
    (if that is more than the minimum): about 7 penalties jail any node, whatever its bond.
 
 **What a passed check shows (ADR-0062).** The node's operator sent a correct row in that epoch,
-from any source. It does not show that the node keeps its own copy. In v0 (the contract live on
-Base Sepolia) every holder of the shard is asked for the same row, so after the first answer the
+from any source. It does not show that the node keeps its own copy. In v0 (the first contract on
+Base Sepolia, retired) every holder of the shard is asked for the same row, so after the first answer the
 others can copy it from the chain; all R holders may keep nothing while some source serves rows.
 The data survives while one holder or the publisher keeps it and stays reachable until a new holder
 copies it. A shard costs a holder at most one slash (it is then taken off the shard), and giving a
@@ -243,7 +244,9 @@ for deals it may hold; it can use all its cores.
 | `answer` with 5 nodes | about 180,000 | small rows, short paths |
 | `answer` with 128 nodes | about 471,000 + calldata | execution measured by `test_answerGasAtTheNodeCap` (2026-11-02, the node's first pass on the shard: 448,077 before the decline notice, 518,726 before the heap); the list adds 4 KiB of calldata |
 | `answer` with 128 nodes, 125 declined | about 1.74 million + calldata | the worst case, `test_answerGasAtTheNodeCapWithDeclines` (2026-11-02 with the decline notice; 1.63 million before it, 5.97 million before the heap, THREATS STORAGE-S16-R1-2); `settleMissed` in the same case 1.59 million (review, before the notice). With 5 nodes the heap costs about 3,000 more per answer than the scan did |
-| `createDeal` | about 292,000 | includes the book checks |
+| `createDeal` | about 292,000 | includes the book checks. On the contract live since 2026-11-19 (v4): 307,934 of execution for a manifest of 393 header bytes, about 337,700 for the whole transaction (forge, 2026-11-19); about 6,800 more than before, for one call to the reader contract and the `DealAnchor` event |
+| `createDealInCatalog` (v4) | 347,756 + calldata | a deal through a catalog of 9,000 leaves, a path of 14 levels: about 386,800 for the whole transaction, about 49,100 more than `createDeal` on the same manifest (`test_gasOfACatalogDealWith14Levels`, 2026-11-19) |
+| Deployment of v4 | 6,111,928 | both contracts in one transaction, measured on a local chain (2026-11-19). The live deployment was estimated at 7.9 million gas before it was sent. The contract before it (v3) took 4,585,344 |
 | `register` + `activate` | about 106,000 + 218,000 | median; `activate` checks the joining node's share |
 | `settleMissed` | about 162,000 | median; more when it jails. Worst case at 128 nodes with 125 declined: about 1.71 million, 2.13 million when the slash jails (review STORAGE-S16-R7, 2026-11-02) |
 | `decline` | about 54,500 | one shard or a whole deal (median, 2026-11-02) |
@@ -286,6 +289,7 @@ Formulas:
 | v0 | Replicas (R = 3), rendezvous placement, on-chain row proofs, pay, slash, repair, reads with fail-over, bonded nodes, conservation on chain | **Built and tested on a local chain** |
 | v0 live | Deploy on Base Sepolia, run five real storage nodes, deals for published datasets; nodes read only new chain logs each pass and keep their placement between changes; one node is the keeper | Chain and placement cache built; `scripts/storage-sepolia.sh` and the node service ready ([deploy-storage.md](ops/runbooks/deploy-storage.md)); contract deployed 2026-11-01 (`0x2423837572b58caf82896491ff6ee23080849419`, block 52986889); nodes funded; first `register` stopped on a public-endpoint limit, fixed (THREATS STORAGE-S15-1); **live 2026-11-01**: five nodes on the web host (/storage/n1..n5), three deals (btc.price, eth.price, btc.mvrv: 3 copies, epochs 2 to 44); epoch 13: 18 challenges, 18 passed, 0.036 tONYX paid, nothing slashed, `conserved()` true; the public endpoint's rate limit fixed (STORAGE-S15-4); **run finished 2026-11-02**: 612 of 612 challenges passed over 34 epochs, nothing slashed, deals closed, books balanced |
 | Cheap holes closed | A different challenged row for each holder, a 2% registration fee so grinding ids costs money, 10% of each reported slash for the reporter, jail below half of a node's own bond (ADR-0060 amendment 1); a decline of a shard the node proved in the last 7 epochs starts one epoch later (amendment 2 item 2) | Built and tested on a local chain; **deployed on Base Sepolia 2026-11-02** (`0x9244eeaf5053f90ca2fbce157a3446f828c5ee43`, block 53457522, `RULES_VERSION` 3; ROADMAP S16) |
+| Deals through a catalog | A deal on a dataset that only a publisher's catalog anchors: one more entry point, `createDealInCatalog`, with one Merkle check when the deal is made; a deal must use the publisher's newest catalog. Deals on widened (format-2) datasets from the same contract. Proofs, pay, slash, decline and close do not change (ADR-0067) | Built and reviewed 2026-11-19; **deployed on Base Sepolia 2026-11-19** (`0x80833ee1b5f14349c6d41e75259974d29cd86e6b`, block 60983049, `RULES_VERSION` 4); the five nodes moved to it; the first deal through a catalog passed every check of its first epoch ("Third live run" below). One live deal on one small dataset so far |
 | Sealed replicas | Each copy stored in a node-specific encoded form, so a node cannot fetch only when asked. Compared and not built: every sound design is too slow, needs seal units v0 does not have, or needs one key holder for every repair (ADR-0062). One copy per operator address was tried and withdrawn (THREATS STORAGE-S16-R1) | Later, after S17 (ROADMAP S21) |
 | Erasure coding | Split each shard into k-of-n pieces (for example 10 of 16) instead of 3 full copies: about half the disk for more safety; each holder keeps a different piece, so one operator saves disk only with more than k pieces of a stripe (the fix for STORAGE-4, ADR-0062 finding 6); aggregated proofs (one answer per node per epoch); placement weighted by declared size | Later (ROADMAP S17) |
 | Cold archive tier | Old, rarely read data kept on an outside storage network, with Onyx keeping only the fingerprints and a fetch path | Later, owner's choice of network (ROADMAP S18) |
@@ -300,14 +304,14 @@ Formulas:
 | Part | Status | Evidence |
 |---|---|---|
 | Placement, proofs, repair, epoch accounting, event replay of the books (`crates/onyx-storage`) | Done | 37 Rust tests, shared vectors `fixtures/storage/vectors.json` |
-| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 47 unit and fuzz tests (8 for the decline notice), 5 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 8 vector tests, a heap-order fuzz test, deploy script test; 22,057 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendments 1 and 2) |
-| Storage-node mode in onyx-node (`ONYX_STORAGE_*`) | Done (local) | `onyx_api::storage` tests: fetch only placed shards, refuse forged bytes, answer with proofs the contract accepts |
+| Contract `OnyxStorage` + `OnyxStorageLib` | Done (local) | 47 unit and fuzz tests (8 for the decline notice), 5 invariants over 16 actions (decline, registration fee, cancel, rewarded reports and a steered miss-and-report included), 8 vector tests, a heap-order fuzz test, deploy script test; 22,057 bytes (limit 24,576; 2026-11-02, with the heap and ADR-0060 amendments 1 and 2). Since 2026-11-19 (v4, ADR-0067): `OnyxStorage` is 23,098 bytes (1,478 free) and the stateless reader `OnyxStorageAnchor` 4,646 bytes; 21 more tests in `OnyxStorageCatalog.t.sol`; the vectors hold 5 good deals through a catalog and 37 refused cases |
+| Storage-node mode in onyx-node (`ONYX_STORAGE_*`) | Done (local) | `onyx_api::storage` tests: fetch only placed shards, refuse forged bytes, answer with proofs the contract accepts. Since 2026-11-19: a node takes a deal's manifest from a carried catalog proof, takes format-2 manifests, and follows rules 4 only |
 | Client read with fail-over | Done (local) | Test: down, missing and forging replicas skipped; demo: one node killed |
-| Operator tool `onyx-storage` | Done | register, status, deal, epoch, settle, withdraw, exit, books, declines, read |
-| Local five-node demo (`scripts/storage-network-anvil.sh`) | Done | see "Last demo run" below |
+| Operator tool `onyx-storage` | Done | register, status, deal (own report, or through a catalog), epoch, settle, withdraw, exit, books, declines, read. Since 2026-11-19 the reading commands ask the contract's views, not every log since the deploy block |
+| Local five-node demo (`scripts/storage-network-anvil.sh`) | Done | see "Last demo run" below (2026-11-01). The demo of 2026-11-19 also runs a deal through a catalog: ADR-0067 slice 4 has its figures |
 | Adversarial reviews | STORAGE-R1 (9 findings) and STORAGE-R2 (a fresh review of those fixes, 6 findings): all fixed with tests except nodes that decline everything still counting in N (S16) | THREATS "STORAGE-R1", "STORAGE-R2" |
 | Decline (`decline`, one shard or a whole deal) | Done (local) | 3 forge tests, 5 node tests, in the money invariants |
-| Base Sepolia | `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` at block 53457522 (2026-11-02, commit 1d608ffd, ADR-0060 amendments 1 and 2, `RULES_VERSION` 3, 22,057 bytes): the v0 parameters (epochs of 7,200 blocks, 24 minutes on 0.2 s blocks, STORAGE-S15-5; 0.001 tONYX per GiB per copy per epoch; bond 0.01 tONYX per GiB, 10 tONYX minimum; slash 10%; 2 checks per deal per epoch; jail after 3 misses); `conserved()` true; deploy cost 0.000024 test ETH. The same five node keys registered again (10 tONYX bond, 0.2 tONYX fee kept, 6 GiB each; n1 is the keeper); deals for btc.price and eth.price, 3 copies, epochs 2 to 10 (about 3 hours; 0.024 tONYX deposit each): short, as the node keys hold little test ETH; **run finished 2026-11-02**: 85 of 90 checks passed, closed, books balanced ("Second live run" below). The v0 contract `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889, 2026-11-01) is retired: its deals ran and closed ("First live run" below) | ROADMAP S15, S16; THREATS STORAGE-S15, STORAGE-S16-R8 to -R11 |
+| Base Sepolia | `OnyxStorage` `0x80833ee1b5f14349c6d41e75259974d29cd86e6b` at block 60983049 (2026-11-19, ADR-0067, `RULES_VERSION` 4, 23,098 bytes, epochs of 7,200 blocks: 24 minutes on 0.2 s blocks, a test setting): **the live contract (v4)**. Its constructor made the reader `OnyxStorageAnchor` `0x69124747008fa162799226a31dc00f389c425c91` (4,646 bytes, no state, no owner, no funds) in the same transaction; the deployment was estimated at 0.000087 test ETH before it was sent (7.9 million gas at a highest fee of 0.011 gwei). What changed against v3: a deal can be made through a publisher's catalog (`createDealInCatalog`), and only through the newest one (`CatalogSuperseded`); manifest headers of format 1 and 2 are read; the event `DealAnchor` names the report behind each deal; the header and payload reads sit in the reader contract. Not changed: placement, checks, pay, slash, decline, close, no owner and no admin key. The five nodes moved here on the same day and registered again with new node ids; one deal, made with `createDealInCatalog` ("Third live run" below; docs/ops/runbooks/deploy-storage.md "Move from v3 to v4"). The source is not verified on a block explorer yet. The early record counts this contract from that block once its second contract list is installed (docs/ops/early-record.md "Changing the contract list"; built, not installed yet). **Retired 2026-11-19 (v3):** `OnyxStorage` `0x9244eeaf5053f90ca2fbce157a3446f828c5ee43` at block 53457522 (2026-11-02, commit 1d608ffd, ADR-0060 amendments 1 and 2, `RULES_VERSION` 3, 22,057 bytes): the v0 parameters (epochs of 7,200 blocks, 24 minutes on 0.2 s blocks, STORAGE-S15-5; 0.001 tONYX per GiB per copy per epoch; bond 0.01 tONYX per GiB, 10 tONYX minimum; slash 10%; 2 checks per deal per epoch; jail after 3 misses); deploy cost 0.000024 test ETH. The five node keys registered on it (10 tONYX bond, 0.2 tONYX fee kept, 6 GiB each; n1 was the keeper); deals for btc.price and eth.price, 3 copies, epochs 2 to 10 (about 3 hours; 0.024 tONYX deposit each); **run finished 2026-11-02**: 85 of 90 checks passed, closed, books balanced ("Second live run" below). Its final state: both deals closed; the five nodes asked to leave in epoch 1041 and took their bonds back from epoch 1045 (9.8, 9.8, 8.82, 7.938 and 7.938 tONYX); no node, no bond and no open deal are left; `conserved()` is true; it still holds 5.2336 tONYX, the treasury's part (fees and slashes). It cannot be stopped or removed, and nothing uses it. The v0 contract `0x2423837572b58caf82896491ff6ee23080849419` (block 52986889, 2026-11-01) is retired: its deals ran and closed ("First live run" below); the five 10 tONYX bonds of that run were left in it | ROADMAP S15, S16; ADR-0067; THREATS STORAGE-S15, STORAGE-S16-R8 to -R11, STOR-CAT-1 to STOR-CAT-8 |
 
 ### First live run (Base Sepolia, 2026-11-01 to 2026-11-02)
 | What | Result |
@@ -331,6 +335,23 @@ Formulas:
 | Close | 0.0055 tONYX refunded to the payer; every node withdrew; `conserved()` true; books: bonds 50, fees and slashes 5.704, rewards 0.4704 tONYX |
 | Found | the lockstep above (STORAGE-S16-R10); `onyx-storage epoch` showed no checks for a closed deal's past epochs, and nodes kept recording a seed every epoch with no deal left, spending gas (STORAGE-S16-R11) |
 | Gas left | nodes 0.000026 to 0.000083 test ETH, payer 0.000023, deployer 0.000075 |
+
+### Third live run (Base Sepolia, v4, 2026-11-19): the move and the first deal through a catalog
+| What | Result |
+|---|---|
+| Leaving v3 | Both v3 deals were closed. The five nodes asked to leave in epoch 1041 (five transactions). Their bonds were free from epoch 1045, 89 minutes later, and came back: 9.8, 9.8, 8.82, 7.938 and 7.938 tONYX. `conserved()` true; v3 still holds 5.2336 tONYX (the treasury's part: fees and slashes) |
+| Order | The nodes left v3 first. Only then the new node program was deployed, then the contract, then the nodes joined it. Nothing differed from the runbook's order |
+| Contract | `0x80833ee1b5f14349c6d41e75259974d29cd86e6b` (ADR-0067, `RULES_VERSION` 4, block 60983049) and its reader `0x69124747008fa162799226a31dc00f389c425c91`, one deployment transaction |
+| Nodes | Five, registered and active with new node ids (listed in ADR-0067 "Live run 2026-11-19"); each node key was brought to 0.00012 test ETH and 20 tONYX, the payer to 0.00003 test ETH and 100 tONYX; each node's health says its last pass was good |
+| Deal | Deal 0, transaction `0x328a0d0b36496d412da4422473af0175fed6cc9f97c018fd219bc47c734e1664`: `btc.custody-share` of the publisher `onchain-archive` (version 1, 1 shard, 44,856 bytes; manifest fingerprint `0x92deb3b4d32738316c4f5334c3849e36fa5c688d1167f6bc42032f947a0f8cfa`), 3 copies, epochs 2 to 44, 0.126 tONYX deposit |
+| Anchor | The publisher's catalog 16, the newest. The tool asked the book before it sent the token approval |
+| First fetch | The three holders (n1, n2, n4) fetched the shard through the catalog proof carried in the manifest answer. They hold no catalog |
+| Checks | Epoch 2: 6 of 6 passed (2 slots, 3 holders each); each holder earned 0.001 tONYX; nothing slashed, nothing left open; `conserved()` true on v4 and on v3 |
+| Epochs 3 and 4 | 6 of 6 checks passed in each, nothing slashed, none left open; `conserved()` true on v4 and on v3 |
+| Read | 20 rows asked from storage node n1 passed `onyx-check --bulk` against the chain; the answer names catalog 16 |
+| Tool | `onyx-storage epoch` answered in seconds through the public endpoint. On v3 the old log scan had not finished one node in 25 minutes |
+| Not done yet | The deal ends after epoch 43 (about 14:00 UTC on 2026-11-20); `close` runs then. No source verification on a block explorer (it needs an account). The early record's second contract list is not installed |
+| Limits | One live deal on one small dataset is the whole live proof so far. 24-minute epochs are a test setting. A next catalog under a second key of the same publisher is not seen by the "newest catalog" rule. A deal sent while a new catalog lands is refused and must be sent again. A storage node fetches at most 64 earlier versions of a dataset |
 
 ### Last demo run (2026-11-01, local anvil, debug build, epochs of 40 blocks)
 | What | Result |

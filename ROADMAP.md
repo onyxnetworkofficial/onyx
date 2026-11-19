@@ -1146,7 +1146,7 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       ("Bitcoin · Short-term holder net position") with one-line meanings of the standard terms in it
       (apps/web/src/lib/glossary.ts: 73 assets, 512 metric kinds, 330 with a meaning; abbreviations
       without a settled meaning stay as written), and search goes by meaning ("bitcoin holders",
-      "whale", "stablecoin") through the node's whole-word `any` search. Left: CAT-1 (a history check), CAT-2 (deals), CAT-3
+      "whale", "stablecoin") through the node's whole-word `any` search. Left: CAT-1 (a history check), CAT-2 (deals: done 2026-11-19, OnyxStorage v4, ADR-0067), CAT-3
       (takedown), CAT-4 (catalog lines past 10,000 datasets a publisher)
 - [ ] S23 Schema changes for bulk datasets (THREATS BULK-SCHEMA-1): a version keeps its dataset's
       schema (`onyx-bulk` `check_successor`), so new rows that need a wider decimal scale or a new
@@ -1163,7 +1163,8 @@ on-chain row proofs, pay, slash, repair, reads with fail-over (`scripts/storage-
       and show rows in the newest; nodes take format 2 with `ONYX_BULK_FORMAT2=on`; `onyx-check`
       reads it (a newer format is exit 3 only when its root is signed); `onyx-publish schema-fit` and
       `build --widen`; `upload` steps back for a node that lacks a version. Left: the successor link
-      from an ended id to a new one; storage deals on a widened dataset (a new OnyxStorage)
+      from an ended id to a new one; storage deals on a widened dataset (the contract and the
+      nodes take them since OnyxStorage v4, live 2026-11-19, ADR-0067; no such deal made live yet)
       Successor link: design drafted (ADR-0059 amendment 6 draft 3 after reviews SUCC-R1 and SUCC-R2, 2026-11-15: a reserved links dataset in the catalogs; THREATS CAT-SUCC-1 to CAT-SUCC-11); build in three slices: slice 1 (onyx-bulk: links rows, chains, generations, complete pinned runs, absence proofs) built 2026-11-15; slice 2, the node part (links index, 410 successor, the successor route, rows?root=, own-report links refused, replaces) built the same day; slices 2 and 3 finished 2026-11-16: the reader's check (bulk_successor.rs: every links row as one pinned run, the chain from proven leaves, the catalog anchored and no next catalog under any known key), `--history` with `successor` and `early`, `onyx-check --successor` (exit 0 live, 4 another end, 1 refused, 3 undecided), `onyx-publish catalog-build --move/--relink/--unlink/--links-next-generation`, fuzz selector 8, and an end-to-end test (the tool, a local node, the check). Build review SUCC-B7 (ready with changes, no High) fixed the same day (THREATS SUCC-B7). Left: deploy nodes, then onyx-check and the tool (amendment 6 item 10); then the first publisher's four moves; a fuzz seed of a successor answer that carries links rows.
 - [ ] S26 Early-contributor record (early contributors may be rewarded later;
       no reward is promised): a daily, append-only list of accepted testnet work, one row per
