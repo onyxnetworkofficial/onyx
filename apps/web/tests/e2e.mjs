@@ -2046,8 +2046,18 @@ try {
 			await ht.locator('summary').click();
 			// E12: every row, not the first one within 10 s (the table is built when it opens).
 			await desk.waitForFunction((k) => document.querySelectorAll('[data-testid="honest-table"] tbody tr').length >= k, hWant.length, { timeout: WAIT_CAP }).catch(() => {});
-			const hRows = await ht.locator('tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent.trim())));
-			expect(hRows.length === hWant.length && hRows.every((r, i) => r[2] === n(hWant[i].block) && r[3] === n(hWant[i].txs)), `PP6 run: the honest round's table lists its ${hWant.length} steps with the recorded end blocks and transactions`);
+			const readH = () => ht.locator('tbody tr').evaluateAll((trs) => trs.map((tr) => [...tr.children].map((c) => c.textContent.trim())));
+			let hRows = await readH();
+			// Seen once in a full run (2026-11-20): no rows after the click. A click that lands while the page still
+			// draws can leave the fold closed, or open with no rows, so close it if it is open and open it once more before the check; the message names what it saw.
+			if (hRows.length !== hWant.length) {
+				if (await ht.evaluate((d) => d.open)) await ht.locator('summary').click();
+				await ht.locator('summary').click();
+				await desk.waitForFunction((k) => document.querySelectorAll('[data-testid="honest-table"] tbody tr').length >= k, hWant.length, { timeout: WAIT_CAP }).catch(() => {});
+				hRows = await readH();
+			}
+			const hBad = hRows.findIndex((r, i) => !hWant[i] || r[2] !== n(hWant[i].block) || r[3] !== n(hWant[i].txs));
+			expect(hRows.length === hWant.length && hBad < 0, `PP6 run: the honest round's table lists its ${hWant.length} steps with the recorded end blocks and transactions${hRows.length === hWant.length && hBad < 0 ? '' : ` (${hRows.length} rows; first wrong row ${hBad}: ${JSON.stringify(hRows[hBad] ?? null)})`}`);
 			expect((await desk.getByTestId('dispute-table').count()) === (runJ.dispute ? 1 : 0), 'W6 run: the dispute bars have their table');
 			const split = await desk.getByTestId('split').evaluate((el) => [[...el.querySelectorAll('.bar i')].map((e) => getComputedStyle(e).backgroundColor), [...el.querySelectorAll('.shares .key')].map((e) => getComputedStyle(e).backgroundColor)]);
 			expect(split[0].length === 4 && JSON.stringify(split[0]) === JSON.stringify(split[1]) && new Set(split[0]).size === 4, `PP6 run: the fee-split bar and its legend use the same 4 category colours (${split[0].join(', ')})`);

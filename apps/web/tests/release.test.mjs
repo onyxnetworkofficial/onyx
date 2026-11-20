@@ -107,6 +107,8 @@ test('the checker files: the workflow builds, checks and attaches exactly the na
 	// The pages offer the files only through checkerFiles()/hasChecker(), so not before CHECKER_SINCE.
 	const api = read('apps/web/src/routes/api/+page.svelte');
 	assert.match(api, /const CHECKER = checkerFiles\(\);/);
+	// A downloaded file is not named `onyx-check`: the page says which name to type.
+	assert.match(api, /\{#if CHECKER\.length\}[\s\S]*api-check-name[\s\S]*CHECKER\[0\]\.file[\s\S]*chmod \+x[\s\S]*\{:else\}/);
 	assert.match(api, /\{#if CHECKER\.length\}[\s\S]*api-check-guide[\s\S]*\{:else\}[\s\S]*There is no\s+ready-made <code>onyx-check<\/code> for macOS or Windows yet/);
 	assert.match(read('apps/web/src/routes/+layout.svelte'), /CHECKER_READY \? 'one download for Linux, macOS or Windows\.' : 'a Linux download, or a build from source elsewhere\.'/);
 	assert.match(read('apps/web/src/lib/components/Downloads.svelte'), /\{#if CHECKER\.length\}/);

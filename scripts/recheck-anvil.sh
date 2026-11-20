@@ -55,7 +55,7 @@ tolerance=$(id tolerance); subject=$(id subject_key)
 for v in "$metric" "$rmetric" "$rtemplate" "$tolerance" "$subject"; do
   [ -n "$v" ] || fail "onyx-source recheck printed no ids"
 done
-(cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 --accounts 10 >"$work/anvil.log" 2>&1) &
+(cd "$work" && exec "$FOUNDRY_BIN/anvil" --host 127.0.0.1 --port 0 --accounts 10 --timestamp 1794657600 >"$work/anvil.log" 2>&1) & # fixed clock (2026-11-14) inside the 7-day recheck window, which ended 2026-11-19: the real clock gives "no recheck day is left"
 anvil_pid=$!
 port=""
 for _ in $(seq 200); do

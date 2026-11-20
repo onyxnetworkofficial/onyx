@@ -145,6 +145,11 @@
 				{#each CHECKER as c, i (c.file)}{i ? ', ' : ''}<a href={BASE + c.file} rel="noopener" data-testid="api-check-file">{c.name}</a>{/each}.
 				Every file's SHA-256 is in <code>SHA256SUMS</code> on the <a href={PAGE} target="_blank" rel="noopener">release page</a>.
 			</p>
+			<p class="qnote" data-testid="api-check-name">
+				The file's name ends with your system (<code>{CHECKER[0].file}</code>, for example). In the commands, write that name in
+				place of <code>onyx-check</code>: on Linux and macOS first run <code>chmod +x</code> on the file and start it with
+				<code>./</code> in front.
+			</p>
 			<p class="qnote" data-testid="api-check-unsigned">
 				The files are not signed yet, so the first start shows a warning. Windows: if "Windows protected your PC" appears, choose More
 				info, then Run anyway. macOS: after a refused start, System Settings, Privacy &amp; Security, Open Anyway. Each step, and how
